@@ -2,12 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "RPC/FSDSRpcServer.h"
 #include "FSDSGameMode.generated.h"
 
 class AFSDSVehiclePawn;
 
 /**
- * FSDS Game Mode — Spawns the vehicle and manages the simulator lifecycle.
+ * FSDS Game Mode — Spawns the vehicle and manages the RPC server.
  */
 UCLASS()
 class FSDSPLUGIN_API AFSDSGameMode : public AGameModeBase
@@ -20,8 +21,8 @@ public:
 	virtual void StartPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
-	/** Get the active vehicle pawn */
 	AFSDSVehiclePawn* GetVehiclePawn() const { return VehiclePawn; }
+	FFSDSRpcServer* GetRpcServer() { return &RpcServer; }
 
 private:
 	void SpawnVehicle();
@@ -29,4 +30,6 @@ private:
 
 	UPROPERTY()
 	AFSDSVehiclePawn* VehiclePawn = nullptr;
+
+	FFSDSRpcServer RpcServer;
 };

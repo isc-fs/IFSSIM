@@ -17,15 +17,14 @@ public class FSDSPlugin : ModuleRules
 			"PhysicsCore",
 			"RHI",
 			"RenderCore",
-			"ImageWrapper"
+			"ImageWrapper",
+			"Networking",
+			"Sockets"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"Slate",
 			"SlateCore"
 		});
-
-		// rpclib will be integrated in a later phase
-		// For now, the plugin compiles as a standalone UE5 module
 	}
 }
