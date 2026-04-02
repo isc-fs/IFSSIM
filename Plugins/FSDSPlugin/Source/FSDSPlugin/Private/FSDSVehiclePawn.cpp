@@ -2,7 +2,9 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/BoxComponent.h"
 #include "Engine/World.h"
+#include "UObject/ConstructorHelpers.h"
 
 AFSDSVehiclePawn::AFSDSVehiclePawn()
 {
@@ -11,11 +13,52 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	// Get the Chaos vehicle movement component (created by parent)
 	VehicleMovement = CastChecked<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 
+	// Configure engine torque curve so the vehicle can actually drive
+	if (VehicleMovement)
+	{
+		VehicleMovement->EngineSetup.MaxTorque = 500.f;
+		VehicleMovement->EngineSetup.MaxRPM = 6000.f;
+		VehicleMovement->EngineSetup.EngineIdleRPM = 800.f;
+		VehicleMovement->EngineSetup.EngineBrakeEffect = 0.1f;
+
+		// Simple torque curve: full torque from 1000-4000 RPM, drops after
+		FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
+		TorqueCurve->Reset();
+		TorqueCurve->AddKey(0.f, 0.5f);
+		TorqueCurve->AddKey(1000.f, 0.8f);
+		TorqueCurve->AddKey(3000.f, 1.0f);
+		TorqueCurve->AddKey(4500.f, 0.9f);
+		TorqueCurve->AddKey(6000.f, 0.7f);
+
+		// Transmission
+		VehicleMovement->TransmissionSetup.bUseAutomaticGears = true;
+		VehicleMovement->TransmissionSetup.FinalRatio = 3.5f;
+
+		// Mass
+		VehicleMovement->Mass = 300.f; // Formula Student car ~300kg
+	}
+
+	// Set up a visible placeholder mesh (cube scaled to car proportions)
+	// The skeletal mesh from GetMesh() is empty by default.
+	// We use a simple static mesh as a visible body until a proper car model is imported.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (CubeMesh.Succeeded())
+	{
+		// Create a static mesh component for the car body
+		CarBodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarBodyMesh"));
+		CarBodyMesh->SetupAttachment(GetMesh());
+		CarBodyMesh->SetStaticMesh(CubeMesh.Object);
+		// Scale to approximate car size: ~4m long, ~2m wide, ~1.2m tall
+		CarBodyMesh->SetRelativeScale3D(FVector(2.0f, 1.0f, 0.6f));
+		CarBodyMesh->SetRelativeLocation(FVector(0.f, 0.f, 60.f));
+		CarBodyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+
 	// Spring arm for chase camera
 	SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
-	SpringArm->SetupAttachment(GetMesh());
-	SpringArm->TargetArmLength = 500.f;
-	SpringArm->SetRelativeLocation(FVector(0.f, 0.f, 150.f));
+	SpringArm->SetupAttachment(GetRootComponent());
+	SpringArm->TargetArmLength = 600.f;
+	SpringArm->SetRelativeLocation(FVector(-50.f, 0.f, 200.f));
 	SpringArm->SetRelativeRotation(FRotator(-15.f, 0.f, 0.f));
 	SpringArm->bUsePawnControlRotation = false;
 	SpringArm->bInheritPitch = false;
@@ -74,6 +117,37 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		else
 		{
 			VehicleMovement->SetUseAutomaticGears(true);
+		}
+	}
+
+	// Direct physics force fallback (works even without wheel setup)
+	// This ensures the car can be driven for testing purposes
+	UPrimitiveComponent* RootPrim = Cast<UPrimitiveComponent>(GetRootComponent());
+	if (RootPrim && RootPrim->IsSimulatingPhysics())
+	{
+		// Forward/backward force
+		if (FMath::Abs(CurrentControls.Throttle) > 0.01f)
+		{
+			FVector ForwardForce = GetActorForwardVector() * CurrentControls.Throttle * 500000.f; // Newtons
+			RootPrim->AddForce(ForwardForce);
+		}
+
+		// Steering torque
+		if (FMath::Abs(CurrentControls.Steering) > 0.01f)
+		{
+			FVector SteeringTorque = FVector(0.f, 0.f, CurrentControls.Steering * 50000000.f);
+			RootPrim->AddTorqueInRadians(SteeringTorque);
+		}
+
+		// Braking (damping)
+		if (CurrentControls.Brake > 0.01f)
+		{
+			FVector Vel = GetVelocity();
+			if (Vel.SizeSquared() > 1.f)
+			{
+				FVector BrakeForce = -Vel.GetSafeNormal() * CurrentControls.Brake * 300000.f;
+				RootPrim->AddForce(BrakeForce);
+			}
 		}
 	}
 }
