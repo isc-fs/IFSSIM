@@ -1,10 +1,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "WheeledVehiclePawn.h"
-#include "ChaosWheeledVehicleMovementComponent.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/FloatingPawnMovement.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Sensors/FSDSCameraSensor.h"
 #include "Sensors/FSDSLidarSensor.h"
 #include "Sensors/FSDSImuSensor.h"
@@ -13,12 +14,12 @@
 #include "FSDSVehiclePawn.generated.h"
 
 /**
- * FSDS Vehicle Pawn — Chaos Physics wheeled vehicle.
- * Supports both keyboard input (for manual testing) and
- * programmatic control via SetCarControls (for RPC/autonomous driving).
+ * FSDS Vehicle Pawn — simple movement for immediate testing.
+ * Uses FloatingPawnMovement for WASD driving.
+ * Will be upgraded to full Chaos vehicle when skeletal mesh is available.
  */
 UCLASS()
-class FSDSPLUGIN_API AFSDSVehiclePawn : public AWheeledVehiclePawn
+class FSDSPLUGIN_API AFSDSVehiclePawn : public APawn
 {
 	GENERATED_BODY()
 
@@ -61,11 +62,13 @@ public:
 	FCarControls GetCarControls() const;
 	FCarState GetCarState() const;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
-	UChaosWheeledVehicleMovementComponent* VehicleMovement;
+	// --- Components ---
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UStaticMeshComponent* CarBodyMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
+	UFloatingPawnMovement* Movement;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	USpringArmComponent* SpringArm;
@@ -92,11 +95,8 @@ public:
 
 private:
 	// Keyboard input handlers
-	void OnThrottleInput(float Value);
-	void OnSteeringInput(float Value);
-	void OnBrakeInput(float Value);
-	void OnHandbrakePressed();
-	void OnHandbrakeReleased();
+	void OnMoveForward(float Value);
+	void OnMoveRight(float Value);
 
 	// Current control state
 	FCarControls CurrentControls;
@@ -105,4 +105,5 @@ private:
 	// Previous frame velocity for acceleration calculation
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;
+	FVector PreviousPosition = FVector::ZeroVector;
 };
