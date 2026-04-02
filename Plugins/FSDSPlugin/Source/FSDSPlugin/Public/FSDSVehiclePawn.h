@@ -5,6 +5,11 @@
 #include "ChaosWheeledVehicleMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
+#include "Sensors/FSDSCameraSensor.h"
+#include "Sensors/FSDSLidarSensor.h"
+#include "Sensors/FSDSImuSensor.h"
+#include "Sensors/FSDSGpsSensor.h"
+#include "Sensors/FSDSGssSensor.h"
 #include "FSDSVehiclePawn.generated.h"
 
 /**
@@ -64,6 +69,23 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UCameraComponent* FollowCamera;
+
+	// --- Sensors ---
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSCameraSensor* CameraSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSLidarSensor* LidarSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSImuSensor* ImuSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSGpsSensor* GpsSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSGssSensor* GssSensor;
 
 private:
 	// Keyboard input handlers

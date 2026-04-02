@@ -26,6 +26,19 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	// Follow camera
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
+
+	// --- Sensors ---
+	CameraSensor = CreateDefaultSubobject<UFSDSCameraSensor>(TEXT("CameraSensor"));
+	CameraSensor->SetupAttachment(GetMesh());
+	CameraSensor->SetRelativeLocation(FVector(160.f, 0.f, -20.f));
+
+	LidarSensor = CreateDefaultSubobject<UFSDSLidarSensor>(TEXT("LidarSensor"));
+
+	ImuSensor = CreateDefaultSubobject<UFSDSImuSensor>(TEXT("ImuSensor"));
+
+	GpsSensor = CreateDefaultSubobject<UFSDSGpsSensor>(TEXT("GpsSensor"));
+
+	GssSensor = CreateDefaultSubobject<UFSDSGssSensor>(TEXT("GssSensor"));
 }
 
 void AFSDSVehiclePawn::BeginPlay()
