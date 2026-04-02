@@ -65,6 +65,9 @@ public:
 	UChaosWheeledVehicleMovementComponent* VehicleMovement;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
+	UStaticMeshComponent* CarBodyMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	USpringArmComponent* SpringArm;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
