@@ -1,0 +1,24 @@
+# UE5 build artifacts
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+
+# Plugin build artifacts
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+
+# IDE files
+.vs/
+.vsconfig
+*.sln
+*.vcxproj*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Compiled content
+*.BI
+*.BI2
