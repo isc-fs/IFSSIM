@@ -1,6 +1,7 @@
 #include "FSDSConeSpawner.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Blueprint.h"
 #include "Misc/FileHelper.h"
 
 AFSDSConeSpawner::AFSDSConeSpawner()
@@ -13,6 +14,29 @@ void AFSDSConeSpawner::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Auto-detect track CSV from map name
+	if (CSVFilePath.IsEmpty() && GetWorld())
+	{
+		FString MapName = GetWorld()->GetMapName();
+		MapName.RemoveFromStart(TEXT("UEDPIE_0_")); // Strip PIE prefix
+
+		FString TracksDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Content"), TEXT("tracks"));
+
+		if (MapName.Contains(TEXT("Acceleration")))
+		{
+			CSVFilePath = FPaths::Combine(TracksDir, TEXT("acceleration.csv"));
+		}
+		else if (MapName.Contains(TEXT("Skidpad")))
+		{
+			CSVFilePath = FPaths::Combine(TracksDir, TEXT("skidpad.csv"));
+		}
+
+		if (!CSVFilePath.IsEmpty())
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Auto-detected track CSV: %s"), *CSVFilePath);
+		}
+	}
+
 	if (!CSVFilePath.IsEmpty())
 	{
 		SpawnFromCSV();
@@ -22,25 +46,26 @@ void AFSDSConeSpawner::BeginPlay()
 		SpawnTestTrack();
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Spawned %d cones"), TotalSpawned);
+	UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Spawned %d cones on %s"),
+		TotalSpawned, *GetWorld()->GetMapName());
 }
 
 void AFSDSConeSpawner::SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation)
 {
-	if (!Mesh || !GetWorld()) return;
+	// Not used anymore — we spawn Blueprint actors instead
+}
+
+void AFSDSConeSpawner::SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation)
+{
+	if (!BPClass || !GetWorld()) return;
 
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	AActor* ConeActor = GetWorld()->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Rotation, Location), Params);
+	AActor* ConeActor = GetWorld()->SpawnActor<AActor>(BPClass, FTransform(Rotation, Location), Params);
 	if (ConeActor)
 	{
-		UStaticMeshComponent* MeshComp = NewObject<UStaticMeshComponent>(ConeActor, TEXT("ConeMesh"));
-		MeshComp->SetStaticMesh(Mesh);
-		MeshComp->SetRelativeScale3D(FVector(ConeScale * 0.5f)); // Scale down cone shape
-		ConeActor->SetRootComponent(MeshComp);
-		MeshComp->RegisterComponent();
-		ConeActor->AddInstanceComponent(MeshComp);
+		ConeActor->SetActorScale3D(FVector(ConeScale));
 		TotalSpawned++;
 	}
 }
@@ -104,10 +129,39 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		return;
 	}
 
-	UStaticMesh* BlueMesh = LoadObject<UStaticMesh>(nullptr, *BlueConeAssetPath);
-	UStaticMesh* YellowMesh = LoadObject<UStaticMesh>(nullptr, *YellowConeAssetPath);
-	UStaticMesh* OrangeBigMesh = LoadObject<UStaticMesh>(nullptr, *OrangeBigConeAssetPath);
-	UStaticMesh* OrangeSmallMesh = LoadObject<UStaticMesh>(nullptr, *OrangeSmallConeAssetPath);
+	// Load cone Blueprint classes — try multiple loading strategies
+	auto LoadConeBP = [](const TCHAR* Path) -> UClass* {
+		FString FullPath(Path);
+
+		// Strategy 1: StaticLoadClass with _C suffix
+		FString ClassPath = FullPath + TEXT("_C");
+		UClass* Class = StaticLoadClass(AActor::StaticClass(), nullptr, *ClassPath);
+		if (Class) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via StaticLoadClass: %s"), *ClassPath); return Class; }
+
+		// Strategy 2: Load UBlueprint then get GeneratedClass
+		UBlueprint* BP = LoadObject<UBlueprint>(nullptr, Path);
+		if (BP && BP->GeneratedClass) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via UBlueprint: %s"), Path); return BP->GeneratedClass; }
+
+		// Strategy 3: FSoftClassPath (async-safe)
+		FSoftClassPath SoftPath(FullPath + TEXT("_C"));
+		UClass* SoftClass = SoftPath.TryLoadClass<AActor>();
+		if (SoftClass) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via FSoftClassPath: %s"), Path); return SoftClass; }
+
+		// Strategy 4: Try with .asset_name suffix pattern
+		FString AssetName = FPaths::GetBaseFilename(FullPath);
+		FString PackagePath = FPaths::GetPath(FullPath);
+		FString AltPath = PackagePath + TEXT(".") + AssetName + TEXT("_C");
+		Class = StaticLoadClass(AActor::StaticClass(), nullptr, *AltPath);
+		if (Class) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via alt path: %s"), *AltPath); return Class; }
+
+		UE_LOG(LogTemp, Warning, TEXT("FSDS Cones: ALL strategies failed for %s"), Path);
+		return nullptr;
+	};
+
+	UClass* BlueBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/blue_trafficone"));
+	UClass* YellowBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/yellow_trafficone"));
+	UClass* OrangeBigBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/orange_trafficone"));
+	UClass* OrangeSmallBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/orange_mini_trafficone"));
 
 	TArray<FString> Lines;
 	FileContent.ParseIntoArrayLines(Lines);
@@ -122,15 +176,15 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		float X = FCString::Atof(*Parts[1]) * 100.f; // meters to cm
 		float Y = FCString::Atof(*Parts[2]) * -100.f; // flip Y, meters to cm
 
-		UStaticMesh* Mesh = nullptr;
-		if (Type == TEXT("blue")) Mesh = BlueMesh;
-		else if (Type == TEXT("yellow")) Mesh = YellowMesh;
-		else if (Type == TEXT("big_orange")) Mesh = OrangeBigMesh;
-		else if (Type == TEXT("small_orange")) Mesh = OrangeSmallMesh;
+		UClass* BPClass = nullptr;
+		if (Type == TEXT("blue")) BPClass = BlueBP;
+		else if (Type == TEXT("yellow")) BPClass = YellowBP;
+		else if (Type == TEXT("big_orange")) BPClass = OrangeBigBP;
+		else if (Type == TEXT("small_orange")) BPClass = OrangeSmallBP;
 
-		if (Mesh)
+		if (BPClass)
 		{
-			SpawnCone(Mesh, FVector(X, Y, HeightOffset), FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f));
+			SpawnConeBP(BPClass, FVector(X, Y, HeightOffset), FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f));
 		}
 	}
 }

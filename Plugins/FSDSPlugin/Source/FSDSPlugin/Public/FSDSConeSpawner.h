@@ -68,6 +68,7 @@ private:
 	void SpawnTestTrack();
 	void SpawnFromCSV();
 	void SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
+	void SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 
 	int32 TotalSpawned = 0;
 };
