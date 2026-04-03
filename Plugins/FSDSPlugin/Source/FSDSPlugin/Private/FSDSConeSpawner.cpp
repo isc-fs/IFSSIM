@@ -1,6 +1,8 @@
 #include "FSDSConeSpawner.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
 #include "Engine/Blueprint.h"
 #include "Misc/FileHelper.h"
 
@@ -29,6 +31,10 @@ void AFSDSConeSpawner::BeginPlay()
 		else if (MapName.Contains(TEXT("Skidpad")))
 		{
 			CSVFilePath = FPaths::Combine(TracksDir, TEXT("skidpad.csv"));
+		}
+		else if (MapName.Contains(TEXT("customMap")) || MapName.Contains(TEXT("Custom")))
+		{
+			CSVFilePath = FPaths::Combine(TracksDir, TEXT("random_track.csv"));
 		}
 
 		if (!CSVFilePath.IsEmpty())
@@ -163,6 +169,35 @@ void AFSDSConeSpawner::SpawnFromCSV()
 	UClass* OrangeBigBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/orange_trafficone"));
 	UClass* OrangeSmallBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/orange_mini_trafficone"));
 
+	// Fallback: load per-color cone StaticMeshes (these have baked materials)
+	UStaticMesh* BlueConeMesh = nullptr;
+	UStaticMesh* YellowConeMesh = nullptr;
+	UStaticMesh* OrangeConeMesh = nullptr;
+	UStaticMesh* OrangeBigConeMesh = nullptr;
+	UStaticMesh* DefaultConeMesh = nullptr;
+
+	if (!BlueBP || !YellowBP)
+	{
+		// Try per-color meshes first (these are complete colored cone models)
+		BlueConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue.trafficone_mini_blue"));
+		YellowConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow"));
+		OrangeConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange.trafficone_mini_orange"));
+		OrangeBigConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange.trafficone_big_orange"));
+
+		// Fallback to engine cone
+		DefaultConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cone.Cone"));
+
+		if (!BlueConeMesh) BlueConeMesh = DefaultConeMesh;
+		if (!YellowConeMesh) YellowConeMesh = DefaultConeMesh;
+		if (!OrangeConeMesh) OrangeConeMesh = DefaultConeMesh;
+		if (!OrangeBigConeMesh) OrangeBigConeMesh = OrangeConeMesh;
+
+		UE_LOG(LogTemp, Log, TEXT("FSDS Cones: StaticMesh mode (blue=%s, yellow=%s, orange=%s)"),
+			BlueConeMesh != DefaultConeMesh ? TEXT("REAL") : TEXT("fallback"),
+			YellowConeMesh != DefaultConeMesh ? TEXT("REAL") : TEXT("fallback"),
+			OrangeConeMesh != DefaultConeMesh ? TEXT("REAL") : TEXT("fallback"));
+	}
+
 	TArray<FString> Lines;
 	FileContent.ParseIntoArrayLines(Lines);
 
@@ -185,6 +220,35 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		if (BPClass)
 		{
 			SpawnConeBP(BPClass, FVector(X, Y, HeightOffset), FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f));
+		}
+		else if (BlueConeMesh || DefaultConeMesh)
+		{
+			// Select correct mesh per cone type
+			UStaticMesh* ConeMesh = DefaultConeMesh;
+			if (Type == TEXT("blue")) ConeMesh = BlueConeMesh;
+			else if (Type == TEXT("yellow")) ConeMesh = YellowConeMesh;
+			else if (Type == TEXT("big_orange")) ConeMesh = OrangeBigConeMesh;
+			else if (Type == TEXT("small_orange") || Type == TEXT("orange")) ConeMesh = OrangeConeMesh;
+
+			if (!ConeMesh) ConeMesh = DefaultConeMesh;
+
+			// Spawn AStaticMeshActor
+			FActorSpawnParameters Params;
+			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+			AStaticMeshActor* ConeActor = GetWorld()->SpawnActor<AStaticMeshActor>(
+				AStaticMeshActor::StaticClass(),
+				FTransform(FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), FVector(X, Y, HeightOffset)),
+				Params);
+
+			if (ConeActor)
+			{
+				UStaticMeshComponent* MeshComp = ConeActor->GetStaticMeshComponent();
+				MeshComp->SetMobility(EComponentMobility::Movable);
+				MeshComp->SetStaticMesh(ConeMesh);
+				MeshComp->SetRelativeScale3D(FVector(ConeScale));
+				TotalSpawned++;
+			}
 		}
 	}
 }
