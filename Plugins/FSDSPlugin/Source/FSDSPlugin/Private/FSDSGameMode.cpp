@@ -1,5 +1,6 @@
 #include "FSDSGameMode.h"
 #include "FSDSVehiclePawn.h"
+#include "FSDSSettings.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
@@ -18,9 +19,9 @@ void AFSDSGameMode::StartPlay()
 	LogStartup();
 	SpawnVehicle();
 
-	// Start RPC server
+	// Start RPC server with settings string
 	RpcServer.SetVehiclePawn(VehiclePawn);
-	RpcServer.SetSettingsString(TEXT("{\"SimMode\": \"Car\"}"));
+	RpcServer.SetSettingsString(FFSDSSettings::Get().GetSettingsString());
 	RpcServer.Start(41451);
 }
 

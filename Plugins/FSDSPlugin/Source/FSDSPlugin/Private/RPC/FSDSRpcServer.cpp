@@ -217,6 +217,66 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return TEXT("true");
 	}
 
+	else if (Method == TEXT("simGetImage"))
+	{
+		// Parse: simGetImage camera_name image_type
+		if (!VehiclePawn) return TEXT("{}");
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
+		int32 ImgType = (Parts.Num() >= 3) ? FCString::Atoi(*Parts[2]) : 0;
+
+		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
+		if (!Cam)
+		{
+			for (auto& Pair : VehiclePawn->Cameras)
+			{
+				Cam = Pair.Value;
+				break;
+			}
+		}
+		if (!Cam) return TEXT("{\"error\":\"no camera\"}");
+
+		// Image capture MUST run on game thread
+		int32 PngSize = 0;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+
+		AsyncTask(ENamedThreads::GameThread, [Cam, ImgType, &PngSize, DoneEvent]() {
+			TArray<uint8> PngData = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
+			PngSize = PngData.Num();
+			DoneEvent->Trigger();
+		});
+
+		DoneEvent->Wait(3000); // 3 second timeout
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+
+		return FString::Printf(TEXT("{\"size\":%d,\"camera\":\"%s\",\"type\":%d}"),
+			PngSize, *CamName, ImgType);
+	}
+	else if (Method == TEXT("listCameras"))
+	{
+		if (!VehiclePawn) return TEXT("[]");
+		FString Result = TEXT("[");
+		bool bFirst = true;
+		for (auto& Pair : VehiclePawn->Cameras)
+		{
+			if (!bFirst) Result += TEXT(",");
+			Result += FString::Printf(TEXT("\"%s\""), *Pair.Key);
+			bFirst = false;
+		}
+		Result += TEXT("]");
+		return Result;
+	}
+	else if (Method == TEXT("simGetGroundTruthKinematics"))
+	{
+		if (!VehiclePawn) return TEXT("{}");
+		auto State = VehiclePawn->GetCarState();
+		return FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f}"),
+			State.Position.X / 100.0, State.Position.Y / 100.0, State.Position.Z / 100.0,
+			State.LinearVelocity.X / 100.0, State.LinearVelocity.Y / 100.0, State.LinearVelocity.Z / 100.0,
+			State.LinearAcceleration.X / 100.0, State.LinearAcceleration.Y / 100.0, State.LinearAcceleration.Z / 100.0);
+	}
+
 	return TEXT("{\"error\":\"unknown method\"}");
 }
 

@@ -1,0 +1,37 @@
+{
+  "SettingsVersion": 1.2,
+  "SimMode": "Car",
+  "ViewMode": "SpringArmChase",
+  "ClockSpeed": 1.0,
+  "Vehicles": {
+    "FSCar": {
+      "VehicleType": "ChaosCar",
+      "EnableCollisions": true,
+      "AllowAPIAlways": true,
+      "AutoCreate": true,
+      "Sensors": {
+        "Imu": { "SensorType": 2, "Enabled": true },
+        "Gps": { "SensorType": 3, "Enabled": true },
+        "Lidar1": {
+          "SensorType": 6, "Enabled": true,
+          "NumberOfChannels": 4, "PointsPerSecond": 40960,
+          "RotationsPerSecond": 10,
+          "VerticalFOVUpper": 0, "VerticalFOVLower": -25,
+          "HorizontalFOVStart": 0, "HorizontalFOVEnd": 359,
+          "X": 1.4, "Y": 0, "Z": -0.2
+        },
+        "GSS": { "SensorType": 7, "Enabled": true }
+      },
+      "Cameras": {
+        "cam1": {
+          "CaptureSettings": [{ "ImageType": 0, "Width": 785, "Height": 785, "FOV_Degrees": 90 }],
+          "X": 1.6, "Y": 0, "Z": -0.2, "Pitch": 0, "Roll": 0, "Yaw": 0
+        },
+        "cam2": {
+          "CaptureSettings": [{ "ImageType": 0, "Width": 785, "Height": 785, "FOV_Degrees": 90 }],
+          "X": 1.6, "Y": -0.15, "Z": -0.2, "Pitch": 0, "Roll": 0, "Yaw": -10
+        }
+      }
+    }
+  }
+}
