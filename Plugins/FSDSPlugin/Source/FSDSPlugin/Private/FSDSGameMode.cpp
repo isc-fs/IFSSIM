@@ -1,6 +1,7 @@
 #include "FSDSGameMode.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
+#include "FSDSConeSpawner.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
@@ -18,6 +19,11 @@ void AFSDSGameMode::StartPlay()
 	Super::StartPlay();
 	LogStartup();
 	SpawnVehicle();
+
+	// Spawn cone spawner (auto-places cones on the track)
+	FActorSpawnParameters ConeSpawnParams;
+	ConeSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	GetWorld()->SpawnActor<AFSDSConeSpawner>(AFSDSConeSpawner::StaticClass(), FTransform::Identity, ConeSpawnParams);
 
 	// Start RPC server
 	RpcServer.SetVehiclePawn(VehiclePawn);
