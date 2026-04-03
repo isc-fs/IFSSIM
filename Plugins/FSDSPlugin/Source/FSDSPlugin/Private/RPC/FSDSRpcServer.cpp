@@ -480,6 +480,91 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return TEXT("true");
 	}
 
+	// === New Sensors ===
+
+	else if (Method == TEXT("getDistanceSensorData"))
+	{
+		if (!VehiclePawn || !VehiclePawn->DistanceSensor) return TEXT("{}");
+		auto Data = VehiclePawn->DistanceSensor->GetOutput();
+		return FString::Printf(TEXT("{\"distance\":%.4f,\"min\":%.2f,\"max\":%.2f}"),
+			Data.Distance, Data.MinDistance, Data.MaxDistance);
+	}
+	else if (Method == TEXT("getBarometerData"))
+	{
+		if (!VehiclePawn || !VehiclePawn->BarometerSensor) return TEXT("{}");
+		auto Data = VehiclePawn->BarometerSensor->GetOutput();
+		return FString::Printf(TEXT("{\"altitude\":%.4f,\"pressure\":%.2f,\"temperature\":%.2f}"),
+			Data.Altitude, Data.Pressure, Data.Temperature);
+	}
+	else if (Method == TEXT("getMagnetometerData"))
+	{
+		if (!VehiclePawn || !VehiclePawn->MagnetometerSensor) return TEXT("{}");
+		auto Data = VehiclePawn->MagnetometerSensor->GetOutput();
+		return FString::Printf(TEXT("{\"mx\":%.6f,\"my\":%.6f,\"mz\":%.6f}"),
+			Data.MagneticField.X, Data.MagneticField.Y, Data.MagneticField.Z);
+	}
+
+	// === simGetImages (batch) ===
+
+	else if (Method == TEXT("simGetImages"))
+	{
+		if (!VehiclePawn) return TEXT("[]");
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		FString Result = TEXT("[");
+		bool bFirst = true;
+		for (int32 i = 1; i < Parts.Num(); i++)
+		{
+			FString CamName, TypeStr;
+			Parts[i].Split(TEXT(":"), &CamName, &TypeStr);
+			int32 ImgType = FCString::Atoi(*TypeStr);
+			UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
+			if (!Cam) continue;
+			int32 PngSize = 0;
+			FEvent* Done = FPlatformProcess::GetSynchEventFromPool(true);
+			AsyncTask(ENamedThreads::GameThread, [Cam, ImgType, &PngSize, Done]() {
+				TArray<uint8> Png = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
+				PngSize = Png.Num();
+				Done->Trigger();
+			});
+			Done->Wait(3000);
+			FPlatformProcess::ReturnSynchEventToPool(Done);
+			if (!bFirst) Result += TEXT(",");
+			Result += FString::Printf(TEXT("{\"camera\":\"%s\",\"type\":%d,\"size\":%d}"), *CamName, ImgType, PngSize);
+			bFirst = false;
+		}
+		Result += TEXT("]");
+		return Result;
+	}
+
+	// === Weather / TimeOfDay stubs ===
+
+	else if (Method == TEXT("simEnableWeather") || Method == TEXT("simSetWeatherParameter") || Method == TEXT("simSetTimeOfDay"))
+	{
+		return TEXT("true");
+	}
+
+	// === Visualization stubs ===
+
+	else if (Method == TEXT("simPlotPoints") || Method == TEXT("simPlotLineStrip") ||
+		Method == TEXT("simPlotLineList") || Method == TEXT("simPlotArrows") ||
+		Method == TEXT("simPlotStrings") || Method == TEXT("simPlotTransforms") ||
+		Method == TEXT("simPlotTransformsWithNames") || Method == TEXT("simFlushPersistentMarkers"))
+	{
+		return TEXT("true");
+	}
+
+	// === Segmentation stubs ===
+
+	else if (Method == TEXT("simSetSegmentationObjectID")) { return TEXT("true"); }
+	else if (Method == TEXT("simGetSegmentationObjectID")) { return TEXT("0"); }
+	else if (Method == TEXT("simSwapTextures")) { return TEXT("[]"); }
+
+	// === Version ===
+
+	else if (Method == TEXT("getServerVersion")) { return TEXT("2"); }
+	else if (Method == TEXT("getMinRequiredClientVersion")) { return TEXT("1"); }
+
 	return TEXT("{\"error\":\"unknown method\"}");
 }
 

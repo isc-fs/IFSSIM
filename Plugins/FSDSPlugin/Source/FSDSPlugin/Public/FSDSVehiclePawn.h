@@ -11,6 +11,9 @@
 #include "Sensors/FSDSImuSensor.h"
 #include "Sensors/FSDSGpsSensor.h"
 #include "Sensors/FSDSGssSensor.h"
+#include "Sensors/FSDSDistanceSensor.h"
+#include "Sensors/FSDSBarometerSensor.h"
+#include "Sensors/FSDSMagnetometerSensor.h"
 #include "Vehicles/FSDSWheelFront.h"
 #include "Vehicles/FSDSWheelRear.h"
 #include "FSDSVehiclePawn.generated.h"
@@ -95,6 +98,15 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
 	UFSDSGssSensor* GssSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSDistanceSensor* DistanceSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSBarometerSensor* BarometerSensor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSMagnetometerSensor* MagnetometerSensor;
 
 	/** Create sensors from settings.json config (call in BeginPlay) */
 	void SetupSensorsFromSettings();

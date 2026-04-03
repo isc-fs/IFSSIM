@@ -113,6 +113,9 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	ImuSensor = CreateDefaultSubobject<UFSDSImuSensor>(TEXT("ImuSensor"));
 	GpsSensor = CreateDefaultSubobject<UFSDSGpsSensor>(TEXT("GpsSensor"));
 	GssSensor = CreateDefaultSubobject<UFSDSGssSensor>(TEXT("GssSensor"));
+	DistanceSensor = CreateDefaultSubobject<UFSDSDistanceSensor>(TEXT("DistanceSensor"));
+	BarometerSensor = CreateDefaultSubobject<UFSDSBarometerSensor>(TEXT("BarometerSensor"));
+	MagnetometerSensor = CreateDefaultSubobject<UFSDSMagnetometerSensor>(TEXT("MagnetometerSensor"));
 }
 
 void AFSDSVehiclePawn::SetupVehicleMovement()
