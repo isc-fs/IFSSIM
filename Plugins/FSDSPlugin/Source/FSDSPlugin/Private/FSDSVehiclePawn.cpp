@@ -273,44 +273,66 @@ void AFSDSVehiclePawn::BeginPlay()
 		UMaterialInterface* JuntsMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_junts_Formula.mat_junts_Formula"));
 		UMaterialInterface* NoseMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "nose_red_mat.nose_red_mat"));
 
-		// Try to get the original material slot names and assign appropriate materials
 		int32 NumMaterials = GetMesh()->GetNumMaterials();
 		USkeletalMesh* SkelMesh = GetMesh()->GetSkeletalMeshAsset();
 
-		int32 Assigned = 0;
+		// Log unique slot names to understand the mesh structure
+		TSet<FString> UniqueNames;
 		for (int32 i = 0; i < NumMaterials; i++)
 		{
-			// Get the original material slot name from the skeletal mesh
 			FName SlotName = SkelMesh->GetMaterials()[i].MaterialSlotName;
-			FString SlotStr = SlotName.ToString().ToLower();
-
-			UMaterialInterface* MatToUse = nullptr;
-
-			if (SlotStr.Contains("carbon") || SlotStr.Contains("fiber"))
-				MatToUse = CarbonMat;
-			else if (SlotStr.Contains("chassis") || SlotStr.Contains("frame"))
-				MatToUse = ChassisMat;
-			else if (SlotStr.Contains("yellow") || SlotStr.Contains("accent"))
-				MatToUse = YellowMat;
-			else if (SlotStr.Contains("dash") || SlotStr.Contains("cockpit") || SlotStr.Contains("interior"))
-				MatToUse = DashMat;
-			else if (SlotStr.Contains("nose") || SlotStr.Contains("front"))
-				MatToUse = NoseMat ? NoseMat : RedMat;
-			else if (SlotStr.Contains("tire") || SlotStr.Contains("rubber") || SlotStr.Contains("wheel"))
-				MatToUse = ChassisMat; // Dark for tires
-			else if (SlotStr.Contains("junt") || SlotStr.Contains("joint"))
-				MatToUse = JuntsMat;
+			UniqueNames.Add(SlotName.ToString());
+		}
+		// Log unique imported names (these contain the original material references)
+		TMap<FString, int32> ImportedNameCounts;
+		for (int32 i = 0; i < NumMaterials; i++)
+		{
+			FName ImportedName = SkelMesh->GetMaterials()[i].ImportedMaterialSlotName;
+			FString Key = ImportedName.ToString();
+			if (ImportedNameCounts.Contains(Key))
+				ImportedNameCounts[Key]++;
 			else
-				MatToUse = RedMat; // Default to red for body panels
-
-			if (MatToUse)
-			{
-				GetMesh()->SetMaterial(i, MatToUse);
-				Assigned++;
-			}
+				ImportedNameCounts.Add(Key, 1);
+		}
+		UE_LOG(LogTemp, Log, TEXT("FSDS: %d slots, %d unique imported names:"), NumMaterials, ImportedNameCounts.Num());
+		for (auto& Pair : ImportedNameCounts)
+		{
+			UE_LOG(LogTemp, Log, TEXT("  '%s' (%d slots)"), *Pair.Key, Pair.Value);
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Assigned materials to %d/%d slots by name matching"), Assigned, NumMaterials);
+		// Check how many slots already have valid materials loaded
+		// (the /AirSim/ mount point may have resolved them automatically)
+		int32 ValidMats = 0;
+		int32 NullMats = 0;
+		for (int32 i = 0; i < NumMaterials; i++)
+		{
+			UMaterialInterface* ExistingMat = SkelMesh->GetMaterials()[i].MaterialInterface;
+			if (ExistingMat)
+				ValidMats++;
+			else
+				NullMats++;
+		}
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Materials — %d valid, %d null (out of %d)"), ValidMats, NullMats, NumMaterials);
+
+		// Keep valid materials, fill nulls with chassis (dark) material
+		int32 Fixed = 0;
+		for (int32 i = 0; i < NumMaterials; i++)
+		{
+			UMaterialInterface* ExistingMat = SkelMesh->GetMaterials()[i].MaterialInterface;
+			if (ExistingMat)
+			{
+				// Material resolved from the asset — use it as-is
+				GetMesh()->SetMaterial(i, ExistingMat);
+			}
+			else
+			{
+				// Null — fill with dark chassis material
+				GetMesh()->SetMaterial(i, ChassisMat ? ChassisMat : RedMat);
+				Fixed++;
+			}
+		}
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Kept %d original materials, filled %d null slots with chassis material"),
+			ValidMats, Fixed);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Vehicle pawn spawned at %s (Chaos: %s)"),
