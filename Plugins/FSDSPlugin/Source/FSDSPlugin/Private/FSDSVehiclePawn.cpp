@@ -314,25 +314,34 @@ void AFSDSVehiclePawn::BeginPlay()
 		}
 		UE_LOG(LogTemp, Log, TEXT("FSDS: Materials — %d valid, %d null (out of %d)"), ValidMats, NullMats, NumMaterials);
 
-		// Keep valid materials, fill nulls with chassis (dark) material
+		// Load British Racing Green material
+		UMaterialInterface* GreenMat = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/matreials_and_textures/mat_british_green.mat_british_green"));
+
+		// Keep valid materials, fill nulls with chassis, apply green to Element 112 (body panel)
 		int32 Fixed = 0;
 		for (int32 i = 0; i < NumMaterials; i++)
 		{
+			if (i == 112 && GreenMat)
+			{
+				// Element 112: body panel → British Racing Green
+				GetMesh()->SetMaterial(i, GreenMat);
+				continue;
+			}
+
 			UMaterialInterface* ExistingMat = SkelMesh->GetMaterials()[i].MaterialInterface;
 			if (ExistingMat)
 			{
-				// Material resolved from the asset — use it as-is
 				GetMesh()->SetMaterial(i, ExistingMat);
 			}
 			else
 			{
-				// Null — fill with dark chassis material
 				GetMesh()->SetMaterial(i, ChassisMat ? ChassisMat : RedMat);
 				Fixed++;
 			}
 		}
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Kept %d original materials, filled %d null slots with chassis material"),
-			ValidMats, Fixed);
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Kept %d original, %d null→chassis, Element 112→%s"),
+			ValidMats, Fixed, GreenMat ? TEXT("British Green") : TEXT("fallback"));
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Vehicle pawn spawned at %s (Chaos: %s)"),
