@@ -1,6 +1,7 @@
 #include "FSDSVehiclePawn.h"
 #include "Components/InputComponent.h"
-#include "Components/BoxComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 #include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -8,35 +9,79 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	// Root collision box
-	UBoxComponent* BoxComp = CreateDefaultSubobject<UBoxComponent>(TEXT("BoxCollision"));
-	BoxComp->SetBoxExtent(FVector(200.f, 100.f, 60.f));
-	BoxComp->SetSimulatePhysics(false);
-	BoxComp->SetCollisionProfileName(TEXT("Pawn"));
-	SetRootComponent(BoxComp);
+	// Get the Chaos vehicle movement component
+	VehicleMovement = CastChecked<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 
-	// Visible car body mesh (cube placeholder)
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (CubeMesh.Succeeded())
+	// Try to load the Formula Student skeletal mesh
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> CarMesh(
+		TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/FormulaMesh.FormulaMesh"));
+
+	if (CarMesh.Succeeded())
 	{
-		CarBodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CarBodyMesh"));
-		CarBodyMesh->SetupAttachment(RootComponent);
-		CarBodyMesh->SetStaticMesh(CubeMesh.Object);
-		CarBodyMesh->SetRelativeScale3D(FVector(4.0f, 2.0f, 1.2f));
-		CarBodyMesh->SetRelativeLocation(FVector(0.f, 0.f, 0.f));
-		CarBodyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		GetMesh()->SetSkeletalMesh(CarMesh.Object);
+		GetMesh()->SetSimulatePhysics(true);
+
+		// Load physics asset
+		static ConstructorHelpers::FObjectFinder<UPhysicsAsset> PhysAsset(
+			TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/FormulaMesh_PhysicsAsset.FormulaMesh_PhysicsAsset"));
+		if (PhysAsset.Succeeded())
+		{
+			GetMesh()->SetPhysicsAsset(PhysAsset.Object);
+			UE_LOG(LogTemp, Log, TEXT("FSDS: PhysicsAsset loaded"));
+		}
+
+		// Load animation blueprint if available
+		static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBP(
+			TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/FormulaAnim"));
+		if (AnimBP.Succeeded())
+		{
+			GetMesh()->SetAnimInstanceClass(AnimBP.Class);
+			UE_LOG(LogTemp, Log, TEXT("FSDS: FormulaAnim loaded"));
+		}
+
+		// Check if skeleton has wheel bones
+		if (CarMesh.Object->GetRefSkeleton().FindBoneIndex(FName("WheelFL")) != INDEX_NONE)
+		{
+			// Material assignment is deferred to BeginPlay where we create
+			// a dynamic material instance with a visible color
+
+			bChaosVehicleActive = true;
+			UE_LOG(LogTemp, Log, TEXT("FSDS: FormulaMesh loaded with wheel bones — Chaos vehicle ACTIVE"));
+		}
+		else
+		{
+			bChaosVehicleActive = false;
+			UE_LOG(LogTemp, Warning, TEXT("FSDS: FormulaMesh loaded but NO wheel bones found. Bones in skeleton:"));
+			const FReferenceSkeleton& RefSkel = CarMesh.Object->GetRefSkeleton();
+			for (int32 i = 0; i < FMath::Min(RefSkel.GetRawBoneNum(), 20); i++)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d]: %s"), i, *RefSkel.GetBoneName(i).ToString());
+			}
+		}
+	}
+	else
+	{
+		// Fallback: use a simple cube mesh
+		static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+		if (CubeMesh.Succeeded())
+		{
+			UStaticMeshComponent* PlaceholderMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaceholderMesh"));
+			PlaceholderMesh->SetupAttachment(GetMesh());
+			PlaceholderMesh->SetStaticMesh(CubeMesh.Object);
+			PlaceholderMesh->SetRelativeScale3D(FVector(4.0f, 2.0f, 1.2f));
+			PlaceholderMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+
+		bChaosVehicleActive = false;
+		UE_LOG(LogTemp, Warning, TEXT("FSDS: FormulaMesh not found — using placeholder cube. Chaos vehicle disabled."));
 	}
 
-	// Floating pawn movement — simple WASD driving
-	Movement = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("Movement"));
-	Movement->MaxSpeed = 2000.f;      // 20 m/s = ~72 km/h
-	Movement->Acceleration = 4000.f;   // Fast acceleration
-	Movement->Deceleration = 8000.f;   // Quick braking
-	Movement->TurningBoost = 2.0f;
+	// Configure Chaos vehicle physics (works when skeletal mesh has wheel bones)
+	SetupVehicleMovement();
 
 	// Spring arm for chase camera
 	SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
-	SpringArm->SetupAttachment(RootComponent);
+	SpringArm->SetupAttachment(GetRootComponent());
 	SpringArm->TargetArmLength = 600.f;
 	SpringArm->SetRelativeLocation(FVector(-50.f, 0.f, 200.f));
 	SpringArm->SetRelativeRotation(FRotator(-15.f, 0.f, 0.f));
@@ -52,7 +97,7 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 
 	// --- Sensors ---
 	CameraSensor = CreateDefaultSubobject<UFSDSCameraSensor>(TEXT("CameraSensor"));
-	CameraSensor->SetupAttachment(RootComponent);
+	CameraSensor->SetupAttachment(GetMesh());
 	CameraSensor->SetRelativeLocation(FVector(160.f, 0.f, 50.f));
 
 	LidarSensor = CreateDefaultSubobject<UFSDSLidarSensor>(TEXT("LidarSensor"));
@@ -61,74 +106,196 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	GssSensor = CreateDefaultSubobject<UFSDSGssSensor>(TEXT("GssSensor"));
 }
 
+void AFSDSVehiclePawn::SetupVehicleMovement()
+{
+	if (!VehicleMovement) return;
+
+	// --- Engine (matching FSDS/Colosseum) ---
+	VehicleMovement->EngineSetup.MaxRPM = 5700.f;
+	VehicleMovement->EngineSetup.MaxTorque = 500.f;
+	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
+	TorqueCurve->Reset();
+	TorqueCurve->AddKey(0.f, 400.f);
+	TorqueCurve->AddKey(1890.f, 500.f);
+	TorqueCurve->AddKey(5730.f, 400.f);
+
+	// --- Transmission ---
+	VehicleMovement->TransmissionSetup.bUseAutomaticGears = true;
+	VehicleMovement->TransmissionSetup.GearChangeTime = 0.15f;
+
+	// --- Differential ---
+	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::AllWheelDrive;
+	VehicleMovement->DifferentialSetup.FrontRearSplit = 0.65f;
+
+	// --- Steering curve (speed-dependent) ---
+	FRichCurve* SteeringCurve = VehicleMovement->SteeringSetup.SteeringCurve.GetRichCurve();
+	SteeringCurve->Reset();
+	SteeringCurve->AddKey(0.f, 1.0f);
+	SteeringCurve->AddKey(40.f, 0.7f);
+	SteeringCurve->AddKey(120.f, 0.6f);
+
+	// --- Wheels ---
+	VehicleMovement->WheelSetups.SetNum(4);
+
+	VehicleMovement->WheelSetups[0].WheelClass = UFSDSWheelFront::StaticClass();
+	VehicleMovement->WheelSetups[0].BoneName = FName("WheelFL");
+	VehicleMovement->WheelSetups[0].AdditionalOffset = FVector(0.f, -8.f, 0.f);
+
+	VehicleMovement->WheelSetups[1].WheelClass = UFSDSWheelFront::StaticClass();
+	VehicleMovement->WheelSetups[1].BoneName = FName("WheelFR");
+	VehicleMovement->WheelSetups[1].AdditionalOffset = FVector(0.f, 8.f, 0.f);
+
+	VehicleMovement->WheelSetups[2].WheelClass = UFSDSWheelRear::StaticClass();
+	VehicleMovement->WheelSetups[2].BoneName = FName("WheelRL");
+	VehicleMovement->WheelSetups[2].AdditionalOffset = FVector(0.f, -8.f, 0.f);
+
+	VehicleMovement->WheelSetups[3].WheelClass = UFSDSWheelRear::StaticClass();
+	VehicleMovement->WheelSetups[3].BoneName = FName("WheelRR");
+	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
+
+	// --- Physics ---
+	VehicleMovement->Mass = 300.f;
+	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.333f, 1.2f);
+	VehicleMovement->CenterOfMassOverride = FVector(8.f, 0.f, 0.f);
+	VehicleMovement->bEnableCenterOfMassOverride = true;
+}
+
 void AFSDSVehiclePawn::BeginPlay()
 {
 	Super::BeginPlay();
-	PreviousPosition = GetActorLocation();
-	UE_LOG(LogTemp, Log, TEXT("FSDS: Vehicle pawn spawned at %s"), *GetActorLocation().ToString());
+
+	// Load and apply FSDS car materials at runtime
+	if (GetMesh() && GetMesh()->GetSkeletalMeshAsset())
+	{
+		const FString MatPath = TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/matreials_and_textures/");
+
+		UMaterialInterface* RedMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "m_red_real_formula_mat.m_red_real_formula_mat"));
+		UMaterialInterface* CarbonMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_carbonFiber_Formula.mat_carbonFiber_Formula"));
+		UMaterialInterface* ChassisMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_chassis_Formula.mat_chassis_Formula"));
+		UMaterialInterface* YellowMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_yellow_Formula.mat_yellow_Formula"));
+		UMaterialInterface* DashMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_dashboard_Formula.mat_dashboard_Formula"));
+		UMaterialInterface* JuntsMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_junts_Formula.mat_junts_Formula"));
+		UMaterialInterface* NoseMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "nose_red_mat.nose_red_mat"));
+
+		// Try to get the original material slot names and assign appropriate materials
+		int32 NumMaterials = GetMesh()->GetNumMaterials();
+		USkeletalMesh* SkelMesh = GetMesh()->GetSkeletalMeshAsset();
+
+		int32 Assigned = 0;
+		for (int32 i = 0; i < NumMaterials; i++)
+		{
+			// Get the original material slot name from the skeletal mesh
+			FName SlotName = SkelMesh->GetMaterials()[i].MaterialSlotName;
+			FString SlotStr = SlotName.ToString().ToLower();
+
+			UMaterialInterface* MatToUse = nullptr;
+
+			if (SlotStr.Contains("carbon") || SlotStr.Contains("fiber"))
+				MatToUse = CarbonMat;
+			else if (SlotStr.Contains("chassis") || SlotStr.Contains("frame"))
+				MatToUse = ChassisMat;
+			else if (SlotStr.Contains("yellow") || SlotStr.Contains("accent"))
+				MatToUse = YellowMat;
+			else if (SlotStr.Contains("dash") || SlotStr.Contains("cockpit") || SlotStr.Contains("interior"))
+				MatToUse = DashMat;
+			else if (SlotStr.Contains("nose") || SlotStr.Contains("front"))
+				MatToUse = NoseMat ? NoseMat : RedMat;
+			else if (SlotStr.Contains("tire") || SlotStr.Contains("rubber") || SlotStr.Contains("wheel"))
+				MatToUse = ChassisMat; // Dark for tires
+			else if (SlotStr.Contains("junt") || SlotStr.Contains("joint"))
+				MatToUse = JuntsMat;
+			else
+				MatToUse = RedMat; // Default to red for body panels
+
+			if (MatToUse)
+			{
+				GetMesh()->SetMaterial(i, MatToUse);
+				Assigned++;
+			}
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Assigned materials to %d/%d slots by name matching"), Assigned, NumMaterials);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS: Vehicle pawn spawned at %s (Chaos: %s)"),
+		*GetActorLocation().ToString(),
+		bChaosVehicleActive ? TEXT("YES") : TEXT("NO - fallback mode"));
 }
 
 void AFSDSVehiclePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// Calculate velocity and acceleration
-	FVector CurrentPosition = GetActorLocation();
-	FVector CurrentVelocity = (DeltaTime > 0.f) ? (CurrentPosition - PreviousPosition) / DeltaTime : FVector::ZeroVector;
-
+	// Acceleration tracking
+	FVector CurrentVelocity = GetVelocity();
 	if (DeltaTime > 0.f)
 	{
 		CurrentAcceleration = (CurrentVelocity - PreviousVelocity) / DeltaTime;
 	}
 	PreviousVelocity = CurrentVelocity;
-	PreviousPosition = CurrentPosition;
+
+	// Apply controls to Chaos vehicle
+	if (VehicleMovement)
+	{
+		VehicleMovement->SetThrottleInput(CurrentControls.Throttle);
+		VehicleMovement->SetSteeringInput(CurrentControls.Steering);
+		VehicleMovement->SetBrakeInput(CurrentControls.Brake);
+		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
+
+		if (CurrentControls.bIsManualGear)
+		{
+			VehicleMovement->SetTargetGear(CurrentControls.ManualGear, CurrentControls.bGearImmediate);
+		}
+		else
+		{
+			VehicleMovement->SetUseAutomaticGears(true);
+		}
+	}
 }
 
 void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-	PlayerInputComponent->BindAxis("MoveForward", this, &AFSDSVehiclePawn::OnMoveForward);
-	PlayerInputComponent->BindAxis("MoveRight", this, &AFSDSVehiclePawn::OnMoveRight);
+	PlayerInputComponent->BindAxis("MoveForward", this, &AFSDSVehiclePawn::OnThrottleInput);
+	PlayerInputComponent->BindAxis("MoveRight", this, &AFSDSVehiclePawn::OnSteeringInput);
+	PlayerInputComponent->BindAxis("Brake", this, &AFSDSVehiclePawn::OnBrakeInput);
+
+	PlayerInputComponent->BindAction("Handbrake", IE_Pressed, this, &AFSDSVehiclePawn::OnHandbrakePressed);
+	PlayerInputComponent->BindAction("Handbrake", IE_Released, this, &AFSDSVehiclePawn::OnHandbrakeReleased);
 }
 
-void AFSDSVehiclePawn::OnMoveForward(float Value)
+void AFSDSVehiclePawn::OnThrottleInput(float Value)
 {
-	if (Value != 0.f)
-	{
-		FVector Forward = GetActorForwardVector();
-		AddMovementInput(Forward, Value);
-	}
+	if (!bApiControlEnabled)
+		CurrentControls.Throttle = FMath::Clamp(Value, -1.f, 1.f);
 }
 
-void AFSDSVehiclePawn::OnMoveRight(float Value)
+void AFSDSVehiclePawn::OnSteeringInput(float Value)
 {
-	if (Value != 0.f)
-	{
-		// Rotate the pawn for steering
-		FRotator NewRotation = GetActorRotation();
-		NewRotation.Yaw += Value * 2.0f; // Steering sensitivity
-		SetActorRotation(NewRotation);
-	}
+	if (!bApiControlEnabled)
+		CurrentControls.Steering = FMath::Clamp(Value, -1.f, 1.f);
 }
 
-// --- Programmatic control ---
+void AFSDSVehiclePawn::OnBrakeInput(float Value)
+{
+	if (!bApiControlEnabled)
+		CurrentControls.Brake = FMath::Clamp(Value, 0.f, 1.f);
+}
+
+void AFSDSVehiclePawn::OnHandbrakePressed()
+{
+	if (!bApiControlEnabled) CurrentControls.bHandbrake = true;
+}
+
+void AFSDSVehiclePawn::OnHandbrakeReleased()
+{
+	if (!bApiControlEnabled) CurrentControls.bHandbrake = false;
+}
 
 void AFSDSVehiclePawn::SetCarControls(const FCarControls& Controls)
 {
 	CurrentControls = Controls;
-
-	// Apply controls as movement input
-	if (FMath::Abs(Controls.Throttle) > 0.01f)
-	{
-		AddMovementInput(GetActorForwardVector(), Controls.Throttle);
-	}
-	if (FMath::Abs(Controls.Steering) > 0.01f)
-	{
-		FRotator NewRotation = GetActorRotation();
-		NewRotation.Yaw += Controls.Steering * 2.0f;
-		SetActorRotation(NewRotation);
-	}
 }
 
 AFSDSVehiclePawn::FCarControls AFSDSVehiclePawn::GetCarControls() const
@@ -140,17 +307,21 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 {
 	FCarState State;
 
-	State.Speed = PreviousVelocity.Size() / 100.f; // cm/s to m/s
+	State.Speed = GetVelocity().Size() / 100.f;
 	State.Position = GetActorLocation();
 	State.Orientation = GetActorQuat();
-	State.LinearVelocity = PreviousVelocity;
-	State.AngularVelocity = FVector::ZeroVector;
+	State.LinearVelocity = GetVelocity();
+	State.AngularVelocity = GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
 	State.LinearAcceleration = CurrentAcceleration;
 	State.bHandbrake = CurrentControls.bHandbrake;
-	State.Gear = 1;
-	State.RPM = 3000.f;
-	State.MaxRPM = 5700.f;
-	State.Timestamp = FPlatformTime::Cycles64();
 
+	if (VehicleMovement)
+	{
+		State.Gear = VehicleMovement->GetCurrentGear();
+		State.RPM = VehicleMovement->GetEngineRotationSpeed();
+		State.MaxRPM = VehicleMovement->GetEngineMaxRotationSpeed();
+	}
+
+	State.Timestamp = FPlatformTime::Cycles64();
 	return State;
 }

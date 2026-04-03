@@ -7,6 +7,9 @@
 AFSDSGameMode::AFSDSGameMode()
 {
 	DefaultPawnClass = AFSDSVehiclePawn::StaticClass();
+
+	// Allow spawning even if there's collision at the spawn point
+	bUseSeamlessTravel = false;
 }
 
 void AFSDSGameMode::StartPlay()
@@ -26,6 +29,22 @@ void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	RpcServer.Stop();
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Simulator shutting down"));
 	Super::EndPlay(EndPlayReason);
+}
+
+APawn* AFSDSGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* NewPlayer, const FTransform& SpawnTransform)
+{
+	// Spawn with collision override to avoid "collision at spawn location" failure
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	APawn* Pawn = GetWorld()->SpawnActor<AFSDSVehiclePawn>(
+		AFSDSVehiclePawn::StaticClass(), SpawnTransform, SpawnParams);
+
+	if (Pawn)
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Vehicle spawned via custom spawn (collision override)"));
+	}
+	return Pawn;
 }
 
 void AFSDSGameMode::SpawnVehicle()
