@@ -360,65 +360,73 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 	else if (Method == TEXT("listSceneObjects"))
 	{
-		// Parse optional regex: listSceneObjects [regex]
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		FString Filter = (Parts.Num() >= 2) ? Parts[1] : TEXT("*");
 
-		FString Result = TEXT("[");
-		bool bFirst = true;
+		FString Result;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
 
-		if (World)
-		{
-			for (TActorIterator<AActor> It(World); It; ++It)
+		AsyncTask(ENamedThreads::GameThread, [this, Filter, &Result, DoneEvent]() {
+			Result = TEXT("[");
+			bool bFirst = true;
+			if (World)
 			{
-				FString ActorName = It->GetName();
-				if (Filter == TEXT("*") || ActorName.Contains(Filter))
+				for (TActorIterator<AActor> It(World); It; ++It)
 				{
-					if (!bFirst) Result += TEXT(",");
-					Result += FString::Printf(TEXT("\"%s\""), *ActorName);
-					bFirst = false;
+					FString ActorName = It->GetName();
+					if (Filter == TEXT("*") || ActorName.Contains(Filter))
+					{
+						if (!bFirst) Result += TEXT(",");
+						Result += FString::Printf(TEXT("\"%s\""), *ActorName);
+						bFirst = false;
+					}
 				}
 			}
-		}
-		Result += TEXT("]");
+			Result += TEXT("]");
+			DoneEvent->Trigger();
+		});
+
+		DoneEvent->Wait(3000);
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
 		return Result;
 	}
 	else if (Method == TEXT("getObjectPose"))
 	{
-		// Parse: getObjectPose object_name
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		if (Parts.Num() < 2) return TEXT("{\"error\":\"missing object_name\"}");
 		FString ObjName = Parts[1];
 
-		FVector PosENU = FVector::ZeroVector;
-		FQuat OriENU = FQuat::Identity;
-		bool bFound = false;
+		FString Result;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
 
-		if (World)
-		{
-			for (TActorIterator<AActor> It(World); It; ++It)
+		AsyncTask(ENamedThreads::GameThread, [this, ObjName, &Result, DoneEvent]() {
+			if (World)
 			{
-				if (It->GetName() == ObjName)
+				for (TActorIterator<AActor> It(World); It; ++It)
 				{
-					PosENU = FSDSCoord::UEToENU(It->GetActorLocation());
-					OriENU = FSDSCoord::UEQuatToENU(It->GetActorQuat());
-					bFound = true;
-					break;
+					if (It->GetName() == ObjName)
+					{
+						FVector PosENU = FSDSCoord::UEToENU(It->GetActorLocation());
+						FQuat OriENU = FSDSCoord::UEQuatToENU(It->GetActorQuat());
+						Result = FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+							PosENU.X, PosENU.Y, PosENU.Z, OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
+						DoneEvent->Trigger();
+						return;
+					}
 				}
 			}
-		}
+			Result = TEXT("{\"error\":\"object not found\"}");
+			DoneEvent->Trigger();
+		});
 
-		if (!bFound) return TEXT("{\"error\":\"object not found\"}");
-
-		return FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
-			PosENU.X, PosENU.Y, PosENU.Z,
-			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
+		DoneEvent->Wait(3000);
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+		return Result;
 	}
 	else if (Method == TEXT("setObjectPose"))
 	{
-		// Parse: setObjectPose object_name x y z
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		if (Parts.Num() < 5) return TEXT("{\"error\":\"usage: setObjectPose name x y z\"}");
@@ -427,22 +435,30 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		FVector PosENU(FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]), FCString::Atof(*Parts[4]));
 		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
 
-		bool bFound = false;
-		AsyncTask(ENamedThreads::GameThread, [this, ObjName, PosUE, &bFound]() {
-			if (!World) return;
-			for (TActorIterator<AActor> It(World); It; ++It)
+		FString Result;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+
+		AsyncTask(ENamedThreads::GameThread, [this, ObjName, PosUE, &Result, DoneEvent]() {
+			if (World)
 			{
-				if (It->GetName() == ObjName)
+				for (TActorIterator<AActor> It(World); It; ++It)
 				{
-					It->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
-					bFound = true;
-					break;
+					if (It->GetName() == ObjName)
+					{
+						It->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+						Result = TEXT("true");
+						DoneEvent->Trigger();
+						return;
+					}
 				}
 			}
+			Result = TEXT("{\"error\":\"object not found\"}");
+			DoneEvent->Trigger();
 		});
 
-		FPlatformProcess::Sleep(0.05f); // Brief wait for game thread
-		return bFound ? TEXT("true") : TEXT("{\"error\":\"object not found\"}");
+		DoneEvent->Wait(3000);
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+		return Result;
 	}
 	else if (Method == TEXT("simSetVehiclePose"))
 	{
