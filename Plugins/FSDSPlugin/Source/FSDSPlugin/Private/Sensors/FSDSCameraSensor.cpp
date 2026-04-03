@@ -25,8 +25,33 @@ void UFSDSCameraSensor::Configure(const FString& InCameraName, const FFSDSCaptur
 	ImageHeight = Settings.Height;
 	FOVAngle = Settings.FOV_Degrees;
 
-	UE_LOG(LogTemp, Log, TEXT("FSDS Camera '%s': %dx%d, FOV=%.0f, Type=%d"),
-		*CameraName, ImageWidth, ImageHeight, FOVAngle, (int)Settings.ImageType);
+	// Projection mode
+	if (Settings.bOrthographic)
+	{
+		ProjectionType = ECameraProjectionMode::Orthographic;
+		OrthoWidth = Settings.OrthoWidth * 100.f; // meters to cm
+	}
+
+	// Motion blur
+	if (Settings.MotionBlurAmount > 0.f)
+	{
+		ShowFlags.SetMotionBlur(true);
+		PostProcessSettings.bOverride_MotionBlurAmount = true;
+		PostProcessSettings.MotionBlurAmount = Settings.MotionBlurAmount;
+	}
+	else
+	{
+		ShowFlags.SetMotionBlur(false);
+	}
+
+	// Auto-exposure
+	PostProcessSettings.bOverride_AutoExposureMethod = true;
+	PostProcessSettings.bOverride_AutoExposureBias = true;
+	PostProcessSettings.AutoExposureBias = Settings.AutoExposureBias;
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS Camera '%s': %dx%d, FOV=%.0f, Type=%d, MotionBlur=%.1f, Ortho=%d"),
+		*CameraName, ImageWidth, ImageHeight, FOVAngle, (int)Settings.ImageType,
+		Settings.MotionBlurAmount, Settings.bOrthographic ? 1 : 0);
 }
 
 void UFSDSCameraSensor::InitializeRenderTarget()

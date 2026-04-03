@@ -504,6 +504,62 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			Data.MagneticField.X, Data.MagneticField.Y, Data.MagneticField.Z);
 	}
 
+	// === Camera info/control ===
+
+	else if (Method == TEXT("simGetCameraInfo"))
+	{
+		if (!VehiclePawn) return TEXT("{}");
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
+
+		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
+		if (!Cam) return TEXT("{\"error\":\"camera not found\"}");
+
+		FVector Pos = FSDSCoord::UEToENU(Cam->GetComponentLocation());
+		FQuat Ori = FSDSCoord::UEQuatToENU(Cam->GetComponentQuat());
+
+		return FString::Printf(TEXT("{\"camera\":\"%s\",\"fov\":%.1f,\"width\":%d,\"height\":%d,\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+			*CamName, Cam->FOVAngle, Cam->ImageWidth, Cam->ImageHeight,
+			Pos.X, Pos.Y, Pos.Z, Ori.W, Ori.X, Ori.Y, Ori.Z);
+	}
+	else if (Method == TEXT("simSetCameraFov"))
+	{
+		// Parse: simSetCameraFov camera_name fov_degrees
+		if (!VehiclePawn) return TEXT("false");
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 3) return TEXT("{\"error\":\"usage: simSetCameraFov cam1 90\"}");
+
+		FString CamName = Parts[1];
+		float NewFOV = FCString::Atof(*Parts[2]);
+
+		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
+		if (!Cam) return TEXT("{\"error\":\"camera not found\"}");
+
+		Cam->FOVAngle = NewFOV;
+		return TEXT("true");
+	}
+	else if (Method == TEXT("simSetCameraOrientation"))
+	{
+		// Parse: simSetCameraOrientation camera_name pitch yaw roll
+		if (!VehiclePawn) return TEXT("false");
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 5) return TEXT("{\"error\":\"usage: simSetCameraOrientation cam1 pitch yaw roll\"}");
+
+		FString CamName = Parts[1];
+		float Pitch = FCString::Atof(*Parts[2]);
+		float Yaw = FCString::Atof(*Parts[3]);
+		float Roll = FCString::Atof(*Parts[4]);
+
+		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
+		if (!Cam) return TEXT("{\"error\":\"camera not found\"}");
+
+		Cam->SetRelativeRotation(FRotator(Pitch, Yaw, Roll));
+		return TEXT("true");
+	}
+
 	// === simGetImages (batch) ===
 
 	else if (Method == TEXT("simGetImages"))
