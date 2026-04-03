@@ -240,7 +240,63 @@ void FFSDSSettings::ParseCamera(const FString& Name, TSharedPtr<FJsonObject> Cam
 			double FOV = 90.0;
 			CapObj->TryGetNumberField(TEXT("FOV_Degrees"), FOV); Cap.FOV_Degrees = FOV;
 
+			// Auto-exposure
+			double DblVal;
+			if (CapObj->TryGetNumberField(TEXT("AutoExposureSpeed"), DblVal)) Cap.AutoExposureSpeed = DblVal;
+			if (CapObj->TryGetNumberField(TEXT("AutoExposureBias"), DblVal)) Cap.AutoExposureBias = DblVal;
+			if (CapObj->TryGetNumberField(TEXT("AutoExposureMaxBrightness"), DblVal)) Cap.AutoExposureMaxBrightness = DblVal;
+			if (CapObj->TryGetNumberField(TEXT("AutoExposureMinBrightness"), DblVal)) Cap.AutoExposureMinBrightness = DblVal;
+
+			// Motion blur
+			if (CapObj->TryGetNumberField(TEXT("MotionBlurAmount"), DblVal)) Cap.MotionBlurAmount = DblVal;
+
+			// Gamma
+			if (CapObj->TryGetNumberField(TEXT("TargetGamma"), DblVal)) Cap.TargetGamma = DblVal;
+
+			// Projection
+			bool bOrtho = false;
+			if (CapObj->TryGetBoolField(TEXT("ProjectionMode"), bOrtho)) Cap.bOrthographic = bOrtho;
+			if (CapObj->TryGetNumberField(TEXT("OrthoWidth"), DblVal)) Cap.OrthoWidth = DblVal;
+
 			Camera.CaptureSettings.Add(Cap);
+		}
+	}
+
+	// Gimbal settings
+	const TSharedPtr<FJsonObject>* GimbalObj;
+	if (CameraObj->TryGetObjectField(TEXT("Gimbal"), GimbalObj))
+	{
+		(*GimbalObj)->TryGetBoolField(TEXT("Enabled"), Camera.Gimbal.bEnabled);
+		double Stab = 0;
+		if ((*GimbalObj)->TryGetNumberField(TEXT("Stabilization"), Stab)) Camera.Gimbal.Stabilization = Stab;
+	}
+
+	// Noise settings (per image type)
+	const TSharedPtr<FJsonObject>* NoiseObj;
+	if (CameraObj->TryGetObjectField(TEXT("NoiseSettings"), NoiseObj))
+	{
+		for (auto& NoisePair : (*NoiseObj)->Values)
+		{
+			int32 ImgType = FCString::Atoi(*NoisePair.Key);
+			const TSharedPtr<FJsonObject>* NObj;
+			if (NoisePair.Value->TryGetObject(NObj))
+			{
+				FFSDSNoiseSettings Noise;
+				(*NObj)->TryGetBoolField(TEXT("Enabled"), Noise.bEnabled);
+				double D;
+				if ((*NObj)->TryGetNumberField(TEXT("RandContrib"), D)) Noise.RandContrib = D;
+				if ((*NObj)->TryGetNumberField(TEXT("RandSpeed"), D)) Noise.RandSpeed = D;
+				if ((*NObj)->TryGetNumberField(TEXT("RandSize"), D)) Noise.RandSize = D;
+				if ((*NObj)->TryGetNumberField(TEXT("RandDensity"), D)) Noise.RandDensity = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveContrib"), D)) Noise.HorzWaveContrib = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveStrength"), D)) Noise.HorzWaveStrength = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveVertSize"), D)) Noise.HorzWaveVertSize = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveScreenSize"), D)) Noise.HorzWaveScreenSize = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzNoiseLinesContrib"), D)) Noise.HorzNoiseLinesContrib = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzDistortionContrib"), D)) Noise.HorzDistortionContrib = D;
+				if ((*NObj)->TryGetNumberField(TEXT("HorzDistortionStrength"), D)) Noise.HorzDistortionStrength = D;
+				Camera.NoiseSettings.Add(ImgType, Noise);
+			}
 		}
 	}
 
