@@ -98,10 +98,6 @@ void FFSDSRpcServer::ServerThreadFunc()
 
 void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 {
-	// Simple text-based protocol for now:
-	// Client sends: "method_name\n"
-	// Server responds: "result_json\n"
-
 	uint8 Buffer[4096];
 
 	while (bRunning && ClientSocket)
@@ -117,6 +113,13 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 				FString Request = UTF8_TO_TCHAR((char*)Buffer);
 				Request.TrimEndInline();
 
+				// Check if this is a binary request
+				if (ProcessBinaryRequest(Request, ClientSocket))
+				{
+					continue; // Binary response already sent
+				}
+
+				// Text response
 				FString Response = ProcessRequest(Request);
 				Response += TEXT("\n");
 
@@ -127,7 +130,7 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 		}
 		else
 		{
-			break; // Client disconnected
+			break;
 		}
 	}
 }
@@ -480,7 +483,99 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	return TEXT("{\"error\":\"unknown method\"}");
 }
 
+bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* ClientSocket)
+{
+	FString Method, Args;
+	Request.Split(TEXT(" "), &Method, &Args);
+	if (Method.IsEmpty()) Method = Request;
+
+	if (Method == TEXT("simGetImageBinary"))
+	{
+		// Parse: simGetImageBinary camera_name image_type
+		if (!VehiclePawn) return false;
+
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
+		int32 ImgType = (Parts.Num() >= 3) ? FCString::Atoi(*Parts[2]) : 0;
+
+		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
+		if (!Cam)
+		{
+			for (auto& Pair : VehiclePawn->Cameras)
+			{
+				Cam = Pair.Value;
+				break;
+			}
+		}
+		if (!Cam) return false;
+
+		// Capture on game thread
+		TArray<uint8> PngData;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+
+		AsyncTask(ENamedThreads::GameThread, [Cam, ImgType, &PngData, DoneEvent]() {
+			PngData = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
+			DoneEvent->Trigger();
+		});
+
+		DoneEvent->Wait(5000);
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+
+		// Send header: "IMG:size\n" followed by raw PNG bytes
+		FString Header = FString::Printf(TEXT("IMG:%d\n"), PngData.Num());
+		FTCHARToUTF8 HeaderConv(*Header);
+		int32 Sent = 0;
+		ClientSocket->Send((const uint8*)HeaderConv.Get(), HeaderConv.Length(), Sent);
+
+		// Send raw PNG bytes
+		if (PngData.Num() > 0)
+		{
+			int32 TotalSent = 0;
+			while (TotalSent < PngData.Num())
+			{
+				int32 ChunkSent = 0;
+				ClientSocket->Send(PngData.GetData() + TotalSent, PngData.Num() - TotalSent, ChunkSent);
+				if (ChunkSent <= 0) break;
+				TotalSent += ChunkSent;
+			}
+		}
+		return true;
+	}
+	else if (Method == TEXT("getLidarDataBinary"))
+	{
+		if (!VehiclePawn || !VehiclePawn->LidarSensor) return false;
+
+		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
+		int32 NumPoints = Points.Num() / 3;
+
+		// Send header: "PTS:num_points\n" followed by raw float data
+		FString Header = FString::Printf(TEXT("PTS:%d\n"), NumPoints);
+		FTCHARToUTF8 HeaderConv(*Header);
+		int32 Sent = 0;
+		ClientSocket->Send((const uint8*)HeaderConv.Get(), HeaderConv.Length(), Sent);
+
+		// Send raw float array (x,y,z per point)
+		if (Points.Num() > 0)
+		{
+			int32 ByteSize = Points.Num() * sizeof(float);
+			int32 TotalSent = 0;
+			const uint8* Data = (const uint8*)Points.GetData();
+			while (TotalSent < ByteSize)
+			{
+				int32 ChunkSent = 0;
+				ClientSocket->Send(Data + TotalSent, ByteSize - TotalSent, ChunkSent);
+				if (ChunkSent <= 0) break;
+				TotalSent += ChunkSent;
+			}
+		}
+		return true;
+	}
+
+	return false; // Not a binary request
+}
+
 void FFSDSRpcServer::BindMethods()
 {
-	// Methods are handled in ProcessRequest() — no separate binding needed
+	// Methods are handled in ProcessRequest/ProcessBinaryRequest
 }

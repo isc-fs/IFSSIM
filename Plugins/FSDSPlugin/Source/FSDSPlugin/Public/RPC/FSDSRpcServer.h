@@ -38,6 +38,12 @@ private:
 	void ServerThreadFunc();
 	void HandleClient(FSocket* ClientSocket);
 	FString ProcessRequest(const FString& Request);
+	bool ProcessBinaryRequest(const FString& Request, FSocket* ClientSocket);
+
+	// Cached binary data for thread-safe transfer
+	TArray<uint8> CachedImageData;
+	TArray<float> CachedLidarData;
+	FCriticalSection BinaryDataLock;
 
 	std::unique_ptr<std::thread> ServerThread;
 	std::atomic<bool> bRunning{false};
