@@ -1,6 +1,7 @@
 #include "FSDSVehiclePawn.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/BoxComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
@@ -84,9 +85,17 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	}
 	else if (VehicleMovement)
 	{
-		// Disable Chaos vehicle component to prevent crash on broken skeleton
+		// Skeleton failed to load — disable Chaos to prevent crash
 		VehicleMovement->Deactivate();
-		UE_LOG(LogTemp, Warning, TEXT("FSDS: Chaos vehicle movement deactivated (broken skeleton)"));
+		GetMesh()->SetSimulatePhysics(false);
+
+		// Add FloatingPawnMovement as minimal fallback
+		FallbackMovement = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("FallbackMovement"));
+		FallbackMovement->MaxSpeed = 2000.f;
+		FallbackMovement->Acceleration = 4000.f;
+		FallbackMovement->Deceleration = 8000.f;
+
+		UE_LOG(LogTemp, Error, TEXT("FSDS: Skeleton failed — Chaos disabled, using FloatingPawnMovement"));
 	}
 
 	// Spring arm for chase camera
@@ -321,9 +330,10 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	}
 	PreviousVelocity = CurrentVelocity;
 
-	// Apply controls to Chaos vehicle
-	if (VehicleMovement)
+	// Apply controls
+	if (bChaosVehicleActive && VehicleMovement)
 	{
+		// Chaos vehicle mode
 		VehicleMovement->SetThrottleInput(CurrentControls.Throttle);
 		VehicleMovement->SetSteeringInput(CurrentControls.Steering);
 		VehicleMovement->SetBrakeInput(CurrentControls.Brake);
@@ -336,6 +346,20 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		else
 		{
 			VehicleMovement->SetUseAutomaticGears(true);
+		}
+	}
+	else if (FallbackMovement)
+	{
+		// Fallback: FloatingPawnMovement (no physics, no gravity)
+		if (FMath::Abs(CurrentControls.Throttle) > 0.01f)
+		{
+			AddMovementInput(GetActorForwardVector(), CurrentControls.Throttle);
+		}
+		if (FMath::Abs(CurrentControls.Steering) > 0.01f)
+		{
+			FRotator NewRot = GetActorRotation();
+			NewRot.Yaw += CurrentControls.Steering * 2.0f;
+			SetActorRotation(NewRot);
 		}
 	}
 }

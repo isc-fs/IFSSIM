@@ -4,6 +4,7 @@
 #include "WheeledVehiclePawn.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "GameFramework/FloatingPawnMovement.h"
 #include "Camera/CameraComponent.h"
 #include "Sensors/FSDSCameraSensor.h"
 #include "Sensors/FSDSLidarSensor.h"
@@ -97,6 +98,12 @@ public:
 
 	/** Create sensors from settings.json config (call in BeginPlay) */
 	void SetupSensorsFromSettings();
+
+	UPROPERTY()
+	UFloatingPawnMovement* FallbackMovement = nullptr;
+
+	UPROPERTY()
+	class UBoxComponent* PhysicsBox = nullptr;
 
 private:
 	void SetupVehicleMovement();
