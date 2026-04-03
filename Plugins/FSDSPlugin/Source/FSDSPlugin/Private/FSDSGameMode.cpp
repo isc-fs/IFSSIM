@@ -19,8 +19,9 @@ void AFSDSGameMode::StartPlay()
 	LogStartup();
 	SpawnVehicle();
 
-	// Start RPC server with settings string
+	// Start RPC server
 	RpcServer.SetVehiclePawn(VehiclePawn);
+	RpcServer.SetWorld(GetWorld());
 	RpcServer.SetSettingsString(FFSDSSettings::Get().GetSettingsString());
 	RpcServer.Start(41451);
 }

@@ -3,6 +3,9 @@
 #include "FSDSReferee.h"
 #include "FSDSCoordinates.h"
 #include "Async/Async.h"
+#include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
+#include "EngineUtils.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 #include "Common/TcpSocketBuilder.h"
@@ -295,6 +298,167 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			AccENU.X, AccENU.Y, AccENU.Z,
 			AngVelENU.X, AngVelENU.Y, AngVelENU.Z,
 			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
+	}
+
+	// === Simulation Control ===
+
+	else if (Method == TEXT("simPause"))
+	{
+		bSimPaused = true;
+		AsyncTask(ENamedThreads::GameThread, [this]() {
+			if (World) UGameplayStatics::SetGamePaused(World, true);
+		});
+		return TEXT("true");
+	}
+	else if (Method == TEXT("simResume"))
+	{
+		bSimPaused = false;
+		AsyncTask(ENamedThreads::GameThread, [this]() {
+			if (World) UGameplayStatics::SetGamePaused(World, false);
+		});
+		return TEXT("true");
+	}
+	else if (Method == TEXT("simIsPaused"))
+	{
+		return bSimPaused ? TEXT("true") : TEXT("false");
+	}
+	else if (Method == TEXT("simContinueForTime"))
+	{
+		// Parse: simContinueForTime seconds
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		float Seconds = (Parts.Num() >= 2) ? FCString::Atof(*Parts[1]) : 1.0f;
+
+		AsyncTask(ENamedThreads::GameThread, [this, Seconds]() {
+			if (World)
+			{
+				UGameplayStatics::SetGamePaused(World, false);
+				// Schedule re-pause after duration
+				FTimerHandle Handle;
+				World->GetTimerManager().SetTimer(Handle, [this]() {
+					UGameplayStatics::SetGamePaused(World, true);
+					bSimPaused = true;
+				}, Seconds, false);
+			}
+		});
+		bSimPaused = false;
+		return TEXT("true");
+	}
+	else if (Method == TEXT("reset"))
+	{
+		AsyncTask(ENamedThreads::GameThread, [this]() {
+			if (World)
+			{
+				// Restart the current level
+				UGameplayStatics::OpenLevel(World, *World->GetMapName(), true);
+			}
+		});
+		return TEXT("true");
+	}
+
+	// === Object APIs ===
+
+	else if (Method == TEXT("listSceneObjects"))
+	{
+		// Parse optional regex: listSceneObjects [regex]
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		FString Filter = (Parts.Num() >= 2) ? Parts[1] : TEXT("*");
+
+		FString Result = TEXT("[");
+		bool bFirst = true;
+
+		if (World)
+		{
+			for (TActorIterator<AActor> It(World); It; ++It)
+			{
+				FString ActorName = It->GetName();
+				if (Filter == TEXT("*") || ActorName.Contains(Filter))
+				{
+					if (!bFirst) Result += TEXT(",");
+					Result += FString::Printf(TEXT("\"%s\""), *ActorName);
+					bFirst = false;
+				}
+			}
+		}
+		Result += TEXT("]");
+		return Result;
+	}
+	else if (Method == TEXT("getObjectPose"))
+	{
+		// Parse: getObjectPose object_name
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2) return TEXT("{\"error\":\"missing object_name\"}");
+		FString ObjName = Parts[1];
+
+		FVector PosENU = FVector::ZeroVector;
+		FQuat OriENU = FQuat::Identity;
+		bool bFound = false;
+
+		if (World)
+		{
+			for (TActorIterator<AActor> It(World); It; ++It)
+			{
+				if (It->GetName() == ObjName)
+				{
+					PosENU = FSDSCoord::UEToENU(It->GetActorLocation());
+					OriENU = FSDSCoord::UEQuatToENU(It->GetActorQuat());
+					bFound = true;
+					break;
+				}
+			}
+		}
+
+		if (!bFound) return TEXT("{\"error\":\"object not found\"}");
+
+		return FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+			PosENU.X, PosENU.Y, PosENU.Z,
+			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
+	}
+	else if (Method == TEXT("setObjectPose"))
+	{
+		// Parse: setObjectPose object_name x y z
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 5) return TEXT("{\"error\":\"usage: setObjectPose name x y z\"}");
+
+		FString ObjName = Parts[1];
+		FVector PosENU(FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]), FCString::Atof(*Parts[4]));
+		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
+
+		bool bFound = false;
+		AsyncTask(ENamedThreads::GameThread, [this, ObjName, PosUE, &bFound]() {
+			if (!World) return;
+			for (TActorIterator<AActor> It(World); It; ++It)
+			{
+				if (It->GetName() == ObjName)
+				{
+					It->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+					bFound = true;
+					break;
+				}
+			}
+		});
+
+		FPlatformProcess::Sleep(0.05f); // Brief wait for game thread
+		return bFound ? TEXT("true") : TEXT("{\"error\":\"object not found\"}");
+	}
+	else if (Method == TEXT("simSetVehiclePose"))
+	{
+		// Parse: simSetVehiclePose x y z
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 4) return TEXT("{\"error\":\"usage: simSetVehiclePose x y z\"}");
+
+		FVector PosENU(FCString::Atof(*Parts[1]), FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]));
+		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
+
+		AsyncTask(ENamedThreads::GameThread, [this, PosUE]() {
+			if (VehiclePawn)
+				VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+		});
+		return TEXT("true");
 	}
 
 	return TEXT("{\"error\":\"unknown method\"}");

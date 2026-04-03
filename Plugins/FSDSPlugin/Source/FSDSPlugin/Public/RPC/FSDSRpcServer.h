@@ -8,11 +8,14 @@
 class FSocket;
 class AFSDSVehiclePawn;
 class AFSDSReferee;
+class UWorld;
 
 /**
  * FSDS RPC Server — TCP server on port 41451.
- * Accepts text-based commands and returns JSON responses.
  * Protocol: "method_name [args]\n" -> "json_response\n"
+ *
+ * Simulation control: simPause, simResume, simStep, reset
+ * Object APIs: listSceneObjects, getObjectPose, setObjectPose
  */
 class FSDSPLUGIN_API FFSDSRpcServer
 {
@@ -26,6 +29,7 @@ public:
 	void SetVehiclePawn(AFSDSVehiclePawn* Pawn) { VehiclePawn = Pawn; }
 	void SetReferee(AFSDSReferee* Ref) { Referee = Ref; }
 	void SetSettingsString(const FString& Settings) { SettingsString = Settings; }
+	void SetWorld(UWorld* InWorld) { World = InWorld; }
 
 	bool IsRunning() const { return bRunning; }
 
@@ -38,9 +42,11 @@ private:
 	std::unique_ptr<std::thread> ServerThread;
 	std::atomic<bool> bRunning{false};
 	std::atomic<bool> bApiControlEnabled{false};
+	std::atomic<bool> bSimPaused{false};
 	uint16 ServerPort = 41451;
 
 	AFSDSVehiclePawn* VehiclePawn = nullptr;
 	AFSDSReferee* Referee = nullptr;
+	UWorld* World = nullptr;
 	FString SettingsString;
 };
