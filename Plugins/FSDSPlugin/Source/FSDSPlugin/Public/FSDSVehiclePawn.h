@@ -76,8 +76,12 @@ public:
 
 	// --- Sensors ---
 
+	/** Multiple cameras from settings.json */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
-	UFSDSCameraSensor* CameraSensor;
+	TMap<FString, UFSDSCameraSensor*> Cameras;
+
+	/** Get a camera by name (returns nullptr if not found) */
+	UFSDSCameraSensor* GetCamera(const FString& Name) const;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
 	UFSDSLidarSensor* LidarSensor;
@@ -90,6 +94,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
 	UFSDSGssSensor* GssSensor;
+
+	/** Create sensors from settings.json config (call in BeginPlay) */
+	void SetupSensorsFromSettings();
 
 private:
 	void SetupVehicleMovement();

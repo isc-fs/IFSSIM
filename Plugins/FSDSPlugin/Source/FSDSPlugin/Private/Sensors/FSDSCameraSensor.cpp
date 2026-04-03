@@ -2,11 +2,13 @@
 #include "IImageWrapperModule.h"
 #include "IImageWrapper.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/World.h"
 
 UFSDSCameraSensor::UFSDSCameraSensor()
 {
-	PrimaryComponentTick.bCanEverTick = true;
-	bCaptureEveryFrame = false; // We capture on demand, not every frame
+	PrimaryComponentTick.bCanEverTick = false;
+	bCaptureEveryFrame = true;
 	bCaptureOnMovement = false;
 }
 
@@ -16,9 +18,15 @@ void UFSDSCameraSensor::BeginPlay()
 	InitializeRenderTarget();
 }
 
-void UFSDSCameraSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void UFSDSCameraSensor::Configure(const FString& InCameraName, const FFSDSCaptureSettings& Settings)
 {
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	CameraName = InCameraName;
+	ImageWidth = Settings.Width;
+	ImageHeight = Settings.Height;
+	FOVAngle = Settings.FOV_Degrees;
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS Camera '%s': %dx%d, FOV=%.0f, Type=%d"),
+		*CameraName, ImageWidth, ImageHeight, FOVAngle, (int)Settings.ImageType);
 }
 
 void UFSDSCameraSensor::InitializeRenderTarget()
@@ -29,7 +37,33 @@ void UFSDSCameraSensor::InitializeRenderTarget()
 		TextureTarget->InitAutoFormat(ImageWidth, ImageHeight);
 		TextureTarget->RenderTargetFormat = RTF_RGBA8;
 		TextureTarget->bAutoGenerateMips = false;
-		UE_LOG(LogTemp, Log, TEXT("FSDS Camera: Render target initialized (%dx%d)"), ImageWidth, ImageHeight);
+		UE_LOG(LogTemp, Log, TEXT("FSDS Camera '%s': Render target %dx%d"), *CameraName, ImageWidth, ImageHeight);
+	}
+}
+
+void UFSDSCameraSensor::ConfigureForImageType(EFSDSImageType ImageType)
+{
+	switch (ImageType)
+	{
+	case EFSDSImageType::Scene:
+		CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+		break;
+	case EFSDSImageType::DepthPlanner:
+	case EFSDSImageType::DepthPerspective:
+	case EFSDSImageType::DepthVis:
+		CaptureSource = ESceneCaptureSource::SCS_SceneDepth;
+		break;
+	case EFSDSImageType::Segmentation:
+		CaptureSource = ESceneCaptureSource::SCS_BaseColor;
+		// For proper segmentation, use stencil buffer
+		// This is a simplified version — full segmentation needs custom post-process
+		break;
+	case EFSDSImageType::SurfaceNormals:
+		CaptureSource = ESceneCaptureSource::SCS_Normal;
+		break;
+	default:
+		CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+		break;
 	}
 }
 
@@ -41,11 +75,10 @@ TArray<FColor> UFSDSCameraSensor::CaptureImageRaw(int32& OutWidth, int32& OutHei
 	{
 		InitializeRenderTarget();
 	}
+	if (!TextureTarget) return Pixels;
 
-	// Trigger a capture
 	CaptureScene();
 
-	// Read pixels from render target
 	FTextureRenderTargetResource* RTResource = TextureTarget->GameThread_GetRenderTargetResource();
 	if (RTResource)
 	{
@@ -58,12 +91,19 @@ TArray<FColor> UFSDSCameraSensor::CaptureImageRaw(int32& OutWidth, int32& OutHei
 	return Pixels;
 }
 
-TArray<uint8> UFSDSCameraSensor::CaptureImagePNG()
+TArray<uint8> UFSDSCameraSensor::CaptureImagePNG(EFSDSImageType ImageType)
 {
 	TArray<uint8> PNGData;
 
+	// Switch capture source for the requested image type
+	ESceneCaptureSource OriginalSource = CaptureSource;
+	ConfigureForImageType(ImageType);
+
 	int32 Width, Height;
 	TArray<FColor> Pixels = CaptureImageRaw(Width, Height);
+
+	// Restore original capture source
+	CaptureSource = OriginalSource;
 
 	if (Pixels.Num() > 0)
 	{

@@ -19,7 +19,9 @@ public class FSDSPlugin : ModuleRules
 			"RenderCore",
 			"ImageWrapper",
 			"Networking",
-			"Sockets"
+			"Sockets",
+			"Json",
+			"JsonUtilities"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
