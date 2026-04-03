@@ -1,9 +1,11 @@
 #include "RPC/FSDSRpcServer.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
+#include "FSDSConeSpawner.h"
 #include "FSDSCoordinates.h"
 #include "Async/Async.h"
 #include "Engine/World.h"
+#include "Engine/StaticMeshActor.h"
 #include "Kismet/GameplayStatics.h"
 #include "EngineUtils.h"
 #include "Sockets.h"
@@ -615,6 +617,58 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("simSetSegmentationObjectID")) { return TEXT("true"); }
 	else if (Method == TEXT("simGetSegmentationObjectID")) { return TEXT("0"); }
 	else if (Method == TEXT("simSwapTextures")) { return TEXT("[]"); }
+
+	// === Track loading ===
+
+	else if (Method == TEXT("loadTrack"))
+	{
+		// Parse: loadTrack path/to/track.csv
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2) return TEXT("{\"error\":\"usage: loadTrack path.csv\"}");
+
+		FString TrackPath = Parts[1];
+
+		// Find and reload the ConeSpawner on game thread
+		FString Result;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+
+		AsyncTask(ENamedThreads::GameThread, [this, TrackPath, &Result, DoneEvent]() {
+			if (!World) { Result = TEXT("{\"error\":\"no world\"}"); DoneEvent->Trigger(); return; }
+
+			// Find existing ConeSpawner
+			AFSDSConeSpawner* Spawner = nullptr;
+			for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+			{
+				Spawner = *It;
+				break;
+			}
+
+			if (!Spawner) { Result = TEXT("{\"error\":\"no ConeSpawner found\"}"); DoneEvent->Trigger(); return; }
+
+			// Destroy all previously spawned cone actors
+			TArray<AActor*> AllActors;
+			UGameplayStatics::GetAllActorsOfClass(World, AStaticMeshActor::StaticClass(), AllActors);
+			for (AActor* A : AllActors)
+			{
+				if (A->GetName().Contains(TEXT("StaticMeshActor")))
+				{
+					A->Destroy();
+				}
+			}
+
+			// Set new CSV path and re-run spawning
+			Spawner->CSVFilePath = TrackPath;
+			Spawner->BeginPlay();
+
+			Result = FString::Printf(TEXT("{\"loaded\":\"%s\"}"), *TrackPath);
+			DoneEvent->Trigger();
+		});
+
+		DoneEvent->Wait(5000);
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+		return Result;
+	}
 
 	// === Version ===
 
