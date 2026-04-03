@@ -13,6 +13,29 @@ void AFSDSConeSpawner::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Auto-detect track CSV from map name
+	if (CSVFilePath.IsEmpty() && GetWorld())
+	{
+		FString MapName = GetWorld()->GetMapName();
+		MapName.RemoveFromStart(TEXT("UEDPIE_0_")); // Strip PIE prefix
+
+		FString TracksDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Content"), TEXT("tracks"));
+
+		if (MapName.Contains(TEXT("Acceleration")))
+		{
+			CSVFilePath = FPaths::Combine(TracksDir, TEXT("acceleration.csv"));
+		}
+		else if (MapName.Contains(TEXT("Skidpad")))
+		{
+			CSVFilePath = FPaths::Combine(TracksDir, TEXT("skidpad.csv"));
+		}
+
+		if (!CSVFilePath.IsEmpty())
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Auto-detected track CSV: %s"), *CSVFilePath);
+		}
+	}
+
 	if (!CSVFilePath.IsEmpty())
 	{
 		SpawnFromCSV();
@@ -22,7 +45,8 @@ void AFSDSConeSpawner::BeginPlay()
 		SpawnTestTrack();
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Spawned %d cones"), TotalSpawned);
+	UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Spawned %d cones on %s"),
+		TotalSpawned, *GetWorld()->GetMapName());
 }
 
 void AFSDSConeSpawner::SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation)
