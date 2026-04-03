@@ -1,25 +1,26 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/FloatingPawnMovement.h"
+#include "WheeledVehiclePawn.h"
+#include "ChaosWheeledVehicleMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
-#include "Components/StaticMeshComponent.h"
 #include "Sensors/FSDSCameraSensor.h"
 #include "Sensors/FSDSLidarSensor.h"
 #include "Sensors/FSDSImuSensor.h"
 #include "Sensors/FSDSGpsSensor.h"
 #include "Sensors/FSDSGssSensor.h"
+#include "Vehicles/FSDSWheelFront.h"
+#include "Vehicles/FSDSWheelRear.h"
 #include "FSDSVehiclePawn.generated.h"
 
 /**
- * FSDS Vehicle Pawn — simple movement for immediate testing.
- * Uses FloatingPawnMovement for WASD driving.
- * Will be upgraded to full Chaos vehicle when skeletal mesh is available.
+ * FSDS Vehicle Pawn — Chaos Physics wheeled vehicle.
+ * Uses AWheeledVehiclePawn with FormulaMesh skeletal mesh.
+ * Falls back to simple movement if skeletal mesh fails to load.
  */
 UCLASS()
-class FSDSPLUGIN_API AFSDSVehiclePawn : public APawn
+class FSDSPLUGIN_API AFSDSVehiclePawn : public AWheeledVehiclePawn
 {
 	GENERATED_BODY()
 
@@ -30,7 +31,7 @@ public:
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void BeginPlay() override;
 
-	// --- Programmatic control (called from RPC) ---
+	// --- Programmatic control ---
 
 	struct FCarControls
 	{
@@ -65,10 +66,7 @@ public:
 	// --- Components ---
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
-	UStaticMeshComponent* CarBodyMesh;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
-	UFloatingPawnMovement* Movement;
+	UChaosWheeledVehicleMovementComponent* VehicleMovement;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	USpringArmComponent* SpringArm;
@@ -94,16 +92,17 @@ public:
 	UFSDSGssSensor* GssSensor;
 
 private:
-	// Keyboard input handlers
-	void OnMoveForward(float Value);
-	void OnMoveRight(float Value);
+	void SetupVehicleMovement();
+	void OnThrottleInput(float Value);
+	void OnSteeringInput(float Value);
+	void OnBrakeInput(float Value);
+	void OnHandbrakePressed();
+	void OnHandbrakeReleased();
 
-	// Current control state
 	FCarControls CurrentControls;
 	bool bApiControlEnabled = false;
+	bool bChaosVehicleActive = false;
 
-	// Previous frame velocity for acceleration calculation
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;
-	FVector PreviousPosition = FVector::ZeroVector;
 };
