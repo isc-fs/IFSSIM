@@ -23,10 +23,4 @@ Thumbs.db
 *.BI
 *.BI2
 
-# Binary content assets (maps, meshes, textures)
-# These are UE4 assets (~1GB) — use Git LFS or download separately
-Content/*.umap
-Content/FormulaStudentAssets/
-Content/RaceCourse/
-Content/Competition/
-Plugins/FSDSPlugin/Content/VehicleAdv/
+# Binary content assets tracked via Git LFS (*.uasset, *.umap)
