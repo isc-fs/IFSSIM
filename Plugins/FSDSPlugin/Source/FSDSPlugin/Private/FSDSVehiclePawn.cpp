@@ -31,14 +31,8 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 			UE_LOG(LogTemp, Log, TEXT("FSDS: PhysicsAsset loaded"));
 		}
 
-		// Load animation blueprint if available
-		static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBP(
-			TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/FormulaAnim"));
-		if (AnimBP.Succeeded())
-		{
-			GetMesh()->SetAnimInstanceClass(AnimBP.Class);
-			UE_LOG(LogTemp, Log, TEXT("FSDS: FormulaAnim loaded"));
-		}
+		// Note: FormulaAnim was a UE4 PhysX animation BP — removed (incompatible with Chaos)
+		// Wheel animation will come from Chaos vehicle component automatically
 
 		// Check if skeleton has wheel bones AND a valid skeleton
 		if (CarMesh.Object->GetSkeleton() != nullptr &&
