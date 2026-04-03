@@ -1,6 +1,7 @@
 #include "RPC/FSDSRpcServer.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
+#include "FSDSCoordinates.h"
 #include "Async/Async.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -156,9 +157,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		if (!VehiclePawn) return TEXT("{}");
 		auto State = VehiclePawn->GetCarState();
-		return FString::Printf(TEXT("{\"speed\":%.4f,\"gear\":%d,\"rpm\":%.1f,\"maxrpm\":%.1f,\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}"),
+		FVector PosENU = FSDSCoord::UEToENU(State.Position);
+		FVector VelENU = FSDSCoord::UEVelocityToENU(State.LinearVelocity);
+		FQuat OriENU = FSDSCoord::UEQuatToENU(State.Orientation);
+		return FString::Printf(TEXT("{\"speed\":%.4f,\"gear\":%d,\"rpm\":%.1f,\"maxrpm\":%.1f,\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
 			State.Speed, State.Gear, State.RPM, State.MaxRPM,
-			State.Position.X, State.Position.Y, State.Position.Z);
+			PosENU.X, PosENU.Y, PosENU.Z,
+			VelENU.X, VelENU.Y, VelENU.Z,
+			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
 	}
 	else if (Method == TEXT("getGpsData"))
 	{
@@ -171,16 +177,23 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		if (!VehiclePawn || !VehiclePawn->ImuSensor) return TEXT("{}");
 		auto Imu = VehiclePawn->ImuSensor->GetOutput();
-		return FString::Printf(TEXT("{\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f}"),
-			Imu.LinearAcceleration.X, Imu.LinearAcceleration.Y, Imu.LinearAcceleration.Z,
-			Imu.AngularVelocity.X, Imu.AngularVelocity.Y, Imu.AngularVelocity.Z);
+		// IMU data is already in body frame, convert to ENU body frame
+		FVector AccENU = FSDSCoord::UEVelocityToENU(Imu.LinearAcceleration);
+		FVector GyroENU = FSDSCoord::UEAngularVelocityToENU(Imu.AngularVelocity);
+		FQuat OriENU = FSDSCoord::UEQuatToENU(Imu.Orientation);
+		return FString::Printf(TEXT("{\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+			AccENU.X, AccENU.Y, AccENU.Z,
+			GyroENU.X, GyroENU.Y, GyroENU.Z,
+			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
 	}
 	else if (Method == TEXT("getGroundSpeedSensorData"))
 	{
 		if (!VehiclePawn || !VehiclePawn->GssSensor) return TEXT("{}");
 		auto Gss = VehiclePawn->GssSensor->GetOutput();
+		// GSS is in body frame — swap axes for ENU body convention
+		FVector VelENU(Gss.LinearVelocity.Y, Gss.LinearVelocity.X, Gss.LinearVelocity.Z);
 		return FString::Printf(TEXT("{\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f}"),
-			Gss.LinearVelocity.X, Gss.LinearVelocity.Y, Gss.LinearVelocity.Z);
+			VelENU.X, VelENU.Y, VelENU.Z);
 	}
 	else if (Method == TEXT("getLidarData"))
 	{
@@ -271,10 +284,17 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		if (!VehiclePawn) return TEXT("{}");
 		auto State = VehiclePawn->GetCarState();
-		return FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f}"),
-			State.Position.X / 100.0, State.Position.Y / 100.0, State.Position.Z / 100.0,
-			State.LinearVelocity.X / 100.0, State.LinearVelocity.Y / 100.0, State.LinearVelocity.Z / 100.0,
-			State.LinearAcceleration.X / 100.0, State.LinearAcceleration.Y / 100.0, State.LinearAcceleration.Z / 100.0);
+		FVector PosENU = FSDSCoord::UEToENU(State.Position);
+		FVector VelENU = FSDSCoord::UEVelocityToENU(State.LinearVelocity);
+		FVector AccENU = FSDSCoord::UEVelocityToENU(State.LinearAcceleration); // Same axis swap
+		FVector AngVelENU = FSDSCoord::UEAngularVelocityToENU(State.AngularVelocity);
+		FQuat OriENU = FSDSCoord::UEQuatToENU(State.Orientation);
+		return FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,\"wx\":%.4f,\"wy\":%.4f,\"wz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+			PosENU.X, PosENU.Y, PosENU.Z,
+			VelENU.X, VelENU.Y, VelENU.Z,
+			AccENU.X, AccENU.Y, AccENU.Z,
+			AngVelENU.X, AngVelENU.Y, AngVelENU.Z,
+			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
 	}
 
 	return TEXT("{\"error\":\"unknown method\"}");

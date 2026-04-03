@@ -140,9 +140,10 @@ void IFSSIMRosWrapper::imuTimerCb()
     sensor_msgs::msg::Imu msg;
     msg.header.stamp = node_->now();
     msg.header.frame_id = vehicle_frame_id_;
-    msg.linear_acceleration.x = client_->parseDouble(resp, "ax") / 100.0; // cm/s^2 to m/s^2
-    msg.linear_acceleration.y = client_->parseDouble(resp, "ay") / 100.0;
-    msg.linear_acceleration.z = client_->parseDouble(resp, "az") / 100.0;
+    // RPC server already outputs in ENU frame (m/s^2)
+    msg.linear_acceleration.x = client_->parseDouble(resp, "ax");
+    msg.linear_acceleration.y = client_->parseDouble(resp, "ay");
+    msg.linear_acceleration.z = client_->parseDouble(resp, "az");
     msg.angular_velocity.x = client_->parseDouble(resp, "gx");
     msg.angular_velocity.y = client_->parseDouble(resp, "gy");
     msg.angular_velocity.z = client_->parseDouble(resp, "gz");
@@ -179,10 +180,16 @@ void IFSSIMRosWrapper::odomTimerCb()
     msg.header.frame_id = map_frame_id_;
     msg.child_frame_id = vehicle_frame_id_;
 
-    // Position (cm to m)
-    msg.pose.pose.position.x = client_->parseDouble(resp, "x") / 100.0;
-    msg.pose.pose.position.y = client_->parseDouble(resp, "y") / 100.0;
-    msg.pose.pose.position.z = client_->parseDouble(resp, "z") / 100.0;
+    // RPC server already outputs in ENU (meters)
+    msg.pose.pose.position.x = client_->parseDouble(resp, "x");
+    msg.pose.pose.position.y = client_->parseDouble(resp, "y");
+    msg.pose.pose.position.z = client_->parseDouble(resp, "z");
+
+    // Orientation
+    msg.pose.pose.orientation.w = client_->parseDouble(resp, "qw");
+    msg.pose.pose.orientation.x = client_->parseDouble(resp, "qx");
+    msg.pose.pose.orientation.y = client_->parseDouble(resp, "qy");
+    msg.pose.pose.orientation.z = client_->parseDouble(resp, "qz");
 
     odom_pub_->publish(msg);
 }
