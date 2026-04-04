@@ -14,10 +14,10 @@
         "Gps": { "SensorType": 3, "Enabled": true },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "NumberOfChannels": 4, "PointsPerSecond": 40960,
+          "NumberOfChannels": 128, "PointsPerSecond": 400000,
           "RotationsPerSecond": 10,
-          "VerticalFOVUpper": 0, "VerticalFOVLower": -25,
-          "HorizontalFOVStart": 0, "HorizontalFOVEnd": 359,
+          "VerticalFOVUpper": 3, "VerticalFOVLower": -16,
+          "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
           "X": 1.4, "Y": 0, "Z": -0.2
         },
         "GSS": { "SensorType": 7, "Enabled": true }

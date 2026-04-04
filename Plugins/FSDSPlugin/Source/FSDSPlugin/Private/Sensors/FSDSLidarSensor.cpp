@@ -37,7 +37,7 @@ void UFSDSLidarSensor::PerformScan()
 
 	// How many rays to cast this frame
 	int32 PointsThisFrame = FMath::CeilToInt(PointsPerSecond * DeltaTime);
-	PointsThisFrame = FMath::Min(PointsThisFrame, 50000); // Cap per-frame for performance
+	PointsThisFrame = FMath::Min(PointsThisFrame, 100000); // Cap per-frame for performance
 
 	float HFov = HorizontalFOVEnd - HorizontalFOVStart;
 	float VFov = VerticalFOVUpper - VerticalFOVLower;
