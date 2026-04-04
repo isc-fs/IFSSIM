@@ -167,7 +167,7 @@ void IFSSIMRosWrapper::initializeSubscribers()
 
 void IFSSIMRosWrapper::initializeTimers()
 {
-    camera_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this));
+    camera_timer_ = node_->create_wall_timer(200ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this)); // 5Hz per camera
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
 

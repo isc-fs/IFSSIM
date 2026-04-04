@@ -1034,7 +1034,7 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 			}
 		}
 
-		// ~10Hz LiDAR (sleep less to compensate for send time)
-		FPlatformProcess::Sleep(0.05f);
+		// 10Hz LiDAR
+		FPlatformProcess::Sleep(0.1f);
 	}
 }
