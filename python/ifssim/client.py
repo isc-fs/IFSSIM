@@ -124,6 +124,18 @@ class IFSSIMClient:
         cmd = f"setCarControls {controls.throttle} {controls.steering} {controls.brake}"
         self._text_cmd(cmd)
 
+    def getCarControls(self, vehicle_name='FSCar'):
+        resp = self._text_cmd("getCarControls")
+        controls = CarControls()
+        controls.throttle = self._parse(resp, "throttle") or 0.0
+        controls.steering = self._parse(resp, "steering") or 0.0
+        controls.brake = self._parse(resp, "brake") or 0.0
+        controls.handbrake = str(self._parse(resp, "handbrake")).lower() == "true"
+        controls.is_manual_gear = str(self._parse(resp, "is_manual_gear")).lower() == "true"
+        controls.manual_gear = int(self._parse(resp, "manual_gear") or 0)
+        controls.gear_immediate = str(self._parse(resp, "gear_immediate")).lower() == "true"
+        return controls
+
     def getCarState(self, vehicle_name='FSCar'):
         resp = self._text_cmd("getCarState")
         state = CarState()
@@ -261,6 +273,26 @@ class IFSSIMClient:
             self._parse(resp, "qw") or 1.0
         )
         return kin
+
+    def simGetVehiclePose(self, vehicle_name='FSCar'):
+        resp = self._text_cmd("simGetVehiclePose")
+        pose = Pose()
+        pose.position = Vector3r(
+            self._parse(resp, "x") or 0.0,
+            self._parse(resp, "y") or 0.0,
+            self._parse(resp, "z") or 0.0
+        )
+        pose.orientation = Quaternionr(
+            self._parse(resp, "qx") or 0.0,
+            self._parse(resp, "qy") or 0.0,
+            self._parse(resp, "qz") or 0.0,
+            self._parse(resp, "qw") or 1.0
+        )
+        return pose
+
+    def simSetVehiclePose(self, pose, ignore_collision=True, vehicle_name='FSCar'):
+        cmd = f"simSetVehiclePose {pose.position.x_val} {pose.position.y_val} {pose.position.z_val}"
+        self._text_cmd(cmd)
 
     # --- Competition ---
 

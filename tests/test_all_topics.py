@@ -209,6 +209,16 @@ def main():
     qw = c.parse(resp, "qw")
     check("quaternion present", qw is not None, f"qw={qw}")
 
+    # 10b. Vehicle pose
+    print("\n--- Vehicle Pose ---")
+    resp = c.text_cmd("simGetVehiclePose")
+    check("simGetVehiclePose responds", "qw" in resp, resp[:80])
+
+    # 10c. Car controls readback
+    print("\n--- Car Controls Readback ---")
+    resp = c.text_cmd("getCarControls")
+    check("getCarControls responds", "throttle" in resp, resp[:80])
+
     # 11. Distance sensor
     print("\n--- Distance Sensor ---")
     resp = c.text_cmd("getDistanceSensorData")
@@ -219,7 +229,7 @@ def main():
     resp = c.text_cmd("getBarometerData")
     check("barometer responds", "pressure" in resp, resp[:80])
     pressure = c.parse(resp, "pressure")
-    check("pressure ~100kPa", pressure is not None and 90000 < pressure < 110000, f"{pressure:.0f} Pa")
+    check("pressure ~100kPa", pressure is not None and 90000 < pressure < 110000, f"{pressure} Pa" if pressure is None else f"{pressure:.0f} Pa")
 
     # 13. Magnetometer
     print("\n--- Magnetometer ---")
