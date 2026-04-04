@@ -1,11 +1,13 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <mutex>
 
 /**
  * Simple TCP client for connecting to the IFSSIM RPC server.
  * Protocol: send "command [args]\n", receive "json_response\n"
+ * Cross-platform: uses Winsock2 on Windows, POSIX sockets on Linux.
  */
 class TcpClient
 {
@@ -32,7 +34,11 @@ public:
     std::string sendBinaryCommand(const std::string& command, std::vector<uint8_t>& outData);
 
 private:
+#ifdef _WIN32
+    unsigned long long socket_fd_ = ~0ULL; // INVALID_SOCKET
+#else
     int socket_fd_ = -1;
+#endif
     bool connected_ = false;
     std::mutex mutex_;
 };

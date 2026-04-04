@@ -1,8 +1,31 @@
 #include "tcp_client.h"
 
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "Ws2_32.lib")
+  typedef SOCKET socket_t;
+  #define INVALID_SOCK INVALID_SOCKET
+  #define CLOSE_SOCKET closesocket
+  static bool wsa_initialized = false;
+  static void init_wsa() {
+      if (!wsa_initialized) {
+          WSADATA wsa;
+          WSAStartup(MAKEWORD(2, 2), &wsa);
+          wsa_initialized = true;
+      }
+  }
+#else
+  #include <sys/socket.h>
+  #include <arpa/inet.h>
+  #include <unistd.h>
+  typedef int socket_t;
+  #define INVALID_SOCK (-1)
+  #define CLOSE_SOCKET close
+  static void init_wsa() {}
+#endif
+
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -17,19 +40,27 @@ TcpClient::~TcpClient()
 bool TcpClient::connect(const std::string& host, int port, double timeout_sec)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    init_wsa();
 
-    socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd_ < 0) {
+    socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCK) {
         std::cerr << "IFSSIM Bridge: Failed to create socket" << std::endl;
         return false;
     }
+    socket_fd_ = (decltype(socket_fd_))sock;
 
     // Set timeout
+#ifdef _WIN32
+    DWORD timeout_ms = (DWORD)(timeout_sec * 1000);
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+#else
     struct timeval tv;
     tv.tv_sec = (int)timeout_sec;
     tv.tv_usec = (int)((timeout_sec - tv.tv_sec) * 1000000);
-    setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
@@ -38,15 +69,15 @@ bool TcpClient::connect(const std::string& host, int port, double timeout_sec)
 
     if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
         std::cerr << "IFSSIM Bridge: Invalid address: " << host << std::endl;
-        close(socket_fd_);
-        socket_fd_ = -1;
+        CLOSE_SOCKET(sock);
+        socket_fd_ = (decltype(socket_fd_))INVALID_SOCK;
         return false;
     }
 
-    if (::connect(socket_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (::connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         std::cerr << "IFSSIM Bridge: Connection failed to " << host << ":" << port << std::endl;
-        close(socket_fd_);
-        socket_fd_ = -1;
+        CLOSE_SOCKET(sock);
+        socket_fd_ = (decltype(socket_fd_))INVALID_SOCK;
         return false;
     }
 
@@ -58,9 +89,10 @@ bool TcpClient::connect(const std::string& host, int port, double timeout_sec)
 void TcpClient::disconnect()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (socket_fd_ >= 0) {
-        close(socket_fd_);
-        socket_fd_ = -1;
+    socket_t sock = (socket_t)socket_fd_;
+    if (sock != INVALID_SOCK) {
+        CLOSE_SOCKET(sock);
+        socket_fd_ = (decltype(socket_fd_))INVALID_SOCK;
     }
     connected_ = false;
 }
@@ -73,18 +105,19 @@ bool TcpClient::isConnected() const
 std::string TcpClient::sendCommand(const std::string& command)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    socket_t sock = (socket_t)socket_fd_;
 
-    if (!connected_ || socket_fd_ < 0) return "";
+    if (!connected_ || sock == INVALID_SOCK) return "";
 
     std::string msg = command + "\n";
-    if (send(socket_fd_, msg.c_str(), msg.size(), 0) < 0) {
+    if (send(sock, msg.c_str(), (int)msg.size(), 0) < 0) {
         connected_ = false;
         return "";
     }
 
     char buffer[8192];
     memset(buffer, 0, sizeof(buffer));
-    int bytes = recv(socket_fd_, buffer, sizeof(buffer) - 1, 0);
+    int bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
     if (bytes <= 0) {
         connected_ = false;
         return "";
@@ -129,11 +162,12 @@ double TcpClient::parseDouble(const std::string& json, const std::string& key)
 std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector<uint8_t>& outData)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    socket_t sock = (socket_t)socket_fd_;
 
-    if (!connected_ || socket_fd_ < 0) return "";
+    if (!connected_ || sock == INVALID_SOCK) return "";
 
     std::string msg = command + "\n";
-    if (send(socket_fd_, msg.c_str(), msg.size(), 0) < 0) {
+    if (send(sock, msg.c_str(), (int)msg.size(), 0) < 0) {
         connected_ = false;
         return "";
     }
@@ -141,7 +175,7 @@ std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector
     // Read header line (e.g., "PTS:1234\n")
     std::string header;
     char c;
-    while (recv(socket_fd_, &c, 1, 0) == 1) {
+    while (recv(sock, &c, 1, 0) == 1) {
         if (c == '\n') break;
         header += c;
     }
@@ -171,7 +205,7 @@ std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector
         outData.resize(dataSize);
         int totalRead = 0;
         while (totalRead < dataSize) {
-            int bytesRead = recv(socket_fd_, (char*)outData.data() + totalRead, dataSize - totalRead, 0);
+            int bytesRead = recv(sock, (char*)outData.data() + totalRead, dataSize - totalRead, 0);
             if (bytesRead <= 0) break;
             totalRead += bytesRead;
         }

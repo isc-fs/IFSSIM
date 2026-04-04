@@ -7,7 +7,7 @@ int main(int argc, char** argv)
 
     auto node = rclcpp::Node::make_shared("ifssim_bridge");
 
-    std::string host = node->declare_parameter<std::string>("host", "localhost");
+    std::string host = node->declare_parameter<std::string>("host", "127.0.0.1");
     int port = node->declare_parameter<int>("port", 41451);
     double timeout = node->declare_parameter<double>("timeout", 5.0);
 

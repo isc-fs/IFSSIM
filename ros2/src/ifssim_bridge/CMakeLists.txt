@@ -16,7 +16,7 @@ find_package(tf2_ros REQUIRED)
 find_package(fs_msgs REQUIRED)
 
 # Bridge library
-add_library(ifssim_ros_wrapper SHARED
+add_library(ifssim_ros_wrapper STATIC
   src/ifssim_ros_wrapper.cpp
   src/tcp_client.cpp
 )
@@ -27,6 +27,11 @@ target_include_directories(ifssim_ros_wrapper PUBLIC
 ament_target_dependencies(ifssim_ros_wrapper
   rclcpp std_msgs geometry_msgs sensor_msgs nav_msgs tf2 tf2_ros fs_msgs
 )
+
+# Link Winsock2 on Windows
+if(WIN32)
+  target_link_libraries(ifssim_ros_wrapper ws2_32)
+endif()
 
 # Main bridge node
 add_executable(ifssim_bridge src/ifssim_bridge_node.cpp)
