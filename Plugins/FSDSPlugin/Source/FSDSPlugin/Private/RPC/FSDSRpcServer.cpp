@@ -980,8 +980,8 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			return;
 		}
 
-		// Pace at ~50Hz — balances data freshness vs game thread load
-		FPlatformProcess::Sleep(0.02f);
+		// Pace at ~400Hz — matches BMI088 IMU rate
+		FPlatformProcess::Sleep(0.0025f);
 	}
 }
 
