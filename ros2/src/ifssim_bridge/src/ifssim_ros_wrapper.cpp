@@ -167,13 +167,16 @@ void IFSSIMRosWrapper::initializeSubscribers()
 
 void IFSSIMRosWrapper::initializeTimers()
 {
-    // Camera disabled by default — enable with parameter camera_enabled:=true
-    bool camera_enabled = node_->declare_parameter<bool>("camera_enabled", false);
-    if (camera_enabled) {
-        camera_timer_ = node_->create_wall_timer(200ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this));
-        RCLCPP_INFO(node_->get_logger(), "Camera streaming enabled at 5Hz");
+    // Camera rate configurable via parameter (default 10Hz, 0 to disable)
+    int camera_hz = node_->declare_parameter<int>("camera_hz", 0);
+    if (camera_hz > 0) {
+        int period_ms = 1000 / camera_hz;
+        camera_timer_ = node_->create_wall_timer(
+            std::chrono::milliseconds(period_ms),
+            std::bind(&IFSSIMRosWrapper::cameraTimerCb, this));
+        RCLCPP_INFO(node_->get_logger(), "Camera streaming at %dHz (%dms)", camera_hz, period_ms);
     } else {
-        RCLCPP_INFO(node_->get_logger(), "Camera streaming disabled (use camera_enabled:=true to enable)");
+        RCLCPP_INFO(node_->get_logger(), "Camera streaming disabled (use camera_hz:=10 to enable)");
     }
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
