@@ -165,10 +165,10 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 
 	if (MeshComp)
 	{
+		// Set collision profile BEFORE enabling physics (order matters in Chaos)
+		MeshComp->SetCollisionProfileName(TEXT("PhysicsActor"));
 		MeshComp->SetSimulatePhysics(true);
 		MeshComp->SetMassOverrideInKg(NAME_None, 1.0f); // ~1 kg traffic cone
-		MeshComp->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		MeshComp->SetCollisionResponseToAllChannels(ECR_Block);
 		MeshComp->SetGenerateOverlapEvents(true);
 	}
 
