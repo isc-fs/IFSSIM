@@ -6,7 +6,8 @@
 
 /**
  * FSDS Referee — tracks competition state: cone hits, lap times, track layout.
- * Called from Blueprint actors (FinishLine, cone triggers) or from C++.
+ * Automatically detects cone hits (overlap events) and lap completions
+ * (finish line trigger from big orange cones).
  */
 
 UENUM(BlueprintType)
@@ -88,6 +89,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "FSDS Referee")
 	void LoadStartPos(FVector Pos);
 
+	/** Register a spawned cone actor for collision tracking */
+	void RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color);
+
+	/** Reset referee state (for new session / track reload) */
+	UFUNCTION(BlueprintCallable, Category = "FSDS Referee")
+	void ResetState();
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -95,4 +103,36 @@ private:
 	FFSDSRefereeState State;
 
 	void AppendCone(FTransform Transform, EFSDSConeColor Color);
+
+	/** Callback when vehicle overlaps a cone */
+	UFUNCTION()
+	void OnConeOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
+		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex,
+		bool bFromSweep, const FHitResult& SweepResult);
+
+	/** Finish line detection */
+	UPROPERTY()
+	class UBoxComponent* FinishLineTrigger = nullptr;
+
+	UFUNCTION()
+	void OnFinishLineOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
+		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex,
+		bool bFromSweep, const FHitResult& SweepResult);
+
+	/** Track cone original positions for displacement detection */
+	TMap<AActor*, FVector> ConeOriginalPositions;
+	TSet<AActor*> HitCones; // Already counted cones (avoid double-counting)
+
+	/** Lap timing */
+	double LapStartTime = 0.0;
+	bool bLapTimerRunning = false;
+	bool bVehicleInsideFinishZone = false; // Debounce
+
+	/** Finish line geometry (computed from big orange cones) */
+	FVector FinishLineCenter = FVector::ZeroVector;
+	FVector FinishLineDirection = FVector::ForwardVector;
+	bool bFinishLineValid = false;
+
+	/** Displacement threshold for cone hit (cm) */
+	float ConeHitThreshold = 15.0f;
 };

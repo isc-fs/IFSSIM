@@ -55,6 +55,7 @@ private:
     void cameraTimerCb();
     void goSignalTimerCb();
     void extraInfoTimerCb();
+    void trackPublishCb();
     void staticTfCb();
 
     // Subscriber callbacks
@@ -113,6 +114,7 @@ private:
     rclcpp::TimerBase::SharedPtr camera_timer_;
     rclcpp::TimerBase::SharedPtr go_signal_timer_;
     rclcpp::TimerBase::SharedPtr extra_info_timer_;
+    rclcpp::TimerBase::SharedPtr track_publish_timer_;
     rclcpp::TimerBase::SharedPtr static_tf_timer_;
 
     // Config

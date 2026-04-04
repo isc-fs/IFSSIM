@@ -36,6 +36,25 @@ void AFSDSConeSpawner::BeginPlay()
 		{
 			CSVFilePath = FPaths::Combine(TracksDir, TEXT("random_track.csv"));
 		}
+		else
+		{
+			// Fallback: try to find a CSV matching the map name
+			FString MapCSV = FPaths::Combine(TracksDir, MapName.ToLower() + TEXT(".csv"));
+			if (FPaths::FileExists(MapCSV))
+			{
+				CSVFilePath = MapCSV;
+			}
+			else
+			{
+				// Final fallback: use random_track.csv if it exists (e.g. TrainingMap)
+				FString DefaultCSV = FPaths::Combine(TracksDir, TEXT("random_track.csv"));
+				if (FPaths::FileExists(DefaultCSV))
+				{
+					CSVFilePath = DefaultCSV;
+					UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: No track CSV for '%s', using random_track.csv"), *MapName);
+				}
+			}
+		}
 
 		if (!CSVFilePath.IsEmpty())
 		{
@@ -56,9 +75,60 @@ void AFSDSConeSpawner::BeginPlay()
 		TotalSpawned, *GetWorld()->GetMapName());
 }
 
+AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation, EFSDSConeColor Color)
+{
+	if (!Mesh || !GetWorld()) return nullptr;
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	AStaticMeshActor* ConeActor = GetWorld()->SpawnActor<AStaticMeshActor>(
+		AStaticMeshActor::StaticClass(),
+		FTransform(Rotation, Location),
+		Params);
+
+	if (ConeActor)
+	{
+		UStaticMeshComponent* MeshComp = ConeActor->GetStaticMeshComponent();
+		MeshComp->SetMobility(EComponentMobility::Movable);
+		MeshComp->SetStaticMesh(Mesh);
+		MeshComp->SetRelativeScale3D(FVector(ConeScale));
+		TotalSpawned++;
+
+		SpawnedCones.Add(ConeActor);
+
+		// Register with referee for hit tracking and cone position publishing
+		if (Referee)
+		{
+			FTransform ConeTransform = ConeActor->GetActorTransform();
+			switch (Color)
+			{
+			case EFSDSConeColor::Yellow:
+				Referee->AppendYellowCone(ConeTransform);
+				break;
+			case EFSDSConeColor::Blue:
+				Referee->AppendBlueCone(ConeTransform);
+				break;
+			case EFSDSConeColor::OrangeLarge:
+				Referee->AppendBigOrangeCone(ConeTransform);
+				break;
+			case EFSDSConeColor::OrangeSmall:
+				Referee->AppendSmallOrangeCone(ConeTransform);
+				break;
+			default:
+				break;
+			}
+			Referee->RegisterConeActor(ConeActor, Color);
+		}
+	}
+
+	return ConeActor;
+}
+
 void AFSDSConeSpawner::SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation)
 {
-	// Not used anymore — we spawn Blueprint actors instead
+	// Delegate to new method — color unknown from test track context
+	SpawnStaticMeshCone(Mesh, Location, Rotation, EFSDSConeColor::Unknown);
 }
 
 void AFSDSConeSpawner::SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation)
@@ -73,6 +143,7 @@ void AFSDSConeSpawner::SpawnConeBP(UClass* BPClass, FVector Location, FRotator R
 	{
 		ConeActor->SetActorScale3D(FVector(ConeScale));
 		TotalSpawned++;
+		SpawnedCones.Add(ConeActor);
 	}
 }
 
@@ -105,21 +176,21 @@ void AFSDSConeSpawner::SpawnTestTrack()
 
 		// Blue cones on the left (inside)
 		FVector BluePos = TrackCenter + FVector(OvalX, OvalY, HeightOffset) - TrackDir * HalfWidth;
-		SpawnCone(BlueMesh, BluePos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f));
+		SpawnStaticMeshCone(BlueMesh, BluePos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), EFSDSConeColor::Blue);
 
 		// Yellow cones on the right (outside)
 		FVector YellowPos = TrackCenter + FVector(OvalX, OvalY, HeightOffset) + TrackDir * HalfWidth;
-		SpawnCone(YellowMesh, YellowPos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f));
+		SpawnStaticMeshCone(YellowMesh, YellowPos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), EFSDSConeColor::Yellow);
 	}
 
 	// Orange big cones at start/finish
 	if (OrangeBigMesh)
 	{
 		FVector StartPos = TrackCenter + FVector(TrackRadius * 1.5f, 0.f, HeightOffset);
-		SpawnCone(OrangeBigMesh, StartPos + FVector(0.f, -HalfWidth, 0.f));
-		SpawnCone(OrangeBigMesh, StartPos + FVector(0.f, HalfWidth, 0.f));
-		SpawnCone(OrangeBigMesh, StartPos + FVector(0.f, -HalfWidth - 100.f, 0.f));
-		SpawnCone(OrangeBigMesh, StartPos + FVector(0.f, HalfWidth + 100.f, 0.f));
+		SpawnStaticMeshCone(OrangeBigMesh, StartPos + FVector(0.f, -HalfWidth, 0.f), FRotator::ZeroRotator, EFSDSConeColor::OrangeLarge);
+		SpawnStaticMeshCone(OrangeBigMesh, StartPos + FVector(0.f, HalfWidth, 0.f), FRotator::ZeroRotator, EFSDSConeColor::OrangeLarge);
+		SpawnStaticMeshCone(OrangeBigMesh, StartPos + FVector(0.f, -HalfWidth - 100.f, 0.f), FRotator::ZeroRotator, EFSDSConeColor::OrangeLarge);
+		SpawnStaticMeshCone(OrangeBigMesh, StartPos + FVector(0.f, HalfWidth + 100.f, 0.f), FRotator::ZeroRotator, EFSDSConeColor::OrangeLarge);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Test track spawned at (%.0f, %.0f) r=%.0f"),
@@ -211,15 +282,25 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		float X = FCString::Atof(*Parts[1]) * 100.f; // meters to cm
 		float Y = FCString::Atof(*Parts[2]) * -100.f; // flip Y, meters to cm
 
+		// Determine cone color
+		EFSDSConeColor Color = EFSDSConeColor::Unknown;
+		if (Type == TEXT("blue")) Color = EFSDSConeColor::Blue;
+		else if (Type == TEXT("yellow")) Color = EFSDSConeColor::Yellow;
+		else if (Type == TEXT("big_orange")) Color = EFSDSConeColor::OrangeLarge;
+		else if (Type == TEXT("small_orange") || Type == TEXT("orange")) Color = EFSDSConeColor::OrangeSmall;
+
 		UClass* BPClass = nullptr;
 		if (Type == TEXT("blue")) BPClass = BlueBP;
 		else if (Type == TEXT("yellow")) BPClass = YellowBP;
 		else if (Type == TEXT("big_orange")) BPClass = OrangeBigBP;
 		else if (Type == TEXT("small_orange")) BPClass = OrangeSmallBP;
 
+		FVector Location(X, Y, HeightOffset);
+		FRotator Rotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
+
 		if (BPClass)
 		{
-			SpawnConeBP(BPClass, FVector(X, Y, HeightOffset), FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f));
+			SpawnConeBP(BPClass, Location, Rotation);
 		}
 		else if (BlueConeMesh || DefaultConeMesh)
 		{
@@ -232,23 +313,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 
 			if (!ConeMesh) ConeMesh = DefaultConeMesh;
 
-			// Spawn AStaticMeshActor
-			FActorSpawnParameters Params;
-			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-			AStaticMeshActor* ConeActor = GetWorld()->SpawnActor<AStaticMeshActor>(
-				AStaticMeshActor::StaticClass(),
-				FTransform(FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), FVector(X, Y, HeightOffset)),
-				Params);
-
-			if (ConeActor)
-			{
-				UStaticMeshComponent* MeshComp = ConeActor->GetStaticMeshComponent();
-				MeshComp->SetMobility(EComponentMobility::Movable);
-				MeshComp->SetStaticMesh(ConeMesh);
-				MeshComp->SetRelativeScale3D(FVector(ConeScale));
-				TotalSpawned++;
-			}
+			SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
 		}
 	}
 }

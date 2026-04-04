@@ -269,6 +269,25 @@ class IFSSIMClient:
         state = RefereeState()
         state.doo_counter = int(self._parse(resp, "doo_counter") or 0)
         state.laps = int(self._parse(resp, "laps") or 0)
+        state.cone_count = int(self._parse(resp, "cones") or 0)
+
+        # Parse lap_times array
+        state.lap_times = []
+        import json
+        try:
+            data = json.loads(resp)
+            state.lap_times = data.get("lap_times", [])
+            # Parse cone positions
+            state.cones = []
+            for c in data.get("cone_positions", []):
+                cp = ConePosition()
+                cp.x = c.get("x", 0.0)
+                cp.y = c.get("y", 0.0)
+                cp.color = c.get("color", 4)
+                state.cones.append(cp)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
         return state
 
     # --- Simulation Control ---
