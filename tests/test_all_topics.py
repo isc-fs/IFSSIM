@@ -247,6 +247,7 @@ def main():
     check("has event type", "event" in resp, "event field present")
     check("has finished flag", "finished" in resp, "finished field present")
     check("has required_laps", "required_laps" in resp, "required_laps field present")
+    check("has oc_counter", "oc_counter" in resp, "off-track counter present")
 
     # 15. Simulation control
     print("\n--- Simulation Control ---")

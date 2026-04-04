@@ -132,7 +132,7 @@ def main():
     # Referee — same API as FSDS
     print("\n--- Referee ---")
     ref = client.getRefereeState()
-    check("getRefereeState", hasattr(ref, 'doo_counter'), f"doo={ref.doo_counter}")
+    check("getRefereeState", hasattr(ref, 'doo_counter'), f"doo={ref.doo_counter}, oc={ref.oc_counter}")
     check("laps count", hasattr(ref, 'laps'), f"laps={ref.laps}")
     check("lap_times is list", isinstance(ref.lap_times, list), f"lap_times={ref.lap_times}")
     check("cone_count > 0", ref.cone_count > 0, f"cone_count={ref.cone_count}")

@@ -56,6 +56,33 @@ void AFSDSReferee::Tick(float DeltaTime)
 		}
 	}
 
+	// Out-of-bounds detection (throttled to avoid per-frame cost)
+	OffTrackTimer += DeltaTime;
+	if (OffTrackTimer >= OffTrackCheckInterval && State.Cones.Num() > 10)
+	{
+		OffTrackTimer = 0.f;
+
+		// Find the vehicle pawn
+		APawn* Vehicle = GetWorld()->GetFirstPlayerController() ?
+			GetWorld()->GetFirstPlayerController()->GetPawn() : nullptr;
+
+		if (Vehicle)
+		{
+			FVector VehiclePos = Vehicle->GetActorLocation();
+			FVector2D CarPos2D(VehiclePos.X, VehiclePos.Y);
+
+			bool bCurrentlyOffTrack = !IsInsideTrack(CarPos2D);
+
+			if (bCurrentlyOffTrack && !bWasOffTrack)
+			{
+				// Transition: on-track → off-track
+				State.OffTrackCounter++;
+				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: OFF TRACK (OC count: %d)"), State.OffTrackCounter);
+			}
+			bWasOffTrack = bCurrentlyOffTrack;
+		}
+	}
+
 	// Debounce: reset finish zone flag when vehicle exits
 	if (bVehicleInsideFinishZone)
 	{
@@ -188,6 +215,7 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 void AFSDSReferee::ResetState()
 {
 	State.DooCounter = 0;
+	State.OffTrackCounter = 0;
 	State.Laps.Empty();
 	State.Cones.Empty();
 	ConeOriginalPositions.Empty();
@@ -195,6 +223,7 @@ void AFSDSReferee::ResetState()
 	bLapTimerRunning = false;
 	bVehicleInsideFinishZone = false;
 	bFinishLineValid = false;
+	bWasOffTrack = false;
 	LapStartTime = 0.0;
 	UE_LOG(LogTemp, Log, TEXT("FSDS Referee: State reset"));
 }
@@ -287,9 +316,58 @@ void AFSDSReferee::OnFinishLineOverlap(UPrimitiveComponent* OverlappedComp, AAct
 			if (State.Laps.Num() >= State.RequiredLaps)
 			{
 				State.bFinished = true;
-				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: EVENT FINISHED — %d/%d laps, DOO=%d"),
-					State.Laps.Num(), State.RequiredLaps, State.DooCounter);
+				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: EVENT FINISHED — %d/%d laps, DOO=%d, OC=%d"),
+					State.Laps.Num(), State.RequiredLaps, State.DooCounter, State.OffTrackCounter);
 			}
 		}
 	}
+}
+
+float AFSDSReferee::DistToNearestCone(FVector2D Point, EFSDSConeColor Color) const
+{
+	float MinDist = TNumericLimits<float>::Max();
+	for (const FFSDSCone& Cone : State.Cones)
+	{
+		if (Cone.Color != Color) continue;
+		float Dist = FVector2D::Distance(Point, Cone.Location);
+		if (Dist < MinDist) MinDist = Dist;
+	}
+	return MinDist;
+}
+
+bool AFSDSReferee::IsInsideTrack(FVector2D Point) const
+{
+	// Strategy: find the two nearest blue cones and two nearest yellow cones.
+	// The car is "on track" if it's closer to the track centerline than
+	// to the outer boundary. We approximate this by checking that the car
+	// is between the blue and yellow cone lines.
+	//
+	// Simple approach: find the nearest blue and nearest yellow cone.
+	// If both are within a reasonable distance AND the car is between them,
+	// it's on track. If either is very far, the car has left the track.
+
+	float DistBlue = DistToNearestCone(Point, EFSDSConeColor::Blue);
+	float DistYellow = DistToNearestCone(Point, EFSDSConeColor::Yellow);
+
+	// Track width tolerance: if both boundaries are within max track width, car is near track
+	// Typical FS track width: 3-5m = 300-500cm. Allow some margin.
+	float MaxTrackWidth = 600.f; // 6m in cm — generous limit
+
+	// If either cone line is very far, car has left the track
+	if (DistBlue > MaxTrackWidth && DistYellow > MaxTrackWidth)
+	{
+		return false; // Far from both boundaries
+	}
+
+	// Find the two nearest cones (one blue, one yellow) and check
+	// if the car is between them using a perpendicular distance approach.
+	// Simplified: car is on track if min(distBlue, distYellow) < MaxTrackWidth/2
+	// AND the sum of distances is reasonable (less than track width + margin)
+	float SumDist = DistBlue + DistYellow;
+	if (SumDist > MaxTrackWidth * 1.5f)
+	{
+		return false; // Too far from both sides combined
+	}
+
+	return true;
 }

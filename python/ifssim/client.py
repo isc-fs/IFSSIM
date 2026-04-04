@@ -300,6 +300,7 @@ class IFSSIMClient:
         resp = self._text_cmd("getRefereeState")
         state = RefereeState()
         state.doo_counter = int(self._parse(resp, "doo_counter") or 0)
+        state.oc_counter = int(self._parse(resp, "oc_counter") or 0)
         state.laps = int(self._parse(resp, "laps") or 0)
         state.cone_count = int(self._parse(resp, "cones") or 0)
 
