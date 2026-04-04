@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <cstring>
+#include <algorithm>
 
 using namespace std::chrono_literals;
 
@@ -48,8 +49,31 @@ void IFSSIMRosWrapper::initializeConnection()
         RCLCPP_WARN(node_->get_logger(), "Failed to connect lidar client, using main client");
     }
 
+    client_camera_ = std::make_unique<TcpClient>();
+    if (!client_camera_->connect(host_, port_, timeout_sec_)) {
+        RCLCPP_WARN(node_->get_logger(), "Failed to connect camera client, using main client");
+    }
+
     // Enable API control
     client_->sendBool("enableApiControl");
+
+    // Discover cameras
+    std::string cam_list = client_->sendCommand("listCameras");
+    // Parse ["cam1","cam2"] format
+    if (!cam_list.empty() && cam_list[0] == '[') {
+        std::string stripped = cam_list.substr(1, cam_list.size() - 2);
+        std::stringstream ss(stripped);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            // Remove quotes
+            token.erase(std::remove(token.begin(), token.end(), '"'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), ' '), token.end());
+            if (!token.empty()) {
+                camera_names_.push_back(token);
+            }
+        }
+    }
+    RCLCPP_INFO(node_->get_logger(), "Discovered %zu cameras", camera_names_.size());
 
     // Ping
     if (client_->sendBool("ping")) {
@@ -66,6 +90,14 @@ void IFSSIMRosWrapper::initializePublishers()
     gss_pub_ = node_->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("gss", 10);
     lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", 10);
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
+
+    // Camera publishers — one per camera
+    for (const auto& cam_name : camera_names_) {
+        auto pub = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
+            "camera/" + cam_name + "/compressed", 10);
+        camera_pubs_[cam_name] = pub;
+        RCLCPP_INFO(node_->get_logger(), "Camera publisher: camera/%s/compressed", cam_name.c_str());
+    }
 
     if (!competition_mode_) {
         odom_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("testing_only/odom", 10);
@@ -102,6 +134,7 @@ void IFSSIMRosWrapper::initializeTimers()
     imu_timer_ = node_->create_wall_timer(4ms, std::bind(&IFSSIMRosWrapper::imuTimerCb, this));
     gss_timer_ = node_->create_wall_timer(10ms, std::bind(&IFSSIMRosWrapper::gssTimerCb, this));
     lidar_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::lidarTimerCb, this));
+    camera_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this)); // 10 Hz
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
 
@@ -239,6 +272,42 @@ void IFSSIMRosWrapper::lidarTimerCb()
     }
 
     lidar_pub_->publish(msg);
+}
+
+void IFSSIMRosWrapper::cameraTimerCb()
+{
+    TcpClient* cam_client = (client_camera_ && client_camera_->isConnected())
+        ? client_camera_.get() : client_.get();
+    if (!cam_client || !cam_client->isConnected()) return;
+
+    for (const auto& cam_name : camera_names_) {
+        auto it = camera_pubs_.find(cam_name);
+        if (it == camera_pubs_.end()) continue;
+
+        // Use binary protocol to get PNG image
+        std::string command = "simGetImageBinary " + cam_name + " 0";
+        std::vector<uint8_t> imageData;
+        std::string header = cam_client->sendBinaryCommand(command, imageData);
+
+        if (header.empty() || imageData.empty()) continue;
+
+        // Parse image size from header "IMG:size"
+        int imgSize = 0;
+        size_t colonPos = header.find(':');
+        if (colonPos != std::string::npos) {
+            try { imgSize = std::stoi(header.substr(colonPos + 1)); } catch (...) {}
+        }
+        if (imgSize <= 0 || imageData.empty()) continue;
+
+        // Publish as CompressedImage
+        sensor_msgs::msg::CompressedImage msg;
+        msg.header.stamp = node_->now();
+        msg.header.frame_id = vehicle_frame_id_ + "/" + cam_name;
+        msg.format = "png";
+        msg.data.assign(imageData.begin(), imageData.end());
+
+        it->second->publish(msg);
+    }
 }
 
 void IFSSIMRosWrapper::goSignalTimerCb()
