@@ -4,6 +4,7 @@
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -20,6 +21,8 @@
 
 #include <memory>
 #include <string>
+#include <map>
+#include <vector>
 
 /**
  * IFSSIM ROS2 Wrapper — connects to the IFSSIM TCP RPC server
@@ -49,6 +52,7 @@ private:
     void gssTimerCb();
     void odomTimerCb();
     void lidarTimerCb();
+    void cameraTimerCb();
     void goSignalTimerCb();
     void extraInfoTimerCb();
     void staticTfCb();
@@ -65,9 +69,10 @@ private:
     // Node
     std::shared_ptr<rclcpp::Node> node_;
 
-    // TCP clients (two for parallelism, like original FSDS)
+    // TCP clients (three for parallelism: main, lidar, camera)
     std::unique_ptr<TcpClient> client_;
     std::unique_ptr<TcpClient> client_lidar_;
+    std::unique_ptr<TcpClient> client_camera_;
 
     // Connection params
     std::string host_;
@@ -84,6 +89,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_pub_;
+    std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
     rclcpp::Publisher<fs_msgs::msg::GoSignal>::SharedPtr go_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::ExtraInfo>::SharedPtr extra_info_pub_;
     rclcpp::Publisher<fs_msgs::msg::Track>::SharedPtr track_pub_;
@@ -104,6 +110,7 @@ private:
     rclcpp::TimerBase::SharedPtr gss_timer_;
     rclcpp::TimerBase::SharedPtr odom_timer_;
     rclcpp::TimerBase::SharedPtr lidar_timer_;
+    rclcpp::TimerBase::SharedPtr camera_timer_;
     rclcpp::TimerBase::SharedPtr go_signal_timer_;
     rclcpp::TimerBase::SharedPtr extra_info_timer_;
     rclcpp::TimerBase::SharedPtr static_tf_timer_;
@@ -112,4 +119,5 @@ private:
     std::string mission_name_ = "trackdrive";
     std::string track_name_ = "A";
     bool competition_mode_ = false;
+    std::vector<std::string> camera_names_;
 };
