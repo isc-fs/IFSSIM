@@ -140,8 +140,8 @@
                         </div>
                     </div>
                     <div class="track-actions">
-                        <button class="load" onclick="loadTrack('${t.name}')">Load</button>
-                        <button class="delete" onclick="deleteTrack('${t.name}')">Del</button>
+                        <button class="load" onclick="event.stopPropagation(); loadTrack('${t.name}')">Load</button>
+                        <button class="delete" onclick="deleteTrack('${t.name}', event)">Del</button>
                     </div>
                 `;
                 list.appendChild(div);
@@ -179,15 +179,25 @@
             selectTrack(name);
         }
 
-        async function deleteTrack(name) {
-            if (!confirm(`Delete ${name}?`)) return;
-            await fetch(`/api/track/${name}/delete`, { method: 'DELETE' });
-            showToast(`Deleted: ${name}`);
-            if (selectedTrack === name) {
-                selectedTrack = null;
-                document.getElementById('trackPreview').innerHTML = '<div class="placeholder">Select a track</div>';
+        async function deleteTrack(name, event) {
+            if (event) { event.stopPropagation(); event.preventDefault(); }
+            if (!confirm(`Delete "${name}"?`)) return;
+            try {
+                const r = await fetch(`/api/track/${encodeURIComponent(name)}/delete`, { method: 'DELETE' });
+                const d = await r.json();
+                if (d.error) {
+                    showToast(`Error: ${d.error}`, true);
+                    return;
+                }
+                showToast(`Deleted: ${name}`);
+                if (selectedTrack === name) {
+                    selectedTrack = null;
+                    document.getElementById('trackPreview').innerHTML = '<div class="placeholder">Select a track</div>';
+                }
+                refreshTracks();
+            } catch (e) {
+                showToast(`Delete failed: ${e.message}`, true);
             }
-            refreshTracks();
         }
 
         async function generateTrack() {

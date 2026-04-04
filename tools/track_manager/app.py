@@ -198,8 +198,11 @@ def generate_track():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/track/<name>/delete", methods=["DELETE"])
+@app.route("/api/track/<name>/delete", methods=["DELETE", "POST"])
 def delete_track(name):
+    # Sanitize — only allow filenames, no path traversal
+    if "/" in name or "\\" in name or ".." in name:
+        return jsonify({"error": "Invalid track name"}), 400
     filepath = os.path.join(TRACKS_DIR, name)
     if os.path.exists(filepath):
         os.remove(filepath)
