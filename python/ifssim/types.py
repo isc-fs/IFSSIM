@@ -2,7 +2,10 @@
 IFSSIM Types — API-compatible with the original FSDS types.
 Drop-in replacement: from ifssim import CarControls, CarState, etc.
 """
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 class ImageType:
