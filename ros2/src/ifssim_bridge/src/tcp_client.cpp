@@ -125,3 +125,58 @@ double TcpClient::parseDouble(const std::string& json, const std::string& key)
         return 0.0;
     }
 }
+
+std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector<uint8_t>& outData)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!connected_ || socket_fd_ < 0) return "";
+
+    std::string msg = command + "\n";
+    if (send(socket_fd_, msg.c_str(), msg.size(), 0) < 0) {
+        connected_ = false;
+        return "";
+    }
+
+    // Read header line (e.g., "PTS:1234\n")
+    std::string header;
+    char c;
+    while (recv(socket_fd_, &c, 1, 0) == 1) {
+        if (c == '\n') break;
+        header += c;
+    }
+
+    if (header.empty()) return "";
+
+    // Parse the byte count from header
+    size_t colonPos = header.find(':');
+    if (colonPos == std::string::npos) return header;
+
+    int dataSize = 0;
+    try {
+        std::string prefix = header.substr(0, colonPos);
+        int count = std::stoi(header.substr(colonPos + 1));
+
+        if (prefix == "PTS") {
+            dataSize = count * 3 * sizeof(float); // 3 floats per point
+        } else if (prefix == "IMG") {
+            dataSize = count; // raw byte count
+        }
+    } catch (...) {
+        return header;
+    }
+
+    // Read binary data
+    if (dataSize > 0) {
+        outData.resize(dataSize);
+        int totalRead = 0;
+        while (totalRead < dataSize) {
+            int bytesRead = recv(socket_fd_, (char*)outData.data() + totalRead, dataSize - totalRead, 0);
+            if (bytesRead <= 0) break;
+            totalRead += bytesRead;
+        }
+        outData.resize(totalRead);
+    }
+
+    return header;
+}

@@ -3,6 +3,8 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <sstream>
 #include <cmath>
+#include <vector>
+#include <cstring>
 
 using namespace std::chrono_literals;
 
@@ -200,12 +202,22 @@ void IFSSIMRosWrapper::lidarTimerCb()
         ? client_lidar_.get() : client_.get();
     if (!lidar_client || !lidar_client->isConnected()) return;
 
-    std::string resp = lidar_client->sendCommand("getLidarData");
-    if (resp.empty()) return;
+    // Use binary protocol to get actual point cloud data
+    std::vector<uint8_t> binaryData;
+    std::string header = lidar_client->sendBinaryCommand("getLidarDataBinary", binaryData);
 
-    int point_count = (int)lidar_client->parseDouble(resp, "points");
+    if (header.empty() || binaryData.empty()) return;
 
-    // Create PointCloud2 message (empty for now — full point data requires binary protocol)
+    // Parse point count from header "PTS:N"
+    int point_count = 0;
+    size_t colonPos = header.find(':');
+    if (colonPos != std::string::npos) {
+        try { point_count = std::stoi(header.substr(colonPos + 1)); } catch (...) {}
+    }
+
+    if (point_count <= 0) return;
+
+    // Build PointCloud2 message with actual data
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = node_->now();
     msg.header.frame_id = vehicle_frame_id_;
@@ -214,10 +226,17 @@ void IFSSIMRosWrapper::lidarTimerCb()
     msg.is_dense = true;
     msg.is_bigendian = false;
 
-    // Define fields: x, y, z
+    // Define fields: x, y, z (float32 each)
     sensor_msgs::PointCloud2Modifier modifier(msg);
     modifier.setPointCloud2FieldsByString(1, "xyz");
     modifier.resize(point_count);
+
+    // Copy actual point data into the message
+    // Binary data is [x,y,z, x,y,z, ...] as float32, same layout as PointCloud2
+    size_t expectedBytes = point_count * 3 * sizeof(float);
+    if (binaryData.size() >= expectedBytes) {
+        memcpy(msg.data.data(), binaryData.data(), expectedBytes);
+    }
 
     lidar_pub_->publish(msg);
 }

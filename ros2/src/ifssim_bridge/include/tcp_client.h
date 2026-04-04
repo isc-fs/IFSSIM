@@ -26,6 +26,11 @@ public:
     /** Convenience: send and parse a float response from JSON */
     double parseDouble(const std::string& json, const std::string& key);
 
+    /** Send a binary command and receive header + binary data
+     * Protocol: send "command\n", receive "HEADER:value\n" + raw bytes
+     * Returns the header line and fills outData with binary payload */
+    std::string sendBinaryCommand(const std::string& command, std::vector<uint8_t>& outData);
+
 private:
     int socket_fd_ = -1;
     bool connected_ = false;
