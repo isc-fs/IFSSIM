@@ -8,7 +8,7 @@
 UFSDSCameraSensor::UFSDSCameraSensor()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	bCaptureEveryFrame = true;
+	bCaptureEveryFrame = false; // Only capture on demand (CaptureScene called from RPC)
 	bCaptureOnMovement = false;
 }
 
