@@ -82,6 +82,10 @@ void IFSSIMRosWrapper::initializeConnection()
     } else {
         RCLCPP_ERROR(node_->get_logger(), "Ping failed!");
     }
+
+    // Parse noise settings for covariance matrices
+    std::string settings = client_->sendCommand("getSettingsString");
+    parseNoiseSettings(settings);
 }
 
 void IFSSIMRosWrapper::initializePublishers()
@@ -164,6 +168,15 @@ void IFSSIMRosWrapper::gpsTimerCb()
     msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
     msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
 
+    // Position covariance (diagonal, in m²) — ENU order
+    double gps_var = gps_position_noise_std_ * gps_position_noise_std_;
+    msg.position_covariance = {
+        gps_var, 0, 0,
+        0, gps_var, 0,
+        0, 0, gps_var
+    };
+    msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+
     gps_pub_->publish(msg);
 }
 
@@ -185,6 +198,29 @@ void IFSSIMRosWrapper::imuTimerCb()
     msg.angular_velocity.y = client_->parseDouble(resp, "gy");
     msg.angular_velocity.z = client_->parseDouble(resp, "gz");
 
+    // Orientation covariance (small — quaternion is from ground truth)
+    msg.orientation_covariance = {
+        1e-6, 0, 0,
+        0, 1e-6, 0,
+        0, 0, 1e-6
+    };
+
+    // Angular velocity covariance (σ² from gyro noise)
+    double gyro_var = imu_gyro_noise_std_ * imu_gyro_noise_std_;
+    msg.angular_velocity_covariance = {
+        gyro_var, 0, 0,
+        0, gyro_var, 0,
+        0, 0, gyro_var
+    };
+
+    // Linear acceleration covariance (σ² from accel noise)
+    double accel_var = imu_accel_noise_std_ * imu_accel_noise_std_;
+    msg.linear_acceleration_covariance = {
+        accel_var, 0, 0,
+        0, accel_var, 0,
+        0, 0, accel_var
+    };
+
     imu_pub_->publish(msg);
 }
 
@@ -201,6 +237,12 @@ void IFSSIMRosWrapper::gssTimerCb()
     msg.twist.twist.linear.x = client_->parseDouble(resp, "vx");
     msg.twist.twist.linear.y = client_->parseDouble(resp, "vy");
     msg.twist.twist.linear.z = client_->parseDouble(resp, "vz");
+
+    // Twist covariance (6x6, only linear velocity diagonal filled)
+    double gss_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
+    msg.twist.covariance[0] = gss_var;   // vx
+    msg.twist.covariance[7] = gss_var;   // vy
+    msg.twist.covariance[14] = gss_var;  // vz
 
     gss_pub_->publish(msg);
 }
@@ -227,6 +269,21 @@ void IFSSIMRosWrapper::odomTimerCb()
     msg.pose.pose.orientation.x = client_->parseDouble(resp, "qx");
     msg.pose.pose.orientation.y = client_->parseDouble(resp, "qy");
     msg.pose.pose.orientation.z = client_->parseDouble(resp, "qz");
+
+    // Pose covariance (6x6 — position from GPS noise, orientation small)
+    double pos_var = gps_position_noise_std_ * gps_position_noise_std_;
+    msg.pose.covariance[0] = pos_var;    // x
+    msg.pose.covariance[7] = pos_var;    // y
+    msg.pose.covariance[14] = pos_var;   // z
+    msg.pose.covariance[21] = 1e-6;      // roll
+    msg.pose.covariance[28] = 1e-6;      // pitch
+    msg.pose.covariance[35] = 1e-6;      // yaw
+
+    // Twist covariance (from GSS noise)
+    double vel_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
+    msg.twist.covariance[0] = vel_var;
+    msg.twist.covariance[7] = vel_var;
+    msg.twist.covariance[14] = vel_var;
 
     odom_pub_->publish(msg);
 }
@@ -410,6 +467,32 @@ void IFSSIMRosWrapper::trackPublishCb()
     if (!msg.track.empty()) {
         track_pub_->publish(msg);
     }
+}
+
+void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)
+{
+    // Parse noise std values from settings JSON
+    // Settings format: nested JSON with Sensors containing noise params
+    auto parseField = [&settings](const std::string& key) -> double {
+        size_t pos = settings.find("\"" + key + "\"");
+        if (pos == std::string::npos) return 0.0;
+        pos = settings.find(':', pos);
+        if (pos == std::string::npos) return 0.0;
+        pos++; // skip ':'
+        while (pos < settings.size() && settings[pos] == ' ') pos++;
+        try { return std::stod(settings.substr(pos)); } catch (...) { return 0.0; }
+    };
+
+    gps_position_noise_std_ = parseField("GpsPositionNoiseStd");
+    gps_velocity_noise_std_ = parseField("GpsVelocityNoiseStd");
+    imu_accel_noise_std_ = parseField("AccelNoiseStd") / 100.0; // cm/s² → m/s²
+    imu_gyro_noise_std_ = parseField("GyroNoiseStd");
+    gss_velocity_noise_std_ = parseField("VelocityNoiseStd");
+
+    RCLCPP_INFO(node_->get_logger(),
+        "Noise settings: GPS pos=%.3fm vel=%.3fm/s, IMU accel=%.4fm/s² gyro=%.4frad/s, GSS vel=%.3fm/s",
+        gps_position_noise_std_, gps_velocity_noise_std_,
+        imu_accel_noise_std_, imu_gyro_noise_std_, gss_velocity_noise_std_);
 }
 
 void IFSSIMRosWrapper::staticTfCb()

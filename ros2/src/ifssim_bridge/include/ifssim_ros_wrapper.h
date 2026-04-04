@@ -122,4 +122,13 @@ private:
     std::string track_name_ = "A";
     bool competition_mode_ = false;
     std::vector<std::string> camera_names_;
+
+    // Sensor noise parameters (parsed from settings at startup)
+    double gps_position_noise_std_ = 0.0;  // meters
+    double gps_velocity_noise_std_ = 0.0;  // m/s
+    double imu_accel_noise_std_ = 0.0;     // m/s²
+    double imu_gyro_noise_std_ = 0.0;      // rad/s
+    double gss_velocity_noise_std_ = 0.0;  // m/s
+
+    void parseNoiseSettings(const std::string& settings_json);
 };
