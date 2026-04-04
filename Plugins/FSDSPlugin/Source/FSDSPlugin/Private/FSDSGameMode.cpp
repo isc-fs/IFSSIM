@@ -2,6 +2,7 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "FSDSConeSpawner.h"
+#include "FSDSReferee.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
@@ -20,13 +21,34 @@ void AFSDSGameMode::StartPlay()
 	LogStartup();
 	SpawnVehicle();
 
-	// Spawn cone spawner (auto-places cones on the track)
-	FActorSpawnParameters ConeSpawnParams;
-	ConeSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	GetWorld()->SpawnActor<AFSDSConeSpawner>(AFSDSConeSpawner::StaticClass(), FTransform::Identity, ConeSpawnParams);
+	// Spawn referee actor (tracks cone hits, laps, timing)
+	FActorSpawnParameters RefereeSpawnParams;
+	RefereeSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	RefereeActor = GetWorld()->SpawnActor<AFSDSReferee>(
+		AFSDSReferee::StaticClass(), FTransform::Identity, RefereeSpawnParams);
+
+	if (RefereeActor && VehiclePawn)
+	{
+		RefereeActor->LoadStartPos(VehiclePawn->GetActorLocation());
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Referee actor spawned"));
+	}
+
+	// Spawn cone spawner with deferred construction so we can set the referee
+	// before BeginPlay runs (cones need referee reference during spawning)
+	ConeSpawnerActor = GetWorld()->SpawnActorDeferred<AFSDSConeSpawner>(
+		AFSDSConeSpawner::StaticClass(), FTransform::Identity);
+
+	if (ConeSpawnerActor)
+	{
+		ConeSpawnerActor->SetReferee(RefereeActor);
+		ConeSpawnerActor->FinishSpawning(FTransform::Identity); // Triggers BeginPlay
+		UE_LOG(LogTemp, Log, TEXT("FSDS: ConeSpawner spawned with Referee wired (%d cones)"),
+			ConeSpawnerActor->SpawnedCones.Num());
+	}
 
 	// Start RPC server
 	RpcServer.SetVehiclePawn(VehiclePawn);
+	RpcServer.SetReferee(RefereeActor);
 	RpcServer.SetWorld(GetWorld());
 	RpcServer.SetSettingsString(FFSDSSettings::Get().GetSettingsString());
 	RpcServer.Start(41451);

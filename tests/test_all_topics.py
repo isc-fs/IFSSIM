@@ -230,6 +230,10 @@ def main():
     print("\n--- Referee ---")
     resp = c.text_cmd("getRefereeState")
     check("referee responds", "doo_counter" in resp, resp[:80])
+    check("has lap_times", "lap_times" in resp, "lap_times field present")
+    check("has cone_positions", "cone_positions" in resp, "cone_positions field present")
+    cones_count = c.parse(resp, "cones")
+    check("cones registered", cones_count is not None and cones_count > 0, f"cones={cones_count}")
 
     # 15. Simulation control
     print("\n--- Simulation Control ---")

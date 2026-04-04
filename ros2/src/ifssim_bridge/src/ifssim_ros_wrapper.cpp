@@ -1,6 +1,7 @@
 #include "ifssim_ros_wrapper.h"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <fs_msgs/msg/cone.hpp>
 #include <sstream>
 #include <cmath>
 #include <vector>
@@ -141,6 +142,7 @@ void IFSSIMRosWrapper::initializeTimers()
     if (!competition_mode_) {
         odom_timer_ = node_->create_wall_timer(4ms, std::bind(&IFSSIMRosWrapper::odomTimerCb, this));
         extra_info_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::extraInfoTimerCb, this));
+        track_publish_timer_ = node_->create_wall_timer(5000ms, std::bind(&IFSSIMRosWrapper::trackPublishCb, this)); // 0.2 Hz
     }
 }
 
@@ -331,6 +333,66 @@ void IFSSIMRosWrapper::extraInfoTimerCb()
     msg.laps = (uint32_t)client_->parseDouble(resp, "laps");
 
     extra_info_pub_->publish(msg);
+}
+
+void IFSSIMRosWrapper::trackPublishCb()
+{
+    if (!client_ || !client_->isConnected()) return;
+
+    std::string resp = client_->sendCommand("getRefereeState");
+    if (resp.empty()) return;
+
+    // Parse cone_positions array from response
+    // Format: {"doo_counter":N,"cones":N,"laps":N,"lap_times":[...],"cone_positions":[{"x":1.0,"y":2.0,"color":0},...]}"
+    fs_msgs::msg::Track msg;
+
+    // Find cone_positions array
+    size_t arr_start = resp.find("\"cone_positions\":[");
+    if (arr_start == std::string::npos) return;
+    arr_start = resp.find('[', arr_start);
+    size_t arr_end = resp.find(']', arr_start);
+    if (arr_end == std::string::npos) return;
+
+    std::string arr = resp.substr(arr_start + 1, arr_end - arr_start - 1);
+    if (arr.empty()) return;
+
+    // Parse each cone object: {"x":1.0,"y":2.0,"color":0}
+    size_t pos = 0;
+    while (pos < arr.size()) {
+        size_t obj_start = arr.find('{', pos);
+        if (obj_start == std::string::npos) break;
+        size_t obj_end = arr.find('}', obj_start);
+        if (obj_end == std::string::npos) break;
+
+        std::string obj = arr.substr(obj_start, obj_end - obj_start + 1);
+        pos = obj_end + 1;
+
+        // Parse x, y, color from the object
+        double x = 0, y = 0;
+        int color = 4; // UNKNOWN
+
+        auto parseField = [&obj](const std::string& key) -> double {
+            size_t kpos = obj.find("\"" + key + "\":");
+            if (kpos == std::string::npos) return 0.0;
+            kpos += key.size() + 3; // skip "key":
+            return std::stod(obj.substr(kpos));
+        };
+
+        x = parseField("x");
+        y = parseField("y");
+        color = (int)parseField("color");
+
+        fs_msgs::msg::Cone cone;
+        cone.location.x = x;
+        cone.location.y = y;
+        cone.location.z = 0.0;
+        cone.color = (uint8_t)color;
+        msg.track.push_back(cone);
+    }
+
+    if (!msg.track.empty()) {
+        track_pub_->publish(msg);
+    }
 }
 
 void IFSSIMRosWrapper::staticTfCb()

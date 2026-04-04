@@ -214,10 +214,35 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getRefereeState"))
 	{
-		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0}");
+		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[]}");
 		auto State = Referee->GetState();
-		return FString::Printf(TEXT("{\"doo_counter\":%d,\"cones\":%d,\"laps\":%d}"),
-			State.DooCounter, State.Cones.Num(), State.Laps.Num());
+
+		// Build lap times array
+		FString LapTimesJson = TEXT("[");
+		for (int32 i = 0; i < State.Laps.Num(); i++)
+		{
+			if (i > 0) LapTimesJson += TEXT(",");
+			LapTimesJson += FString::Printf(TEXT("%.3f"), State.Laps[i]);
+		}
+		LapTimesJson += TEXT("]");
+
+		// Build cone positions array (ENU coordinates in meters)
+		FString ConesJson = TEXT("[");
+		for (int32 i = 0; i < State.Cones.Num(); i++)
+		{
+			if (i > 0) ConesJson += TEXT(",");
+			const FFSDSCone& Cone = State.Cones[i];
+			// Convert from UE cm to ENU meters: swap X↔Y, divide by 100
+			float EnuX = Cone.Location.Y / 100.f;
+			float EnuY = Cone.Location.X / 100.f;
+			int32 ColorInt = (int32)Cone.Color;
+			ConesJson += FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"color\":%d}"),
+				EnuX, EnuY, ColorInt);
+		}
+		ConesJson += TEXT("]");
+
+		return FString::Printf(TEXT("{\"doo_counter\":%d,\"cones\":%d,\"laps\":%d,\"lap_times\":%s,\"cone_positions\":%s}"),
+			State.DooCounter, State.Cones.Num(), State.Laps.Num(), *LapTimesJson, *ConesJson);
 	}
 	else if (Method.StartsWith(TEXT("setCarControls")))
 	{
@@ -649,22 +674,28 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 			if (!Spawner) { Result = TEXT("{\"error\":\"no ConeSpawner found\"}"); DoneEvent->Trigger(); return; }
 
-			// Destroy all previously spawned cone actors
-			TArray<AActor*> AllActors;
-			UGameplayStatics::GetAllActorsOfClass(World, AStaticMeshActor::StaticClass(), AllActors);
-			for (AActor* A : AllActors)
+			// Destroy all previously spawned cone actors (tracked by spawner)
+			for (AActor* ConeActor : Spawner->SpawnedCones)
 			{
-				if (A->GetName().Contains(TEXT("StaticMeshActor")))
+				if (ConeActor && IsValid(ConeActor))
 				{
-					A->Destroy();
+					ConeActor->Destroy();
 				}
+			}
+			Spawner->SpawnedCones.Empty();
+
+			// Reset referee state for new track
+			if (Referee)
+			{
+				Referee->ResetState();
 			}
 
 			// Set new CSV path and re-run spawning
 			Spawner->CSVFilePath = TrackPath;
 			Spawner->BeginPlay();
 
-			Result = FString::Printf(TEXT("{\"loaded\":\"%s\"}"), *TrackPath);
+			int32 NumCones = Spawner->SpawnedCones.Num();
+			Result = FString::Printf(TEXT("{\"loaded\":\"%s\",\"cones\":%d}"), *TrackPath, NumCones);
 			DoneEvent->Trigger();
 		});
 

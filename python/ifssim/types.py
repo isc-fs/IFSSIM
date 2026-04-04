@@ -161,11 +161,26 @@ class Point2D:
     y = 0.0
 
 
+class ConePosition:
+    """A cone on the track with ENU position and color."""
+    x = 0.0
+    y = 0.0
+    color = 0  # 0=Yellow, 1=Blue, 2=OrangeLarge, 3=OrangeSmall, 4=Unknown
+
+    YELLOW = 0
+    BLUE = 1
+    ORANGE_BIG = 2
+    ORANGE_SMALL = 3
+    UNKNOWN = 4
+
+
 class RefereeState:
     doo_counter = 0
-    laps = 0.0
+    laps = 0
+    lap_times = []        # List of lap times in seconds
     initial_position = Point2D()
-    cones = []
+    cones = []            # List of ConePosition objects
+    cone_count = 0        # Total cone count
 
 
 class ImageRequest:

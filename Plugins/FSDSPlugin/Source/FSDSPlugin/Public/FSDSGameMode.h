@@ -6,9 +6,11 @@
 #include "FSDSGameMode.generated.h"
 
 class AFSDSVehiclePawn;
+class AFSDSReferee;
+class AFSDSConeSpawner;
 
 /**
- * FSDS Game Mode — Spawns the vehicle and manages the RPC server.
+ * FSDS Game Mode — Spawns the vehicle, referee, cones and manages the RPC server.
  */
 UCLASS()
 class FSDSPLUGIN_API AFSDSGameMode : public AGameModeBase
@@ -31,6 +33,12 @@ private:
 
 	UPROPERTY()
 	AFSDSVehiclePawn* VehiclePawn = nullptr;
+
+	UPROPERTY()
+	AFSDSReferee* RefereeActor = nullptr;
+
+	UPROPERTY()
+	AFSDSConeSpawner* ConeSpawnerActor = nullptr;
 
 	FFSDSRpcServer RpcServer;
 };

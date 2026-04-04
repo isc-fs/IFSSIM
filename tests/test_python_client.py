@@ -119,6 +119,13 @@ def main():
     print("\n--- Referee ---")
     ref = client.getRefereeState()
     check("getRefereeState", hasattr(ref, 'doo_counter'), f"doo={ref.doo_counter}")
+    check("laps count", hasattr(ref, 'laps'), f"laps={ref.laps}")
+    check("lap_times is list", isinstance(ref.lap_times, list), f"lap_times={ref.lap_times}")
+    check("cone_count > 0", ref.cone_count > 0, f"cone_count={ref.cone_count}")
+    check("cones is list", isinstance(ref.cones, list), f"{len(ref.cones)} cones")
+    if ref.cones:
+        c = ref.cones[0]
+        check("cone has x,y,color", hasattr(c, 'x') and hasattr(c, 'color'), f"({c.x:.2f},{c.y:.2f}) color={c.color}")
 
     # Settings
     print("\n--- Settings ---")
