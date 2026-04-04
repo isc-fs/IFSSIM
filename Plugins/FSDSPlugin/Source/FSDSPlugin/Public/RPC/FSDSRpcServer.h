@@ -30,6 +30,7 @@ public:
 	void SetReferee(AFSDSReferee* Ref) { Referee = Ref; }
 	void SetSettingsString(const FString& Settings) { SettingsString = Settings; }
 	void SetWorld(UWorld* InWorld) { World = InWorld; }
+	void SetUdpBroadcaster(class FFSDSUdpBroadcaster* Broadcaster) { UdpBroadcaster = Broadcaster; }
 
 	bool IsRunning() const { return bRunning; }
 
@@ -39,6 +40,11 @@ private:
 	void HandleClient(FSocket* ClientSocket);
 	FString ProcessRequest(const FString& Request);
 	bool ProcessBinaryRequest(const FString& Request, FSocket* ClientSocket);
+
+	/** Streaming modes — hold connection open and push data continuously */
+	void StreamSensors(FSocket* ClientSocket);
+	void StreamLidar(FSocket* ClientSocket);
+	uint32 StreamFrameCounter = 0;
 
 	// Cached binary data for thread-safe transfer
 	TArray<uint8> CachedImageData;
@@ -55,6 +61,7 @@ private:
 	AFSDSReferee* Referee = nullptr;
 	UWorld* World = nullptr;
 	FString SettingsString;
+	class FFSDSUdpBroadcaster* UdpBroadcaster = nullptr;
 
 	// Cached car controls for immediate readback (set from TCP thread before game thread applies)
 	struct FCachedControls {

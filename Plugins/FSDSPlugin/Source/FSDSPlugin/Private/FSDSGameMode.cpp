@@ -71,16 +71,32 @@ void AFSDSGameMode::StartPlay()
 			ConeSpawnerActor->SpawnedCones.Num());
 	}
 
-	// Start RPC server
+	// Start RPC server (commands + camera)
 	RpcServer.SetVehiclePawn(VehiclePawn);
 	RpcServer.SetReferee(RefereeActor);
 	RpcServer.SetWorld(GetWorld());
 	RpcServer.SetSettingsString(FFSDSSettings::Get().GetSettingsString());
+	RpcServer.SetUdpBroadcaster(&UdpBroadcaster);
 	RpcServer.Start(41451);
+
+	// Start UDP broadcaster (sensor push)
+	UdpBroadcaster.SetVehiclePawn(VehiclePawn);
+	UdpBroadcaster.SetReferee(RefereeActor);
+	UdpBroadcaster.Start(TEXT("255.255.255.255"), 41452, 41453);
+
+	// Enable ticking for UDP broadcast
+	PrimaryActorTick.bCanEverTick = true;
+}
+
+void AFSDSGameMode::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UdpBroadcaster.Tick(DeltaSeconds);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	UdpBroadcaster.Stop();
 	RpcServer.Stop();
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Simulator shutting down"));
 	Super::EndPlay(EndPlayReason);
