@@ -22,5 +22,13 @@ void UFSDSGssSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	FQuat InvRotation = Owner->GetActorQuat().Inverse();
 	Output.LinearVelocity = InvRotation.RotateVector(WorldVelocity);
 
+	// Apply velocity noise
+	if (VelocityNoiseStd > 0.f)
+	{
+		Output.LinearVelocity.X += FMath::FRandRange(-1.f, 1.f) * VelocityNoiseStd;
+		Output.LinearVelocity.Y += FMath::FRandRange(-1.f, 1.f) * VelocityNoiseStd;
+		Output.LinearVelocity.Z += FMath::FRandRange(-1.f, 1.f) * VelocityNoiseStd;
+	}
+
 	CachedOutput = Output;
 }

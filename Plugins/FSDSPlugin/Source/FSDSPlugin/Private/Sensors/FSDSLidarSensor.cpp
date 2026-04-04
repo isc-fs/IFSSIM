@@ -80,11 +80,26 @@ void UFSDSLidarSensor::PerformScan()
 			FHitResult Hit;
 			if (World->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
 			{
+				// Random dropout
+				if (DropoutRate > 0.f && FMath::FRand() < DropoutRate)
+				{
+					continue;
+				}
+
 				float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
+
+				// Apply range noise
+				if (RangeNoiseStd > 0.f)
+				{
+					Dist += FMath::FRandRange(-1.f, 1.f) * RangeNoiseStd;
+				}
+
 				if (Dist >= MinRange)
 				{
+					// Recompute hit point from noisy distance along the ray direction
+					FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
 					// Convert to sensor-local coordinates (meters)
-					FVector LocalHit = OwnerTransform.InverseTransformPosition(Hit.ImpactPoint);
+					FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
 					NewPoints.Add(LocalHit.X / 100.f);
 					NewPoints.Add(LocalHit.Y / 100.f);
 					NewPoints.Add(LocalHit.Z / 100.f);

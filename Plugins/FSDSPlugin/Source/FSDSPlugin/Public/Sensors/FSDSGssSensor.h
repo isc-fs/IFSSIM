@@ -6,6 +6,7 @@
 
 /**
  * Ground Speed Sensor — reports linear velocity in the vehicle body frame.
+ * Supports configurable velocity noise (Gaussian).
  */
 UCLASS(ClassGroup=(FSDS), meta=(BlueprintSpawnableComponent))
 class FSDSPLUGIN_API UFSDSGssSensor : public UActorComponent
@@ -24,6 +25,10 @@ public:
 	};
 
 	FGssOutput GetOutput() const { return CachedOutput; }
+
+	/** Velocity noise σ in m/s per axis (0 = no noise). Typical wheel speed sensor ~0.02 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GSS Noise")
+	float VelocityNoiseStd = 0.0f;
 
 private:
 	FGssOutput CachedOutput;

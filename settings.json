@@ -10,17 +10,32 @@
       "AllowAPIAlways": true,
       "AutoCreate": true,
       "Sensors": {
-        "Imu": { "SensorType": 2, "Enabled": true },
-        "Gps": { "SensorType": 3, "Enabled": true },
+        "Imu": {
+          "SensorType": 2, "Enabled": true,
+          "AccelNoiseStd": 0.18,
+          "GyroNoiseStd": 0.004,
+          "AccelBiasStd": 0.01,
+          "GyroBiasStd": 0.0002
+        },
+        "Gps": {
+          "SensorType": 3, "Enabled": true,
+          "GpsPositionNoiseStd": 0.5,
+          "GpsVelocityNoiseStd": 0.1
+        },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
           "NumberOfChannels": 128, "PointsPerSecond": 400000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 3, "VerticalFOVLower": -16,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
-          "X": 1.4, "Y": 0, "Z": -0.2
+          "X": 1.4, "Y": 0, "Z": -0.2,
+          "RangeNoiseStd": 2.0,
+          "DropoutRate": 0.01
         },
-        "GSS": { "SensorType": 7, "Enabled": true }
+        "GSS": {
+          "SensorType": 7, "Enabled": true,
+          "VelocityNoiseStd": 0.02
+        }
       },
       "Cameras": {
         "cam1": {

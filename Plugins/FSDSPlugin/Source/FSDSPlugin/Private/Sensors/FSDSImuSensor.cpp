@@ -37,5 +37,43 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	}
 	PreviousVelocity = CurrentVelocity;
 
+	// --- Apply noise ---
+
+	if (DeltaTime > 0.f)
+	{
+		float SqrtDt = FMath::Sqrt(DeltaTime);
+
+		// Bias random walk (persistent drift)
+		if (AccelBiasStd > 0.f)
+		{
+			AccelBias.X += FMath::FRandRange(-1.f, 1.f) * AccelBiasStd * SqrtDt;
+			AccelBias.Y += FMath::FRandRange(-1.f, 1.f) * AccelBiasStd * SqrtDt;
+			AccelBias.Z += FMath::FRandRange(-1.f, 1.f) * AccelBiasStd * SqrtDt;
+		}
+
+		if (GyroBiasStd > 0.f)
+		{
+			GyroBias.X += FMath::FRandRange(-1.f, 1.f) * GyroBiasStd * SqrtDt;
+			GyroBias.Y += FMath::FRandRange(-1.f, 1.f) * GyroBiasStd * SqrtDt;
+			GyroBias.Z += FMath::FRandRange(-1.f, 1.f) * GyroBiasStd * SqrtDt;
+		}
+
+		// Apply bias + white noise to accelerometer
+		if (AccelNoiseStd > 0.f || AccelBiasStd > 0.f)
+		{
+			Output.LinearAcceleration.X += AccelBias.X + FMath::FRandRange(-1.f, 1.f) * AccelNoiseStd;
+			Output.LinearAcceleration.Y += AccelBias.Y + FMath::FRandRange(-1.f, 1.f) * AccelNoiseStd;
+			Output.LinearAcceleration.Z += AccelBias.Z + FMath::FRandRange(-1.f, 1.f) * AccelNoiseStd;
+		}
+
+		// Apply bias + white noise to gyroscope
+		if (GyroNoiseStd > 0.f || GyroBiasStd > 0.f)
+		{
+			Output.AngularVelocity.X += GyroBias.X + FMath::FRandRange(-1.f, 1.f) * GyroNoiseStd;
+			Output.AngularVelocity.Y += GyroBias.Y + FMath::FRandRange(-1.f, 1.f) * GyroNoiseStd;
+			Output.AngularVelocity.Z += GyroBias.Z + FMath::FRandRange(-1.f, 1.f) * GyroNoiseStd;
+		}
+	}
+
 	CachedOutput = Output;
 }

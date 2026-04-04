@@ -80,6 +80,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;
 
+	/** Range measurement noise σ in cm (0 = no noise). Hesai ATX ~2cm */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseStd = 0.0f;
+
+	/** Random point dropout probability [0,1] (0 = no dropout). Typical ~0.01 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutRate = 0.0f;
+
 private:
 	void PerformScan();
 

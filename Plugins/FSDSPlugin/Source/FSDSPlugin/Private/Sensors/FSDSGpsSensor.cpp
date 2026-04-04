@@ -33,5 +33,20 @@ void UFSDSGpsSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	// Velocity in m/s
 	Output.Velocity = WorldVel / 100.f;
 
+	// Apply GPS noise
+	if (GpsPositionNoiseStd > 0.f)
+	{
+		Output.Latitude += FMath::FRandRange(-1.f, 1.f) * GpsPositionNoiseStd / MetersPerDegreeLat;
+		Output.Longitude += FMath::FRandRange(-1.f, 1.f) * GpsPositionNoiseStd / MetersPerDegreeLon;
+		Output.Altitude += FMath::FRandRange(-1.f, 1.f) * GpsPositionNoiseStd;
+	}
+
+	if (GpsVelocityNoiseStd > 0.f)
+	{
+		Output.Velocity.X += FMath::FRandRange(-1.f, 1.f) * GpsVelocityNoiseStd;
+		Output.Velocity.Y += FMath::FRandRange(-1.f, 1.f) * GpsVelocityNoiseStd;
+		Output.Velocity.Z += FMath::FRandRange(-1.f, 1.f) * GpsVelocityNoiseStd;
+	}
+
 	CachedOutput = Output;
 }

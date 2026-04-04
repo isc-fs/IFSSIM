@@ -95,6 +95,17 @@ struct FFSDSSensorSettings
 	float HorizontalFOVEnd = 359.f;
 	float MaxRange = 100.f; // meters
 	bool bDrawDebugPoints = false;
+
+	// Noise parameters (apply to all sensor types, 0 = no noise)
+	float GpsPositionNoiseStd = 0.f;  // meters
+	float GpsVelocityNoiseStd = 0.f;  // m/s
+	float AccelNoiseStd = 0.f;        // cm/s²
+	float GyroNoiseStd = 0.f;         // rad/s
+	float AccelBiasStd = 0.f;         // cm/s² per sqrt(s)
+	float GyroBiasStd = 0.f;          // rad/s per sqrt(s)
+	float VelocityNoiseStd = 0.f;     // m/s (GSS)
+	float RangeNoiseStd = 0.f;        // cm (LiDAR)
+	float DropoutRate = 0.f;          // [0,1] (LiDAR)
 };
 
 struct FFSDSVehicleSettings
