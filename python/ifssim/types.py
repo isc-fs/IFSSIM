@@ -177,10 +177,13 @@ class ConePosition:
 class RefereeState:
     doo_counter = 0
     laps = 0
-    lap_times = []        # List of lap times in seconds
+    lap_times = []           # List of lap times in seconds
+    required_laps = 0        # Laps needed to finish the event
+    finished = False         # True when event is complete
+    event = "unknown"        # Event type: trackdrive, acceleration, skidpad, autocross
     initial_position = Point2D()
-    cones = []            # List of ConePosition objects
-    cone_count = 0        # Total cone count
+    cones = []               # List of ConePosition objects
+    cone_count = 0           # Total cone count
 
 
 class ImageRequest:

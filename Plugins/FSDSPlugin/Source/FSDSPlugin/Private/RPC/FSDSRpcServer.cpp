@@ -241,8 +241,21 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		ConesJson += TEXT("]");
 
-		return FString::Printf(TEXT("{\"doo_counter\":%d,\"cones\":%d,\"laps\":%d,\"lap_times\":%s,\"cone_positions\":%s}"),
-			State.DooCounter, State.Cones.Num(), State.Laps.Num(), *LapTimesJson, *ConesJson);
+		// Event type name
+		FString EventName;
+		switch (State.EventType)
+		{
+		case EFSDSEventType::Acceleration: EventName = TEXT("acceleration"); break;
+		case EFSDSEventType::Skidpad: EventName = TEXT("skidpad"); break;
+		case EFSDSEventType::Autocross: EventName = TEXT("autocross"); break;
+		case EFSDSEventType::Trackdrive: EventName = TEXT("trackdrive"); break;
+		default: EventName = TEXT("unknown"); break;
+		}
+
+		return FString::Printf(TEXT("{\"doo_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s}"),
+			State.DooCounter, State.Cones.Num(), State.Laps.Num(), State.RequiredLaps,
+			State.bFinished ? TEXT("true") : TEXT("false"), *EventName,
+			*LapTimesJson, *ConesJson);
 	}
 	else if (Method.StartsWith(TEXT("setCarControls")))
 	{

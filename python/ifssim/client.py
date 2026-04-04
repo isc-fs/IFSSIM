@@ -303,12 +303,15 @@ class IFSSIMClient:
         state.laps = int(self._parse(resp, "laps") or 0)
         state.cone_count = int(self._parse(resp, "cones") or 0)
 
-        # Parse lap_times array
+        # Parse full JSON response
         state.lap_times = []
         import json
         try:
             data = json.loads(resp)
             state.lap_times = data.get("lap_times", [])
+            state.required_laps = data.get("required_laps", 0)
+            state.finished = data.get("finished", False)
+            state.event = data.get("event", "unknown")
             # Parse cone positions
             state.cones = []
             for c in data.get("cone_positions", []):

@@ -27,9 +27,34 @@ void AFSDSGameMode::StartPlay()
 	RefereeActor = GetWorld()->SpawnActor<AFSDSReferee>(
 		AFSDSReferee::StaticClass(), FTransform::Identity, RefereeSpawnParams);
 
-	if (RefereeActor && VehiclePawn)
+	if (RefereeActor)
 	{
-		RefereeActor->LoadStartPos(VehiclePawn->GetActorLocation());
+		if (VehiclePawn)
+		{
+			RefereeActor->LoadStartPos(VehiclePawn->GetActorLocation());
+		}
+
+		// Auto-detect event type from map name
+		FString MapName = GetWorld()->GetMapName();
+		MapName.RemoveFromStart(TEXT("UEDPIE_0_"));
+
+		if (MapName.Contains(TEXT("Acceleration")))
+		{
+			RefereeActor->SetEventType(EFSDSEventType::Acceleration);
+		}
+		else if (MapName.Contains(TEXT("Skidpad")))
+		{
+			RefereeActor->SetEventType(EFSDSEventType::Skidpad);
+		}
+		else if (MapName.Contains(TEXT("Autocross")))
+		{
+			RefereeActor->SetEventType(EFSDSEventType::Autocross);
+		}
+		else
+		{
+			RefereeActor->SetEventType(EFSDSEventType::Trackdrive, 10);
+		}
+
 		UE_LOG(LogTemp, Log, TEXT("FSDS: Referee actor spawned"));
 	}
 

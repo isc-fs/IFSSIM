@@ -11,6 +11,16 @@
  */
 
 UENUM(BlueprintType)
+enum class EFSDSEventType : uint8
+{
+	Trackdrive,    // Multiple laps (default 10)
+	Acceleration,  // Single straight-line run
+	Skidpad,       // Figure-8, 4 crossings (2 right + 2 left)
+	Autocross,     // Single lap
+	Unknown
+};
+
+UENUM(BlueprintType)
 enum class EFSDSConeColor : uint8
 {
 	Yellow,
@@ -48,6 +58,15 @@ struct FFSDSRefereeState
 
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
 	FVector2D CarStartLocation = FVector2D::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	EFSDSEventType EventType = EFSDSEventType::Trackdrive;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	bool bFinished = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	int32 RequiredLaps = 10;
 };
 
 UCLASS(BlueprintType, Blueprintable)
@@ -88,6 +107,10 @@ public:
 	/** Set the car start position */
 	UFUNCTION(BlueprintCallable, Category = "FSDS Referee")
 	void LoadStartPos(FVector Pos);
+
+	/** Set event type and configure rules accordingly */
+	UFUNCTION(BlueprintCallable, Category = "FSDS Referee")
+	void SetEventType(EFSDSEventType Type, int32 NumLaps = 10);
 
 	/** Register a spawned cone actor for collision tracking */
 	void RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color);
