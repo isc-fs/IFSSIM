@@ -79,19 +79,10 @@ void AFSDSGameMode::StartPlay()
 	RpcServer.SetUdpBroadcaster(&UdpBroadcaster);
 	RpcServer.Start(41451);
 
-	// Start UDP broadcaster (sensor push)
+	// UDP broadcaster available but not started by default
+	// (TCP streaming via streamSensors/streamLidar is the primary data path)
 	UdpBroadcaster.SetVehiclePawn(VehiclePawn);
 	UdpBroadcaster.SetReferee(RefereeActor);
-	UdpBroadcaster.Start(TEXT("255.255.255.255"), 41452, 41453);
-
-	// Enable ticking for UDP broadcast
-	PrimaryActorTick.bCanEverTick = true;
-}
-
-void AFSDSGameMode::Tick(float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-	UdpBroadcaster.Tick(DeltaSeconds);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)

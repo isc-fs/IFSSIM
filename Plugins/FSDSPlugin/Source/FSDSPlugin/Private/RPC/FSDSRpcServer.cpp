@@ -980,8 +980,8 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			return;
 		}
 
-		// Pace at ~100Hz (10ms sleep) — fast enough for all sensors
-		FPlatformProcess::Sleep(0.008f);
+		// Pace at ~50Hz — balances data freshness vs game thread load
+		FPlatformProcess::Sleep(0.02f);
 	}
 }
 
