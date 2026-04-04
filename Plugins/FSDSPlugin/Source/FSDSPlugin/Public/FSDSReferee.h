@@ -50,6 +50,10 @@ struct FFSDSRefereeState
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
 	int32 DooCounter = 0;
 
+	/** Off-track / out-of-bounds counter */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	int32 OffTrackCounter = 0;
+
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
 	TArray<float> Laps;
 
@@ -158,4 +162,15 @@ private:
 
 	/** Displacement threshold for cone hit (cm) */
 	float ConeHitThreshold = 15.0f;
+
+	/** Out-of-bounds detection */
+	bool bWasOffTrack = false; // Debounce: only count transitions on→off
+	float OffTrackCheckInterval = 0.2f; // Check every 200ms (not every frame)
+	float OffTrackTimer = 0.f;
+
+	/** Check if a 2D point is inside the track boundaries defined by cones */
+	bool IsInsideTrack(FVector2D Point) const;
+
+	/** Find the nearest cone of a given color to a point */
+	float DistToNearestCone(FVector2D Point, EFSDSConeColor Color) const;
 };

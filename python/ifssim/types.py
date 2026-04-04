@@ -175,7 +175,8 @@ class ConePosition:
 
 
 class RefereeState:
-    doo_counter = 0
+    doo_counter = 0          # Cone hits (Deletion of Opportunity)
+    oc_counter = 0           # Off-track / out-of-bounds count
     laps = 0
     lap_times = []           # List of lap times in seconds
     required_laps = 0        # Laps needed to finish the event

@@ -252,8 +252,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		default: EventName = TEXT("unknown"); break;
 		}
 
-		return FString::Printf(TEXT("{\"doo_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s}"),
-			State.DooCounter, State.Cones.Num(), State.Laps.Num(), State.RequiredLaps,
+		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s}"),
+			State.DooCounter, State.OffTrackCounter, State.Cones.Num(), State.Laps.Num(), State.RequiredLaps,
 			State.bFinished ? TEXT("true") : TEXT("false"), *EventName,
 			*LapTimesJson, *ConesJson);
 	}
