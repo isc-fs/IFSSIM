@@ -258,12 +258,39 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				Controls.Steering = FCString::Atof(*Parts[2]);
 				Controls.Brake = FCString::Atof(*Parts[3]);
 
+				// Cache immediately for getCarControls readback
+				CachedControls.Throttle = Controls.Throttle;
+				CachedControls.Steering = Controls.Steering;
+				CachedControls.Brake = Controls.Brake;
+
 				AsyncTask(ENamedThreads::GameThread, [this, Controls]() {
 					if (VehiclePawn) VehiclePawn->SetCarControls(Controls);
 				});
 			}
 		}
 		return TEXT("true");
+	}
+	else if (Method == TEXT("getCarControls"))
+	{
+		// Read from cached controls (set immediately on setCarControls, no game-thread delay)
+		return FString::Printf(TEXT("{\"throttle\":%.4f,\"steering\":%.4f,\"brake\":%.4f,\"handbrake\":%s,\"is_manual_gear\":%s,\"manual_gear\":%d,\"gear_immediate\":%s}"),
+			CachedControls.Throttle, CachedControls.Steering, CachedControls.Brake,
+			CachedControls.bHandbrake ? TEXT("true") : TEXT("false"),
+			CachedControls.bIsManualGear ? TEXT("true") : TEXT("false"),
+			CachedControls.ManualGear,
+			CachedControls.bGearImmediate ? TEXT("true") : TEXT("false"));
+	}
+	else if (Method == TEXT("simGetVehiclePose"))
+	{
+		if (!VehiclePawn) return TEXT("{\"x\":0,\"y\":0,\"z\":0,\"qw\":1,\"qx\":0,\"qy\":0,\"qz\":0}");
+		FVector Pos = VehiclePawn->GetActorLocation();
+		FQuat Quat = VehiclePawn->GetActorQuat();
+		// Convert to ENU meters
+		float EnuX = Pos.Y / 100.f;
+		float EnuY = Pos.X / 100.f;
+		float EnuZ = Pos.Z / 100.f;
+		return FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+			EnuX, EnuY, EnuZ, Quat.W, Quat.Y, Quat.X, Quat.Z);
 	}
 
 	else if (Method == TEXT("simGetImage"))

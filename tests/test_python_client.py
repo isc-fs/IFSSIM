@@ -58,7 +58,14 @@ def main():
     controls = CarControls(throttle=0.5, steering=0.1, brake=0.0)
     client.setCarControls(controls)
     check("setCarControls", True, "throttle=0.5, steering=0.1")
-    import time; time.sleep(0.5)
+    import time; time.sleep(0.3)
+
+    # Read back controls before stopping
+    ctrl = client.getCarControls()
+    check("getCarControls", hasattr(ctrl, 'throttle'), f"throttle={ctrl.throttle:.2f}, steering={ctrl.steering:.2f}")
+    check("controls match", abs(ctrl.throttle - 0.5) < 0.1, f"expected ~0.5, got {ctrl.throttle:.2f}")
+
+    time.sleep(0.2)
     state2 = client.getCarState()
     check("car responded", True, f"speed={state2.speed:.4f}")
 
@@ -114,6 +121,13 @@ def main():
     kin = client.simGetGroundTruthKinematics()
     check("simGetGroundTruthKinematics", hasattr(kin, 'position'))
     check("has orientation", abs(kin.orientation.w_val) > 0.9, f"qw={kin.orientation.w_val:.4f}")
+
+    # Vehicle pose — same API as FSDS
+    print("\n--- Vehicle Pose ---")
+    pose = client.simGetVehiclePose()
+    check("simGetVehiclePose", hasattr(pose, 'position'))
+    check("pose position", hasattr(pose.position, 'x_val'), f"({pose.position.x_val:.2f},{pose.position.y_val:.2f},{pose.position.z_val:.2f})")
+    check("pose orientation", abs(pose.orientation.w_val) > 0.9, f"qw={pose.orientation.w_val:.4f}")
 
     # Referee — same API as FSDS
     print("\n--- Referee ---")

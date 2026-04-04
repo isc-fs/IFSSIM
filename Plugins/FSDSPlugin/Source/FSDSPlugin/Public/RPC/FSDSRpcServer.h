@@ -55,4 +55,16 @@ private:
 	AFSDSReferee* Referee = nullptr;
 	UWorld* World = nullptr;
 	FString SettingsString;
+
+	// Cached car controls for immediate readback (set from TCP thread before game thread applies)
+	struct FCachedControls {
+		float Throttle = 0.f;
+		float Steering = 0.f;
+		float Brake = 0.f;
+		bool bHandbrake = false;
+		bool bIsManualGear = false;
+		int32 ManualGear = 0;
+		bool bGearImmediate = true;
+	};
+	FCachedControls CachedControls;
 };
