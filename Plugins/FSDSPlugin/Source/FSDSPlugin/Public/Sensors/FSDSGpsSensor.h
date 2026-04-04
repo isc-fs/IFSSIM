@@ -6,6 +6,7 @@
 
 /**
  * GPS sensor — converts UE world position to geographic coordinates.
+ * Supports configurable position and velocity noise (Gaussian).
  */
 UCLASS(ClassGroup=(FSDS), meta=(BlueprintSpawnableComponent))
 class FSDSPLUGIN_API UFSDSGpsSensor : public UActorComponent
@@ -37,6 +38,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GPS")
 	float HomeAltitude = 122.f;
+
+	/** Position noise standard deviation in meters (0 = no noise) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GPS Noise")
+	float GpsPositionNoiseStd = 0.0f;
+
+	/** Velocity noise standard deviation in m/s (0 = no noise) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GPS Noise")
+	float GpsVelocityNoiseStd = 0.0f;
 
 private:
 	FGpsOutput CachedOutput;

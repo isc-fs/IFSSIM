@@ -240,12 +240,57 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->HorizontalFOVStart = SensorPair.Value.HorizontalFOVStart;
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
+				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
+				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 				break;
 			}
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("FSDS: Configured %d cameras, LiDAR, IMU, GPS, GSS from settings"),
+	// Configure noise from settings — GPS (SensorType 3)
+	if (GpsSensor)
+	{
+		for (auto& SensorPair : VehicleSettings->Sensors)
+		{
+			if (SensorPair.Value.SensorType == 3 && SensorPair.Value.bEnabled)
+			{
+				GpsSensor->GpsPositionNoiseStd = SensorPair.Value.GpsPositionNoiseStd;
+				GpsSensor->GpsVelocityNoiseStd = SensorPair.Value.GpsVelocityNoiseStd;
+				break;
+			}
+		}
+	}
+
+	// Configure noise from settings — IMU (SensorType 2)
+	if (ImuSensor)
+	{
+		for (auto& SensorPair : VehicleSettings->Sensors)
+		{
+			if (SensorPair.Value.SensorType == 2 && SensorPair.Value.bEnabled)
+			{
+				ImuSensor->AccelNoiseStd = SensorPair.Value.AccelNoiseStd;
+				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
+				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd;
+				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
+				break;
+			}
+		}
+	}
+
+	// Configure noise from settings — GSS (SensorType 7)
+	if (GssSensor)
+	{
+		for (auto& SensorPair : VehicleSettings->Sensors)
+		{
+			if (SensorPair.Value.SensorType == 7 && SensorPair.Value.bEnabled)
+			{
+				GssSensor->VelocityNoiseStd = SensorPair.Value.VelocityNoiseStd;
+				break;
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS: Configured %d cameras, LiDAR, IMU, GPS, GSS from settings (with noise)"),
 		Cameras.Num());
 }
 

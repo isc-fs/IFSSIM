@@ -200,6 +200,17 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("HorizontalFOVEnd"), DblVal)) Sensor.HorizontalFOVEnd = DblVal;
 	SensorObj->TryGetBoolField(TEXT("DrawDebugPoints"), Sensor.bDrawDebugPoints);
 
+	// Noise parameters (all sensor types)
+	if (SensorObj->TryGetNumberField(TEXT("GpsPositionNoiseStd"), DblVal)) Sensor.GpsPositionNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GpsVelocityNoiseStd"), DblVal)) Sensor.GpsVelocityNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelNoiseStd"), DblVal)) Sensor.AccelNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroNoiseStd"), DblVal)) Sensor.GyroNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelBiasStd"), DblVal)) Sensor.AccelBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroBiasStd"), DblVal)) Sensor.GyroBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("VelocityNoiseStd"), DblVal)) Sensor.VelocityNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseStd"), DblVal)) Sensor.RangeNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+
 	Vehicle.Sensors.Add(Name, Sensor);
 }
 
