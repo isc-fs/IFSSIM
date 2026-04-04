@@ -316,6 +316,23 @@ void IFSSIMRosWrapper::goSignalTimerCb()
 {
     fs_msgs::msg::GoSignal msg;
     msg.header.stamp = node_->now();
+
+    // Query event type from simulator referee state
+    if (client_ && client_->isConnected()) {
+        std::string resp = client_->sendCommand("getRefereeState");
+        if (!resp.empty()) {
+            // Parse event field from JSON
+            size_t epos = resp.find("\"event\":\"");
+            if (epos != std::string::npos) {
+                epos += 9; // skip "event":"
+                size_t eend = resp.find('"', epos);
+                if (eend != std::string::npos) {
+                    mission_name_ = resp.substr(epos, eend - epos);
+                }
+            }
+        }
+    }
+
     msg.mission = mission_name_;
     msg.track = track_name_;
     go_signal_pub_->publish(msg);

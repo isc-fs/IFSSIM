@@ -244,6 +244,9 @@ def main():
     check("has cone_positions", "cone_positions" in resp, "cone_positions field present")
     cones_count = c.parse(resp, "cones")
     check("cones registered", cones_count is not None and cones_count > 0, f"cones={cones_count}")
+    check("has event type", "event" in resp, "event field present")
+    check("has finished flag", "finished" in resp, "finished field present")
+    check("has required_laps", "required_laps" in resp, "required_laps field present")
 
     # 15. Simulation control
     print("\n--- Simulation Control ---")

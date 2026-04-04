@@ -137,6 +137,9 @@ def main():
     check("lap_times is list", isinstance(ref.lap_times, list), f"lap_times={ref.lap_times}")
     check("cone_count > 0", ref.cone_count > 0, f"cone_count={ref.cone_count}")
     check("cones is list", isinstance(ref.cones, list), f"{len(ref.cones)} cones")
+    check("event type", ref.event in ('trackdrive','acceleration','skidpad','autocross'), f"event={ref.event}")
+    check("required_laps > 0", ref.required_laps > 0, f"required_laps={ref.required_laps}")
+    check("finished is bool", isinstance(ref.finished, bool), f"finished={ref.finished}")
     if ref.cones:
         c = ref.cones[0]
         check("cone has x,y,color", hasattr(c, 'x') and hasattr(c, 'color'), f"({c.x:.2f},{c.y:.2f}) color={c.color}")

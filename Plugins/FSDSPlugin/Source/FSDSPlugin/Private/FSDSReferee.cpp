@@ -214,11 +214,43 @@ void AFSDSReferee::OnConeOverlap(UPrimitiveComponent* OverlappedComp, AActor* Ot
 	// Not used currently — displacement check in Tick is more reliable
 }
 
+void AFSDSReferee::SetEventType(EFSDSEventType Type, int32 NumLaps)
+{
+	State.EventType = Type;
+	State.bFinished = false;
+
+	switch (Type)
+	{
+	case EFSDSEventType::Acceleration:
+		State.RequiredLaps = 1; // Single run
+		ConeHitThreshold = 15.0f;
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Event = Acceleration (1 run)"));
+		break;
+	case EFSDSEventType::Skidpad:
+		State.RequiredLaps = 4; // 2 right + 2 left laps
+		ConeHitThreshold = 15.0f;
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Event = Skidpad (4 crossings)"));
+		break;
+	case EFSDSEventType::Autocross:
+		State.RequiredLaps = 1; // Single lap
+		ConeHitThreshold = 15.0f;
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Event = Autocross (1 lap)"));
+		break;
+	case EFSDSEventType::Trackdrive:
+	default:
+		State.RequiredLaps = FMath::Max(1, NumLaps);
+		ConeHitThreshold = 15.0f;
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Event = Trackdrive (%d laps)"), State.RequiredLaps);
+		break;
+	}
+}
+
 void AFSDSReferee::OnFinishLineOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
 	UPrimitiveComponent* OtherComp, int32 OtherBodyIndex,
 	bool bFromSweep, const FHitResult& SweepResult)
 {
 	if (!bFinishLineValid) return;
+	if (State.bFinished) return; // Event already complete
 
 	// Only trigger on the vehicle pawn
 	APawn* VehiclePawn = Cast<APawn>(OtherActor);
@@ -235,18 +267,29 @@ void AFSDSReferee::OnFinishLineOverlap(UPrimitiveComponent* OverlappedComp, AAct
 		// First crossing — start the timer
 		LapStartTime = CurrentTime;
 		bLapTimerRunning = true;
-		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Lap timer started at %.2f s"), CurrentTime);
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Lap timer started at %.2f s (%s)"),
+			CurrentTime, *UEnum::GetValueAsString(State.EventType));
 	}
 	else
 	{
-		// Subsequent crossing — record lap
+		// Subsequent crossing — record lap/run
 		float LapTime = (float)(CurrentTime - LapStartTime);
 
-		// Minimum lap time to avoid false triggers (3 seconds)
-		if (LapTime > 3.0f)
+		// Minimum time to avoid false triggers
+		float MinTime = (State.EventType == EFSDSEventType::Acceleration) ? 1.0f : 3.0f;
+
+		if (LapTime > MinTime)
 		{
 			LapCompleted(LapTime);
 			LapStartTime = CurrentTime; // Start next lap
+
+			// Check if event is finished
+			if (State.Laps.Num() >= State.RequiredLaps)
+			{
+				State.bFinished = true;
+				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: EVENT FINISHED — %d/%d laps, DOO=%d"),
+					State.Laps.Num(), State.RequiredLaps, State.DooCounter);
+			}
 		}
 	}
 }
