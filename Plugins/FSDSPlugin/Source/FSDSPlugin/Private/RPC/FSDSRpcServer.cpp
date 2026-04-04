@@ -1,4 +1,5 @@
 #include "RPC/FSDSRpcServer.h"
+#include "RPC/FSDSUdpBroadcaster.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
 #include "FSDSConeSpawner.h"
@@ -85,9 +86,14 @@ void FFSDSRpcServer::ServerThreadFunc()
 			if (ClientSocket)
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
-				HandleClient(ClientSocket);
-				ClientSocket->Close();
-				SocketSubsystem->DestroySocket(ClientSocket);
+
+				// Handle each client in its own thread (supports streaming + concurrent clients)
+				std::thread ClientThread([this, ClientSocket, SocketSubsystem]() {
+					HandleClient(ClientSocket);
+					ClientSocket->Close();
+					SocketSubsystem->DestroySocket(ClientSocket);
+				});
+				ClientThread.detach();
 			}
 		}
 
@@ -114,6 +120,18 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 				Buffer[BytesRead] = 0;
 				FString Request = UTF8_TO_TCHAR((char*)Buffer);
 				Request.TrimEndInline();
+
+				// Check for streaming mode
+				if (Request == TEXT("streamSensors"))
+				{
+					StreamSensors(ClientSocket);
+					return; // Connection used for streaming, done
+				}
+				if (Request == TEXT("streamLidar"))
+				{
+					StreamLidar(ClientSocket);
+					return;
+				}
 
 				// Check if this is a binary request
 				if (ProcessBinaryRequest(Request, ClientSocket))
@@ -744,6 +762,24 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return Result;
 	}
 
+	// === UDP Target Registration ===
+
+	else if (Method == TEXT("registerUdpTarget"))
+	{
+		// Parse: registerUdpTarget <ip>
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2) return TEXT("{\"error\":\"usage: registerUdpTarget ip\"}");
+
+		FString TargetIP = Parts[1];
+		if (UdpBroadcaster)
+		{
+			UdpBroadcaster->SetTargetIP(TargetIP);
+			return FString::Printf(TEXT("{\"registered\":\"%s\"}"), *TargetIP);
+		}
+		return TEXT("{\"error\":\"no UDP broadcaster\"}");
+	}
+
 	// === Version ===
 
 	else if (Method == TEXT("getServerVersion")) { return TEXT("2"); }
@@ -847,4 +883,158 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 void FFSDSRpcServer::BindMethods()
 {
 	// Methods are handled in ProcessRequest/ProcessBinaryRequest
+}
+
+void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Sensor streaming started"));
+
+	// Send "OK\n" to confirm streaming mode
+	FString Ack = TEXT("OK\n");
+	FTCHARToUTF8 AckConv(*Ack);
+	int32 Sent = 0;
+	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
+
+	while (bRunning)
+	{
+		if (!VehiclePawn) { FPlatformProcess::Sleep(0.1f); continue; }
+
+		// Pack sensor frame (reuse the struct from UdpBroadcaster)
+		FFSDSSensorFrame Frame;
+		Frame.Magic = 0x49465353;
+		Frame.FrameID = StreamFrameCounter++;
+		Frame.Timestamp = FPlatformTime::Cycles64();
+
+		// GPS
+		if (VehiclePawn->GpsSensor)
+		{
+			auto Gps = VehiclePawn->GpsSensor->GetOutput();
+			Frame.Latitude = Gps.Latitude;
+			Frame.Longitude = Gps.Longitude;
+			Frame.Altitude = Gps.Altitude;
+		}
+
+		// IMU
+		if (VehiclePawn->ImuSensor)
+		{
+			auto Imu = VehiclePawn->ImuSensor->GetOutput();
+			Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
+			Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
+			Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
+			Frame.GyroX = Imu.AngularVelocity.X;
+			Frame.GyroY = Imu.AngularVelocity.Y;
+			Frame.GyroZ = Imu.AngularVelocity.Z;
+			FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
+			Frame.OrientX = EnuQuat.X;
+			Frame.OrientY = EnuQuat.Y;
+			Frame.OrientZ = EnuQuat.Z;
+			Frame.OrientW = EnuQuat.W;
+		}
+
+		// GSS
+		if (VehiclePawn->GssSensor)
+		{
+			auto Gss = VehiclePawn->GssSensor->GetOutput();
+			Frame.GssVelX = Gss.LinearVelocity.Y;
+			Frame.GssVelY = Gss.LinearVelocity.X;
+			Frame.GssVelZ = Gss.LinearVelocity.Z;
+		}
+
+		// Pose (ENU meters)
+		FVector Pos = VehiclePawn->GetActorLocation();
+		FQuat Quat = VehiclePawn->GetActorQuat();
+		Frame.PosX = Pos.Y / 100.f;
+		Frame.PosY = Pos.X / 100.f;
+		Frame.PosZ = Pos.Z / 100.f;
+		FQuat EnuQ = FSDSCoord::UEQuatToENU(Quat);
+		Frame.PoseOrientX = EnuQ.X;
+		Frame.PoseOrientY = EnuQ.Y;
+		Frame.PoseOrientZ = EnuQ.Z;
+		Frame.PoseOrientW = EnuQ.W;
+
+		auto CarState = VehiclePawn->GetCarState();
+		Frame.Speed = CarState.Speed;
+		Frame.RPM = CarState.RPM;
+
+		// Referee
+		if (Referee)
+		{
+			auto RefState = Referee->GetState();
+			Frame.DooCounter = RefState.DooCounter;
+			Frame.OffTrackCounter = RefState.OffTrackCounter;
+			Frame.LapCount = RefState.Laps.Num();
+		}
+
+		// Controls
+		auto Controls = VehiclePawn->GetCarControls();
+		Frame.Throttle = Controls.Throttle;
+		Frame.Steering = Controls.Steering;
+		Frame.Brake = Controls.Brake;
+
+		// Send frame
+		int32 BytesSent = 0;
+		bool bOk = ClientSocket->Send((const uint8*)&Frame, sizeof(Frame), BytesSent);
+		if (!bOk || BytesSent != sizeof(Frame))
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Sensor stream client disconnected"));
+			return;
+		}
+
+		// Pace at ~100Hz (10ms sleep) — fast enough for all sensors
+		FPlatformProcess::Sleep(0.008f);
+	}
+}
+
+void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started"));
+
+	FString Ack = TEXT("OK\n");
+	FTCHARToUTF8 AckConv(*Ack);
+	int32 Sent = 0;
+	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
+
+	while (bRunning)
+	{
+		if (!VehiclePawn || !VehiclePawn->LidarSensor)
+		{
+			FPlatformProcess::Sleep(0.1f);
+			continue;
+		}
+
+		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
+		int32 TotalPoints = Points.Num() / 3;
+
+		if (TotalPoints > 0)
+		{
+			// Send header
+			FFSDSLidarChunkHeader Header;
+			Header.Magic = 0x4C494452;
+			Header.ChunkIndex = 0;
+			Header.TotalChunks = 1; // Single chunk over TCP (no size limit)
+			Header.FrameID = StreamFrameCounter;
+			Header.PointsInChunk = TotalPoints;
+			Header.TotalPoints = TotalPoints;
+			Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
+
+			int32 BytesSent = 0;
+			bool bOk = ClientSocket->Send((const uint8*)&Header, sizeof(Header), BytesSent);
+			if (!bOk) { UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected")); return; }
+
+			// Send point data
+			int32 DataSize = TotalPoints * 3 * sizeof(float);
+			int32 TotalSent = 0;
+			const uint8* Data = (const uint8*)Points.GetData();
+			while (TotalSent < DataSize)
+			{
+				int32 ChunkSent = 0;
+				bOk = ClientSocket->Send(Data + TotalSent, DataSize - TotalSent, ChunkSent);
+				if (!bOk || ChunkSent <= 0) { UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected")); return; }
+				TotalSent += ChunkSent;
+			}
+		}
+
+		// ~10Hz LiDAR (sleep less to compensate for send time)
+		FPlatformProcess::Sleep(0.05f);
+	}
 }

@@ -8,26 +8,33 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
+#include <tf2_ros/transform_broadcaster.h>
 
 #include <fs_msgs/msg/control_command.hpp>
 #include <fs_msgs/msg/go_signal.hpp>
 #include <fs_msgs/msg/finished_signal.hpp>
 #include <fs_msgs/msg/track.hpp>
 #include <fs_msgs/msg/extra_info.hpp>
-#include <fs_msgs/msg/wheel_states.hpp>
 #include <fs_msgs/srv/reset.hpp>
 
 #include "tcp_client.h"
+#include "udp_receiver.h"  // For frame struct definitions
 
 #include <memory>
 #include <string>
 #include <map>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 /**
- * IFSSIM ROS2 Wrapper — connects to the IFSSIM TCP RPC server
- * and publishes sensor data as ROS2 topics.
- * Same topic names and message types as the original FSDS bridge.
+ * IFSSIM ROS2 Wrapper — TCP push model.
+ *
+ * Architecture (4 TCP connections):
+ *   1. Sensor stream (streamSensors) → GPS, IMU, GSS, Odom, TF at ~100Hz
+ *   2. LiDAR stream (streamLidar)   → PointCloud2 at ~10Hz
+ *   3. Camera client (TCP req/resp)  → CompressedImage at 10Hz
+ *   4. Command client (TCP req/resp) → control commands, settings, referee queries
  */
 class IFSSIMRosWrapper
 {
@@ -45,13 +52,17 @@ private:
     void initializePublishers();
     void initializeSubscribers();
     void initializeTimers();
+    void startStreaming();
 
-    // Timer callbacks
-    void gpsTimerCb();
-    void imuTimerCb();
-    void gssTimerCb();
-    void odomTimerCb();
-    void lidarTimerCb();
+    // Streaming threads
+    void sensorStreamThread();
+    void lidarStreamThread();
+
+    // Stream data handlers
+    void onSensorFrame(const SensorFrame& frame);
+    void onLidarFrame(const LidarChunkHeader& header, const float* points);
+
+    // Timer callbacks (TCP command client, low frequency)
     void cameraTimerCb();
     void goSignalTimerCb();
     void extraInfoTimerCb();
@@ -61,8 +72,6 @@ private:
     // Subscriber callbacks
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
     void finishedSignalCb(const fs_msgs::msg::FinishedSignal::SharedPtr msg);
-
-    // Service callbacks
     void resetSrvCb(
         const std::shared_ptr<fs_msgs::srv::Reset::Request> request,
         std::shared_ptr<fs_msgs::srv::Reset::Response> response);
@@ -70,10 +79,16 @@ private:
     // Node
     std::shared_ptr<rclcpp::Node> node_;
 
-    // TCP clients (three for parallelism: main, lidar, camera)
-    std::unique_ptr<TcpClient> client_;
-    std::unique_ptr<TcpClient> client_lidar_;
-    std::unique_ptr<TcpClient> client_camera_;
+    // TCP clients
+    std::unique_ptr<TcpClient> client_;          // Commands + referee queries
+    std::unique_ptr<TcpClient> client_camera_;   // Camera image requests
+
+    // Streaming sockets (raw, not TcpClient — held open)
+    int sensor_stream_fd_ = -1;
+    int lidar_stream_fd_ = -1;
+    std::thread sensor_thread_;
+    std::thread lidar_thread_;
+    std::atomic<bool> streaming_{false};
 
     // Connection params
     std::string host_;
@@ -98,19 +113,13 @@ private:
     // Subscribers
     rclcpp::Subscription<fs_msgs::msg::ControlCommand>::SharedPtr control_cmd_sub_;
     rclcpp::Subscription<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_sub_;
-
-    // Services
     rclcpp::Service<fs_msgs::srv::Reset>::SharedPtr reset_srv_;
 
     // TF
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     // Timers
-    rclcpp::TimerBase::SharedPtr gps_timer_;
-    rclcpp::TimerBase::SharedPtr imu_timer_;
-    rclcpp::TimerBase::SharedPtr gss_timer_;
-    rclcpp::TimerBase::SharedPtr odom_timer_;
-    rclcpp::TimerBase::SharedPtr lidar_timer_;
     rclcpp::TimerBase::SharedPtr camera_timer_;
     rclcpp::TimerBase::SharedPtr go_signal_timer_;
     rclcpp::TimerBase::SharedPtr extra_info_timer_;
@@ -123,12 +132,14 @@ private:
     bool competition_mode_ = false;
     std::vector<std::string> camera_names_;
 
-    // Sensor noise parameters (parsed from settings at startup)
-    double gps_position_noise_std_ = 0.0;  // meters
-    double gps_velocity_noise_std_ = 0.0;  // m/s
-    double imu_accel_noise_std_ = 0.0;     // m/s²
-    double imu_gyro_noise_std_ = 0.0;      // rad/s
-    double gss_velocity_noise_std_ = 0.0;  // m/s
+    // Noise params
+    double gps_position_noise_std_ = 0.0;
+    double imu_accel_noise_std_ = 0.0;
+    double imu_gyro_noise_std_ = 0.0;
+    double gss_velocity_noise_std_ = 0.0;
 
     void parseNoiseSettings(const std::string& settings_json);
+
+    // Helper: open a raw TCP socket and send a command
+    int openStreamSocket(const std::string& command);
 };

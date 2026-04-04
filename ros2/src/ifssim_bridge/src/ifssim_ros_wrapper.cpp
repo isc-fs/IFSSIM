@@ -1,23 +1,33 @@
+/**
+ * IFSSIM ROS2 Wrapper — TCP push model.
+ *
+ * Sensor data streams continuously from the sim over persistent TCP connections.
+ * No polling. The sim pushes binary frames at engine tick rate (~100Hz).
+ * Camera and commands use traditional TCP request-response.
+ */
+
 #include "ifssim_ros_wrapper.h"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <fs_msgs/msg/cone.hpp>
 #include <sstream>
 #include <cmath>
-#include <vector>
 #include <cstring>
 #include <algorithm>
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
 using namespace std::chrono_literals;
 
 IFSSIMRosWrapper::IFSSIMRosWrapper(
     std::shared_ptr<rclcpp::Node> node,
-    const std::string& host,
-    int port,
-    double timeout_sec)
+    const std::string& host, int port, double timeout_sec)
     : node_(node), host_(host), port_(port), timeout_sec_(timeout_sec)
 {
-    // Read parameters
     mission_name_ = node_->declare_parameter<std::string>("mission_name", "trackdrive");
     track_name_ = node_->declare_parameter<std::string>("track_name", "A");
     competition_mode_ = node_->declare_parameter<bool>("competition_mode", false);
@@ -26,64 +36,87 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     initializePublishers();
     initializeSubscribers();
     initializeTimers();
-
-    RCLCPP_INFO(node_->get_logger(), "IFSSIM ROS2 Bridge initialized");
+    startStreaming();
 }
 
 IFSSIMRosWrapper::~IFSSIMRosWrapper()
 {
-    if (client_) client_->disconnect();
-    if (client_lidar_) client_lidar_->disconnect();
+    streaming_ = false;
+    if (sensor_thread_.joinable()) sensor_thread_.join();
+    if (lidar_thread_.joinable()) lidar_thread_.join();
+    if (sensor_stream_fd_ >= 0) close(sensor_stream_fd_);
+    if (lidar_stream_fd_ >= 0) close(lidar_stream_fd_);
+}
+
+int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
+{
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return -1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port_);
+    inet_pton(AF_INET, host_.c_str(), &addr.sin_addr);
+
+    if (::connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sock);
+        return -1;
+    }
+
+    // Disable Nagle for low latency
+    int flag = 1;
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+
+    // Send the stream command
+    std::string msg = command + "\n";
+    send(sock, msg.c_str(), msg.size(), 0);
+
+    // Read "OK\n" acknowledgment
+    char buf[16];
+    int n = recv(sock, buf, sizeof(buf) - 1, 0);
+    if (n <= 0) {
+        close(sock);
+        return -1;
+    }
+    buf[n] = 0;
+
+    return sock;
 }
 
 void IFSSIMRosWrapper::initializeConnection()
 {
     client_ = std::make_unique<TcpClient>();
-    client_lidar_ = std::make_unique<TcpClient>();
-
     if (!client_->connect(host_, port_, timeout_sec_)) {
-        RCLCPP_ERROR(node_->get_logger(), "Failed to connect main client to %s:%d", host_.c_str(), port_);
+        RCLCPP_ERROR(node_->get_logger(), "Failed to connect command client to %s:%d", host_.c_str(), port_);
         return;
-    }
-
-    if (!client_lidar_->connect(host_, port_, timeout_sec_)) {
-        RCLCPP_WARN(node_->get_logger(), "Failed to connect lidar client, using main client");
     }
 
     client_camera_ = std::make_unique<TcpClient>();
     if (!client_camera_->connect(host_, port_, timeout_sec_)) {
-        RCLCPP_WARN(node_->get_logger(), "Failed to connect camera client, using main client");
+        RCLCPP_WARN(node_->get_logger(), "Camera client failed, using main");
     }
 
-    // Enable API control
     client_->sendBool("enableApiControl");
 
     // Discover cameras
     std::string cam_list = client_->sendCommand("listCameras");
-    // Parse ["cam1","cam2"] format
     if (!cam_list.empty() && cam_list[0] == '[') {
         std::string stripped = cam_list.substr(1, cam_list.size() - 2);
         std::stringstream ss(stripped);
         std::string token;
         while (std::getline(ss, token, ',')) {
-            // Remove quotes
             token.erase(std::remove(token.begin(), token.end(), '"'), token.end());
             token.erase(std::remove(token.begin(), token.end(), ' '), token.end());
-            if (!token.empty()) {
-                camera_names_.push_back(token);
-            }
+            if (!token.empty()) camera_names_.push_back(token);
         }
     }
     RCLCPP_INFO(node_->get_logger(), "Discovered %zu cameras", camera_names_.size());
 
-    // Ping
     if (client_->sendBool("ping")) {
-        RCLCPP_INFO(node_->get_logger(), "IFSSIM simulator connected successfully");
-    } else {
-        RCLCPP_ERROR(node_->get_logger(), "Ping failed!");
+        RCLCPP_INFO(node_->get_logger(), "IFSSIM connected (TCP push model)");
     }
 
-    // Parse noise settings for covariance matrices
     std::string settings = client_->sendCommand("getSettingsString");
     parseNoiseSettings(settings);
 }
@@ -96,7 +129,6 @@ void IFSSIMRosWrapper::initializePublishers()
     lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", 10);
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
 
-    // Camera publishers — one per camera
     for (const auto& cam_name : camera_names_) {
         auto pub = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
             "camera/" + cam_name + "/compressed", 10);
@@ -106,13 +138,13 @@ void IFSSIMRosWrapper::initializePublishers()
 
     if (!competition_mode_) {
         odom_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("testing_only/odom", 10);
-
         auto qos = rclcpp::QoS(1).transient_local();
         track_pub_ = node_->create_publisher<fs_msgs::msg::Track>("testing_only/track", qos);
         extra_info_pub_ = node_->create_publisher<fs_msgs::msg::ExtraInfo>("testing_only/extra_info", 10);
     }
 
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node_);
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
 
     RCLCPP_INFO(node_->get_logger(), "Publishers initialized (competition_mode: %s)",
         competition_mode_ ? "true" : "false");
@@ -135,237 +167,259 @@ void IFSSIMRosWrapper::initializeSubscribers()
 
 void IFSSIMRosWrapper::initializeTimers()
 {
-    gps_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::gpsTimerCb, this));
-    imu_timer_ = node_->create_wall_timer(std::chrono::microseconds(2500), std::bind(&IFSSIMRosWrapper::imuTimerCb, this)); // 400 Hz (BMI088)
-    gss_timer_ = node_->create_wall_timer(10ms, std::bind(&IFSSIMRosWrapper::gssTimerCb, this));
-    lidar_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::lidarTimerCb, this));
-    camera_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this)); // 10 Hz
+    camera_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this));
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
 
     if (!competition_mode_) {
-        odom_timer_ = node_->create_wall_timer(4ms, std::bind(&IFSSIMRosWrapper::odomTimerCb, this));
         extra_info_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::extraInfoTimerCb, this));
-        track_publish_timer_ = node_->create_wall_timer(5000ms, std::bind(&IFSSIMRosWrapper::trackPublishCb, this)); // 0.2 Hz
+        track_publish_timer_ = node_->create_wall_timer(5000ms, std::bind(&IFSSIMRosWrapper::trackPublishCb, this));
     }
 }
 
-// === Timer callbacks ===
-
-void IFSSIMRosWrapper::gpsTimerCb()
+void IFSSIMRosWrapper::startStreaming()
 {
-    if (!client_ || !client_->isConnected()) return;
-
-    std::string resp = client_->sendCommand("getGpsData");
-    if (resp.empty()) return;
-
-    sensor_msgs::msg::NavSatFix msg;
-    msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_;
-    msg.latitude = client_->parseDouble(resp, "lat");
-    msg.longitude = client_->parseDouble(resp, "lon");
-    msg.altitude = client_->parseDouble(resp, "alt");
-    msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
-    msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
-
-    // Position covariance (diagonal, in m²) — ENU order
-    double gps_var = gps_position_noise_std_ * gps_position_noise_std_;
-    msg.position_covariance = {
-        gps_var, 0, 0,
-        0, gps_var, 0,
-        0, 0, gps_var
-    };
-    msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
-
-    gps_pub_->publish(msg);
-}
-
-void IFSSIMRosWrapper::imuTimerCb()
-{
-    if (!client_ || !client_->isConnected()) return;
-
-    std::string resp = client_->sendCommand("getImuData");
-    if (resp.empty()) return;
-
-    sensor_msgs::msg::Imu msg;
-    msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_;
-    // RPC server already outputs in ENU frame (m/s^2)
-    msg.linear_acceleration.x = client_->parseDouble(resp, "ax");
-    msg.linear_acceleration.y = client_->parseDouble(resp, "ay");
-    msg.linear_acceleration.z = client_->parseDouble(resp, "az");
-    msg.angular_velocity.x = client_->parseDouble(resp, "gx");
-    msg.angular_velocity.y = client_->parseDouble(resp, "gy");
-    msg.angular_velocity.z = client_->parseDouble(resp, "gz");
-
-    // Orientation covariance (small — quaternion is from ground truth)
-    msg.orientation_covariance = {
-        1e-6, 0, 0,
-        0, 1e-6, 0,
-        0, 0, 1e-6
-    };
-
-    // Angular velocity covariance (σ² from gyro noise)
-    double gyro_var = imu_gyro_noise_std_ * imu_gyro_noise_std_;
-    msg.angular_velocity_covariance = {
-        gyro_var, 0, 0,
-        0, gyro_var, 0,
-        0, 0, gyro_var
-    };
-
-    // Linear acceleration covariance (σ² from accel noise)
-    double accel_var = imu_accel_noise_std_ * imu_accel_noise_std_;
-    msg.linear_acceleration_covariance = {
-        accel_var, 0, 0,
-        0, accel_var, 0,
-        0, 0, accel_var
-    };
-
-    imu_pub_->publish(msg);
-}
-
-void IFSSIMRosWrapper::gssTimerCb()
-{
-    if (!client_ || !client_->isConnected()) return;
-
-    std::string resp = client_->sendCommand("getGroundSpeedSensorData");
-    if (resp.empty()) return;
-
-    geometry_msgs::msg::TwistWithCovarianceStamped msg;
-    msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_;
-    msg.twist.twist.linear.x = client_->parseDouble(resp, "vx");
-    msg.twist.twist.linear.y = client_->parseDouble(resp, "vy");
-    msg.twist.twist.linear.z = client_->parseDouble(resp, "vz");
-
-    // Twist covariance (6x6, only linear velocity diagonal filled)
-    double gss_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
-    msg.twist.covariance[0] = gss_var;   // vx
-    msg.twist.covariance[7] = gss_var;   // vy
-    msg.twist.covariance[14] = gss_var;  // vz
-
-    gss_pub_->publish(msg);
-}
-
-void IFSSIMRosWrapper::odomTimerCb()
-{
-    if (!client_ || !client_->isConnected()) return;
-
-    std::string resp = client_->sendCommand("getCarState");
-    if (resp.empty()) return;
-
-    nav_msgs::msg::Odometry msg;
-    msg.header.stamp = node_->now();
-    msg.header.frame_id = map_frame_id_;
-    msg.child_frame_id = vehicle_frame_id_;
-
-    // RPC server already outputs in ENU (meters)
-    msg.pose.pose.position.x = client_->parseDouble(resp, "x");
-    msg.pose.pose.position.y = client_->parseDouble(resp, "y");
-    msg.pose.pose.position.z = client_->parseDouble(resp, "z");
-
-    // Orientation
-    msg.pose.pose.orientation.w = client_->parseDouble(resp, "qw");
-    msg.pose.pose.orientation.x = client_->parseDouble(resp, "qx");
-    msg.pose.pose.orientation.y = client_->parseDouble(resp, "qy");
-    msg.pose.pose.orientation.z = client_->parseDouble(resp, "qz");
-
-    // Pose covariance (6x6 — position from GPS noise, orientation small)
-    double pos_var = gps_position_noise_std_ * gps_position_noise_std_;
-    msg.pose.covariance[0] = pos_var;    // x
-    msg.pose.covariance[7] = pos_var;    // y
-    msg.pose.covariance[14] = pos_var;   // z
-    msg.pose.covariance[21] = 1e-6;      // roll
-    msg.pose.covariance[28] = 1e-6;      // pitch
-    msg.pose.covariance[35] = 1e-6;      // yaw
-
-    // Twist covariance (from GSS noise)
-    double vel_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
-    msg.twist.covariance[0] = vel_var;
-    msg.twist.covariance[7] = vel_var;
-    msg.twist.covariance[14] = vel_var;
-
-    odom_pub_->publish(msg);
-}
-
-void IFSSIMRosWrapper::lidarTimerCb()
-{
-    TcpClient* lidar_client = (client_lidar_ && client_lidar_->isConnected())
-        ? client_lidar_.get() : client_.get();
-    if (!lidar_client || !lidar_client->isConnected()) return;
-
-    // Use binary protocol to get actual point cloud data
-    std::vector<uint8_t> binaryData;
-    std::string header = lidar_client->sendBinaryCommand("getLidarDataBinary", binaryData);
-
-    if (header.empty() || binaryData.empty()) return;
-
-    // Parse point count from header "PTS:N"
-    int point_count = 0;
-    size_t colonPos = header.find(':');
-    if (colonPos != std::string::npos) {
-        try { point_count = std::stoi(header.substr(colonPos + 1)); } catch (...) {}
+    // Open streaming connections
+    sensor_stream_fd_ = openStreamSocket("streamSensors");
+    if (sensor_stream_fd_ >= 0) {
+        RCLCPP_INFO(node_->get_logger(), "Sensor stream connected");
+    } else {
+        RCLCPP_ERROR(node_->get_logger(), "Failed to open sensor stream");
     }
 
-    if (point_count <= 0) return;
+    lidar_stream_fd_ = openStreamSocket("streamLidar");
+    if (lidar_stream_fd_ >= 0) {
+        RCLCPP_INFO(node_->get_logger(), "LiDAR stream connected");
+    } else {
+        RCLCPP_ERROR(node_->get_logger(), "Failed to open LiDAR stream");
+    }
 
-    // Build PointCloud2 message with actual data
+    streaming_ = true;
+
+    if (sensor_stream_fd_ >= 0) {
+        sensor_thread_ = std::thread(&IFSSIMRosWrapper::sensorStreamThread, this);
+    }
+    if (lidar_stream_fd_ >= 0) {
+        lidar_thread_ = std::thread(&IFSSIMRosWrapper::lidarStreamThread, this);
+    }
+}
+
+// =============================================================================
+// Streaming threads — read continuous binary data from sim
+// =============================================================================
+
+static bool readExact(int fd, void* buf, size_t len)
+{
+    size_t total = 0;
+    while (total < len) {
+        ssize_t n = recv(fd, (char*)buf + total, len - total, 0);
+        if (n <= 0) return false;
+        total += n;
+    }
+    return true;
+}
+
+void IFSSIMRosWrapper::sensorStreamThread()
+{
+    RCLCPP_INFO(node_->get_logger(), "Sensor stream thread started");
+
+    while (streaming_ && sensor_stream_fd_ >= 0) {
+        SensorFrame frame;
+        if (!readExact(sensor_stream_fd_, &frame, sizeof(frame))) {
+            RCLCPP_WARN(node_->get_logger(), "Sensor stream disconnected");
+            break;
+        }
+
+        if (frame.magic != SENSOR_MAGIC) continue;
+        onSensorFrame(frame);
+    }
+}
+
+void IFSSIMRosWrapper::lidarStreamThread()
+{
+    RCLCPP_INFO(node_->get_logger(), "LiDAR stream thread started");
+
+    while (streaming_ && lidar_stream_fd_ >= 0) {
+        // Read header
+        LidarChunkHeader header;
+        if (!readExact(lidar_stream_fd_, &header, sizeof(header))) {
+            RCLCPP_WARN(node_->get_logger(), "LiDAR stream disconnected");
+            break;
+        }
+
+        if (header.magic != LIDAR_MAGIC || header.total_points <= 0) continue;
+
+        // Read point data
+        int data_size = header.total_points * 3 * sizeof(float);
+        std::vector<float> points(header.total_points * 3);
+
+        if (!readExact(lidar_stream_fd_, points.data(), data_size)) {
+            RCLCPP_WARN(node_->get_logger(), "LiDAR stream data incomplete");
+            break;
+        }
+
+        onLidarFrame(header, points.data());
+    }
+}
+
+// =============================================================================
+// Frame handlers — publish ROS2 topics
+// =============================================================================
+
+void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
+{
+    auto now = node_->now();
+
+    // GPS
+    {
+        sensor_msgs::msg::NavSatFix msg;
+        msg.header.stamp = now;
+        msg.header.frame_id = vehicle_frame_id_;
+        msg.latitude = f.latitude;
+        msg.longitude = f.longitude;
+        msg.altitude = f.altitude;
+        msg.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+        msg.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+        double gps_var = gps_position_noise_std_ * gps_position_noise_std_;
+        msg.position_covariance = {gps_var,0,0, 0,gps_var,0, 0,0,gps_var};
+        msg.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+        gps_pub_->publish(msg);
+    }
+
+    // IMU
+    {
+        sensor_msgs::msg::Imu msg;
+        msg.header.stamp = now;
+        msg.header.frame_id = vehicle_frame_id_;
+        msg.linear_acceleration.x = f.accel_x;
+        msg.linear_acceleration.y = f.accel_y;
+        msg.linear_acceleration.z = f.accel_z;
+        msg.angular_velocity.x = f.gyro_x;
+        msg.angular_velocity.y = f.gyro_y;
+        msg.angular_velocity.z = f.gyro_z;
+        msg.orientation.x = f.orient_x;
+        msg.orientation.y = f.orient_y;
+        msg.orientation.z = f.orient_z;
+        msg.orientation.w = f.orient_w;
+        msg.orientation_covariance = {1e-6,0,0, 0,1e-6,0, 0,0,1e-6};
+        double gyro_var = imu_gyro_noise_std_ * imu_gyro_noise_std_;
+        msg.angular_velocity_covariance = {gyro_var,0,0, 0,gyro_var,0, 0,0,gyro_var};
+        double accel_var = imu_accel_noise_std_ * imu_accel_noise_std_;
+        msg.linear_acceleration_covariance = {accel_var,0,0, 0,accel_var,0, 0,0,accel_var};
+        imu_pub_->publish(msg);
+    }
+
+    // GSS
+    {
+        geometry_msgs::msg::TwistWithCovarianceStamped msg;
+        msg.header.stamp = now;
+        msg.header.frame_id = vehicle_frame_id_;
+        msg.twist.twist.linear.x = f.gss_vx;
+        msg.twist.twist.linear.y = f.gss_vy;
+        msg.twist.twist.linear.z = f.gss_vz;
+        double gss_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
+        msg.twist.covariance[0] = gss_var;
+        msg.twist.covariance[7] = gss_var;
+        msg.twist.covariance[14] = gss_var;
+        gss_pub_->publish(msg);
+    }
+
+    // TF (map → vehicle)
+    {
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header.stamp = now;
+        tf.header.frame_id = map_frame_id_;
+        tf.child_frame_id = vehicle_frame_id_;
+        tf.transform.translation.x = f.pos_x;
+        tf.transform.translation.y = f.pos_y;
+        tf.transform.translation.z = f.pos_z;
+        tf.transform.rotation.x = f.pose_qx;
+        tf.transform.rotation.y = f.pose_qy;
+        tf.transform.rotation.z = f.pose_qz;
+        tf.transform.rotation.w = f.pose_qw;
+        tf_broadcaster_->sendTransform(tf);
+    }
+
+    // Odom (testing only)
+    if (odom_pub_) {
+        nav_msgs::msg::Odometry msg;
+        msg.header.stamp = now;
+        msg.header.frame_id = map_frame_id_;
+        msg.child_frame_id = vehicle_frame_id_;
+        msg.pose.pose.position.x = f.pos_x;
+        msg.pose.pose.position.y = f.pos_y;
+        msg.pose.pose.position.z = f.pos_z;
+        msg.pose.pose.orientation.x = f.pose_qx;
+        msg.pose.pose.orientation.y = f.pose_qy;
+        msg.pose.pose.orientation.z = f.pose_qz;
+        msg.pose.pose.orientation.w = f.pose_qw;
+        double pos_var = gps_position_noise_std_ * gps_position_noise_std_;
+        msg.pose.covariance[0] = pos_var;
+        msg.pose.covariance[7] = pos_var;
+        msg.pose.covariance[14] = pos_var;
+        msg.pose.covariance[21] = 1e-6;
+        msg.pose.covariance[28] = 1e-6;
+        msg.pose.covariance[35] = 1e-6;
+        odom_pub_->publish(msg);
+    }
+}
+
+void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float* points)
+{
+    int total_points = header.total_points;
+    if (total_points <= 0) return;
+
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_;
+    msg.header.frame_id = vehicle_frame_id_ + "/Lidar1";
     msg.height = 1;
-    msg.width = point_count;
+    msg.width = total_points;
     msg.is_dense = true;
     msg.is_bigendian = false;
 
-    // Define fields: x, y, z (float32 each)
     sensor_msgs::PointCloud2Modifier modifier(msg);
     modifier.setPointCloud2FieldsByString(1, "xyz");
-    modifier.resize(point_count);
+    modifier.resize(total_points);
 
-    // Copy actual point data into the message
-    // Binary data is [x,y,z, x,y,z, ...] as float32, same layout as PointCloud2
-    size_t expectedBytes = point_count * 3 * sizeof(float);
-    if (binaryData.size() >= expectedBytes) {
-        memcpy(msg.data.data(), binaryData.data(), expectedBytes);
+    sensor_msgs::PointCloud2Iterator<float> iter_x(msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(msg, "z");
+
+    for (int i = 0; i < total_points; i++) {
+        *iter_x = points[i * 3];
+        *iter_y = points[i * 3 + 1];
+        *iter_z = points[i * 3 + 2];
+        ++iter_x; ++iter_y; ++iter_z;
     }
 
     lidar_pub_->publish(msg);
 }
 
+// =============================================================================
+// TCP timer callbacks (low frequency)
+// =============================================================================
+
 void IFSSIMRosWrapper::cameraTimerCb()
 {
-    TcpClient* cam_client = (client_camera_ && client_camera_->isConnected())
+    TcpClient* cam = (client_camera_ && client_camera_->isConnected())
         ? client_camera_.get() : client_.get();
-    if (!cam_client || !cam_client->isConnected()) return;
+    if (!cam || !cam->isConnected()) return;
 
     for (const auto& cam_name : camera_names_) {
         auto it = camera_pubs_.find(cam_name);
         if (it == camera_pubs_.end()) continue;
 
-        // Use binary protocol to get PNG image
-        std::string command = "simGetImageBinary " + cam_name + " 0";
-        std::vector<uint8_t> imageData;
-        std::string header = cam_client->sendBinaryCommand(command, imageData);
+        std::vector<uint8_t> data;
+        std::string header = cam->sendBinaryCommand("simGetImageBinary " + cam_name + " 0", data);
 
-        if (header.empty() || imageData.empty()) continue;
-
-        // Parse image size from header "IMG:size"
-        int imgSize = 0;
-        size_t colonPos = header.find(':');
-        if (colonPos != std::string::npos) {
-            try { imgSize = std::stoi(header.substr(colonPos + 1)); } catch (...) {}
+        if (!data.empty()) {
+            sensor_msgs::msg::CompressedImage msg;
+            msg.header.stamp = node_->now();
+            msg.header.frame_id = vehicle_frame_id_ + "/" + cam_name;
+            msg.format = "png";
+            msg.data = std::move(data);
+            it->second->publish(msg);
         }
-        if (imgSize <= 0 || imageData.empty()) continue;
-
-        // Publish as CompressedImage
-        sensor_msgs::msg::CompressedImage msg;
-        msg.header.stamp = node_->now();
-        msg.header.frame_id = vehicle_frame_id_ + "/" + cam_name;
-        msg.format = "png";
-        msg.data.assign(imageData.begin(), imageData.end());
-
-        it->second->publish(msg);
     }
 }
 
@@ -373,54 +427,45 @@ void IFSSIMRosWrapper::goSignalTimerCb()
 {
     fs_msgs::msg::GoSignal msg;
     msg.header.stamp = node_->now();
+    msg.mission = mission_name_;
+    msg.track = track_name_;
 
-    // Query event type from simulator referee state
     if (client_ && client_->isConnected()) {
         std::string resp = client_->sendCommand("getRefereeState");
         if (!resp.empty()) {
-            // Parse event field from JSON
             size_t epos = resp.find("\"event\":\"");
             if (epos != std::string::npos) {
-                epos += 9; // skip "event":"
+                epos += 9;
                 size_t eend = resp.find('"', epos);
                 if (eend != std::string::npos) {
                     mission_name_ = resp.substr(epos, eend - epos);
+                    msg.mission = mission_name_;
                 }
             }
         }
     }
-
-    msg.mission = mission_name_;
-    msg.track = track_name_;
     go_signal_pub_->publish(msg);
 }
 
 void IFSSIMRosWrapper::extraInfoTimerCb()
 {
     if (!client_ || !client_->isConnected()) return;
-
     std::string resp = client_->sendCommand("getRefereeState");
     if (resp.empty()) return;
 
     fs_msgs::msg::ExtraInfo msg;
     msg.doo_counter = (uint32_t)client_->parseDouble(resp, "doo_counter");
     msg.laps = (uint32_t)client_->parseDouble(resp, "laps");
-
     extra_info_pub_->publish(msg);
 }
 
 void IFSSIMRosWrapper::trackPublishCb()
 {
     if (!client_ || !client_->isConnected()) return;
-
     std::string resp = client_->sendCommand("getRefereeState");
     if (resp.empty()) return;
 
-    // Parse cone_positions array from response
-    // Format: {"doo_counter":N,"cones":N,"laps":N,"lap_times":[...],"cone_positions":[{"x":1.0,"y":2.0,"color":0},...]}"
     fs_msgs::msg::Track msg;
-
-    // Find cone_positions array
     size_t arr_start = resp.find("\"cone_positions\":[");
     if (arr_start == std::string::npos) return;
     arr_start = resp.find('[', arr_start);
@@ -430,88 +475,84 @@ void IFSSIMRosWrapper::trackPublishCb()
     std::string arr = resp.substr(arr_start + 1, arr_end - arr_start - 1);
     if (arr.empty()) return;
 
-    // Parse each cone object: {"x":1.0,"y":2.0,"color":0}
     size_t pos = 0;
     while (pos < arr.size()) {
         size_t obj_start = arr.find('{', pos);
         if (obj_start == std::string::npos) break;
         size_t obj_end = arr.find('}', obj_start);
         if (obj_end == std::string::npos) break;
-
         std::string obj = arr.substr(obj_start, obj_end - obj_start + 1);
         pos = obj_end + 1;
 
-        // Parse x, y, color from the object
-        double x = 0, y = 0;
-        int color = 4; // UNKNOWN
-
-        auto parseField = [&obj](const std::string& key) -> double {
+        auto pf = [&obj](const std::string& key) -> double {
             size_t kpos = obj.find("\"" + key + "\":");
             if (kpos == std::string::npos) return 0.0;
-            kpos += key.size() + 3; // skip "key":
-            return std::stod(obj.substr(kpos));
+            return std::stod(obj.substr(kpos + key.size() + 3));
         };
 
-        x = parseField("x");
-        y = parseField("y");
-        color = (int)parseField("color");
-
         fs_msgs::msg::Cone cone;
-        cone.location.x = x;
-        cone.location.y = y;
-        cone.location.z = 0.0;
-        cone.color = (uint8_t)color;
+        cone.location.x = pf("x");
+        cone.location.y = pf("y");
+        cone.color = (uint8_t)pf("color");
         msg.track.push_back(cone);
     }
 
-    if (!msg.track.empty()) {
-        track_pub_->publish(msg);
+    if (!msg.track.empty()) track_pub_->publish(msg);
+}
+
+void IFSSIMRosWrapper::staticTfCb()
+{
+    auto now = node_->now();
+
+    // LiDAR
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.stamp = now;
+    tf.header.frame_id = vehicle_frame_id_;
+    tf.child_frame_id = vehicle_frame_id_ + "/Lidar1";
+    tf.transform.translation.y = 1.4;
+    tf.transform.translation.z = -0.2;
+    tf.transform.rotation.w = 1.0;
+    static_tf_broadcaster_->sendTransform(tf);
+
+    for (const auto& cam_name : camera_names_) {
+        geometry_msgs::msg::TransformStamped ctf;
+        ctf.header.stamp = now;
+        ctf.header.frame_id = vehicle_frame_id_;
+        ctf.child_frame_id = vehicle_frame_id_ + "/" + cam_name;
+        ctf.transform.translation.y = 1.6;
+        ctf.transform.rotation.w = 1.0;
+        static_tf_broadcaster_->sendTransform(ctf);
     }
 }
 
 void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)
 {
-    // Parse noise std values from settings JSON
-    // Settings format: nested JSON with Sensors containing noise params
-    auto parseField = [&settings](const std::string& key) -> double {
+    auto pf = [&settings](const std::string& key) -> double {
         size_t pos = settings.find("\"" + key + "\"");
         if (pos == std::string::npos) return 0.0;
         pos = settings.find(':', pos);
         if (pos == std::string::npos) return 0.0;
-        pos++; // skip ':'
+        pos++;
         while (pos < settings.size() && settings[pos] == ' ') pos++;
         try { return std::stod(settings.substr(pos)); } catch (...) { return 0.0; }
     };
 
-    gps_position_noise_std_ = parseField("GpsPositionNoiseStd");
-    gps_velocity_noise_std_ = parseField("GpsVelocityNoiseStd");
-    imu_accel_noise_std_ = parseField("AccelNoiseStd") / 100.0; // cm/s² → m/s²
-    imu_gyro_noise_std_ = parseField("GyroNoiseStd");
-    gss_velocity_noise_std_ = parseField("VelocityNoiseStd");
+    gps_position_noise_std_ = pf("GpsPositionNoiseStd");
+    imu_accel_noise_std_ = pf("AccelNoiseStd") / 100.0;
+    imu_gyro_noise_std_ = pf("GyroNoiseStd");
+    gss_velocity_noise_std_ = pf("VelocityNoiseStd");
 
-    RCLCPP_INFO(node_->get_logger(),
-        "Noise settings: GPS pos=%.3fm vel=%.3fm/s, IMU accel=%.4fm/s² gyro=%.4frad/s, GSS vel=%.3fm/s",
-        gps_position_noise_std_, gps_velocity_noise_std_,
-        imu_accel_noise_std_, imu_gyro_noise_std_, gss_velocity_noise_std_);
+    RCLCPP_INFO(node_->get_logger(), "Noise: GPS=%.3fm, IMU accel=%.4f gyro=%.4f, GSS=%.3f",
+        gps_position_noise_std_, imu_accel_noise_std_, imu_gyro_noise_std_, gss_velocity_noise_std_);
 }
 
-void IFSSIMRosWrapper::staticTfCb()
-{
-    geometry_msgs::msg::TransformStamped tf;
-    tf.header.stamp = node_->now();
-    tf.header.frame_id = map_frame_id_;
-    tf.child_frame_id = vehicle_frame_id_;
-    tf.transform.rotation.w = 1.0;
-
-    static_tf_broadcaster_->sendTransform(tf);
-}
-
-// === Subscriber callbacks ===
+// =============================================================================
+// Subscriber callbacks
+// =============================================================================
 
 void IFSSIMRosWrapper::controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg)
 {
     if (!client_ || !client_->isConnected()) return;
-
     std::ostringstream cmd;
     cmd << "setCarControls " << msg->throttle << " " << msg->steering << " " << msg->brake;
     client_->sendCommand(cmd.str());

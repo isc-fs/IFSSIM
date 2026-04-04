@@ -19,6 +19,7 @@ find_package(fs_msgs REQUIRED)
 add_library(ifssim_ros_wrapper STATIC
   src/ifssim_ros_wrapper.cpp
   src/tcp_client.cpp
+  src/udp_receiver.cpp
 )
 target_include_directories(ifssim_ros_wrapper PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
