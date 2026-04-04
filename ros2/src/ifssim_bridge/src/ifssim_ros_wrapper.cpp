@@ -131,7 +131,7 @@ void IFSSIMRosWrapper::initializeSubscribers()
 void IFSSIMRosWrapper::initializeTimers()
 {
     gps_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::gpsTimerCb, this));
-    imu_timer_ = node_->create_wall_timer(4ms, std::bind(&IFSSIMRosWrapper::imuTimerCb, this));
+    imu_timer_ = node_->create_wall_timer(std::chrono::microseconds(2500), std::bind(&IFSSIMRosWrapper::imuTimerCb, this)); // 400 Hz (BMI088)
     gss_timer_ = node_->create_wall_timer(10ms, std::bind(&IFSSIMRosWrapper::gssTimerCb, this));
     lidar_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::lidarTimerCb, this));
     camera_timer_ = node_->create_wall_timer(100ms, std::bind(&IFSSIMRosWrapper::cameraTimerCb, this)); // 10 Hz
