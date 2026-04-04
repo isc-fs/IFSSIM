@@ -205,9 +205,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getLidarData"))
 	{
-		if (!VehiclePawn || !VehiclePawn->LidarSensor) return TEXT("{\"points\":0}");
-		auto Points = VehiclePawn->LidarSensor->GetPointCloud();
-		return FString::Printf(TEXT("{\"points\":%d}"), Points.Num() / 3);
+		if (!VehiclePawn || !VehiclePawn->LidarSensor) return TEXT("{\"points\":0,\"channels\":0}");
+		int32 PointCount = VehiclePawn->LidarSensor->GetPointCount();
+		return FString::Printf(TEXT("{\"points\":%d,\"channels\":%d,\"range\":%.1f}"),
+			PointCount,
+			VehiclePawn->LidarSensor->NumberOfChannels,
+			VehiclePawn->LidarSensor->MaxRange / 100.f);
 	}
 	else if (Method == TEXT("getRefereeState"))
 	{
