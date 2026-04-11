@@ -9,6 +9,26 @@
       "EnableCollisions": true,
       "AllowAPIAlways": true,
       "AutoCreate": true,
+      "VehiclePhysics": {
+        "Mass": 290,
+        "Drivetrain": "RWD",
+        "WheelRadius": 0.200,
+        "WheelWidth": 0.190,
+        "MaxSteerAngle": 28,
+        "MotorMaxTorque": 230,
+        "MotorMaxPower": 80000,
+        "GearRatio": 2.909,
+        "DrivetrainEfficiency": 0.92,
+        "CdA": 0.95,
+        "ClA": 3.0,
+        "AeroBalanceFront": 0.45,
+        "TireMu": 1.65,
+        "WeightDistFront": 0.438,
+        "CoGHeight": 0.344,
+        "SuspensionDamping": 1.5,
+        "MotorRPM": [0, 1000, 2000, 3000, 4000, 5000, 6000, 6500],
+        "MotorTorque": [230, 240, 240, 240, 240, 240, 200, 180]
+      },
       "Sensors": {
         "Imu": {
           "SensorType": 2, "Enabled": true,

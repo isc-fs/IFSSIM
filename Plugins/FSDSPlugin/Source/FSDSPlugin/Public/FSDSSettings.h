@@ -108,6 +108,28 @@ struct FFSDSSensorSettings
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
 };
 
+struct FFSDSVehiclePhysics
+{
+	float Mass = 290.f;
+	FString Drivetrain = TEXT("RWD"); // RWD, FWD, AWD
+	float WheelRadius = 0.200f;      // meters
+	float WheelWidth = 0.190f;       // meters
+	float MaxSteerAngle = 28.f;      // degrees
+	float MotorMaxTorque = 230.f;    // Nm (at motor)
+	float MotorMaxPower = 80000.f;   // Watts
+	float GearRatio = 2.909f;
+	float DrivetrainEfficiency = 0.92f;
+	float CdA = 0.95f;              // drag
+	float ClA = 3.0f;               // downforce (positive = down)
+	float AeroBalanceFront = 0.45f;
+	float TireMu = 1.65f;
+	float WeightDistFront = 0.438f;
+	float CoGHeight = 0.344f;        // meters
+	float SuspensionDamping = 1.5f;
+	TArray<float> MotorRPM;          // RPM points
+	TArray<float> MotorTorque;       // Nm at motor for each RPM
+};
+
 struct FFSDSVehicleSettings
 {
 	FString Name = TEXT("FSCar");
@@ -116,6 +138,7 @@ struct FFSDSVehicleSettings
 	bool bAllowAPIAlways = true;
 	bool bAutoCreate = true;
 
+	FFSDSVehiclePhysics Physics;
 	TMap<FString, FFSDSSensorSettings> Sensors;
 	TMap<FString, FFSDSCameraSettings> Cameras;
 };
