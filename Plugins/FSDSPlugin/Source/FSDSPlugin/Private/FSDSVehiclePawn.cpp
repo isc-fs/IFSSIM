@@ -129,23 +129,22 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	const float GearRatio = 2.909f;
 	const float DriveEff = 0.92f;
 
-	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm (UNCAPPED)
-	// Traction limit: mu(1.65) * m(290) * g(9.81) * rear_frac(0.562) * tire_r(0.2) = 527 Nm
-	// Cap at traction limit to prevent wheelspin (real car has traction control)
+	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm
 	// Curve is NORMALIZED (0-1, multiplied by MaxTorque)
+	// Power-limited above ~3000 RPM: T = P_max / omega
 	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
-	VehicleMovement->EngineSetup.MaxTorque = 500.f; // Traction-limited peak (~527 Nm limit)
+	VehicleMovement->EngineSetup.MaxTorque = 643.f; // Full EMRAX peak at wheel
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
-	// EMRAX 228 torque curve (normalized, traction + power limited)
-	TorqueCurve->AddKey(0.f,    0.90f);   // Reduced launch torque (traction control emulation)
-	TorqueCurve->AddKey(1000.f, 0.95f);   // Near peak
-	TorqueCurve->AddKey(2000.f, 1.000f);  // Full torque available (has speed = has grip)
-	TorqueCurve->AddKey(3000.f, 0.950f);  // Power limit starts
-	TorqueCurve->AddKey(4000.f, 0.750f);  // 80kW power-limited
-	TorqueCurve->AddKey(5000.f, 0.600f);
-	TorqueCurve->AddKey(6000.f, 0.500f);
-	TorqueCurve->AddKey(6500.f, 0.460f);  // Redline
+	// EMRAX 228 torque curve (normalized, power-limited only)
+	TorqueCurve->AddKey(0.f,    0.958f);  // 616/643 — 230 Nm motor
+	TorqueCurve->AddKey(1000.f, 1.000f);  // 643/643 — 240 Nm motor (peak)
+	TorqueCurve->AddKey(2000.f, 1.000f);  // Full torque
+	TorqueCurve->AddKey(3000.f, 0.900f);  // Power limit starts
+	TorqueCurve->AddKey(4000.f, 0.700f);  // 80kW / (4000*2π/60) * GR * eff / 643
+	TorqueCurve->AddKey(5000.f, 0.560f);
+	TorqueCurve->AddKey(6000.f, 0.470f);
+	TorqueCurve->AddKey(6500.f, 0.430f);  // Redline
 
 	// --- Transmission (single speed, electric) ---
 	// Electric motor: single fixed gear, no shifting
