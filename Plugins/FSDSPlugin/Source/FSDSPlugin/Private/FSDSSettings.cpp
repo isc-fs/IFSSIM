@@ -164,6 +164,47 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		}
 	}
 
+	// VehiclePhysics
+	const TSharedPtr<FJsonObject>* PhysicsObj;
+	if (VehicleObj->TryGetObjectField(TEXT("VehiclePhysics"), PhysicsObj))
+	{
+		double DblVal;
+		FString StrVal;
+		auto& P = Vehicle.Physics;
+
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("Mass"), DblVal)) P.Mass = DblVal;
+		if ((*PhysicsObj)->TryGetStringField(TEXT("Drivetrain"), StrVal)) P.Drivetrain = StrVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelRadius"), DblVal)) P.WheelRadius = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelWidth"), DblVal)) P.WheelWidth = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxSteerAngle"), DblVal)) P.MaxSteerAngle = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxTorque"), DblVal)) P.MotorMaxTorque = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxPower"), DblVal)) P.MotorMaxPower = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("GearRatio"), DblVal)) P.GearRatio = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("DrivetrainEfficiency"), DblVal)) P.DrivetrainEfficiency = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("CdA"), DblVal)) P.CdA = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("ClA"), DblVal)) P.ClA = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("AeroBalanceFront"), DblVal)) P.AeroBalanceFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("TireMu"), DblVal)) P.TireMu = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("WeightDistFront"), DblVal)) P.WeightDistFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("CoGHeight"), DblVal)) P.CoGHeight = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("SuspensionDamping"), DblVal)) P.SuspensionDamping = DblVal;
+
+		// Motor torque curve arrays
+		const TArray<TSharedPtr<FJsonValue>>* RPMArr;
+		const TArray<TSharedPtr<FJsonValue>>* TorqueArr;
+		if ((*PhysicsObj)->TryGetArrayField(TEXT("MotorRPM"), RPMArr))
+		{
+			for (auto& V : *RPMArr) P.MotorRPM.Add(V->AsNumber());
+		}
+		if ((*PhysicsObj)->TryGetArrayField(TEXT("MotorTorque"), TorqueArr))
+		{
+			for (auto& V : *TorqueArr) P.MotorTorque.Add(V->AsNumber());
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("FSDS Settings: VehiclePhysics loaded — Mass=%.0f, %s, Motor=%.0fNm/%.0fW, GR=%.3f, CdA=%.2f, ClA=%.1f, mu=%.2f"),
+			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.GearRatio, P.CdA, P.ClA, P.TireMu);
+	}
+
 	Vehicles.Add(Name, Vehicle);
 }
 

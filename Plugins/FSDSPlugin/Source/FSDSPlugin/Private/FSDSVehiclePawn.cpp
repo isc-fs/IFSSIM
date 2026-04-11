@@ -313,6 +313,66 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		}
 	}
 
+	// Apply vehicle physics from settings (overrides hardcoded IFS-08 defaults)
+	if (VehicleSettings && VehicleMovement && bChaosVehicleActive)
+	{
+		auto& P = VehicleSettings->Physics;
+
+		// Mass
+		VehicleMovement->Mass = P.Mass;
+
+		// Drivetrain
+		if (P.Drivetrain == TEXT("RWD"))
+			VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
+		else if (P.Drivetrain == TEXT("FWD"))
+			VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::FrontWheelDrive;
+		else if (P.Drivetrain == TEXT("AWD"))
+		{
+			VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::AllWheelDrive;
+			VehicleMovement->DifferentialSetup.FrontRearSplit = P.WeightDistFront;
+		}
+
+		// Motor torque curve from settings (if provided)
+		if (P.MotorRPM.Num() > 0 && P.MotorRPM.Num() == P.MotorTorque.Num())
+		{
+			float PeakWheelTorque = 0.f;
+			for (float T : P.MotorTorque)
+			{
+				float WheelT = T * P.GearRatio * P.DrivetrainEfficiency;
+				if (WheelT > PeakWheelTorque) PeakWheelTorque = WheelT;
+			}
+
+			VehicleMovement->EngineSetup.MaxTorque = PeakWheelTorque;
+			FRichCurve* TC = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
+			TC->Reset();
+
+			for (int32 i = 0; i < P.MotorRPM.Num(); i++)
+			{
+				float WheelT = P.MotorTorque[i] * P.GearRatio * P.DrivetrainEfficiency;
+				// Power limit: T = min(T, P_max / omega)
+				float MotorOmega = P.MotorRPM[i] * 2.f * PI / 60.f;
+				if (MotorOmega > 1.f)
+				{
+					float PowerLimitT = (P.MotorMaxPower / MotorOmega) * P.GearRatio * P.DrivetrainEfficiency;
+					WheelT = FMath::Min(WheelT, PowerLimitT);
+				}
+				float Normalized = (PeakWheelTorque > 0.f) ? WheelT / PeakWheelTorque : 0.f;
+				TC->AddKey(P.MotorRPM[i], Normalized);
+			}
+
+			UE_LOG(LogTemp, Log, TEXT("FSDS: Motor curve from settings — %d points, peak %.0f Nm at wheel"),
+				P.MotorRPM.Num(), PeakWheelTorque);
+		}
+
+		// Aero
+		CdA = P.CdA;
+		ClA = P.ClA;
+		AeroBalanceFront = P.AeroBalanceFront;
+
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, mu=%.2f, CdA=%.2f, ClA=%.1f"),
+			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.TireMu, P.CdA, P.ClA);
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Configured %d cameras, LiDAR, IMU, GPS, GSS from settings (with noise)"),
 		Cameras.Num());
 }
