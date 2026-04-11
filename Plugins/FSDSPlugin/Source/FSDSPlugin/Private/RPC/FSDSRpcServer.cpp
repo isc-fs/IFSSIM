@@ -780,6 +780,53 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return TEXT("{\"error\":\"no UDP broadcaster\"}");
 	}
 
+	// === Event Type Control ===
+
+	else if (Method.StartsWith(TEXT("setEventType")))
+	{
+		// Parse: setEventType trackdrive [10]
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2) return TEXT("{\"error\":\"usage: setEventType acceleration|skidpad|autocross|trackdrive [laps]\"}");
+
+		FString EventName = Parts[1].ToLower();
+		int32 NumLaps = (Parts.Num() >= 3) ? FCString::Atoi(*Parts[2]) : 10;
+
+		if (!Referee) return TEXT("{\"error\":\"no referee\"}");
+
+		EFSDSEventType EventType = EFSDSEventType::Trackdrive;
+		if (EventName == TEXT("acceleration")) EventType = EFSDSEventType::Acceleration;
+		else if (EventName == TEXT("skidpad")) EventType = EFSDSEventType::Skidpad;
+		else if (EventName == TEXT("autocross")) EventType = EFSDSEventType::Autocross;
+		else if (EventName == TEXT("trackdrive")) EventType = EFSDSEventType::Trackdrive;
+		else return FString::Printf(TEXT("{\"error\":\"unknown event: %s\"}"), *EventName);
+
+		AsyncTask(ENamedThreads::GameThread, [this, EventType, NumLaps]() {
+			if (Referee) Referee->SetEventType(EventType, NumLaps);
+		});
+
+		return FString::Printf(TEXT("{\"event\":\"%s\",\"laps\":%d}"), *EventName, NumLaps);
+	}
+
+	// === Sim Status ===
+
+	else if (Method == TEXT("getSimStatus"))
+	{
+		FString MapName = TEXT("unknown");
+		float FPS = 0.f;
+		if (World)
+		{
+			MapName = World->GetMapName();
+			MapName.RemoveFromStart(TEXT("UEDPIE_0_"));
+		}
+		FPS = 1.0f / FApp::GetDeltaTime();
+
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s}"),
+			*MapName, FPS,
+			bSimPaused ? TEXT("true") : TEXT("false"),
+			bApiControlEnabled ? TEXT("true") : TEXT("false"));
+	}
+
 	// === Version ===
 
 	else if (Method == TEXT("getServerVersion")) { return TEXT("2"); }
