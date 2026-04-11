@@ -36,23 +36,45 @@ void AFSDSReferee::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// Check all registered cones for displacement (knocked over)
-	for (auto& Pair : ConeOriginalPositions)
+	// Wait for physics to settle before recording cone positions
+	if (!bPositionsRecorded)
 	{
-		AActor* ConeActor = Pair.Key;
-		if (!ConeActor || !IsValid(ConeActor)) continue;
-		if (HitCones.Contains(ConeActor)) continue; // Already counted
-
-		FVector CurrentPos = ConeActor->GetActorLocation();
-		FVector OriginalPos = Pair.Value;
-		float Displacement = FVector::Dist(CurrentPos, OriginalPos);
-
-		if (Displacement > ConeHitThreshold)
+		PositionSnapshotTimer += DeltaTime;
+		if (PositionSnapshotTimer >= PositionSnapshotDelay)
 		{
-			HitCones.Add(ConeActor);
-			State.DooCounter++;
-			UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Cone displaced %.1f cm (DOO count: %d)"),
-				Displacement, State.DooCounter);
+			// Snapshot current positions as "original" (after physics settled)
+			for (auto& Pair : ConeOriginalPositions)
+			{
+				if (Pair.Key && IsValid(Pair.Key))
+				{
+					Pair.Value = Pair.Key->GetActorLocation();
+				}
+			}
+			bPositionsRecorded = true;
+			UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Cone positions recorded after %.1fs settle"), PositionSnapshotDelay);
+		}
+	}
+
+	// Check all registered cones for displacement (only after positions recorded)
+	if (bPositionsRecorded)
+	{
+		for (auto& Pair : ConeOriginalPositions)
+		{
+			AActor* ConeActor = Pair.Key;
+			if (!ConeActor || !IsValid(ConeActor)) continue;
+			if (HitCones.Contains(ConeActor)) continue;
+
+			FVector CurrentPos = ConeActor->GetActorLocation();
+			FVector OriginalPos = Pair.Value;
+			float Displacement = FVector::Dist(CurrentPos, OriginalPos);
+
+			if (Displacement > ConeHitThreshold)
+			{
+				HitCones.Add(ConeActor);
+				State.DooCounter++;
+				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Cone displaced %.1f cm (DOO count: %d)"),
+					Displacement, State.DooCounter);
+			}
 		}
 	}
 
@@ -224,6 +246,8 @@ void AFSDSReferee::ResetState()
 	bVehicleInsideFinishZone = false;
 	bFinishLineValid = false;
 	bWasOffTrack = false;
+	bPositionsRecorded = false;
+	PositionSnapshotTimer = 0.f;
 	LapStartTime = 0.0;
 	UE_LOG(LogTemp, Log, TEXT("FSDS Referee: State reset"));
 }

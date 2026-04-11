@@ -163,6 +163,11 @@ private:
 	/** Displacement threshold for cone hit (cm) */
 	float ConeHitThreshold = 15.0f;
 
+	/** Delay before recording cone positions (let physics settle) */
+	float PositionSnapshotDelay = 2.0f;
+	float PositionSnapshotTimer = 0.f;
+	bool bPositionsRecorded = false;
+
 	/** Out-of-bounds detection */
 	bool bWasOffTrack = false; // Debounce: only count transitions on→off
 	float OffTrackCheckInterval = 0.2f; // Check every 200ms (not every frame)
