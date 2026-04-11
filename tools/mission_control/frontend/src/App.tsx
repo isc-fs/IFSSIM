@@ -25,20 +25,26 @@ function App() {
           <h1 className="text-[#ffb81c] text-xl font-bold tracking-wide">
             IFSSIM <span className="text-gray-300 font-normal">Mission Control</span>
           </h1>
-          <StatusBar connected={connected} fps={telemetry.fps} paused={telemetry.paused} />
+          <StatusBar connected={connected} fps={telemetry.fps} paused={telemetry.paused} resActive={telemetry.res_active} />
         </div>
 
         {/* RES Button */}
         <button
           onClick={async () => {
-            await fetch('/api/res/activate', { method: 'POST' })
+            if (telemetry.res_active) {
+              await fetch('/api/res/release', { method: 'POST' })
+            } else {
+              await fetch('/api/res/activate', { method: 'POST' })
+            }
           }}
-          className="bg-red-700 hover:bg-red-600 text-white font-bold px-6 py-2 rounded-lg
-                     text-sm uppercase tracking-wider border-2 border-red-500
-                     shadow-[0_0_15px_rgba(239,68,68,0.3)] hover:shadow-[0_0_25px_rgba(239,68,68,0.5)]
-                     transition-all active:scale-95"
+          className={`font-bold px-6 py-2 rounded-lg text-sm uppercase tracking-wider border-2
+                     transition-all active:scale-95 ${
+                       telemetry.res_active
+                         ? 'bg-red-600 text-white border-red-400 shadow-[0_0_25px_rgba(239,68,68,0.6)] animate-pulse'
+                         : 'bg-red-900 hover:bg-red-700 text-white border-red-700 shadow-[0_0_10px_rgba(239,68,68,0.2)] hover:shadow-[0_0_20px_rgba(239,68,68,0.4)]'
+                     }`}
         >
-          RES
+          {telemetry.res_active ? 'RES ACTIVE' : 'RES'}
         </button>
       </header>
 

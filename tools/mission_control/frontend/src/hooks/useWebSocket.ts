@@ -18,6 +18,7 @@ export interface TelemetryData {
   event: string;
   fps: number;
   paused: boolean;
+  res_active: boolean;
   error?: string;
 }
 
@@ -27,7 +28,7 @@ const defaultTelemetry: TelemetryData = {
   throttle: 0, steering: 0, brake: 0,
   doo: 0, oc: 0, laps: 0, required_laps: 0,
   finished: false, event: 'unknown',
-  fps: 0, paused: false,
+  fps: 0, paused: false, res_active: false,
 };
 
 export function useWebSocket(url: string) {
