@@ -440,8 +440,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		AsyncTask(ENamedThreads::GameThread, [this]() {
 			if (World)
 			{
-				// Restart the current level
-				UGameplayStatics::OpenLevel(World, *World->GetMapName(), true);
+				FString MapName = World->GetMapName();
+				MapName.RemoveFromStart(TEXT("UEDPIE_0_")); // Strip PIE prefix
+				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Resetting level: %s"), *MapName);
+				UGameplayStatics::OpenLevel(World, *MapName, true);
 			}
 		});
 		return TEXT("true");

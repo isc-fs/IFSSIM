@@ -44,8 +44,9 @@ app.add_middleware(
 
 sim = SimConnection(SIM_HOST, SIM_PORT)
 
-# Session log
+# State
 session_log = []
+res_active = False
 
 
 # === Pydantic Models ===
@@ -98,10 +99,14 @@ def sim_resume():
 
 @app.post("/api/sim/reset")
 def sim_reset():
+    global res_active
+    if not sim.is_connected():
+        return {"ok": False, "error": "sim not connected"}
     try:
         sim.reset()
+        res_active = False
     except Exception:
-        pass
+        return {"ok": False, "error": "reset failed"}
     log_event("reset", "Simulation reset")
     return {"ok": True}
 
@@ -139,22 +144,30 @@ def event_start(setup: EventSetup):
 # === RES (Remote Emergency Stop) ===
 
 @app.post("/api/res/activate")
-def res_activate():
+def res_activate_endpoint():
+    global res_active
     try:
         sim.res_activate()
     except Exception:
         pass
+    res_active = True
     log_event("res", "EMERGENCY STOP activated")
-    return {"ok": True, "res": "activated"}
+    return {"ok": True, "res": "activated", "res_active": True}
 
 @app.post("/api/res/release")
-def res_release():
+def res_release_endpoint():
+    global res_active
     try:
         sim.res_release()
     except Exception:
         pass
+    res_active = False
     log_event("res", "RES released")
-    return {"ok": True, "res": "released"}
+    return {"ok": True, "res": "released", "res_active": False}
+
+@app.get("/api/res/status")
+def res_status():
+    return {"res_active": res_active}
 
 
 # === Vehicle ===
@@ -362,6 +375,7 @@ async def telemetry_ws(websocket: WebSocket):
                     "event": ref.get("event", "unknown"),
                     "fps": status.get("fps", 0),
                     "paused": status.get("paused", False),
+                    "res_active": res_active,
                 }
 
                 await websocket.send_json(data)
