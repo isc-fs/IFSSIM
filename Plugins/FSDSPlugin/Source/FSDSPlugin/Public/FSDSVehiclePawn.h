@@ -131,4 +131,10 @@ private:
 
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;
+
+	// IFS-08 Aerodynamics
+	float CdA = 0.95f;               // Drag coefficient * frontal area (m²)
+	float ClA = 3.0f;                // Downforce coefficient * plan area (m²)
+	float AeroBalanceFront = 0.45f;   // 45% downforce on front axle
+	void ApplyAeroForces();
 };

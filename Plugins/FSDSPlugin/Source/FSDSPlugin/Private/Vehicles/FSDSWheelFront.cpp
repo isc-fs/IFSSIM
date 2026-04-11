@@ -6,11 +6,16 @@ UFSDSWheelFront::UFSDSWheelFront()
 	bAffectedByHandbrake = false;
 	bAffectedBySteering = true;
 
-	WheelRadius = 38.f;
-	WheelWidth = 17.f;
-	MaxSteerAngle = 50.f;
+	// IFS-08: Hoosier 16.0x7.5-10 R20
+	WheelRadius = 20.f;       // 200mm tire radius
+	WheelWidth = 19.f;        // 7.5 inch = 190mm
+	MaxSteerAngle = 28.f;     // FS typical steering geometry
 
-	SuspensionMaxRaise = 10.f;
-	SuspensionMaxDrop = 10.f;
+	// IFS-08: 35mm ride height, 350 lbs/in front springs
+	SuspensionMaxRaise = 3.5f;  // 35mm
+	SuspensionMaxDrop = 3.5f;
 	SuspensionDampingRatio = 1.5f;
+
+	// Hoosier R20 slick friction
+	FrictionForceMultiplier = 1.65f;
 }
