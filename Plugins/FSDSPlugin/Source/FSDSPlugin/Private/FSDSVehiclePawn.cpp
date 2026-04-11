@@ -129,28 +129,33 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	const float GearRatio = 2.909f;
 	const float DriveEff = 0.92f;
 
-	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm
-	// But power-limited to 80 kW: T = P/omega
-	// At 6500 RPM motor (2234 RPM wheel): T = 80000 / (2234*2π/60) = 342 Nm at wheel
+	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm (UNCAPPED)
+	// Traction limit: mu(1.65) * m(290) * g(9.81) * rear_frac(0.562) * tire_r(0.2) = 527 Nm
+	// Cap at traction limit to prevent wheelspin (real car has traction control)
 	// Curve is NORMALIZED (0-1, multiplied by MaxTorque)
 	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
-	VehicleMovement->EngineSetup.MaxTorque = 643.f; // Peak wheel torque
+	VehicleMovement->EngineSetup.MaxTorque = 500.f; // Traction-limited peak (~527 Nm limit)
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
-	// Normalized EMRAX 228 torque curve (0-1, where 1.0 = 643 Nm at wheel)
-	// Power-limited: at RPM > ~3200, torque drops as P_max/omega
-	TorqueCurve->AddKey(0.f,    0.958f);  // 616/643 — 230 Nm motor (stall)
-	TorqueCurve->AddKey(1000.f, 1.000f);  // 643/643 — 240 Nm motor (peak)
-	TorqueCurve->AddKey(2000.f, 1.000f);  // 643/643 — still torque-limited
-	TorqueCurve->AddKey(3000.f, 0.900f);  // Power limit starts kicking in
-	TorqueCurve->AddKey(4000.f, 0.700f);  // 80kW / (4000*2π/60) * GR * eff / 643
-	TorqueCurve->AddKey(5000.f, 0.560f);  // Power-limited
-	TorqueCurve->AddKey(6000.f, 0.470f);  // Power-limited
-	TorqueCurve->AddKey(6500.f, 0.430f);  // Redline
+	// EMRAX 228 torque curve (normalized, traction + power limited)
+	TorqueCurve->AddKey(0.f,    0.90f);   // Reduced launch torque (traction control emulation)
+	TorqueCurve->AddKey(1000.f, 0.95f);   // Near peak
+	TorqueCurve->AddKey(2000.f, 1.000f);  // Full torque available (has speed = has grip)
+	TorqueCurve->AddKey(3000.f, 0.950f);  // Power limit starts
+	TorqueCurve->AddKey(4000.f, 0.750f);  // 80kW power-limited
+	TorqueCurve->AddKey(5000.f, 0.600f);
+	TorqueCurve->AddKey(6000.f, 0.500f);
+	TorqueCurve->AddKey(6500.f, 0.460f);  // Redline
 
 	// --- Transmission (single speed, electric) ---
-	VehicleMovement->TransmissionSetup.bUseAutomaticGears = true;
-	VehicleMovement->TransmissionSetup.GearChangeTime = 0.0f; // Instant (electric)
+	// Electric motor: single fixed gear, no shifting
+	VehicleMovement->TransmissionSetup.bUseAutomaticGears = false;
+	VehicleMovement->TransmissionSetup.GearChangeTime = 0.0f;
+	VehicleMovement->TransmissionSetup.ForwardGearRatios.Reset();
+	VehicleMovement->TransmissionSetup.ForwardGearRatios.Add(1.0f); // Single gear (reduction already in torque)
+	VehicleMovement->TransmissionSetup.ReverseGearRatios.Reset();
+	VehicleMovement->TransmissionSetup.ReverseGearRatios.Add(1.0f);
+	VehicleMovement->TransmissionSetup.FinalRatio = 1.0f; // No additional reduction
 
 	// --- Differential (RWD) ---
 	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
@@ -501,14 +506,8 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetBrakeInput(CurrentControls.Brake);
 		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
 
-		if (CurrentControls.bIsManualGear)
-		{
-			VehicleMovement->SetTargetGear(CurrentControls.ManualGear, CurrentControls.bGearImmediate);
-		}
-		else
-		{
-			VehicleMovement->SetUseAutomaticGears(true);
-		}
+		// Electric: always in gear 1 (single speed)
+		VehicleMovement->SetTargetGear(1, true);
 	}
 	else if (FallbackMovement)
 	{
