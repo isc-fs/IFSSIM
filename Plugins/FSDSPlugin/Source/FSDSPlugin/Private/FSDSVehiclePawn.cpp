@@ -122,29 +122,45 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 {
 	if (!VehicleMovement) return;
 
-	// --- Engine (matching FSDS/Colosseum) ---
-	VehicleMovement->EngineSetup.MaxRPM = 5700.f;
-	VehicleMovement->EngineSetup.MaxTorque = 500.f;
+	// === IFS-08 EMRAX 228 Powertrain ===
+	// Motor: EMRAX 228, 230 Nm peak, 80 kW, 6500 RPM redline
+	// Gear ratio: 2.909 (32/11), drivetrain efficiency: 92%
+	// Torque at wheel = motor_torque * gear_ratio * efficiency
+	const float GearRatio = 2.909f;
+	const float DriveEff = 0.92f;
+
+	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm
+	// But power-limited to 80 kW: T = P/omega
+	// At 6500 RPM motor (2234 RPM wheel): T = 80000 / (2234*2π/60) = 342 Nm at wheel
+	// Curve is NORMALIZED (0-1, multiplied by MaxTorque)
+	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
+	VehicleMovement->EngineSetup.MaxTorque = 643.f; // Peak wheel torque
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
-	TorqueCurve->AddKey(0.f, 400.f);
-	TorqueCurve->AddKey(1890.f, 500.f);
-	TorqueCurve->AddKey(5730.f, 400.f);
+	// Normalized EMRAX 228 torque curve (0-1, where 1.0 = 643 Nm at wheel)
+	// Power-limited: at RPM > ~3200, torque drops as P_max/omega
+	TorqueCurve->AddKey(0.f,    0.958f);  // 616/643 — 230 Nm motor (stall)
+	TorqueCurve->AddKey(1000.f, 1.000f);  // 643/643 — 240 Nm motor (peak)
+	TorqueCurve->AddKey(2000.f, 1.000f);  // 643/643 — still torque-limited
+	TorqueCurve->AddKey(3000.f, 0.900f);  // Power limit starts kicking in
+	TorqueCurve->AddKey(4000.f, 0.700f);  // 80kW / (4000*2π/60) * GR * eff / 643
+	TorqueCurve->AddKey(5000.f, 0.560f);  // Power-limited
+	TorqueCurve->AddKey(6000.f, 0.470f);  // Power-limited
+	TorqueCurve->AddKey(6500.f, 0.430f);  // Redline
 
-	// --- Transmission ---
+	// --- Transmission (single speed, electric) ---
 	VehicleMovement->TransmissionSetup.bUseAutomaticGears = true;
-	VehicleMovement->TransmissionSetup.GearChangeTime = 0.15f;
+	VehicleMovement->TransmissionSetup.GearChangeTime = 0.0f; // Instant (electric)
 
-	// --- Differential ---
-	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::AllWheelDrive;
-	VehicleMovement->DifferentialSetup.FrontRearSplit = 0.65f;
+	// --- Differential (RWD) ---
+	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
 
 	// --- Steering curve (speed-dependent) ---
 	FRichCurve* SteeringCurve = VehicleMovement->SteeringSetup.SteeringCurve.GetRichCurve();
 	SteeringCurve->Reset();
-	SteeringCurve->AddKey(0.f, 1.0f);
-	SteeringCurve->AddKey(40.f, 0.7f);
-	SteeringCurve->AddKey(120.f, 0.6f);
+	SteeringCurve->AddKey(0.f, 1.0f);    // Full lock at standstill
+	SteeringCurve->AddKey(60.f, 0.8f);   // 80% at 60 km/h
+	SteeringCurve->AddKey(120.f, 0.6f);  // 60% at 120 km/h
 
 	// --- Wheels ---
 	VehicleMovement->WheelSetups.SetNum(4);
@@ -165,10 +181,17 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->WheelSetups[3].BoneName = FName("WheelRR");
 	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
 
-	// --- Physics ---
-	VehicleMovement->Mass = 300.f;
-	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.333f, 1.2f);
-	VehicleMovement->CenterOfMassOverride = FVector(8.f, 0.f, 0.f);
+	// === IFS-08 Mass & Inertia ===
+	// Total mass: 290 kg (car 210 + driver 80)
+	// Wheelbase: 1627 mm, weight dist front: 43.8%
+	// CoG at 713mm from front axle = 813.5mm - 713mm = 100.5mm behind mesh center
+	// CoG height: 344mm from ground
+	VehicleMovement->Mass = 290.f;
+	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
+	// CoG offset: negative X = rearward (43.8% front means rear-biased)
+	// Mesh center is roughly at wheelbase/2 = 813mm from front
+	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
+	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
 }
 
@@ -403,6 +426,12 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	}
 	PreviousVelocity = CurrentVelocity;
 
+	// Apply aerodynamic forces
+	if (bChaosVehicleActive)
+	{
+		ApplyAeroForces();
+	}
+
 	// Apply controls
 	if (bChaosVehicleActive && VehicleMovement)
 	{
@@ -435,6 +464,42 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			SetActorRotation(NewRot);
 		}
 	}
+}
+
+void AFSDSVehiclePawn::ApplyAeroForces()
+{
+	USkeletalMeshComponent* VehicleMesh = GetMesh();
+	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
+
+	FVector Velocity = GetVelocity(); // cm/s
+	float SpeedMs = Velocity.Size() / 100.f; // m/s
+
+	if (SpeedMs < 1.0f) return; // No aero below 1 m/s
+
+	const float Rho = 1.225f; // Air density kg/m³
+	float Q = 0.5f * Rho * SpeedMs * SpeedMs; // Dynamic pressure (Pa)
+
+	// Drag force (opposing velocity, in Newtons)
+	float Fdrag = Q * CdA;
+	FVector DragForce = -Velocity.GetSafeNormal() * Fdrag * 100.f; // N → UE force units (mass*cm/s²)
+
+	// Downforce (negative Z in world, in Newtons)
+	float Fdown = Q * ClA;
+
+	// Apply drag at CoG
+	VehicleMesh->AddForce(DragForce, NAME_None, false);
+
+	// Apply downforce split front/rear at approximate axle positions
+	// Wheelbase ~1627mm in UE X. Front axle at +813mm from center, rear at -813mm
+	FTransform ActorTransform = GetActorTransform();
+	FVector FrontAxleLocal(813.f, 0.f, 0.f); // cm, local space
+	FVector RearAxleLocal(-813.f, 0.f, 0.f);
+	FVector FrontAxleWorld = ActorTransform.TransformPosition(FrontAxleLocal);
+	FVector RearAxleWorld = ActorTransform.TransformPosition(RearAxleLocal);
+
+	FVector DownDir = FVector(0.f, 0.f, -1.f) * 100.f; // N → UE force
+	VehicleMesh->AddForceAtLocation(DownDir * Fdown * AeroBalanceFront, FrontAxleWorld, NAME_None);
+	VehicleMesh->AddForceAtLocation(DownDir * Fdown * (1.f - AeroBalanceFront), RearAxleWorld, NAME_None);
 }
 
 void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
