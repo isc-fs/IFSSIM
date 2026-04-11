@@ -173,6 +173,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("enableApiControl"))
 	{
 		bApiControlEnabled = true;
+		// Also set on vehicle pawn so keyboard input doesn't override API controls
+		if (VehiclePawn) VehiclePawn->SetApiControlEnabled(true);
 		return TEXT("true");
 	}
 	else if (Method == TEXT("isApiControlEnabled"))

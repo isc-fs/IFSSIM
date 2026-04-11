@@ -66,6 +66,7 @@ public:
 	void SetCarControls(const FCarControls& Controls);
 	FCarControls GetCarControls() const;
 	FCarState GetCarState() const;
+	void SetApiControlEnabled(bool bEnabled) { bApiControlEnabled = bEnabled; }
 
 	// --- Components ---
 
