@@ -89,7 +89,13 @@ public:
 	float DropoutRate = 0.0f;
 
 private:
-	void PerformScan();
+	void PerformScan(FTransform OwnerTransform);
+
+	// Rate limiter — scan fires at RotationsPerSecond Hz, not every frame
+	float ScanAccumulator = 0.f;
+
+	// Async guard — prevents overlapping scans if a frame runs long
+	std::atomic<bool> bScanInProgress{false};
 
 	TArray<float> PointCloudBuffer;
 	int32 CachedPointCount = 0;

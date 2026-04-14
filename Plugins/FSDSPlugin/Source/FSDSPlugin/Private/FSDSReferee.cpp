@@ -192,6 +192,13 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 		MeshComp->SetSimulatePhysics(true);
 		MeshComp->SetMassOverrideInKg(NAME_None, 1.0f); // ~1 kg traffic cone
 		MeshComp->SetGenerateOverlapEvents(true);
+
+		// Allow Chaos to sleep this cone as soon as it settles.
+		// Without this, all cones simulate every physics tick even when stationary.
+		if (FBodyInstance* BI = MeshComp->GetBodyInstance())
+		{
+			BI->SleepFamily = ESleepFamily::Sensitive;
+		}
 	}
 
 	// If this is a big orange cone, update finish line
