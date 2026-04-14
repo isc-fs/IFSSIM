@@ -56,16 +56,16 @@ void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
 	// Dispatch scan to a background thread — line traces with bTraceComplex=false
 	// are read-only and safe to call from non-game threads in UE5.
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, World, OwnerTransform]()
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, World, Owner, OwnerTransform]()
 	{
-		PerformScan(OwnerTransform);
+		PerformScan(World, Owner, OwnerTransform);
 		bScanInProgress = false;
 	});
 }
 
-void UFSDSLidarSensor::PerformScan(FTransform OwnerTransform)
+void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform OwnerTransform)
 {
-	if (!World) return;
+	if (!InWorld) return;
 
 	// Full rotation: all points for one 360° (or partial-FOV) sweep
 	int32 PointsPerRotation = FMath::Max(1, FMath::RoundToInt((float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
@@ -84,7 +84,7 @@ void UFSDSLidarSensor::PerformScan(FTransform OwnerTransform)
 	NewPoints.Reserve(PointsPerRotation * 3);
 
 	FCollisionQueryParams TraceParams;
-	TraceParams.AddIgnoredActor(GetOwner());
+	TraceParams.AddIgnoredActor(InOwner);
 	TraceParams.bTraceComplex = false;
 	TraceParams.bReturnPhysicalMaterial = false;
 
@@ -103,7 +103,7 @@ void UFSDSLidarSensor::PerformScan(FTransform OwnerTransform)
 			FVector RayEnd = SensorWorldPos + RayDir * MaxRange;
 
 			FHitResult Hit;
-			if (World->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
+			if (InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
 			{
 				if (DropoutRate > 0.f && FMath::FRand() < DropoutRate)
 					continue;
@@ -123,7 +123,7 @@ void UFSDSLidarSensor::PerformScan(FTransform OwnerTransform)
 					HitCount++;
 
 					if (bDrawDebugPoints)
-						DrawDebugPoint(World, Hit.ImpactPoint, 3.f, FColor::Green, false, 0.1f);
+						DrawDebugPoint(InWorld, Hit.ImpactPoint, 3.f, FColor::Green, false, 0.1f);
 				}
 			}
 		}

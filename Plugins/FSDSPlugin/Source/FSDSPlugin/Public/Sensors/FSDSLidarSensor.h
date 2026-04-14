@@ -89,7 +89,7 @@ public:
 	float DropoutRate = 0.0f;
 
 private:
-	void PerformScan(FTransform OwnerTransform);
+	void PerformScan(UWorld* InWorld, AActor* InOwner, FTransform OwnerTransform);
 
 	// Rate limiter — scan fires at RotationsPerSecond Hz, not every frame
 	float ScanAccumulator = 0.f;
