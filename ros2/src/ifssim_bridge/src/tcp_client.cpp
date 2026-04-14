@@ -29,6 +29,7 @@
 #include <cstring>
 #include <iostream>
 #include <sstream>
+#include <netdb.h>
 
 TcpClient::TcpClient() {}
 
@@ -67,11 +68,16 @@ bool TcpClient::connect(const std::string& host, int port, double timeout_sec)
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
 
+    // Try inet_pton first (IP address), fall back to hostname resolution
     if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) <= 0) {
-        std::cerr << "IFSSIM Bridge: Invalid address: " << host << std::endl;
-        CLOSE_SOCKET(sock);
-        socket_fd_ = (decltype(socket_fd_))INVALID_SOCK;
-        return false;
+        struct hostent* he = gethostbyname(host.c_str());
+        if (!he) {
+            std::cerr << "IFSSIM Bridge: Invalid address: " << host << std::endl;
+            CLOSE_SOCKET(sock);
+            socket_fd_ = (decltype(socket_fd_))INVALID_SOCK;
+            return false;
+        }
+        memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
     }
 
     if (::connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {

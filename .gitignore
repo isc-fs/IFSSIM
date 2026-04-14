@@ -34,4 +34,9 @@ Thumbs.db
 *.BI
 *.BI2
 
+# ROS2 workspace build artifacts
+ros2/build/
+ros2/install/
+ros2/log/
+
 # Binary content assets tracked via Git LFS (*.uasset, *.umap)

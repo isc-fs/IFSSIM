@@ -1,6 +1,7 @@
 #include "Sensors/FSDSLidarSensor.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
+#include "Async/Async.h"
 
 UFSDSLidarSensor::UFSDSLidarSensor()
 {
@@ -23,43 +24,68 @@ void UFSDSLidarSensor::BeginPlay()
 void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	PerformScan();
+
+	// Rate-limit: only scan at RotationsPerSecond Hz (default 10 Hz), not every frame.
+	// This keeps the game thread free — the actual raycasts run on a background thread.
+	float ScanInterval = 1.f / FMath::Max(1.f, RotationsPerSecond);
+	ScanAccumulator += DeltaTime;
+
+	if (ScanAccumulator < ScanInterval)
+		return;
+
+	ScanAccumulator -= ScanInterval;
+
+	// Skip if a previous scan is still in flight (can happen at very low FPS)
+	if (bScanInProgress.exchange(true))
+		return;
+
+	// Snapshot the transform on the game thread before handing off
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		bScanInProgress = false;
+		return;
+	}
+	FTransform OwnerTransform = Owner->GetActorTransform();
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		bScanInProgress = false;
+		return;
+	}
+
+	// Dispatch scan to a background thread — line traces with bTraceComplex=false
+	// are read-only and safe to call from non-game threads in UE5.
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, World, Owner, OwnerTransform]()
+	{
+		PerformScan(World, Owner, OwnerTransform);
+		bScanInProgress = false;
+	});
 }
 
-void UFSDSLidarSensor::PerformScan()
+void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform OwnerTransform)
 {
-	UWorld* World = GetWorld();
-	AActor* Owner = GetOwner();
-	if (!World || !Owner) return;
+	if (!InWorld) return;
 
-	float DeltaTime = World->GetDeltaSeconds();
-	if (DeltaTime <= 0.f) return;
-
-	// How many rays to cast this frame
-	int32 PointsThisFrame = FMath::CeilToInt(PointsPerSecond * DeltaTime);
-	PointsThisFrame = FMath::Min(PointsThisFrame, 100000); // Cap per-frame for performance
+	// Full rotation: all points for one 360° (or partial-FOV) sweep
+	int32 PointsPerRotation = FMath::Max(1, FMath::RoundToInt((float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
 
 	float HFov = HorizontalFOVEnd - HorizontalFOVStart;
 	float VFov = VerticalFOVUpper - VerticalFOVLower;
 
-	// Horizontal step per ray (degrees)
-	int32 HorizontalSteps = PointsThisFrame / FMath::Max(1, NumberOfChannels);
+	int32 HorizontalSteps = PointsPerRotation / FMath::Max(1, NumberOfChannels);
 	float HStep = (HorizontalSteps > 1) ? HFov / (float)HorizontalSteps : 0.f;
-
-	// Vertical step per channel
 	float VStep = (NumberOfChannels > 1) ? VFov / (float)(NumberOfChannels - 1) : 0.f;
 
-	// Sensor world transform
-	FTransform OwnerTransform = Owner->GetActorTransform();
 	FVector SensorWorldPos = OwnerTransform.TransformPosition(SensorOffset);
 	FQuat OwnerRotation = OwnerTransform.GetRotation();
 
 	TArray<float> NewPoints;
-	NewPoints.Reserve(PointsThisFrame * 3);
+	NewPoints.Reserve(PointsPerRotation * 3);
 
 	FCollisionQueryParams TraceParams;
-	TraceParams.AddIgnoredActor(Owner);
-	TraceParams.bTraceComplex = false; // Faster with simple collision
+	TraceParams.AddIgnoredActor(InOwner);
+	TraceParams.bTraceComplex = false;
 	TraceParams.bReturnPhysicalMaterial = false;
 
 	int32 HitCount = 0;
@@ -72,33 +98,24 @@ void UFSDSLidarSensor::PerformScan()
 		{
 			float VAngle = VerticalFOVLower + v * VStep;
 
-			// Ray direction in local space, then transform to world
 			FRotator RayRotation(VAngle, HAngle, 0.f);
 			FVector RayDir = OwnerRotation.RotateVector(RayRotation.Vector());
 			FVector RayEnd = SensorWorldPos + RayDir * MaxRange;
 
 			FHitResult Hit;
-			if (World->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
+			if (InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
 			{
-				// Random dropout
 				if (DropoutRate > 0.f && FMath::FRand() < DropoutRate)
-				{
 					continue;
-				}
 
 				float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
 
-				// Apply range noise
 				if (RangeNoiseStd > 0.f)
-				{
 					Dist += FMath::FRandRange(-1.f, 1.f) * RangeNoiseStd;
-				}
 
 				if (Dist >= MinRange)
 				{
-					// Recompute hit point from noisy distance along the ray direction
 					FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
-					// Convert to sensor-local coordinates (meters)
 					FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
 					NewPoints.Add(LocalHit.X / 100.f);
 					NewPoints.Add(LocalHit.Y / 100.f);
@@ -106,22 +123,16 @@ void UFSDSLidarSensor::PerformScan()
 					HitCount++;
 
 					if (bDrawDebugPoints)
-					{
-						DrawDebugPoint(World, Hit.ImpactPoint, 3.f, FColor::Green, false, 0.1f);
-					}
+						DrawDebugPoint(InWorld, Hit.ImpactPoint, 3.f, FColor::Green, false, 0.1f);
 				}
 			}
 		}
 
-		// Advance horizontal angle for next column
 		CurrentHorizontalAngle += HStep;
 		if (CurrentHorizontalAngle >= HFov)
-		{
 			CurrentHorizontalAngle = 0.f;
-		}
 	}
 
-	// Thread-safe update
 	FScopeLock Lock(&PointCloudLock);
 	PointCloudBuffer = MoveTemp(NewPoints);
 	CachedPointCount = HitCount;
