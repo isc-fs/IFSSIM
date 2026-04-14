@@ -10,7 +10,7 @@
       "AllowAPIAlways": true,
       "AutoCreate": true,
       "VehiclePhysics": {
-        "Mass": 290,
+        "Mass": 210,
         "Drivetrain": "RWD",
         "WheelRadius": 0.200,
         "WheelWidth": 0.190,
