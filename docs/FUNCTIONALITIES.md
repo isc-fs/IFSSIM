@@ -95,7 +95,7 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 
 | Parameter | Value | Unit |
 |---|---|---|
-| Mass | 290 | kg |
+| Mass | 210 | kg |
 | Drivetrain | RWD | — |
 | Wheel radius | 200 | mm |
 | Wheel width | 190 | mm |
