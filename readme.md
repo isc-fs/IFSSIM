@@ -4,6 +4,8 @@
 
 Simulation environment for the IFS project, developed by ISC Racing Team.
 
+📄 **[Full Functionalities Reference](docs/FUNCTIONALITIES.md)** — sensors, RPC API, ROS 2 bridge, vehicle model, referee system, Mission Control, and more.
+
 ---
 
 ## Getting started
