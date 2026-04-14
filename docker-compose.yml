@@ -1,0 +1,55 @@
+services:
+
+  # ROS2 bridge + full driverless pipeline in one container
+  # Connects to UE5/IFSSIM running natively on the host
+  ros_stack:
+    build:
+      context: .
+      dockerfile: docker/ros_stack/Dockerfile
+    environment:
+      - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
+      - IFSSIM_PORT=${IFSSIM_PORT:-41451}
+      - MISSION_NAME=${MISSION_NAME:-trackdrive}
+      - TRACK_NAME=${TRACK_NAME:-A}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    ports:
+      # UE5 pushes sensor data to these ports — must be mapped so host→container works
+      - "41452:41452/udp"
+      - "41453:41453/udp"
+    extra_hosts:
+      # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persist Numba JIT cache so 20s warmup only happens on first ever run
+      - numba_cache_slam:/ros_stack_ws/src/slam/slam/__pycache__
+      - numba_cache_control:/ros_stack_ws/src/control/control/__pycache__
+    restart: unless-stopped
+
+  # Mission Control backend — FastAPI telemetry + event management
+  mission_control_backend:
+    build:
+      context: .
+      dockerfile: docker/mission_control_backend/Dockerfile
+    environment:
+      - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
+      - IFSSIM_PORT=${IFSSIM_PORT:-41451}
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Mission Control frontend — React/Tailwind dashboard
+  mission_control_frontend:
+    build:
+      context: .
+      dockerfile: docker/mission_control_frontend/Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - mission_control_backend
+    restart: unless-stopped
+
+volumes:
+  numba_cache_slam:
+  numba_cache_control:
