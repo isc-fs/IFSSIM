@@ -99,11 +99,4 @@ def generate_launch_description():
             remappings=[REMAP_GSS, REMAP_ODOM, REMAP_CMD],
         ),
 
-        # --- URDF: vehicle model for RViz visualization ---
-        Node(
-            package='coche_urdf',
-            executable='coche_urdf',
-            name='coche_urdf',
-            output='screen',
-        ),
     ])

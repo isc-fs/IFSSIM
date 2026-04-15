@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <unistd.h>
 
 using namespace std::chrono_literals;
@@ -57,7 +58,11 @@ int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port_);
-    inet_pton(AF_INET, host_.c_str(), &addr.sin_addr);
+    if (inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) <= 0) {
+        struct hostent* he = gethostbyname(host_.c_str());
+        if (!he) { close(sock); return -1; }
+        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+    }
 
     if (::connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(sock);

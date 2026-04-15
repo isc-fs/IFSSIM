@@ -15,14 +15,19 @@ RUN apt-get update && apt-get install -y \
     clang-12 clang++-12 libc++-12-dev libc++abi-12-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# Python deps — numba requires numpy<2, install first
+# Python deps — pin numpy<2 (cv_bridge in ros:humble compiled against 1.x)
 RUN pip install --no-cache-dir "numpy==1.24.*"
 RUN pip install --no-cache-dir \
     "numba>=0.59" \
     opencv-python-headless \
     scipy \
     scikit-learn \
-    transforms3d
+    transforms3d \
+    matplotlib \
+    icecream \
+    typing_extensions
+# Re-pin numpy after all installs to prevent any dependency from upgrading it
+RUN pip install --no-cache-dir "numpy==1.24.*"
 
 WORKDIR /ros_stack_ws
 
