@@ -67,10 +67,10 @@ export default function TrackManager() {
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
         <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Generate Track</h2>
         <div className="flex flex-wrap gap-3 items-end">
-          <Field label="Points" value={genParams.n_points} onChange={v => setGenParams({...genParams, n_points: +v})} type="number" w="w-20" />
-          <Field label="Regions" value={genParams.n_regions} onChange={v => setGenParams({...genParams, n_regions: +v})} type="number" w="w-20" />
-          <Field label="Max Size (m)" value={genParams.max_bound} onChange={v => setGenParams({...genParams, max_bound: +v})} type="number" w="w-24" />
-          <Field label="Name" value={genParams.name} onChange={v => setGenParams({...genParams, name: v})} placeholder="auto" w="w-36" />
+          <Field label="Points" value={genParams.n_points} onChange={(v: string) => setGenParams({...genParams, n_points: +v})} type="number" w="w-20" />
+          <Field label="Regions" value={genParams.n_regions} onChange={(v: string) => setGenParams({...genParams, n_regions: +v})} type="number" w="w-20" />
+          <Field label="Max Size (m)" value={genParams.max_bound} onChange={(v: string) => setGenParams({...genParams, max_bound: +v})} type="number" w="w-24" />
+          <Field label="Name" value={genParams.name} onChange={(v: string) => setGenParams({...genParams, name: v})} placeholder="auto" w="w-36" />
           <button onClick={generate} disabled={generating}
             className="px-4 py-2 bg-[#ffb81c] text-black font-bold rounded-lg text-sm hover:bg-[#e6a619] disabled:opacity-50">
             {generating ? 'Generating...' : 'Generate'}
