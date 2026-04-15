@@ -29,4 +29,18 @@ def generate_launch_description():
                 'competition_mode': False,
             }],
         ),
+
+        # Foxglove Studio WebSocket bridge — connect at ws://localhost:8765
+        Node(
+            package='foxglove_bridge',
+            executable='foxglove_bridge',
+            name='foxglove_bridge',
+            output='screen',
+            parameters=[{
+                'port': 8765,
+                'address': '0.0.0.0',
+                'send_buffer_limit': 10000000,
+                'use_sim_time': False,
+            }],
+        ),
     ])

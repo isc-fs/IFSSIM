@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-sensor-msgs \
     ros-humble-nav-msgs \
     clang-12 clang++-12 libc++-12-dev libc++abi-12-dev \
+    ros-humble-foxglove-bridge \
   && rm -rf /var/lib/apt/lists/*
 
 # Python deps — pin numpy<2 (cv_bridge in ros:humble compiled against 1.x)
@@ -50,8 +51,9 @@ RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
 COPY docker/ros_stack/bridge.launch.py   /ros_stack_ws/bridge.launch.py
 COPY docker/ros_stack/pipeline.launch.py /ros_stack_ws/pipeline.launch.py
 COPY docker/ros_stack/teleop_keyboard.py /ros_stack_ws/teleop_keyboard.py
+COPY docker/ros_stack/teleop.sh          /ros_stack_ws/teleop.sh
 COPY docker/ros_stack/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /ros_stack_ws/teleop.sh
 
 # UDP sensor ports (UE5 pushes to these)
 EXPOSE 41452/udp
