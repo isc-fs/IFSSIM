@@ -43,10 +43,13 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
 IFSSIMRosWrapper::~IFSSIMRosWrapper()
 {
     streaming_ = false;
+    // Close fds so blocking recv() calls in threads wake up
+    int sfd = sensor_stream_fd_.exchange(-1);
+    int lfd = lidar_stream_fd_.exchange(-1);
+    if (sfd >= 0) close(sfd);
+    if (lfd >= 0) close(lfd);
     if (sensor_thread_.joinable()) sensor_thread_.join();
     if (lidar_thread_.joinable()) lidar_thread_.join();
-    if (sensor_stream_fd_ >= 0) close(sensor_stream_fd_);
-    if (lidar_stream_fd_ >= 0) close(lidar_stream_fd_);
 }
 
 int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
@@ -77,14 +80,16 @@ int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
     std::string msg = command + "\n";
     send(sock, msg.c_str(), msg.size(), 0);
 
-    // Read "OK\n" acknowledgment
-    char buf[16];
-    int n = recv(sock, buf, sizeof(buf) - 1, 0);
-    if (n <= 0) {
-        close(sock);
-        return -1;
+    // Read exactly "OK\n" (3 bytes) — do NOT read more or we'll consume the start
+    // of the first sensor frame (sent at 400Hz immediately after the ACK).
+    char buf[4];
+    size_t total = 0;
+    while (total < 3) {
+        ssize_t n = recv(sock, buf + total, 3 - total, 0);
+        if (n <= 0) { close(sock); return -1; }
+        total += n;
     }
-    buf[n] = 0;
+    buf[3] = '\0';
 
     return sock;
 }
@@ -238,11 +243,20 @@ void IFSSIMRosWrapper::sensorStreamThread()
 {
     RCLCPP_INFO(node_->get_logger(), "Sensor stream thread started");
 
-    while (streaming_ && sensor_stream_fd_ >= 0) {
+    while (streaming_) {
+        int fd = sensor_stream_fd_.load();
+        if (fd < 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
         SensorFrame frame;
-        if (!readExact(sensor_stream_fd_, &frame, sizeof(frame))) {
+        if (!readExact(fd, &frame, sizeof(frame))) {
             RCLCPP_WARN(node_->get_logger(), "Sensor stream disconnected");
-            break;
+            int expected = fd;
+            if (sensor_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
+            triggerReconnect();
+            continue;
         }
 
         if (frame.magic != SENSOR_MAGIC) continue;
@@ -254,26 +268,81 @@ void IFSSIMRosWrapper::lidarStreamThread()
 {
     RCLCPP_INFO(node_->get_logger(), "LiDAR stream thread started");
 
-    while (streaming_ && lidar_stream_fd_ >= 0) {
-        // Read header
+    while (streaming_) {
+        int fd = lidar_stream_fd_.load();
+        if (fd < 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
         LidarChunkHeader header;
-        if (!readExact(lidar_stream_fd_, &header, sizeof(header))) {
+        if (!readExact(fd, &header, sizeof(header))) {
             RCLCPP_WARN(node_->get_logger(), "LiDAR stream disconnected");
-            break;
+            int expected = fd;
+            if (lidar_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
+            triggerReconnect();
+            continue;
         }
 
         if (header.magic != LIDAR_MAGIC || header.total_points <= 0) continue;
 
-        // Read point data
         int data_size = header.total_points * 3 * sizeof(float);
         std::vector<float> points(header.total_points * 3);
 
-        if (!readExact(lidar_stream_fd_, points.data(), data_size)) {
+        if (!readExact(fd, points.data(), data_size)) {
             RCLCPP_WARN(node_->get_logger(), "LiDAR stream data incomplete");
-            break;
+            int expected = fd;
+            if (lidar_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
+            triggerReconnect();
+            continue;
         }
 
         onLidarFrame(header, points.data());
+    }
+}
+
+void IFSSIMRosWrapper::triggerReconnect()
+{
+    std::lock_guard<std::mutex> lock(reconnect_mutex_);
+
+    // Another thread may have already completed the reconnect while we waited
+    if (sensor_stream_fd_ >= 0 && lidar_stream_fd_ >= 0) return;
+
+    RCLCPP_INFO(node_->get_logger(), "Reconnecting to IFSSIM (level reset?)...");
+
+    // Reconnect command client — retry until UE5 is back up
+    int attempt = 0;
+    while (streaming_) {
+        client_ = std::make_unique<TcpClient>();
+        if (client_->connect(host_, port_, 3.0)) {
+            client_->sendBool("enableApiControl");
+            RCLCPP_INFO(node_->get_logger(), "Command client reconnected (attempt %d)", ++attempt);
+            break;
+        }
+        RCLCPP_INFO(node_->get_logger(), "Reconnect attempt %d failed, retrying in 2s...", ++attempt);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
+    // Reconnect sensor stream
+    while (streaming_ && sensor_stream_fd_ < 0) {
+        int fd = openStreamSocket("streamSensors");
+        if (fd >= 0) {
+            sensor_stream_fd_.store(fd);
+            RCLCPP_INFO(node_->get_logger(), "Sensor stream reconnected");
+        } else {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
+    }
+
+    // Reconnect LiDAR stream
+    while (streaming_ && lidar_stream_fd_ < 0) {
+        int fd = openStreamSocket("streamLidar");
+        if (fd >= 0) {
+            lidar_stream_fd_.store(fd);
+            RCLCPP_INFO(node_->get_logger(), "LiDAR stream reconnected");
+        } else {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
     }
 }
 
@@ -284,8 +353,10 @@ void IFSSIMRosWrapper::lidarStreamThread()
 void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 {
     auto now = node_->now();
+    ++sensor_frame_count_;
 
-    // GPS
+    // GPS — 10 Hz (every 40 frames of the 400 Hz stream)
+    if (sensor_frame_count_ % 40 == 0)
     {
         sensor_msgs::msg::NavSatFix msg;
         msg.header.stamp = now;
@@ -324,58 +395,62 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
         imu_pub_->publish(msg);
     }
 
-    // GSS
+    // GSS + TF + Odom — 100 Hz (every 4 frames of the 400 Hz stream)
+    if (sensor_frame_count_ % 4 == 0)
     {
-        geometry_msgs::msg::TwistWithCovarianceStamped msg;
-        msg.header.stamp = now;
-        msg.header.frame_id = vehicle_frame_id_;
-        msg.twist.twist.linear.x = f.gss_vx;
-        msg.twist.twist.linear.y = f.gss_vy;
-        msg.twist.twist.linear.z = f.gss_vz;
-        double gss_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
-        msg.twist.covariance[0] = gss_var;
-        msg.twist.covariance[7] = gss_var;
-        msg.twist.covariance[14] = gss_var;
-        gss_pub_->publish(msg);
-    }
+        // GSS
+        {
+            geometry_msgs::msg::TwistWithCovarianceStamped msg;
+            msg.header.stamp = now;
+            msg.header.frame_id = vehicle_frame_id_;
+            msg.twist.twist.linear.x = f.gss_vx;
+            msg.twist.twist.linear.y = f.gss_vy;
+            msg.twist.twist.linear.z = f.gss_vz;
+            double gss_var = gss_velocity_noise_std_ * gss_velocity_noise_std_;
+            msg.twist.covariance[0] = gss_var;
+            msg.twist.covariance[7] = gss_var;
+            msg.twist.covariance[14] = gss_var;
+            gss_pub_->publish(msg);
+        }
 
-    // TF (map → vehicle)
-    {
-        geometry_msgs::msg::TransformStamped tf;
-        tf.header.stamp = now;
-        tf.header.frame_id = map_frame_id_;
-        tf.child_frame_id = vehicle_frame_id_;
-        tf.transform.translation.x = f.pos_x;
-        tf.transform.translation.y = f.pos_y;
-        tf.transform.translation.z = f.pos_z;
-        tf.transform.rotation.x = f.pose_qx;
-        tf.transform.rotation.y = f.pose_qy;
-        tf.transform.rotation.z = f.pose_qz;
-        tf.transform.rotation.w = f.pose_qw;
-        tf_broadcaster_->sendTransform(tf);
-    }
+        // TF (map → vehicle)
+        {
+            geometry_msgs::msg::TransformStamped tf;
+            tf.header.stamp = now;
+            tf.header.frame_id = map_frame_id_;
+            tf.child_frame_id = vehicle_frame_id_;
+            tf.transform.translation.x = f.pos_x;
+            tf.transform.translation.y = f.pos_y;
+            tf.transform.translation.z = f.pos_z;
+            tf.transform.rotation.x = f.pose_qx;
+            tf.transform.rotation.y = f.pose_qy;
+            tf.transform.rotation.z = f.pose_qz;
+            tf.transform.rotation.w = f.pose_qw;
+            tf_broadcaster_->sendTransform(tf);
+        }
 
-    // Odom (testing only)
-    if (odom_pub_) {
-        nav_msgs::msg::Odometry msg;
-        msg.header.stamp = now;
-        msg.header.frame_id = map_frame_id_;
-        msg.child_frame_id = vehicle_frame_id_;
-        msg.pose.pose.position.x = f.pos_x;
-        msg.pose.pose.position.y = f.pos_y;
-        msg.pose.pose.position.z = f.pos_z;
-        msg.pose.pose.orientation.x = f.pose_qx;
-        msg.pose.pose.orientation.y = f.pose_qy;
-        msg.pose.pose.orientation.z = f.pose_qz;
-        msg.pose.pose.orientation.w = f.pose_qw;
-        double pos_var = gps_position_noise_std_ * gps_position_noise_std_;
-        msg.pose.covariance[0] = pos_var;
-        msg.pose.covariance[7] = pos_var;
-        msg.pose.covariance[14] = pos_var;
-        msg.pose.covariance[21] = 1e-6;
-        msg.pose.covariance[28] = 1e-6;
-        msg.pose.covariance[35] = 1e-6;
-        odom_pub_->publish(msg);
+        // Odom (testing only)
+        if (odom_pub_) {
+            nav_msgs::msg::Odometry msg;
+            msg.header.stamp = now;
+            msg.header.frame_id = map_frame_id_;
+            msg.child_frame_id = vehicle_frame_id_;
+            msg.pose.pose.position.x = f.pos_x;
+            msg.pose.pose.position.y = f.pos_y;
+            msg.pose.pose.position.z = f.pos_z;
+            msg.pose.pose.orientation.x = f.pose_qx;
+            msg.pose.pose.orientation.y = f.pose_qy;
+            msg.pose.pose.orientation.z = f.pose_qz;
+            msg.pose.pose.orientation.w = f.pose_qw;
+            double pos_var = gps_position_noise_std_ * gps_position_noise_std_;
+            msg.pose.covariance[0] = pos_var;
+            msg.pose.covariance[7] = pos_var;
+            msg.pose.covariance[14] = pos_var;
+            msg.pose.covariance[21] = 1e-6;
+            msg.pose.covariance[28] = 1e-6;
+            msg.pose.covariance[35] = 1e-6;
+            odom_pub_->publish(msg);
+        }
     }
 }
 

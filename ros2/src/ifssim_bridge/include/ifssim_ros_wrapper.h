@@ -26,12 +26,13 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <mutex>
 
 /**
  * IFSSIM ROS2 Wrapper — TCP push model.
  *
  * Architecture (4 TCP connections):
- *   1. Sensor stream (streamSensors) → GPS, IMU, GSS, Odom, TF at ~100Hz
+ *   1. Sensor stream (streamSensors) → IMU at 400Hz, GSS/TF/Odom at 100Hz, GPS at 10Hz
  *   2. LiDAR stream (streamLidar)   → PointCloud2 at ~10Hz
  *   3. Camera client (TCP req/resp)  → CompressedImage at 10Hz
  *   4. Command client (TCP req/resp) → control commands, settings, referee queries
@@ -53,6 +54,7 @@ private:
     void initializeSubscribers();
     void initializeTimers();
     void startStreaming();
+    void triggerReconnect();  // Called by stream threads on disconnect
 
     // Streaming threads
     void sensorStreamThread();
@@ -84,11 +86,12 @@ private:
     std::unique_ptr<TcpClient> client_camera_;   // Camera image requests
 
     // Streaming sockets (raw, not TcpClient — held open)
-    int sensor_stream_fd_ = -1;
-    int lidar_stream_fd_ = -1;
+    std::atomic<int> sensor_stream_fd_{-1};
+    std::atomic<int> lidar_stream_fd_{-1};
     std::thread sensor_thread_;
     std::thread lidar_thread_;
     std::atomic<bool> streaming_{false};
+    std::mutex reconnect_mutex_;  // Ensures only one thread reconnects at a time
 
     // Connection params
     std::string host_;
@@ -131,6 +134,12 @@ private:
     std::string track_name_ = "A";
     bool competition_mode_ = false;
     std::vector<std::string> camera_names_;
+
+    // Per-sensor publish rates (divisors of the 400Hz sensor stream):
+    //   IMU  → publish every frame    (400 Hz)
+    //   GSS / TF / Odom → every 4    (100 Hz)
+    //   GPS  → every 40              ( 10 Hz)
+    uint64_t sensor_frame_count_ = 0;
 
     // Noise params
     double gps_position_noise_std_ = 0.0;

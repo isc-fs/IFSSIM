@@ -17,8 +17,10 @@ services:
       # UE5 pushes sensor data to these ports — must be mapped so host→container works
       - "41452:41452/udp"
       - "41453:41453/udp"
-      # Foxglove Studio WebSocket
+      # Foxglove WebSocket bridge — connect Foxglove desktop at ws://localhost:8765
       - "8765:8765"
+      # rosboard — self-hosted web visualizer at http://localhost:8888
+      - "8888:8888"
     extra_hosts:
       # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
       - "host.docker.internal:host-gateway"
@@ -52,6 +54,7 @@ services:
     depends_on:
       - mission_control_backend
     restart: unless-stopped
+
 
 volumes:
   numba_cache_slam:

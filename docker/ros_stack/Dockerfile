@@ -30,6 +30,10 @@ RUN pip install --no-cache-dir \
 # Re-pin numpy after all installs to prevent any dependency from upgrading it
 RUN pip install --no-cache-dir "numpy==1.24.*"
 
+# rosboard — self-hosted web visualizer (served at :8888)
+RUN apt-get update && apt-get install -y git libturbojpeg0-dev && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir git+https://github.com/dheera/rosboard.git
+
 WORKDIR /ros_stack_ws
 
 # Copy bridge packages (fs_msgs + ifssim_bridge)
@@ -58,6 +62,8 @@ RUN chmod +x /entrypoint.sh /ros_stack_ws/teleop.sh
 # UDP sensor ports (UE5 pushes to these)
 EXPOSE 41452/udp
 EXPOSE 41453/udp
+# rosboard web UI
+EXPOSE 8888
 
 ENV IFSSIM_HOST=host.docker.internal
 ENV IFSSIM_PORT=41451

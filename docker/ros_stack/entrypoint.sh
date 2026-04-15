@@ -20,6 +20,10 @@ fi
 echo "  Simulator: $IFSSIM_HOST:$IFSSIM_PORT"
 echo "  Mission:   $MISSION_NAME / track $TRACK_NAME"
 
+# Start rosboard web visualizer in the background (accessible at http://localhost:8888)
+echo "  Starting rosboard at :8888"
+rosboard_node &
+
 exec ros2 launch $LAUNCH_FILE \
     host:=$IFSSIM_HOST \
     port:=$IFSSIM_PORT \
