@@ -28,6 +28,8 @@ services:
       # Persist Numba JIT cache so 20s warmup only happens on first ever run
       - numba_cache_slam:/ros_stack_ws/src/slam/slam/__pycache__
       - numba_cache_control:/ros_stack_ws/src/control/control/__pycache__
+    mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
+    memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
     restart: unless-stopped
 
   # Mission Control backend — FastAPI telemetry + event management
@@ -42,6 +44,8 @@ services:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    mem_limit: 256m
+    memswap_limit: 256m
     restart: unless-stopped
 
   # Mission Control frontend — React/Tailwind dashboard
@@ -53,6 +57,8 @@ services:
       - "3000:80"
     depends_on:
       - mission_control_backend
+    mem_limit: 64m
+    memswap_limit: 64m
     restart: unless-stopped
 
 
