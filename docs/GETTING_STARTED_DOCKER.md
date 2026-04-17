@@ -8,19 +8,30 @@ This guide covers everything needed to get the IFSSIM Docker stack running along
 
 | Requirement | Version |
 |---|---|
-| Docker Desktop | 4.x or later |
-| Docker Compose | v2 (bundled with Desktop) |
+| Git | 2.x or later |
+| Git LFS | 3.x or later |
+| Docker Desktop | 4.x or later (Windows / macOS) or Docker Engine + Compose plugin (Linux) |
+| Docker Compose | v2 (bundled with Desktop, or `docker-compose-plugin` on Linux) |
 | Unreal Engine | 5.4+ |
-| macOS | Sonoma or later (Apple Silicon or Intel) |
+
+> **Linux users**: install Docker Engine via your distro's package manager and add your user to the `docker` group. Docker Desktop is optional.
 
 ---
 
 ## 1. Clone the repository
 
+This repository uses **Git LFS** for large binary assets (maps, meshes). Make sure LFS is installed before cloning:
+
 ```bash
+# Install Git LFS (once per machine)
+git lfs install
+
+# Clone
 git clone git@github.com:isc-fs/IFSSIM.git
 cd IFSSIM
 ```
+
+If you already cloned without LFS, run `git lfs pull` inside the repo to fetch the missing assets.
 
 ---
 
@@ -59,11 +70,7 @@ All services should show `Up`.
 
 ## 4. Launch UE5
 
-Open the project in the Epic Games Launcher or directly:
-
-```bash
-open IFSSIM.uproject
-```
+Open the project via the Epic Games Launcher, or double-click `IFSSIM.uproject` in your file manager.
 
 Wait for the editor to finish loading and the plugin to compile, then press **Play**.
 
@@ -159,10 +166,13 @@ C++ plugin changes (files under `Plugins/`) take effect automatically the next t
 Make sure UE5 finished compiling the plugin. Check the UE5 output log for `FSDS RPC: Server starting on port 41451`.
 
 **Containers fail to reach UE5**
-On macOS, the backend reaches UE5 via `host.docker.internal`. Verify Docker Desktop has "Allow the default Docker socket to be used" enabled in Settings → Advanced.
+The backend reaches UE5 via `host.docker.internal` (resolved automatically on Windows and macOS by Docker Desktop). On Linux this alias is not set up by default — add `--add-host=host.docker.internal:host-gateway` to your run command or set it in `docker-compose.yml` under `extra_hosts`.
 
 **Track loads but no cones appear**
 The RPC `loadTrack` response will contain an error field. Check the Mission Control session log tab for details.
 
 **Frontend shows stale data after a backend rebuild**
-Hard-refresh the browser (`Cmd+Shift+R`) to clear the cached assets.
+Hard-refresh the browser (`Ctrl+Shift+R` / `Cmd+Shift+R`) to clear the cached assets.
+
+**Git LFS assets missing after clone**
+Run `git lfs pull` inside the repository root to download all tracked binary files.
