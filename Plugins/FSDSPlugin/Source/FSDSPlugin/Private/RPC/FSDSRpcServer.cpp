@@ -752,9 +752,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				Referee->ResetState();
 			}
 
-			// Set new CSV path and re-run spawning
-			Spawner->CSVFilePath = TrackPath;
-			Spawner->BeginPlay();
+			// Set new CSV path and re-run spawning (ReloadTrack avoids double-calling Super::BeginPlay)
+			Spawner->ReloadTrack(TrackPath);
 
 			int32 NumCones = Spawner->SpawnedCones.Num();
 			Result = FString::Printf(TEXT("{\"loaded\":\"%s\",\"cones\":%d}"), *TrackPath, NumCones);
