@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const EVENTS = ['trackdrive', 'autocross', 'acceleration', 'skidpad'] as const
 
@@ -6,6 +6,12 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
   const [event, setEvent] = useState('trackdrive')
   const [laps, setLaps] = useState(10)
   const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    if (telemetry.event && telemetry.event !== 'unknown' && EVENTS.includes(telemetry.event as any)) {
+      setEvent(telemetry.event)
+    }
+  }, [telemetry.event])
 
   const api = async (url: string, body?: any) => {
     const res = await fetch(url, {

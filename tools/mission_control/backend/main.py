@@ -24,14 +24,22 @@ from pydantic import BaseModel
 from sim_client import SimConnection
 from scoring import compute_scoring
 
+# Built-in tracks that ship with the simulator — not deletable, auto-configure event type
+BUILTIN_TRACKS = {
+    "acceleration.csv": "acceleration",
+    "skidpad.csv": "skidpad",
+}
+
 # Track generator path
 TRACK_GEN_PATH = os.path.abspath(os.environ.get("TRACK_GEN_PATH",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "random-track-generator")))
 TRACKS_DIR = os.path.abspath(os.environ.get("TRACKS_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "Content", "tracks")))
+# Path UE5 uses to load the file — must be the host-side absolute path (UE5 runs on host, not in Docker)
+UE5_TRACKS_DIR = os.environ.get("UE5_TRACKS_DIR", TRACKS_DIR)
 
-SIM_HOST = os.environ.get("SIM_HOST", "127.0.0.1")
-SIM_PORT = int(os.environ.get("SIM_PORT", "41451"))
+SIM_HOST = os.environ.get("IFSSIM_HOST", os.environ.get("SIM_HOST", "127.0.0.1"))
+SIM_PORT = int(os.environ.get("IFSSIM_PORT", os.environ.get("SIM_PORT", "41451")))
 
 app = FastAPI(title="IFSSIM Mission Control", version="1.0.0")
 
@@ -47,6 +55,25 @@ sim = SimConnection(SIM_HOST, SIM_PORT)
 # State
 session_log = []
 res_active = False
+_STATE_FILE = os.path.join(TRACKS_DIR, ".ifssim_state.json")
+
+def _load_state():
+    try:
+        with open(_STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_state(data: dict):
+    try:
+        s = _load_state()
+        s.update(data)
+        with open(_STATE_FILE, "w") as f:
+            json.dump(s, f)
+    except Exception:
+        pass
+
+current_event = _load_state().get("event", "unknown")
 
 
 # === Pydantic Models ===
@@ -122,21 +149,26 @@ def event_state():
 
 @app.post("/api/event/set")
 def event_set(setup: EventSetup):
+    global current_event
     try:
         result = sim.set_event(setup.event_type, setup.num_laps)
     except Exception:
         result = {"error": "sim not connected"}
+    current_event = setup.event_type
+    _save_state({"event": current_event})
     log_event("event_set", f"{setup.event_type} ({setup.num_laps} laps)")
     return result
 
 @app.post("/api/event/start")
 def event_start(setup: EventSetup):
-    """Set event type and resume simulation."""
+    global current_event
     try:
         sim.set_event(setup.event_type, setup.num_laps)
         sim.resume()
     except Exception:
         pass
+    current_event = setup.event_type
+    _save_state({"event": current_event})
     log_event("event_start", f"{setup.event_type} started ({setup.num_laps} laps)")
     return {"ok": True, "event": setup.event_type, "laps": setup.num_laps}
 
@@ -223,7 +255,9 @@ def track_list():
         tracks.append({
             "name": name, "path": os.path.abspath(f), "cones": total,
             "blue": len(cones["blue"]), "yellow": len(cones["yellow"]),
-            "orange": len(cones["big_orange"]) + len(cones["small_orange"])
+            "orange": len(cones["big_orange"]) + len(cones["small_orange"]),
+            "builtin": name in BUILTIN_TRACKS,
+            "event_type": BUILTIN_TRACKS.get(name),
         })
     return tracks
 
@@ -244,14 +278,23 @@ def track_load(name: str):
     filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
     if not os.path.exists(filepath):
         return JSONResponse({"error": "Track not found"}, status_code=404)
-    result = sim.load_track(filepath)
-    log_event("track_load", f"Loaded {name}")
-    return {"result": result, "track": name}
+    ue5_path = os.path.join(UE5_TRACKS_DIR, name)
+    result = sim.load_track(ue5_path)
+    event_type = BUILTIN_TRACKS.get(name)
+    if event_type:
+        sim.set_event(event_type)
+        global current_event
+        current_event = event_type
+        _save_state({"event": current_event})
+    log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
+    return {"result": result, "track": name, "event_type": event_type}
 
 @app.delete("/api/track/{name}")
 def track_delete(name: str):
     if "/" in name or "\\" in name or ".." in name:
         return JSONResponse({"error": "Invalid name"}, status_code=400)
+    if name in BUILTIN_TRACKS:
+        return JSONResponse({"error": "Cannot delete built-in track"}, status_code=400)
     filepath = os.path.join(TRACKS_DIR, name)
     if os.path.exists(filepath):
         os.remove(filepath)
@@ -372,7 +415,7 @@ async def telemetry_ws(websocket: WebSocket):
                     "laps": ref.get("laps", 0),
                     "required_laps": ref.get("required_laps", 0),
                     "finished": ref.get("finished", False),
-                    "event": ref.get("event", "unknown"),
+                    "event": current_event,
                     "fps": status.get("fps", 0),
                     "paused": status.get("paused", False),
                     "res_active": res_active,
@@ -383,7 +426,7 @@ async def telemetry_ws(websocket: WebSocket):
                 # Sim disconnected, send empty
                 await websocket.send_json({"error": "sim_disconnected"})
 
-            await asyncio.sleep(0.1)  # 10Hz
+            await asyncio.sleep(0.2)  # 5Hz
     except WebSocketDisconnect:
         pass
 

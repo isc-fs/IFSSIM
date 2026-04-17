@@ -40,3 +40,4 @@ ros2/install/
 ros2/log/
 
 # Binary content assets tracked via Git LFS (*.uasset, *.umap)
+.env

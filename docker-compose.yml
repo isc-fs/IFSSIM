@@ -1,0 +1,73 @@
+services:
+
+  # ROS2 bridge + full driverless pipeline in one container
+  # Connects to UE5/IFSSIM running natively on the host
+  ros_stack:
+    build:
+      context: .
+      dockerfile: docker/ros_stack/Dockerfile
+    environment:
+      - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
+      - IFSSIM_PORT=${IFSSIM_PORT:-41451}
+      - MISSION_NAME=${MISSION_NAME:-trackdrive}
+      - TRACK_NAME=${TRACK_NAME:-A}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - PIPELINE_ENABLED=${PIPELINE_ENABLED:-false}
+    ports:
+      # UE5 pushes sensor data to these ports — must be mapped so host→container works
+      - "127.0.0.1:41452:41452/udp"
+      - "127.0.0.1:41453:41453/udp"
+      # Foxglove WebSocket bridge — connect Foxglove desktop at ws://localhost:8765
+      - "127.0.0.1:8765:8765"
+      # rosboard — self-hosted web visualizer at http://localhost:8888
+      - "127.0.0.1:8888:8888"
+    extra_hosts:
+      # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persist Numba JIT cache so 20s warmup only happens on first ever run
+      - numba_cache_slam:/ros_stack_ws/src/slam/slam/__pycache__
+      - numba_cache_control:/ros_stack_ws/src/control/control/__pycache__
+    mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
+    memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
+    restart: unless-stopped
+
+  # Mission Control backend — FastAPI telemetry + event management
+  mission_control_backend:
+    build:
+      context: .
+      dockerfile: docker/mission_control_backend/Dockerfile
+    environment:
+      - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
+      - IFSSIM_PORT=${IFSSIM_PORT:-41451}
+      # Container-internal path for reading/writing track files
+      - TRACKS_DIR=/tracks
+      # Host-side path sent to UE5 via RPC (UE5 runs on host, needs the real absolute path)
+      - UE5_TRACKS_DIR=${PWD}/Content/tracks
+    volumes:
+      - ./Content/tracks:/tracks
+    ports:
+      - "127.0.0.1:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: 256m
+    memswap_limit: 256m
+    restart: unless-stopped
+
+  # Mission Control frontend — React/Tailwind dashboard
+  mission_control_frontend:
+    build:
+      context: .
+      dockerfile: docker/mission_control_frontend/Dockerfile
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      - mission_control_backend
+    mem_limit: 64m
+    memswap_limit: 64m
+    restart: unless-stopped
+
+
+volumes:
+  numba_cache_slam:
+  numba_cache_control:

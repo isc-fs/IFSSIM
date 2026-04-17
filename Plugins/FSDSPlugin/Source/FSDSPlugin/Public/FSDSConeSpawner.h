@@ -24,6 +24,14 @@ public:
 	/** Set the referee actor for cone registration */
 	void SetReferee(AFSDSReferee* InReferee) { Referee = InReferee; }
 
+	/** Reload cones from a new CSV path without calling BeginPlay again (safe to call at runtime) */
+	void ReloadTrack(const FString& NewCSVPath)
+	{
+		CSVFilePath = NewCSVPath;
+		TotalSpawned = 0;
+		SpawnFromCSV();
+	}
+
 	/** Cone mesh paths */
 	UPROPERTY(EditAnywhere, Category = "FSDS Cones")
 	FString BlueConeAssetPath = TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/blue_trafficone.blue_trafficone");
