@@ -1,47 +1,88 @@
 """
-Sim client wrapper — thin layer over IFSSIMClient for the Mission Control backend.
-All methods are safe to call even when the sim is disconnected.
+Sim client wrapper for the Mission Control backend.
+Uses a persistent TCP connection (reconnects on failure) to avoid flooding
+UE5 with a new connection for every API call.
+All methods are safe to call when the sim is disconnected.
 """
 
 import sys
 import os
 import json
 import socket
+import threading
 
-# Add the Python client to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "python"))
 
 from ifssim import IFSSIMClient
 
 
-def _safe_cmd(host: str, port: int, cmd: str) -> str:
-    """Send a single TCP command and get response. Independent socket per call."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(3)
-        s.connect((host, port))
-        s.sendall((cmd + "\n").encode())
-        import time; time.sleep(0.1)
-        data = s.recv(65536).decode().strip()
-        s.close()
-        return data
-    except Exception:
-        return ""
-
-
 class SimConnection:
-    """Managed connection to the IFSSIM simulator."""
+    """Persistent TCP connection to the IFSSIM RPC server."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 41451):
         self.host = host
         self.port = port
+        self._sock: socket.socket | None = None
+        self._rbuf = b""
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    def _connect(self) -> bool:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3.0)
+            s.connect((self.host, self.port))
+            s.settimeout(5.0)
+            self._sock = s
+            self._rbuf = b""
+            return True
+        except Exception:
+            self._sock = None
+            return False
+
+    def _disconnect(self):
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+        self._sock = None
+        self._rbuf = b""
+
+    # ------------------------------------------------------------------
+    # Core send/receive — the server keeps the connection alive and sends
+    # exactly one newline-terminated line per command.
+    # ------------------------------------------------------------------
 
     def _cmd(self, cmd: str) -> str:
-        """Send a command, return raw response string."""
-        return _safe_cmd(self.host, self.port, cmd)
+        with self._lock:
+            for attempt in range(2):
+                try:
+                    if self._sock is None and not self._connect():
+                        return ""
+
+                    self._sock.sendall((cmd + "\n").encode())
+
+                    # Read until newline
+                    while b"\n" not in self._rbuf:
+                        chunk = self._sock.recv(65536)
+                        if not chunk:
+                            raise ConnectionError("socket closed by server")
+                        self._rbuf += chunk
+
+                    line, _, self._rbuf = self._rbuf.partition(b"\n")
+                    return line.decode().strip()
+
+                except Exception:
+                    self._disconnect()
+                    if attempt == 0:
+                        continue
+            return ""
 
     def _json_cmd(self, cmd: str) -> dict:
-        """Send a command, parse JSON response."""
         resp = self._cmd(cmd)
         if not resp:
             return {}
@@ -50,10 +91,12 @@ class SimConnection:
         except Exception:
             return {"raw": resp}
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def is_connected(self) -> bool:
         return self._cmd("ping") == "true"
-
-    # --- Sim Control ---
 
     def get_status(self) -> dict:
         result = self._json_cmd("getSimStatus")
@@ -76,26 +119,18 @@ class SimConnection:
     def is_paused(self) -> bool:
         return self._cmd("simIsPaused") == "true"
 
-    # --- Event Control ---
-
     def set_event(self, event_type: str, num_laps: int = 10) -> dict:
         return self._json_cmd(f"setEventType {event_type} {num_laps}")
 
     def get_referee_state(self) -> dict:
         return self._json_cmd("getRefereeState")
 
-    # --- RES (Remote Emergency Stop) ---
-
     def res_activate(self):
-        """Emergency stop: full brake, zero throttle."""
         self._cmd("setCarControls 0 0 1")
 
     def res_release(self):
-        """Release brakes."""
         self._cmd("enableApiControl")
         self._cmd("setCarControls 0 0 0")
-
-    # --- Vehicle ---
 
     def get_vehicle_state(self) -> dict:
         state = self._json_cmd("getCarState")
@@ -108,8 +143,6 @@ class SimConnection:
 
     def teleport(self, x: float, y: float, z: float):
         self._cmd(f"simSetVehiclePose {x} {y} {z}")
-
-    # --- Track ---
 
     def load_track(self, filepath: str) -> dict:
         return self._json_cmd(f"loadTrack {filepath}")

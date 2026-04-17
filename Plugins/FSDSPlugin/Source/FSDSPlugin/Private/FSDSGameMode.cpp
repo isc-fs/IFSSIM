@@ -87,6 +87,9 @@ void AFSDSGameMode::StartPlay()
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// Null pawn pointers before stopping threads to prevent dangling access
+	RpcServer.SetVehiclePawn(nullptr);
+	UdpBroadcaster.SetVehiclePawn(nullptr);
 	UdpBroadcaster.Stop();
 	RpcServer.Stop();
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Simulator shutting down"));

@@ -111,7 +111,11 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 	while (bRunning && ClientSocket)
 	{
 		int32 BytesRead = 0;
-		ClientSocket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromMilliseconds(100));
+		// Wait up to 5s for data; on timeout just loop to re-check bRunning.
+		// Without this check, non-blocking Recv after a timed-out Wait returns
+		// false immediately, breaking the loop and closing a live connection.
+		if (!ClientSocket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(5)))
+			continue;
 
 		if (ClientSocket->Recv(Buffer, sizeof(Buffer) - 1, BytesRead))
 		{
@@ -174,7 +178,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		bApiControlEnabled = true;
 		// Also set on vehicle pawn so keyboard input doesn't override API controls
-		if (VehiclePawn) VehiclePawn->SetApiControlEnabled(true);
+		if (IsValid(VehiclePawn)) VehiclePawn->SetApiControlEnabled(true);
 		return TEXT("true");
 	}
 	else if (Method == TEXT("isApiControlEnabled"))
@@ -183,7 +187,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getCarState"))
 	{
-		if (!VehiclePawn) return TEXT("{}");
+		if (!IsValid(VehiclePawn)) return TEXT("{}");
 		auto State = VehiclePawn->GetCarState();
 		FVector PosENU = FSDSCoord::UEToENU(State.Position);
 		FVector VelENU = FSDSCoord::UEVelocityToENU(State.LinearVelocity);
@@ -280,7 +284,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method.StartsWith(TEXT("setCarControls")))
 	{
 		// Parse: setCarControls throttle steering brake
-		if (VehiclePawn && bApiControlEnabled)
+		if (IsValid(VehiclePawn) && bApiControlEnabled)
 		{
 			TArray<FString> Parts;
 			Request.ParseIntoArray(Parts, TEXT(" "));
@@ -297,7 +301,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				CachedControls.Brake = Controls.Brake;
 
 				AsyncTask(ENamedThreads::GameThread, [this, Controls]() {
-					if (VehiclePawn) VehiclePawn->SetCarControls(Controls);
+					if (IsValid(VehiclePawn)) VehiclePawn->SetCarControls(Controls);
 				});
 			}
 		}
@@ -315,7 +319,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("simGetVehiclePose"))
 	{
-		if (!VehiclePawn) return TEXT("{\"x\":0,\"y\":0,\"z\":0,\"qw\":1,\"qx\":0,\"qy\":0,\"qz\":0}");
+		if (!IsValid(VehiclePawn)) return TEXT("{\"x\":0,\"y\":0,\"z\":0,\"qw\":1,\"qx\":0,\"qy\":0,\"qz\":0}");
 		FVector Pos = VehiclePawn->GetActorLocation();
 		FQuat Quat = VehiclePawn->GetActorQuat();
 		// Convert to ENU meters
@@ -329,7 +333,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("simGetImage"))
 	{
 		// Parse: simGetImage camera_name image_type
-		if (!VehiclePawn) return TEXT("{}");
+		if (!IsValid(VehiclePawn)) return TEXT("{}");
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
@@ -364,7 +368,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("listCameras"))
 	{
-		if (!VehiclePawn) return TEXT("[]");
+		if (!IsValid(VehiclePawn)) return TEXT("[]");
 		FString Result = TEXT("[");
 		bool bFirst = true;
 		for (auto& Pair : VehiclePawn->Cameras)
@@ -378,7 +382,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("simGetGroundTruthKinematics"))
 	{
-		if (!VehiclePawn) return TEXT("{}");
+		if (!IsValid(VehiclePawn)) return TEXT("{}");
 		auto State = VehiclePawn->GetCarState();
 		FVector PosENU = FSDSCoord::UEToENU(State.Position);
 		FVector VelENU = FSDSCoord::UEVelocityToENU(State.LinearVelocity);
@@ -566,7 +570,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
 
 		AsyncTask(ENamedThreads::GameThread, [this, PosUE]() {
-			if (VehiclePawn)
+			if (IsValid(VehiclePawn))
 				VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
 		});
 		return TEXT("true");
@@ -600,7 +604,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 	else if (Method == TEXT("simGetCameraInfo"))
 	{
-		if (!VehiclePawn) return TEXT("{}");
+		if (!IsValid(VehiclePawn)) return TEXT("{}");
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
@@ -618,7 +622,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("simSetCameraFov"))
 	{
 		// Parse: simSetCameraFov camera_name fov_degrees
-		if (!VehiclePawn) return TEXT("false");
+		if (!IsValid(VehiclePawn)) return TEXT("false");
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		if (Parts.Num() < 3) return TEXT("{\"error\":\"usage: simSetCameraFov cam1 90\"}");
@@ -635,7 +639,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("simSetCameraOrientation"))
 	{
 		// Parse: simSetCameraOrientation camera_name pitch yaw roll
-		if (!VehiclePawn) return TEXT("false");
+		if (!IsValid(VehiclePawn)) return TEXT("false");
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		if (Parts.Num() < 5) return TEXT("{\"error\":\"usage: simSetCameraOrientation cam1 pitch yaw roll\"}");
@@ -656,7 +660,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 	else if (Method == TEXT("simGetImages"))
 	{
-		if (!VehiclePawn) return TEXT("[]");
+		if (!IsValid(VehiclePawn)) return TEXT("[]");
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		FString Result = TEXT("[");
@@ -847,7 +851,7 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 	if (Method == TEXT("simGetImageBinary"))
 	{
 		// Parse: simGetImageBinary camera_name image_type
-		if (!VehiclePawn) return false;
+		if (!IsValid(VehiclePawn)) return false;
 
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
@@ -947,7 +951,7 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 
 	while (bRunning)
 	{
-		if (!VehiclePawn) { FPlatformProcess::Sleep(0.1f); continue; }
+		if (!IsValid(VehiclePawn)) { FPlatformProcess::Sleep(0.1f); continue; }
 
 		// Pack sensor frame (reuse the struct from UdpBroadcaster)
 		FFSDSSensorFrame Frame;
