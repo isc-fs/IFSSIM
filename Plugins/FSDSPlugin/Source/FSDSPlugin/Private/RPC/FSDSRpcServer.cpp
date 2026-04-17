@@ -985,12 +985,12 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			Frame.OrientW = EnuQuat.W;
 		}
 
-		// GSS
+		// GSS — body frame, X=forward (longitudinal), Y=lateral
 		if (VehiclePawn->GssSensor)
 		{
 			auto Gss = VehiclePawn->GssSensor->GetOutput();
-			Frame.GssVelX = Gss.LinearVelocity.Y;
-			Frame.GssVelY = Gss.LinearVelocity.X;
+			Frame.GssVelX = Gss.LinearVelocity.X;
+			Frame.GssVelY = Gss.LinearVelocity.Y;
 			Frame.GssVelZ = Gss.LinearVelocity.Z;
 		}
 

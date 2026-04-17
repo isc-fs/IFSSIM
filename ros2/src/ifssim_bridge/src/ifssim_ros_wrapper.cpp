@@ -461,7 +461,7 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_ + "/Lidar1";
+    msg.header.frame_id = vehicle_frame_id_;
     msg.height = 1;
     msg.width = total_points;
     msg.is_dense = true;
