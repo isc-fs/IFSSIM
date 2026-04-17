@@ -30,9 +30,6 @@ RUN pip install --no-cache-dir \
 # Re-pin numpy after all installs to prevent any dependency from upgrading it
 RUN pip install --no-cache-dir "numpy==1.24.*"
 
-# rosboard — self-hosted web visualizer (served at :8888)
-RUN apt-get update && apt-get install -y git libturbojpeg0-dev && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir git+https://github.com/dheera/rosboard.git
 
 WORKDIR /ros_stack_ws
 
