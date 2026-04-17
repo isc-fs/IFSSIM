@@ -38,8 +38,8 @@ TRACKS_DIR = os.path.abspath(os.environ.get("TRACKS_DIR",
 # Path UE5 uses to load the file — must be the host-side absolute path (UE5 runs on host, not in Docker)
 UE5_TRACKS_DIR = os.environ.get("UE5_TRACKS_DIR", TRACKS_DIR)
 
-SIM_HOST = os.environ.get("SIM_HOST", "127.0.0.1")
-SIM_PORT = int(os.environ.get("SIM_PORT", "41451"))
+SIM_HOST = os.environ.get("IFSSIM_HOST", os.environ.get("SIM_HOST", "127.0.0.1"))
+SIM_PORT = int(os.environ.get("IFSSIM_PORT", os.environ.get("SIM_PORT", "41451")))
 
 app = FastAPI(title="IFSSIM Mission Control", version="1.0.0")
 
