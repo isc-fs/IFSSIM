@@ -40,6 +40,12 @@ services:
     environment:
       - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
       - IFSSIM_PORT=${IFSSIM_PORT:-41451}
+      # Container-internal path for reading/writing track files
+      - TRACKS_DIR=/tracks
+      # Host-side path sent to UE5 via RPC (UE5 runs on host, needs the real absolute path)
+      - UE5_TRACKS_DIR=${PWD}/Content/tracks
+    volumes:
+      - ./Content/tracks:/tracks
     ports:
       - "127.0.0.1:8000:8000"
     extra_hosts:

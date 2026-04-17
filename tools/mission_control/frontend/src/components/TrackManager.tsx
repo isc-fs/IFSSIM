@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 interface Track {
   name: string; path: string; cones: number;
   blue: number; yellow: number; orange: number;
+  builtin: boolean; event_type: string | null;
 }
 
 export default function TrackManager() {
@@ -28,11 +29,17 @@ export default function TrackManager() {
     if (d.image) setPreview(d.image)
   }
 
-  const loadTrack = async (name: string) => {
-    setMsg(`Loading ${name}...`)
-    const r = await fetch(`/api/track/${encodeURIComponent(name)}/load`, { method: 'POST' })
+  const loadTrack = async (track: Track) => {
+    setMsg(`Loading ${track.name}...`)
+    const r = await fetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' })
     const d = await r.json()
-    setMsg(d.result?.error ? `Error: ${d.result.error}` : `Loaded ${name}`)
+    if (d.result?.error) {
+      setMsg(`Error: ${d.result.error}`)
+    } else {
+      setMsg(d.event_type
+        ? `Loaded ${track.name} — event set to ${d.event_type}`
+        : `Loaded ${track.name}`)
+    }
   }
 
   const deleteTrack = async (name: string) => {
@@ -61,8 +68,48 @@ export default function TrackManager() {
     }
   }
 
+  const builtinTracks = tracks.filter(t => t.builtin)
+  const generatedTracks = tracks.filter(t => !t.builtin)
+
   return (
     <div className="space-y-4">
+      {/* Standard Tracks */}
+      <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
+        <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Standard Tracks</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {builtinTracks.map(t => (
+            <div
+              key={t.name}
+              onClick={() => selectTrack(t.name)}
+              className={`flex justify-between items-center px-4 py-3 rounded-lg cursor-pointer border transition-all ${
+                selected === t.name ? 'border-[#ffb81c] bg-[#1a1a0a]' : 'border-[#333] bg-[#111] hover:border-[#555]'
+              }`}
+            >
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm capitalize">{t.name.replace('.csv', '')}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#ffb81c]/10 text-[#ffb81c] border border-[#ffb81c]/30 uppercase tracking-wide">
+                    {t.event_type}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  <span className="text-blue-400">{t.blue}</span> blue{' '}
+                  <span className="text-[#ffb81c]">{t.yellow}</span> yellow{' '}
+                  <span className="text-orange-500">{t.orange}</span> orange
+                </div>
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); loadTrack(t) }}
+                className="px-3 py-1 bg-green-900/50 text-green-400 border border-green-800 rounded text-xs font-medium hover:bg-green-800/50 whitespace-nowrap"
+              >
+                Load
+              </button>
+            </div>
+          ))}
+        </div>
+        {msg && <p className="mt-3 text-xs text-gray-400">{msg}</p>}
+      </div>
+
       {/* Generator */}
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
         <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Generate Track</h2>
@@ -79,15 +126,14 @@ export default function TrackManager() {
             Refresh
           </button>
         </div>
-        {msg && <p className="mt-2 text-xs text-gray-400">{msg}</p>}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Track List */}
+        {/* Generated Track List */}
         <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
-          <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Available Tracks</h2>
+          <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Generated Tracks</h2>
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
-            {tracks.map(t => (
+            {generatedTracks.map(t => (
               <div
                 key={t.name}
                 className={`flex justify-between items-center px-4 py-3 rounded-lg cursor-pointer border transition-all ${
@@ -105,7 +151,7 @@ export default function TrackManager() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={e => { e.stopPropagation(); loadTrack(t.name) }}
+                  <button onClick={e => { e.stopPropagation(); loadTrack(t) }}
                     className="px-3 py-1 bg-green-900/50 text-green-400 border border-green-800 rounded text-xs font-medium hover:bg-green-800/50">
                     Load
                   </button>
@@ -116,7 +162,7 @@ export default function TrackManager() {
                 </div>
               </div>
             ))}
-            {tracks.length === 0 && <p className="text-gray-500 text-sm">No tracks found</p>}
+            {generatedTracks.length === 0 && <p className="text-gray-500 text-sm">No generated tracks yet</p>}
           </div>
         </div>
 
