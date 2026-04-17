@@ -39,7 +39,7 @@ WORKDIR /ros_stack_ws
 # Copy bridge packages (fs_msgs + ifssim_bridge)
 COPY ros2/src/ src/
 
-# Copy pipeline packages (slam, odometria, path_planning, control, coche_urdf)
+# Copy pipeline packages (slam, odometria, path_planning, control)
 COPY pipeline/ src/
 
 # Install fsd_path_planning (bundled inside path_planning package)
