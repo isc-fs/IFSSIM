@@ -141,9 +141,7 @@ def sim_reset():
         pass
     try:
         sim.res_activate()
-        # Teleport position only — keep current orientation to avoid coordinate-system confusion.
-        # The correct spawn orientation is already set by UE5 at track load.
-        sim.teleport_pos(0.0, 0.0, 0.3)
+        sim.teleport(0.0, 0.0, 0.3, **home_pose)
         res_active = False
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -335,22 +333,6 @@ def track_preview(name: str):
         return {"image": plot}
     return JSONResponse({"error": "Failed to generate plot"}, status_code=500)
 
-def _capture_home_pose():
-    """Query simGetVehiclePose and store as home_pose (spawn orientation for resets)."""
-    global home_pose
-    for _ in range(5):
-        import time; time.sleep(3)
-        pose = sim.get_vehicle_pose()
-        if pose.get("z", 0) > 0:
-            home_pose = {
-                "qw": pose.get("qw", 1.0),
-                "qx": pose.get("qx", 0.0),
-                "qy": pose.get("qy", 0.0),
-                "qz": pose.get("qz", 0.0),
-            }
-            return
-
-
 @app.post("/api/track/{name}/load")
 def track_load(name: str):
     filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
@@ -369,8 +351,6 @@ def track_load(name: str):
         os.remove(PIPELINE_CTL_FILE)
     except FileNotFoundError:
         pass
-    import threading
-    threading.Thread(target=_capture_home_pose, daemon=True).start()
     log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
     return {"result": result, "track": name, "event_type": event_type}
 

@@ -120,10 +120,6 @@ class SimConnection:
         self._require_connected()
         self._cmd("simResume")
 
-    def reset(self):
-        self._require_connected()
-        self._cmd("reset")
-
     def is_paused(self) -> bool:
         return self._cmd("simIsPaused") == "true"
 
