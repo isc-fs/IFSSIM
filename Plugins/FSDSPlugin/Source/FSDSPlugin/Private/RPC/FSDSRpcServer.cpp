@@ -441,16 +441,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("reset"))
 	{
-		AsyncTask(ENamedThreads::GameThread, [this]() {
-			if (World)
-			{
-				FString MapName = World->GetMapName();
-				MapName.RemoveFromStart(TEXT("UEDPIE_0_")); // Strip PIE prefix
-				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Resetting level: %s"), *MapName);
-				UGameplayStatics::OpenLevel(World, *MapName, true);
-			}
-		});
-		return TEXT("true");
+		// Destructive level reload (OpenLevel) crashed the editor; removed in fix/12.
+		// Clients should use simSetVehiclePose instead for a soft reset.
+		UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: 'reset' is no longer supported; use simSetVehiclePose"));
+		return TEXT("{\"error\":\"reset removed; use simSetVehiclePose\"}");
 	}
 
 	// === Object APIs ===
@@ -586,12 +580,20 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				else
 					VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
 
-				// Zero velocities so the car doesn't slide or spin after teleport
-				UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
-				if (Root && Root->IsSimulatingPhysics())
+				// Chaos vehicle workaround: SetActorLocationAndRotation with TeleportPhysics
+				// does not reliably update the skeletal mesh's physics body rotation — the body
+				// keeps its prior orientation and the actor transform snaps back on the next tick.
+				// Force the physics body transform directly.
+				USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
+				if (Mesh && Mesh->IsSimulatingPhysics())
 				{
-					Root->SetPhysicsLinearVelocity(FVector::ZeroVector);
-					Root->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+					if (bHasOrientation)
+					{
+						FTransform NewXform(QuatUE, PosUE, Mesh->GetComponentScale());
+						Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
+					}
+					Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+					Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 				}
 			}
 		});
