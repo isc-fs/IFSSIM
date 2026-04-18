@@ -56,7 +56,41 @@ sim = SimConnection(SIM_HOST, SIM_PORT)
 # State
 session_log = []
 res_active = False
-home_pose = {"qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn orientation
+home_pose = {"x": 0.0, "y": 0.0, "z": 0.3, "qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn pose
+_home_pose_captured = False  # set once we snapshot the pawn's map placement (or user pins a home)
+_sim_was_connected = False   # tracks connect/disconnect transitions so we re-capture after a UE5 restart
+
+
+def _ensure_home_pose_captured():
+    """Snapshot the pawn's map-placement pose as home.
+
+    Runs from the polled status/state endpoints so the capture happens within the
+    first poll after UE5 connects — before the pawn has had time to drive away
+    from its spawn. On UE5 disconnect (Stop/Play cycle), the captured flag is
+    reset so the next connect re-captures fresh."""
+    global home_pose, _home_pose_captured, _sim_was_connected
+    is_conn = sim.is_connected()
+    if _sim_was_connected and not is_conn:
+        _home_pose_captured = False
+    _sim_was_connected = is_conn
+    if _home_pose_captured or not is_conn:
+        return
+    try:
+        pose = sim.get_vehicle_pose()
+    except Exception:
+        return
+    if not pose:
+        return
+    home_pose = {
+        "x": pose.get("x", 0.0),
+        "y": pose.get("y", 0.0),
+        "z": 0.3,  # fixed lift so reset never spawns at ground level
+        "qw": pose.get("qw", 1.0),
+        "qx": pose.get("qx", 0.0),
+        "qy": pose.get("qy", 0.0),
+        "qz": pose.get("qz", 0.0),
+    }
+    _home_pose_captured = True
 _STATE_FILE = os.path.join(TRACKS_DIR, ".ifssim_state.json")
 
 def _load_state():
@@ -102,6 +136,7 @@ class TeleportRequest(BaseModel):
 def sim_status():
     connected = sim.is_connected()
     status = sim.get_status() if connected else {}
+    _ensure_home_pose_captured()
     return {
         "connected": connected,
         "map": status.get("map", "unknown"),
@@ -139,9 +174,10 @@ def sim_reset():
         os.remove(PIPELINE_CTL_FILE)
     except FileNotFoundError:
         pass
+    _ensure_home_pose_captured()
     try:
         sim.res_activate()
-        sim.teleport(0.0, 0.0, 0.3, **home_pose)
+        sim.teleport(**home_pose)
         res_active = False
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -267,9 +303,11 @@ def pipeline_status():
 @app.get("/api/vehicle/state")
 def vehicle_state():
     try:
-        return sim.get_vehicle_state()
+        state = sim.get_vehicle_state()
     except Exception:
         return {}
+    _ensure_home_pose_captured()
+    return state
 
 @app.get("/api/vehicle/pose")
 def vehicle_pose():
@@ -358,16 +396,20 @@ def track_load(name: str):
 @app.post("/api/vehicle/capture_home")
 def capture_home():
     """Capture current vehicle pose as the home/reset position."""
-    global home_pose
+    global home_pose, _home_pose_captured
     pose = sim.get_vehicle_pose()
     if not pose:
         return JSONResponse({"ok": False, "error": "sim not connected"}, status_code=503)
     home_pose = {
+        "x": pose.get("x", 0.0),
+        "y": pose.get("y", 0.0),
+        "z": 0.3,
         "qw": pose.get("qw", 1.0),
         "qx": pose.get("qx", 0.0),
         "qy": pose.get("qy", 0.0),
         "qz": pose.get("qz", 0.0),
     }
+    _home_pose_captured = True
     return {"ok": True, "home_pose": home_pose}
 
 @app.delete("/api/track/{name}")
