@@ -107,28 +107,39 @@ class SimConnection:
             "api_control": result.get("api_control", False),
         }
 
+    def _require_connected(self):
+        """Raise RuntimeError if the sim is not reachable."""
+        if not self.is_connected():
+            raise RuntimeError("Simulator not connected")
+
     def pause(self):
-        return self._cmd("simPause")
+        self._require_connected()
+        self._cmd("simPause")
 
     def resume(self):
-        return self._cmd("simResume")
+        self._require_connected()
+        self._cmd("simResume")
 
     def reset(self):
-        return self._cmd("reset")
+        self._require_connected()
+        self._cmd("reset")
 
     def is_paused(self) -> bool:
         return self._cmd("simIsPaused") == "true"
 
     def set_event(self, event_type: str, num_laps: int = 10) -> dict:
+        self._require_connected()
         return self._json_cmd(f"setEventType {event_type} {num_laps}")
 
     def get_referee_state(self) -> dict:
         return self._json_cmd("getRefereeState")
 
     def res_activate(self):
+        self._require_connected()
         self._cmd("setCarControls 0 0 1")
 
     def res_release(self):
+        self._require_connected()
         self._cmd("enableApiControl")
         self._cmd("setCarControls 0 0 0")
 
