@@ -174,15 +174,26 @@ def event_set(setup: EventSetup):
 
 @app.post("/api/event/start")
 def event_start(setup: EventSetup):
-    global current_event
-    if not res_active:
-        return JSONResponse(
-            {"ok": False, "error": "RES must be activated before starting an event"},
-            status_code=400,
-        )
+    global current_event, res_active
+    if not sim.is_connected():
+        return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
     try:
+        # Stop any running pipeline
+        try:
+            os.remove(PIPELINE_CTL_FILE)
+        except FileNotFoundError:
+            pass
+        # Activate RES (hard brake) then configure event
+        sim.res_activate()
+        res_active = True
         sim.set_event(setup.event_type, setup.num_laps)
         sim.resume()
+        # Release RES → enables API control
+        sim.res_release()
+        res_active = False
+        # Start pipeline
+        os.makedirs("/pipeline_ctrl", exist_ok=True)
+        open(PIPELINE_CTL_FILE, "w").close()
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     current_event = setup.event_type
@@ -509,6 +520,7 @@ async def telemetry_ws(websocket: WebSocket):
                     "fps": status.get("fps", 0),
                     "paused": status.get("paused", False),
                     "res_active": res_active,
+                    "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
                 }
 
                 await websocket.send_json(data)
