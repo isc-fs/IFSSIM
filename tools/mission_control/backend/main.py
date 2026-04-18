@@ -112,17 +112,17 @@ def sim_status():
 def sim_pause():
     try:
         sim.pause()
-    except Exception:
-        pass
-    return {"ok": True, "paused": True}
+        return {"ok": True, "paused": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 @app.post("/api/sim/resume")
 def sim_resume():
     try:
         sim.resume()
-    except Exception:
-        pass
-    return {"ok": True, "paused": False}
+        return {"ok": True, "paused": False}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 @app.post("/api/sim/reset")
 def sim_reset():
@@ -152,8 +152,8 @@ def event_set(setup: EventSetup):
     global current_event
     try:
         result = sim.set_event(setup.event_type, setup.num_laps)
-    except Exception:
-        result = {"error": "sim not connected"}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     current_event = setup.event_type
     _save_state({"event": current_event})
     log_event("event_set", f"{setup.event_type} ({setup.num_laps} laps)")
@@ -162,11 +162,16 @@ def event_set(setup: EventSetup):
 @app.post("/api/event/start")
 def event_start(setup: EventSetup):
     global current_event
+    if not res_active:
+        return JSONResponse(
+            {"ok": False, "error": "RES must be activated before starting an event"},
+            status_code=400,
+        )
     try:
         sim.set_event(setup.event_type, setup.num_laps)
         sim.resume()
-    except Exception:
-        pass
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     current_event = setup.event_type
     _save_state({"event": current_event})
     log_event("event_start", f"{setup.event_type} started ({setup.num_laps} laps)")
@@ -180,8 +185,8 @@ def res_activate_endpoint():
     global res_active
     try:
         sim.res_activate()
-    except Exception:
-        pass
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     res_active = True
     log_event("res", "EMERGENCY STOP activated")
     return {"ok": True, "res": "activated", "res_active": True}
@@ -189,10 +194,15 @@ def res_activate_endpoint():
 @app.post("/api/res/release")
 def res_release_endpoint():
     global res_active
+    if not res_active:
+        return JSONResponse(
+            {"ok": False, "error": "RES is not active"},
+            status_code=400,
+        )
     try:
         sim.res_release()
-    except Exception:
-        pass
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     res_active = False
     log_event("res", "RES released")
     return {"ok": True, "res": "released", "res_active": False}
@@ -222,9 +232,9 @@ def vehicle_pose():
 def vehicle_teleport(req: TeleportRequest):
     try:
         sim.teleport(req.x, req.y, req.z)
-    except Exception:
-        pass
-    return {"teleported": True}
+        return {"teleported": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 # === Track Manager ===

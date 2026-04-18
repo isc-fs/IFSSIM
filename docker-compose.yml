@@ -13,7 +13,6 @@ services:
       - TRACK_NAME=${TRACK_NAME:-A}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - PIPELINE_ENABLED=${PIPELINE_ENABLED:-false}
-      - NUMBA_DISABLE_JIT=1
     ports:
       # UE5 pushes sensor data to these ports — must be mapped so host→container works
       - "127.0.0.1:41452:41452/udp"
@@ -30,6 +29,12 @@ services:
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
     memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "ifssim_bridge"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Mission Control backend — FastAPI telemetry + event management
   mission_control_backend:
@@ -52,6 +57,12 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/sim/status', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Lichtblick — web-based ROS 2 visualizer, connects to Foxglove bridge at ws://localhost:8765
   lichtblick:
