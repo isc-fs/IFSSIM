@@ -56,6 +56,7 @@ sim = SimConnection(SIM_HOST, SIM_PORT)
 # State
 session_log = []
 res_active = False
+home_pose = {"qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn orientation
 _STATE_FILE = os.path.join(TRACKS_DIR, ".ifssim_state.json")
 
 def _load_state():
@@ -133,13 +134,20 @@ def sim_reset():
     global res_active
     if not sim.is_connected():
         return {"ok": False, "error": "sim not connected"}
+    # Stop pipeline so control node stops publishing commands
     try:
-        # yaw=0° (facing +X in AirSim = along the track in ROS odom frame)
-        sim.teleport(0.0, 0.0, 0.5, qw=1.0, qx=0.0, qy=0.0, qz=0.0)
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
+    try:
+        sim.res_activate()
+        # Teleport position only — keep current orientation to avoid coordinate-system confusion.
+        # The correct spawn orientation is already set by UE5 at track load.
+        sim.teleport_pos(0.0, 0.0, 0.3)
         res_active = False
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    log_event("reset", "Soft reset: car teleported to start")
+    log_event("reset", "Soft reset: pipeline stopped, car teleported to start")
     return {"ok": True}
 
 
@@ -188,6 +196,11 @@ def event_start(setup: EventSetup):
 @app.post("/api/res/activate")
 def res_activate_endpoint():
     global res_active
+    # Stop pipeline first so control node stops sending throttle commands
+    try:
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
     try:
         sim.res_activate()
     except Exception as e:
@@ -311,6 +324,22 @@ def track_preview(name: str):
         return {"image": plot}
     return JSONResponse({"error": "Failed to generate plot"}, status_code=500)
 
+def _capture_home_pose():
+    """Query simGetVehiclePose and store as home_pose (spawn orientation for resets)."""
+    global home_pose
+    for _ in range(5):
+        import time; time.sleep(3)
+        pose = sim.get_vehicle_pose()
+        if pose.get("z", 0) > 0:
+            home_pose = {
+                "qw": pose.get("qw", 1.0),
+                "qx": pose.get("qx", 0.0),
+                "qy": pose.get("qy", 0.0),
+                "qz": pose.get("qz", 0.0),
+            }
+            return
+
+
 @app.post("/api/track/{name}/load")
 def track_load(name: str):
     filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
@@ -324,8 +353,31 @@ def track_load(name: str):
         global current_event
         current_event = event_type
         _save_state({"event": current_event})
+    # Stop pipeline on track load (stale SLAM map would be invalid for new track)
+    try:
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
+    import threading
+    threading.Thread(target=_capture_home_pose, daemon=True).start()
     log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
     return {"result": result, "track": name, "event_type": event_type}
+
+
+@app.post("/api/vehicle/capture_home")
+def capture_home():
+    """Capture current vehicle pose as the home/reset position."""
+    global home_pose
+    pose = sim.get_vehicle_pose()
+    if not pose:
+        return JSONResponse({"ok": False, "error": "sim not connected"}, status_code=503)
+    home_pose = {
+        "qw": pose.get("qw", 1.0),
+        "qx": pose.get("qx", 0.0),
+        "qy": pose.get("qy", 0.0),
+        "qz": pose.get("qz", 0.0),
+    }
+    return {"ok": True, "home_pose": home_pose}
 
 @app.delete("/api/track/{name}")
 def track_delete(name: str):

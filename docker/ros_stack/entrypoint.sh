@@ -15,6 +15,10 @@ echo "IFSSIM ROS stack starting (bridge + foxglove)..."
 echo "  Simulator: $IFSSIM_HOST:$IFSSIM_PORT"
 echo "  Mission:   $MISSION_NAME / track $TRACK_NAME"
 
+# Always clear stale pipeline flag on startup — pipeline must be explicitly started
+mkdir -p /pipeline_ctrl
+rm -f $PIPELINE_CTL
+
 # Always start the bridge (background so we can monitor pipeline flag)
 ros2 launch /ros_stack_ws/bridge.launch.py \
     host:=$IFSSIM_HOST \
@@ -22,13 +26,6 @@ ros2 launch /ros_stack_ws/bridge.launch.py \
     mission_name:=$MISSION_NAME \
     track_name:=$TRACK_NAME &
 BRIDGE_PID=$!
-
-# If PIPELINE_ENABLED=true at container start, pre-create the flag file
-if [ "${PIPELINE_ENABLED:-false}" = "true" ]; then
-    mkdir -p /pipeline_ctrl
-    touch $PIPELINE_CTL
-    echo "Pipeline auto-enabled via PIPELINE_ENABLED=true"
-fi
 
 # Monitor flag file and start/stop pipeline accordingly
 while kill -0 $BRIDGE_PID 2>/dev/null; do
