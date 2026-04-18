@@ -35,6 +35,7 @@ TRACK_GEN_PATH = os.path.abspath(os.environ.get("TRACK_GEN_PATH",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "random-track-generator")))
 TRACKS_DIR = os.path.abspath(os.environ.get("TRACKS_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "Content", "tracks")))
+PIPELINE_CTL_FILE = "/pipeline_ctrl/enable"
 # Path UE5 uses to load the file — must be the host-side absolute path (UE5 runs on host, not in Docker)
 UE5_TRACKS_DIR = os.environ.get("UE5_TRACKS_DIR", TRACKS_DIR)
 
@@ -55,6 +56,7 @@ sim = SimConnection(SIM_HOST, SIM_PORT)
 # State
 session_log = []
 res_active = False
+home_pose = {"qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn orientation
 _STATE_FILE = os.path.join(TRACKS_DIR, ".ifssim_state.json")
 
 def _load_state():
@@ -126,15 +128,26 @@ def sim_resume():
 
 @app.post("/api/sim/reset")
 def sim_reset():
+    """Soft reset: teleport car back to start position without crashing UE5.
+    The destructive RPC 'reset' triggers a full level reload which crashes the
+    UE5 editor. Use teleport + disable API control instead."""
     global res_active
     if not sim.is_connected():
         return {"ok": False, "error": "sim not connected"}
+    # Stop pipeline so control node stops publishing commands
     try:
-        sim.reset()
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
+    try:
+        sim.res_activate()
+        # Teleport position only — keep current orientation to avoid coordinate-system confusion.
+        # The correct spawn orientation is already set by UE5 at track load.
+        sim.teleport_pos(0.0, 0.0, 0.3)
         res_active = False
-    except Exception:
-        return {"ok": False, "error": "reset failed"}
-    log_event("reset", "Simulation reset")
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    log_event("reset", "Soft reset: pipeline stopped, car teleported to start")
     return {"ok": True}
 
 
@@ -161,15 +174,26 @@ def event_set(setup: EventSetup):
 
 @app.post("/api/event/start")
 def event_start(setup: EventSetup):
-    global current_event
-    if not res_active:
-        return JSONResponse(
-            {"ok": False, "error": "RES must be activated before starting an event"},
-            status_code=400,
-        )
+    global current_event, res_active
+    if not sim.is_connected():
+        return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
     try:
+        # Stop any running pipeline
+        try:
+            os.remove(PIPELINE_CTL_FILE)
+        except FileNotFoundError:
+            pass
+        # Activate RES (hard brake) then configure event
+        sim.res_activate()
+        res_active = True
         sim.set_event(setup.event_type, setup.num_laps)
         sim.resume()
+        # Release RES → enables API control
+        sim.res_release()
+        res_active = False
+        # Start pipeline
+        os.makedirs("/pipeline_ctrl", exist_ok=True)
+        open(PIPELINE_CTL_FILE, "w").close()
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     current_event = setup.event_type
@@ -183,6 +207,11 @@ def event_start(setup: EventSetup):
 @app.post("/api/res/activate")
 def res_activate_endpoint():
     global res_active
+    # Stop pipeline first so control node stops sending throttle commands
+    try:
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
     try:
         sim.res_activate()
     except Exception as e:
@@ -210,6 +239,29 @@ def res_release_endpoint():
 @app.get("/api/res/status")
 def res_status():
     return {"res_active": res_active}
+
+
+# === Pipeline ===
+
+@app.post("/api/pipeline/start")
+def pipeline_start():
+    os.makedirs("/pipeline_ctrl", exist_ok=True)
+    open(PIPELINE_CTL_FILE, "w").close()
+    log_event("pipeline", "Pipeline started")
+    return {"ok": True, "pipeline": "started"}
+
+@app.post("/api/pipeline/stop")
+def pipeline_stop():
+    try:
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
+    log_event("pipeline", "Pipeline stopped")
+    return {"ok": True, "pipeline": "stopped"}
+
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    return {"enabled": os.path.exists(PIPELINE_CTL_FILE)}
 
 
 # === Vehicle ===
@@ -283,6 +335,22 @@ def track_preview(name: str):
         return {"image": plot}
     return JSONResponse({"error": "Failed to generate plot"}, status_code=500)
 
+def _capture_home_pose():
+    """Query simGetVehiclePose and store as home_pose (spawn orientation for resets)."""
+    global home_pose
+    for _ in range(5):
+        import time; time.sleep(3)
+        pose = sim.get_vehicle_pose()
+        if pose.get("z", 0) > 0:
+            home_pose = {
+                "qw": pose.get("qw", 1.0),
+                "qx": pose.get("qx", 0.0),
+                "qy": pose.get("qy", 0.0),
+                "qz": pose.get("qz", 0.0),
+            }
+            return
+
+
 @app.post("/api/track/{name}/load")
 def track_load(name: str):
     filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
@@ -296,8 +364,31 @@ def track_load(name: str):
         global current_event
         current_event = event_type
         _save_state({"event": current_event})
+    # Stop pipeline on track load (stale SLAM map would be invalid for new track)
+    try:
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
+    import threading
+    threading.Thread(target=_capture_home_pose, daemon=True).start()
     log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
     return {"result": result, "track": name, "event_type": event_type}
+
+
+@app.post("/api/vehicle/capture_home")
+def capture_home():
+    """Capture current vehicle pose as the home/reset position."""
+    global home_pose
+    pose = sim.get_vehicle_pose()
+    if not pose:
+        return JSONResponse({"ok": False, "error": "sim not connected"}, status_code=503)
+    home_pose = {
+        "qw": pose.get("qw", 1.0),
+        "qx": pose.get("qx", 0.0),
+        "qy": pose.get("qy", 0.0),
+        "qz": pose.get("qz", 0.0),
+    }
+    return {"ok": True, "home_pose": home_pose}
 
 @app.delete("/api/track/{name}")
 def track_delete(name: str):
@@ -429,6 +520,7 @@ async def telemetry_ws(websocket: WebSocket):
                     "fps": status.get("fps", 0),
                     "paused": status.get("paused", False),
                     "res_active": res_active,
+                    "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
                 }
 
                 await websocket.send_json(data)

@@ -152,7 +152,13 @@ class SimConnection:
     def get_vehicle_pose(self) -> dict:
         return self._json_cmd("simGetVehiclePose")
 
-    def teleport(self, x: float, y: float, z: float):
+    def teleport(self, x: float, y: float, z: float,
+                 qw: float = 1.0, qx: float = 0.0,
+                 qy: float = 0.0, qz: float = 0.0):
+        self._cmd(f"simSetVehiclePose {x} {y} {z} {qw} {qx} {qy} {qz}")
+
+    def teleport_pos(self, x: float, y: float, z: float):
+        """Teleport position only — orientation unchanged."""
         self._cmd(f"simSetVehiclePose {x} {y} {z}")
 
     def load_track(self, filepath: str) -> dict:

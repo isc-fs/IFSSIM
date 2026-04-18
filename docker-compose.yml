@@ -26,6 +26,8 @@ services:
       # Persist Numba JIT cache so 20s warmup only happens on first ever run
       - numba_cache_slam:/ros_stack_ws/src/slam/slam/__pycache__
       - numba_cache_control:/ros_stack_ws/src/control/control/__pycache__
+      # Shared pipeline control flag — backend writes here to start/stop the pipeline
+      - pipeline_ctrl:/pipeline_ctrl
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
     memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
     restart: unless-stopped
@@ -50,6 +52,7 @@ services:
       - UE5_TRACKS_DIR=${PWD}/Content/tracks
     volumes:
       - ./Content/tracks:/tracks
+      - pipeline_ctrl:/pipeline_ctrl
     ports:
       - "127.0.0.1:8000:8000"
     extra_hosts:
@@ -89,3 +92,4 @@ services:
 volumes:
   numba_cache_slam:
   numba_cache_control:
+  pipeline_ctrl:

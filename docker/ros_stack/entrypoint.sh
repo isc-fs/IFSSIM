@@ -8,20 +8,50 @@ source /ros_stack_ws/install/setup.bash
 # by the colcon-generated setup scripts — add them explicitly.
 export AMENT_PREFIX_PATH="/ros_stack_ws/install/fs_msgs:/ros_stack_ws/install/ifssim_bridge:$AMENT_PREFIX_PATH"
 
+PIPELINE_CTL=/pipeline_ctrl/enable
+PIPELINE_PID=""
 
-if [ "${PIPELINE_ENABLED:-false}" = "true" ]; then
-    LAUNCH_FILE=/ros_stack_ws/pipeline.launch.py
-    echo "IFSSIM ROS stack starting (bridge + pipeline)..."
-else
-    LAUNCH_FILE=/ros_stack_ws/bridge.launch.py
-    echo "IFSSIM ROS stack starting (bridge only)..."
-fi
-
+echo "IFSSIM ROS stack starting (bridge + foxglove)..."
 echo "  Simulator: $IFSSIM_HOST:$IFSSIM_PORT"
 echo "  Mission:   $MISSION_NAME / track $TRACK_NAME"
 
-exec ros2 launch $LAUNCH_FILE \
+# Always clear stale pipeline flag on startup — pipeline must be explicitly started
+mkdir -p /pipeline_ctrl
+rm -f $PIPELINE_CTL
+
+# Always start the bridge (background so we can monitor pipeline flag)
+ros2 launch /ros_stack_ws/bridge.launch.py \
     host:=$IFSSIM_HOST \
     port:=$IFSSIM_PORT \
     mission_name:=$MISSION_NAME \
-    track_name:=$TRACK_NAME
+    track_name:=$TRACK_NAME &
+BRIDGE_PID=$!
+
+# Monitor flag file and start/stop pipeline accordingly
+while kill -0 $BRIDGE_PID 2>/dev/null; do
+    if [ -f "$PIPELINE_CTL" ] && [ -z "$PIPELINE_PID" ]; then
+        echo "Pipeline start signal — launching pipeline nodes..."
+        ros2 launch /ros_stack_ws/pipeline_only.launch.py \
+            host:=$IFSSIM_HOST \
+            port:=$IFSSIM_PORT \
+            mission_name:=$MISSION_NAME \
+            track_name:=$TRACK_NAME &
+        PIPELINE_PID=$!
+        echo "Pipeline PID: $PIPELINE_PID"
+
+    elif [ ! -f "$PIPELINE_CTL" ] && [ -n "$PIPELINE_PID" ]; then
+        echo "Pipeline stop signal — killing pipeline nodes..."
+        kill $PIPELINE_PID 2>/dev/null || true
+        wait $PIPELINE_PID 2>/dev/null || true
+        PIPELINE_PID=""
+        echo "Pipeline stopped."
+
+    elif [ -n "$PIPELINE_PID" ] && ! kill -0 $PIPELINE_PID 2>/dev/null; then
+        echo "Pipeline process exited unexpectedly."
+        PIPELINE_PID=""
+    fi
+
+    sleep 1
+done
+
+wait $BRIDGE_PID

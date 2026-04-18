@@ -49,8 +49,9 @@ RUN ln -s /ros_stack_ws/src/path_planning/path_planning/fsd_path_planning \
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
 
 # Copy launch files, teleop, and entrypoint
-COPY docker/ros_stack/bridge.launch.py   /ros_stack_ws/bridge.launch.py
-COPY docker/ros_stack/pipeline.launch.py /ros_stack_ws/pipeline.launch.py
+COPY docker/ros_stack/bridge.launch.py        /ros_stack_ws/bridge.launch.py
+COPY docker/ros_stack/pipeline.launch.py      /ros_stack_ws/pipeline.launch.py
+COPY docker/ros_stack/pipeline_only.launch.py /ros_stack_ws/pipeline_only.launch.py
 COPY docker/ros_stack/teleop_keyboard.py /ros_stack_ws/teleop_keyboard.py
 COPY docker/ros_stack/teleop.sh          /ros_stack_ws/teleop.sh
 COPY docker/ros_stack/entrypoint.sh /entrypoint.sh

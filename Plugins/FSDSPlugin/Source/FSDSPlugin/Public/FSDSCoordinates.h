@@ -41,17 +41,24 @@ namespace FSDSCoord
 		return UEToENU(UE); // Same transform, just different interpretation
 	}
 
-	/** Convert UE5 quaternion to ENU quaternion */
+	/** Convert UE5 quaternion to ENU quaternion.
+	 *  UE5 yaw=0 faces North (+X_UE = +Y_ENU), so ENU_yaw = 90° - UE5_yaw.
+	 *  Formula: q_ENU = q_90 * q_UE.Inverse()
+	 *  where q_90 is a 90° CCW rotation around Z.
+	 */
 	inline FQuat UEQuatToENU(const FQuat& UE)
 	{
-		// Swap X↔Y axes, keep Z
-		return FQuat(UE.Y, UE.X, UE.Z, UE.W);
+		static const FQuat Q90(0.f, 0.f, 0.7071068f, 0.7071068f);
+		return Q90 * UE.Inverse();
 	}
 
-	/** Convert ENU quaternion to UE5 quaternion */
+	/** Convert ENU quaternion to UE5 quaternion (inverse of UEQuatToENU).
+	 *  Formula: q_UE = q_ENU.Inverse() * q_90
+	 */
 	inline FQuat ENUQuatToUE(const FQuat& ENU)
 	{
-		return FQuat(ENU.Y, ENU.X, ENU.Z, ENU.W);
+		static const FQuat Q90(0.f, 0.f, 0.7071068f, 0.7071068f);
+		return ENU.Inverse() * Q90;
 	}
 
 	/** Convert UE5 rotator (degrees) to ENU yaw (radians) */

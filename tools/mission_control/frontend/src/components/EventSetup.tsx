@@ -54,22 +54,14 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
           </div>
         )}
 
-        <div className="flex gap-3 flex-wrap">
+        <div className="flex gap-3 flex-wrap items-center">
           <button
             onClick={async () => {
-              const r = await api('/api/event/set', { event_type: event, num_laps: laps })
-              setMsg(`Event configured: ${r.event || r.error || JSON.stringify(r)}`)
+              setMsg('Starting…')
+              const r = await api('/api/event/start', { event_type: event, num_laps: laps })
+              setMsg(r.ok ? `Session started: ${r.event} (${r.laps} laps)` : `Error: ${r.error}`)
             }}
-            className="px-4 py-2 bg-[#ffb81c] text-black font-bold rounded-lg text-sm hover:bg-[#e6a619] transition-all"
-          >
-            Configure Event
-          </button>
-          <button
-            onClick={async () => {
-              await api('/api/event/start', { event_type: event, num_laps: laps })
-              setMsg(`Session started: ${event}`)
-            }}
-            className="px-5 py-2 bg-green-700 text-white font-bold rounded-lg text-sm hover:bg-green-600 transition-all
+            className="px-6 py-2.5 bg-green-700 text-white font-bold rounded-lg text-sm hover:bg-green-600 transition-all
                        shadow-[0_0_10px_rgba(34,197,94,0.3)]"
           >
             Start Session
@@ -77,13 +69,16 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
           <button
             onClick={async () => {
               await api('/api/res/activate')
-              setMsg('Session stopped (RES activated)')
+              setMsg('Session stopped')
             }}
-            className="px-5 py-2 bg-red-700 text-white font-bold rounded-lg text-sm hover:bg-red-600 transition-all
+            className="px-6 py-2.5 bg-red-700 text-white font-bold rounded-lg text-sm hover:bg-red-600 transition-all
                        shadow-[0_0_10px_rgba(239,68,68,0.3)]"
           >
             Stop Session
           </button>
+          {telemetry.pipeline_enabled && (
+            <span className="text-green-400 text-xs font-medium animate-pulse">● PIPELINE RUNNING</span>
+          )}
         </div>
 
         {msg && <p className="mt-3 text-xs text-gray-400">{msg}</p>}
@@ -104,10 +99,6 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
           <button onClick={() => { if (confirm('Reset simulation?')) api('/api/sim/reset') }}
             className="px-4 py-2 bg-red-800 text-white rounded-lg text-sm font-medium hover:bg-red-700">
             Reset
-          </button>
-          <button onClick={() => api('/api/res/release')}
-            className="px-4 py-2 bg-blue-700 text-white rounded-lg text-sm font-medium hover:bg-blue-600">
-            Release RES
           </button>
         </div>
       </div>

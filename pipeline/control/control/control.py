@@ -38,7 +38,7 @@ class Control(Node):
     def _setup_publishers(self) -> None:
         """Create the publishers responsible for emitting vehicle commands."""
         self.command_publisher = self.create_publisher(
-            ControlCommand, "/fsds/control_command", self.QUEUE_SIZE
+            ControlCommand, "/control_command", self.QUEUE_SIZE
         )
 
     def _setup_subscribers(self) -> None:
@@ -172,10 +172,7 @@ class Control(Node):
         # Collect path points that lie ahead of the vehicle to use as local reference
         forward_path_points = self.get_points_ahead(front_axle_pose)
         if not forward_path_points:
-            # self.get_logger().info(
-            #     "No forward path points available, publishing neutral command"
-            # )
-            command_msg.throttle = 0.0
+            command_msg.brake = 1.0
             self.command_publisher.publish(command_msg)
             return
 
@@ -220,8 +217,13 @@ class Control(Node):
         else:
             command_msg.brake = -velocity_command_value
 
-        # Normalise steering to the expected command range and publish the command
-        self.steering = -limited_steering_angle
+        # Gate steering: don't apply Stanley steering until the car is moving.
+        # At near-zero speed the cross-track term saturates to max lock, causing
+        # the car to spin before it has any forward momentum.
+        if abs(self.velocity) < 0.5:
+            self.steering = 0.0
+        else:
+            self.steering = -limited_steering_angle
         command_msg.steering = self.steering / np.deg2rad(self.max_steering_ang)
 
         self.command_publisher.publish(command_msg)
@@ -269,7 +271,7 @@ class Control(Node):
             distance = np.sqrt(dx * dx + dy * dy)
             angle_to_point = np.arctan2(dy, dx)
 
-            if abs(wrap_to_pi(vehicle_heading - angle_to_point)) < np.pi / 2:
+            if abs(wrap_to_pi(vehicle_heading - angle_to_point)) < np.pi * 3 / 4:
                 points_with_distances.append((point, distance))
 
         # Sort points by distance and return only points

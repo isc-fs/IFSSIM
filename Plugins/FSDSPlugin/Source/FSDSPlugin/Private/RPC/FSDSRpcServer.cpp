@@ -322,12 +322,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!IsValid(VehiclePawn)) return TEXT("{\"x\":0,\"y\":0,\"z\":0,\"qw\":1,\"qx\":0,\"qy\":0,\"qz\":0}");
 		FVector Pos = VehiclePawn->GetActorLocation();
 		FQuat Quat = VehiclePawn->GetActorQuat();
-		// Convert to ENU meters
-		float EnuX = Pos.Y / 100.f;
-		float EnuY = Pos.X / 100.f;
-		float EnuZ = Pos.Z / 100.f;
+		FVector PosENU = FSDSCoord::UEToENU(Pos);
+		FQuat QuatENU = FSDSCoord::UEQuatToENU(Quat);
 		return FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
-			EnuX, EnuY, EnuZ, Quat.W, Quat.Y, Quat.X, Quat.Z);
+			PosENU.X, PosENU.Y, PosENU.Z, QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
 	else if (Method == TEXT("simGetImage"))
@@ -561,17 +559,41 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("simSetVehiclePose"))
 	{
-		// Parse: simSetVehiclePose x y z
+		// Parse: simSetVehiclePose x y z [qw qx qy qz]
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
-		if (Parts.Num() < 4) return TEXT("{\"error\":\"usage: simSetVehiclePose x y z\"}");
+		if (Parts.Num() < 4) return TEXT("{\"error\":\"usage: simSetVehiclePose x y z [qw qx qy qz]\"}");
 
 		FVector PosENU(FCString::Atof(*Parts[1]), FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]));
 		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
 
-		AsyncTask(ENamedThreads::GameThread, [this, PosUE]() {
+		bool bHasOrientation = Parts.Num() >= 8;
+		FQuat QuatUE = FQuat::Identity;
+		if (bHasOrientation)
+		{
+			float qw = FCString::Atof(*Parts[4]);
+			float qx = FCString::Atof(*Parts[5]);
+			float qy = FCString::Atof(*Parts[6]);
+			float qz = FCString::Atof(*Parts[7]);
+			QuatUE = FSDSCoord::ENUQuatToUE(FQuat(qx, qy, qz, qw));
+		}
+
+		AsyncTask(ENamedThreads::GameThread, [this, PosUE, QuatUE, bHasOrientation]() {
 			if (IsValid(VehiclePawn))
-				VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+			{
+				if (bHasOrientation)
+					VehiclePawn->SetActorLocationAndRotation(PosUE, QuatUE, false, nullptr, ETeleportType::TeleportPhysics);
+				else
+					VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+
+				// Zero velocities so the car doesn't slide or spin after teleport
+				UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
+				if (Root && Root->IsSimulatingPhysics())
+				{
+					Root->SetPhysicsLinearVelocity(FVector::ZeroVector);
+					Root->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+				}
+			}
 		});
 		return TEXT("true");
 	}
