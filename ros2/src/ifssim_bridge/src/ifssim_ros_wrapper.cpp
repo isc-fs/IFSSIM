@@ -216,11 +216,12 @@ void IFSSIMRosWrapper::startStreaming()
 
     streaming_ = true;
 
-    if (sensor_stream_fd_ >= 0) {
-        sensor_thread_ = std::thread(&IFSSIMRosWrapper::sensorStreamThread, this);
-    }
-    if (lidar_stream_fd_ >= 0) {
-        lidar_thread_ = std::thread(&IFSSIMRosWrapper::lidarStreamThread, this);
+    sensor_thread_ = std::thread(&IFSSIMRosWrapper::sensorStreamThread, this);
+    lidar_thread_  = std::thread(&IFSSIMRosWrapper::lidarStreamThread, this);
+
+    // If initial connection failed (UE5 not in Play mode yet), kick off reconnect
+    if (sensor_stream_fd_ < 0 || lidar_stream_fd_ < 0) {
+        std::thread(&IFSSIMRosWrapper::triggerReconnect, this).detach();
     }
 }
 
@@ -461,7 +462,7 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_ + "/Lidar1";
+    msg.header.frame_id = vehicle_frame_id_;
     msg.height = 1;
     msg.width = total_points;
     msg.is_dense = true;
@@ -519,21 +520,6 @@ void IFSSIMRosWrapper::goSignalTimerCb()
     msg.header.stamp = node_->now();
     msg.mission = mission_name_;
     msg.track = track_name_;
-
-    if (client_ && client_->isConnected()) {
-        std::string resp = client_->sendCommand("getRefereeState");
-        if (!resp.empty()) {
-            size_t epos = resp.find("\"event\":\"");
-            if (epos != std::string::npos) {
-                epos += 9;
-                size_t eend = resp.find('"', epos);
-                if (eend != std::string::npos) {
-                    mission_name_ = resp.substr(epos, eend - epos);
-                    msg.mission = mission_name_;
-                }
-            }
-        }
-    }
     go_signal_pub_->publish(msg);
 }
 

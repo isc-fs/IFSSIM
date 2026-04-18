@@ -98,8 +98,8 @@ private:
     int port_;
     double timeout_sec_;
 
-    // Frame IDs
-    std::string map_frame_id_ = "fsds/map";
+    // Frame IDs — match original FSDS simulator convention
+    std::string map_frame_id_ = "odom";
     std::string vehicle_frame_id_ = "fsds/FSCar";
 
     // Publishers

@@ -43,10 +43,11 @@ From the repository root:
 docker compose build
 ```
 
-This builds three services:
+This builds the custom services (Lichtblick is pulled from the registry, not built locally):
 - **`mission_control_backend`** — FastAPI server (port 8000), handles sim commands, scoring, track management
 - **`mission_control_frontend`** — React dashboard served via Nginx (port 3000)
-- **`ros_stack`** — ROS 2 Humble pipeline with sensors, SLAM, control nodes (ports 8765, 8888)
+- **`ros_stack`** — ROS 2 Humble pipeline with sensors, SLAM, control nodes (port 8765)
+- **`lichtblick`** — Web-based ROS 2 visualizer (port 8080), connects to the Foxglove bridge
 
 > First build takes several minutes. Subsequent builds are cached.
 
@@ -153,8 +154,8 @@ C++ plugin changes (files under `Plugins/`) take effect automatically the next t
 |---|---|---|
 | 3000 | Frontend | Mission Control dashboard |
 | 8000 | Backend | REST API + WebSocket telemetry |
+| 8080 | Lichtblick | Web-based ROS 2 visualizer |
 | 8765 | ROS stack | Foxglove WebSocket bridge |
-| 8888 | ROS stack | rosboard web viewer |
 | 41451 | UE5 (host) | RPC server (TCP) |
 | 41452–41453 | ROS stack | UDP sensor bridge |
 

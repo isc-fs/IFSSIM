@@ -1,0 +1,109 @@
+{
+  "configById": {
+    "3D!slam": {
+      "cameraState": {
+        "distance": 40,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "fsds/FSCar",
+      "followMode": "follow-position",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 1
+        },
+        "background": { "color": "#111111" }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar/Lidar1": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -0.5,
+          "maxValue": 1.5,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/Conos_raw": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/Track": {
+          "visible": true
+        },
+        "/Track_azul": {
+          "visible": true
+        },
+        "/Track_amarillo": {
+          "visible": true
+        },
+        "/testing_only/track": {
+          "visible": false
+        }
+      },
+      "layers": []
+    },
+
+    "RawMessages!cones": {
+      "topicPath": "/Conos"
+    },
+
+    "Plot!cone_count": {
+      "title": "Detected Cones",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/Conos.markers[:]{id}.id",
+          "enabled": true,
+          "label": "Mapped cones",
+          "color": "#00cc88",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    }
+  },
+
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+
+  "layout": {
+    "direction": "row",
+    "first": "3D!slam",
+    "second": {
+      "direction": "column",
+      "first": "Plot!cone_count",
+      "second": "RawMessages!cones",
+      "splitPercentage": 40
+    },
+    "splitPercentage": 70
+  }
+}
