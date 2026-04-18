@@ -35,6 +35,7 @@ TRACK_GEN_PATH = os.path.abspath(os.environ.get("TRACK_GEN_PATH",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "random-track-generator")))
 TRACKS_DIR = os.path.abspath(os.environ.get("TRACKS_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "Content", "tracks")))
+PIPELINE_CTL_FILE = "/pipeline_ctrl/enable"
 # Path UE5 uses to load the file — must be the host-side absolute path (UE5 runs on host, not in Docker)
 UE5_TRACKS_DIR = os.environ.get("UE5_TRACKS_DIR", TRACKS_DIR)
 
@@ -133,7 +134,8 @@ def sim_reset():
     if not sim.is_connected():
         return {"ok": False, "error": "sim not connected"}
     try:
-        sim.teleport(0.0, 0.0, 0.5)
+        # yaw=0° (facing +X in AirSim = along the track in ROS odom frame)
+        sim.teleport(0.0, 0.0, 0.5, qw=1.0, qx=0.0, qy=0.0, qz=0.0)
         res_active = False
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -213,6 +215,29 @@ def res_release_endpoint():
 @app.get("/api/res/status")
 def res_status():
     return {"res_active": res_active}
+
+
+# === Pipeline ===
+
+@app.post("/api/pipeline/start")
+def pipeline_start():
+    os.makedirs("/pipeline_ctrl", exist_ok=True)
+    open(PIPELINE_CTL_FILE, "w").close()
+    log_event("pipeline", "Pipeline started")
+    return {"ok": True, "pipeline": "started"}
+
+@app.post("/api/pipeline/stop")
+def pipeline_stop():
+    try:
+        os.remove(PIPELINE_CTL_FILE)
+    except FileNotFoundError:
+        pass
+    log_event("pipeline", "Pipeline stopped")
+    return {"ok": True, "pipeline": "stopped"}
+
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    return {"enabled": os.path.exists(PIPELINE_CTL_FILE)}
 
 
 # === Vehicle ===

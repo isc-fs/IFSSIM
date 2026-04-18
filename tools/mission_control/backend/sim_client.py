@@ -152,8 +152,10 @@ class SimConnection:
     def get_vehicle_pose(self) -> dict:
         return self._json_cmd("simGetVehiclePose")
 
-    def teleport(self, x: float, y: float, z: float):
-        self._cmd(f"simSetVehiclePose {x} {y} {z}")
+    def teleport(self, x: float, y: float, z: float,
+                 qw: float = 1.0, qx: float = 0.0,
+                 qy: float = 0.0, qz: float = 0.0):
+        self._cmd(f"simSetVehiclePose {x} {y} {z} {qw} {qx} {qy} {qz}")
 
     def load_track(self, filepath: str) -> dict:
         return self._json_cmd(f"loadTrack {filepath}")

@@ -561,17 +561,33 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("simSetVehiclePose"))
 	{
-		// Parse: simSetVehiclePose x y z
+		// Parse: simSetVehiclePose x y z [qw qx qy qz]
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
-		if (Parts.Num() < 4) return TEXT("{\"error\":\"usage: simSetVehiclePose x y z\"}");
+		if (Parts.Num() < 4) return TEXT("{\"error\":\"usage: simSetVehiclePose x y z [qw qx qy qz]\"}");
 
 		FVector PosENU(FCString::Atof(*Parts[1]), FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]));
 		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
 
-		AsyncTask(ENamedThreads::GameThread, [this, PosUE]() {
+		bool bHasOrientation = Parts.Num() >= 8;
+		FQuat QuatUE = FQuat::Identity;
+		if (bHasOrientation)
+		{
+			float qw = FCString::Atof(*Parts[4]);
+			float qx = FCString::Atof(*Parts[5]);
+			float qy = FCString::Atof(*Parts[6]);
+			float qz = FCString::Atof(*Parts[7]);
+			QuatUE = FSDSCoord::ENUQuatToUE(FQuat(qx, qy, qz, qw));
+		}
+
+		AsyncTask(ENamedThreads::GameThread, [this, PosUE, QuatUE, bHasOrientation]() {
 			if (IsValid(VehiclePawn))
-				VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+			{
+				if (bHasOrientation)
+					VehiclePawn->SetActorLocationAndRotation(PosUE, QuatUE, false, nullptr, ETeleportType::TeleportPhysics);
+				else
+					VehiclePawn->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+			}
 		});
 		return TEXT("true");
 	}
