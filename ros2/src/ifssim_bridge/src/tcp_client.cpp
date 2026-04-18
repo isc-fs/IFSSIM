@@ -121,16 +121,23 @@ std::string TcpClient::sendCommand(const std::string& command)
         return "";
     }
 
-    char buffer[8192];
-    memset(buffer, 0, sizeof(buffer));
-    int bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
-    if (bytes <= 0) {
-        connected_ = false;
-        return "";
+    // Read until we have a complete response (loop to handle TCP fragmentation and large payloads)
+    std::string response;
+    response.reserve(65536);
+    char buffer[16384];
+    while (true) {
+        int bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
+        if (bytes <= 0) {
+            connected_ = false;
+            return "";
+        }
+        response.append(buffer, bytes);
+        // A complete RPC response ends with '\n'
+        if (response.back() == '\n' || response.back() == '\r') break;
+        // Safety: also break if we've read a suspiciously large response (>512KB)
+        if (response.size() > 524288) break;
     }
 
-    // Trim trailing newline
-    std::string response(buffer, bytes);
     while (!response.empty() && (response.back() == '\n' || response.back() == '\r'))
         response.pop_back();
 
