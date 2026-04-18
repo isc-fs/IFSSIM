@@ -132,20 +132,16 @@ class Plan_Path(Node):
         # ConeTypes.START_FINISH_AREA/ConeTypes.ORANGE_SMALL which maps to index 3
         # ConeTypes.START_FINISH_LINE/ConeTypes.ORANGE_BIG which maps to index 4
 
-        try:  ###Generar Objeto de transformada entre Odom y el coche
-            t = self.tf_buffer.lookup_transform(
-                "odom", "fsds/FSCar", rclpy.time.Time()
-            )  ###Revisar tiempo
+        try:
+            t = self.tf_buffer.lookup_transform("odom", "fsds/FSCar", rclpy.time.Time())
         except TransformException as ex:
-            print(ex)  ##Error al optener TF
+            self.get_logger().warn(f"TF lookup failed: {ex}")
             return
 
-        try:  ###Generar Objeto de transformada entre Odom y el coche
-            t_inv = self.tf_buffer.lookup_transform(
-                "fsds/FSCar", "odom", rclpy.time.Time()
-            )  ###Revisar tiempo
+        try:
+            t_inv = self.tf_buffer.lookup_transform("fsds/FSCar", "odom", rclpy.time.Time())
         except TransformException as ex:
-            print(ex)  ##Error al optener TF
+            self.get_logger().warn(f"TF inverse lookup failed: {ex}")
             return
 
         yaw = quat2euler(
@@ -160,25 +156,22 @@ class Plan_Path(Node):
         car_position = numpy.array(
             [t.transform.translation.x, t.transform.translation.y]
         )
-        # car_position=numpy.array([0.0,0.0])
-        # self.get_logger().info('jajaj'+str(car_position[0])+'ajaj'+str(car_position[1]))
         car_direction = numpy.array([numpy.cos(yaw), numpy.sin(yaw)])
 
-        # car_position is a 2D numpy array with shape (2,)
-        # car_direction is a 2D numpy array with shape (2,) representing the car's direction vector
-        # car_direction can also be a float representing the car's direction in radians
+        try:
+            path = self.path_planner.calculate_path_in_global_frame(
+                global_cones, car_position, car_direction
+            )
+        except Exception as ex:
+            self.get_logger().warn(f"Path calculation failed: {ex}")
+            return
 
-        # print("inincio")
-        path = self.path_planner.calculate_path_in_global_frame(
-            global_cones, car_position, car_direction
-        )
-        # print("fin")
-        # path is a Mx4 numpy array, where M is the number of points in the path
-        # the columns represent the spline parameter (distance along path), x, y and path curvature
-        s = []
-        x = []
-        y = []
-        for a, b, c, d in path:
+        if path is None or len(path) < 2:
+            self.get_logger().warn("Path planner returned empty path — skipping publish")
+            return
+
+        s, x, y = [], [], []
+        for a, b, c, _d in path:
             s.append(a)
             x.append(b)
             y.append(c)
@@ -192,8 +185,8 @@ class Plan_Path(Node):
 
         track = Path()
         track.header.frame_id = "odom"
-        for i, x in enumerate(px):
-            track.poses.append(gen_mark(float(x), float(py[i]), pyaw[i]))
+        for i, xi in enumerate(px):
+            track.poses.append(gen_mark(float(xi), float(py[i]), pyaw[i]))
 
         self.publisher_path.publish(track)
 

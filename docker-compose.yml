@@ -30,6 +30,12 @@ services:
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
     memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "ifssim_bridge"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Mission Control backend — FastAPI telemetry + event management
   mission_control_backend:
@@ -52,6 +58,12 @@ services:
     mem_limit: 256m
     memswap_limit: 256m
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/sim/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Lichtblick — web-based ROS 2 visualizer, connects to Foxglove bridge at ws://localhost:8765
   lichtblick:
