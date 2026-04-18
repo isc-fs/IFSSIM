@@ -102,6 +102,8 @@ class Plan_Path(Node):
         unknown_cones = []
 
         for marker in self.mapa.markers:
+            if marker.action == 3:  # DELETEALL marker — skip, no real cone position
+                continue
             x = float(marker.pose.position.x)
             y = float(marker.pose.position.y)
             r = marker.color.r
@@ -120,7 +122,10 @@ class Plan_Path(Node):
             global_cones[ConeTypes.RIGHT] = numpy.array(right_cones)
         if unknown_cones:
             global_cones[ConeTypes.UNKNOWN] = numpy.array(unknown_cones)
-        # print(global_cones)
+
+        total_cones = len(left_cones) + len(right_cones) + len(unknown_cones)
+        if total_cones < 2:
+            return
 
         # global_cones is a sequence that contains 5 numpy arrays with shape (N, 2),
         # where N is the number of cones of that type
