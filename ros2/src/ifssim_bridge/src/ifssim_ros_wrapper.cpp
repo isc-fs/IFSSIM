@@ -585,7 +585,7 @@ void IFSSIMRosWrapper::staticTfCb()
     tf.header.stamp = now;
     tf.header.frame_id = vehicle_frame_id_;
     tf.child_frame_id = vehicle_frame_id_ + "/Lidar1";
-    tf.transform.translation.y = 1.4;
+    tf.transform.translation.x = 1.4;  // 1.4m forward (REP-103: body X = forward)
     tf.transform.translation.z = -0.2;
     tf.transform.rotation.w = 1.0;
     static_tf_broadcaster_->sendTransform(tf);
@@ -595,7 +595,7 @@ void IFSSIMRosWrapper::staticTfCb()
         ctf.header.stamp = now;
         ctf.header.frame_id = vehicle_frame_id_;
         ctf.child_frame_id = vehicle_frame_id_ + "/" + cam_name;
-        ctf.transform.translation.y = 1.6;
+        ctf.transform.translation.x = 1.6;  // 1.6m forward
         ctf.transform.rotation.w = 1.0;
         static_tf_broadcaster_->sendTransform(ctf);
     }

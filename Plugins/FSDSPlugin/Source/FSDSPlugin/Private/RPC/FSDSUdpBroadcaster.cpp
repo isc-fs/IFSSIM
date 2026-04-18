@@ -175,9 +175,9 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	if (VehiclePawn->GssSensor)
 	{
 		auto Gss = VehiclePawn->GssSensor->GetOutput();
-		// Body frame velocity — swap axes for ENU convention
-		Frame.GssVelX = Gss.LinearVelocity.Y;
-		Frame.GssVelY = Gss.LinearVelocity.X;
+		// Body frame velocity (already m/s from sensor): UE5 X=forward, Y=right → ROS X=forward, Y=left
+		Frame.GssVelX = Gss.LinearVelocity.X;   // forward
+		Frame.GssVelY = -Gss.LinearVelocity.Y;  // left (negate right→left)
 		Frame.GssVelZ = Gss.LinearVelocity.Z;
 	}
 
@@ -258,7 +258,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 		Header->TotalPoints = TotalPoints;
 		Header->Channels = VehiclePawn->LidarSensor->NumberOfChannels;
 
-		// Copy point data
+		// Copy point data (UE5 local frame: X=forward, Y=right — SLAM uses this convention)
 		FMemory::Memcpy(
 			Packet.GetData() + sizeof(FFSDSLidarChunkHeader),
 			Points.GetData() + StartPoint * 3,
