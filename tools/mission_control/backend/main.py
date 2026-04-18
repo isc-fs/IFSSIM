@@ -126,15 +126,18 @@ def sim_resume():
 
 @app.post("/api/sim/reset")
 def sim_reset():
+    """Soft reset: teleport car back to start position without crashing UE5.
+    The destructive RPC 'reset' triggers a full level reload which crashes the
+    UE5 editor. Use teleport + disable API control instead."""
     global res_active
     if not sim.is_connected():
         return {"ok": False, "error": "sim not connected"}
     try:
-        sim.reset()
+        sim.teleport(0.0, 0.0, 0.5)
         res_active = False
-    except Exception:
-        return {"ok": False, "error": "reset failed"}
-    log_event("reset", "Simulation reset")
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    log_event("reset", "Soft reset: car teleported to start")
     return {"ok": True}
 
 
