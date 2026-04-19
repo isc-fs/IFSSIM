@@ -43,6 +43,9 @@
         "/Conos_raw": {
           "visible": false
         },
+        "/Conos_Orange": {
+          "visible": true
+        },
         "/Path": {
           "visible": true
         },
