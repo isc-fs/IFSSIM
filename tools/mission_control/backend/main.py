@@ -474,7 +474,10 @@ def track_generate(params: TrackGenerate):
 # === Scoring ===
 
 @app.get("/api/scoring/summary")
-def scoring_summary(t_best: Optional[float] = Query(None)):
+def scoring_summary(
+    t_best: Optional[float] = Query(None),
+    uss: bool = Query(False),
+):
     ref = sim.get_referee_state()
     if not ref:
         return {"error": "No referee data"}
@@ -484,7 +487,7 @@ def scoring_summary(t_best: Optional[float] = Query(None)):
     doo = ref.get("doo_counter", 0)
     oc = ref.get("oc_counter", 0)
 
-    return compute_scoring(event, lap_times, doo, oc, t_best)
+    return compute_scoring(event, lap_times, doo, oc, t_best, uss=uss)
 
 
 # === Session Log ===
