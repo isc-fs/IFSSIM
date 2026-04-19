@@ -260,17 +260,21 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 			}
 			FinishLineCenter = Sum / FinishCluster.Num();
 
-			// Direction perpendicular to the line between first two oranges in
-			// the cluster. For a 2- or 4-cone gate laid out across the track,
-			// that's close enough to the true gate normal.
+			// Gate axis runs between the first two oranges in the cluster.
+			// FinishLineDirection is perpendicular — the car's approach axis.
 			FVector LineDir = (FinishCluster[1] - FinishCluster[0]).GetSafeNormal();
 			FinishLineDirection = FVector(-LineDir.Y, LineDir.X, 0.f); // 90° rotation
 
-			// Position and orient the finish line trigger
+			// Position and orient the finish line trigger.
+			// The box is authored with local +X = thin depth and local +Y =
+			// wide along gate. We rotate so local +X aligns with the car's
+			// approach (FinishLineDirection), which leaves local +Y aligned
+			// with LineDir — i.e. the 5 m wide face of the box covers the
+			// full gate width even if the car drifts toward either edge.
 			float LineWidth = FVector::Dist(FinishCluster[0], FinishCluster[1]);
 			FinishLineTrigger->SetWorldLocation(FVector(FinishLineCenter.X, FinishLineCenter.Y, 100.f));
 			FinishLineTrigger->SetBoxExtent(FVector(100.f, LineWidth / 2.f + 100.f, 200.f));
-			FinishLineTrigger->SetWorldRotation(LineDir.Rotation());
+			FinishLineTrigger->SetWorldRotation(FinishLineDirection.Rotation());
 
 			bFinishLineValid = true;
 			UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Finish line at (%.0f, %.0f) width=%.0f cm, %d/%d orange cones in finish cluster"),
