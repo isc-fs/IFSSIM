@@ -31,17 +31,31 @@ BRIDGE_PID=$!
 while kill -0 $BRIDGE_PID 2>/dev/null; do
     if [ -f "$PIPELINE_CTL" ] && [ -z "$PIPELINE_PID" ]; then
         echo "Pipeline start signal — launching pipeline nodes..."
-        ros2 launch /ros_stack_ws/pipeline_only.launch.py \
+        # setsid runs ros2 launch in a new process group so the whole tree
+        # (launcher + every ROS node spawned under it) can be killed as one
+        # unit when the stop flag clears. Without setsid, `kill $PID` only
+        # hits the launcher — the node children keep running, saturating
+        # CPU and blocking future restarts.
+        setsid ros2 launch /ros_stack_ws/pipeline_only.launch.py \
             host:=$IFSSIM_HOST \
             port:=$IFSSIM_PORT \
             mission_name:=$MISSION_NAME \
             track_name:=$TRACK_NAME &
         PIPELINE_PID=$!
-        echo "Pipeline PID: $PIPELINE_PID"
+        echo "Pipeline PID (PGID): $PIPELINE_PID"
 
     elif [ ! -f "$PIPELINE_CTL" ] && [ -n "$PIPELINE_PID" ]; then
         echo "Pipeline stop signal — killing pipeline nodes..."
-        kill $PIPELINE_PID 2>/dev/null || true
+        # Negative PID targets the whole process group, reaching every ROS
+        # node under the launcher. Fall back to a plain TERM if the group
+        # kill fails (e.g. setsid not available).
+        kill -TERM -$PIPELINE_PID 2>/dev/null || kill -TERM $PIPELINE_PID 2>/dev/null || true
+        # Give nodes up to 5 s to exit cleanly, then force-kill the group.
+        for _ in $(seq 1 5); do
+            kill -0 -$PIPELINE_PID 2>/dev/null || break
+            sleep 1
+        done
+        kill -KILL -$PIPELINE_PID 2>/dev/null || true
         wait $PIPELINE_PID 2>/dev/null || true
         PIPELINE_PID=""
         echo "Pipeline stopped."

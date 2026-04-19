@@ -13,6 +13,13 @@ services:
       - TRACK_NAME=${TRACK_NAME:-A}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - PIPELINE_ENABLED=${PIPELINE_ENABLED:-false}
+      # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
+      # path_planning) share one persisted location regardless of where their
+      # source happens to live. Previous per-module __pycache__ volumes missed
+      # fsd_path_planning's deeply-nested caches, which left Plan_Path to
+      # re-JIT on every container boot and get SIGKILL'd mid-compile when the
+      # pipeline was restarted.
+      - NUMBA_CACHE_DIR=/numba_cache
     ports:
       # UE5 pushes sensor data to these ports — must be mapped so host→container works
       - "127.0.0.1:41452:41452/udp"
@@ -23,9 +30,10 @@ services:
       # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
       - "host.docker.internal:host-gateway"
     volumes:
-      # Persist Numba JIT cache so 20s warmup only happens on first ever run
-      - numba_cache_slam:/ros_stack_ws/src/slam/slam/__pycache__
-      - numba_cache_control:/ros_stack_ws/src/control/control/__pycache__
+      # Persist Numba JIT cache so ~20 s warmup only happens on first ever run.
+      # Redirected here via NUMBA_CACHE_DIR above so slam, control, and
+      # path_planning (including the vendored fsd_path_planning) all share it.
+      - numba_cache:/numba_cache
       # Shared pipeline control flag — backend writes here to start/stop the pipeline
       - pipeline_ctrl:/pipeline_ctrl
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
@@ -90,6 +98,5 @@ services:
 
 
 volumes:
-  numba_cache_slam:
-  numba_cache_control:
+  numba_cache:
   pipeline_ctrl:
