@@ -44,12 +44,12 @@
         },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "NumberOfChannels": 128, "PointsPerSecond": 300000,
+          "NumberOfChannels": 116, "PointsPerSecond": 900000,
           "RotationsPerSecond": 10,
-          "VerticalFOVUpper": 3, "VerticalFOVLower": -16,
+          "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
           "X": 1.4, "Y": 0, "Z": 0.3,
-          "RangeNoiseStd": 2.0,
+          "RangeNoiseStd": 0.03,
           "DropoutRate": 0.01
         },
         "GSS": {
