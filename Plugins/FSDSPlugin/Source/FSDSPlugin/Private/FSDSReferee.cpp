@@ -216,27 +216,65 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 
 		if (OrangePositions.Num() >= 2)
 		{
-			// Compute finish line center and direction
-			FVector Sum = FVector::ZeroVector;
+			// Acceleration and similar events carry TWO orange gates (start and
+			// finish). Averaging all of them lands the trigger at the midpoint
+			// of the track, causing the car to fire "finished" on the drive-by.
+			// Pick only the cluster farthest from the map origin as the finish
+			// gate — start gates on standard FS layouts sit near spawn (0,0).
+			// The seed is the farthest orange; any orange within CLUSTER_RADIUS
+			// of it joins the cluster.
+			constexpr float CLUSTER_RADIUS_CM = 1500.f; // 15 m in UE units
+
+			int32 SeedIdx = 0;
+			float SeedDistSq = OrangePositions[0].SizeSquared2D();
+			for (int32 i = 1; i < OrangePositions.Num(); i++)
+			{
+				const float DistSq = OrangePositions[i].SizeSquared2D();
+				if (DistSq > SeedDistSq)
+				{
+					SeedDistSq = DistSq;
+					SeedIdx = i;
+				}
+			}
+
+			TArray<FVector> FinishCluster;
 			for (const FVector& P : OrangePositions)
+			{
+				if (FVector::Dist2D(P, OrangePositions[SeedIdx]) <= CLUSTER_RADIUS_CM)
+				{
+					FinishCluster.Add(P);
+				}
+			}
+
+			if (FinishCluster.Num() < 2)
+			{
+				// Degenerate: fall back to using all oranges rather than no gate
+				FinishCluster = OrangePositions;
+			}
+
+			// Compute finish line center and direction from the cluster
+			FVector Sum = FVector::ZeroVector;
+			for (const FVector& P : FinishCluster)
 			{
 				Sum += P;
 			}
-			FinishLineCenter = Sum / OrangePositions.Num();
+			FinishLineCenter = Sum / FinishCluster.Num();
 
-			// Direction perpendicular to the line between first two orange cones
-			FVector LineDir = (OrangePositions[1] - OrangePositions[0]).GetSafeNormal();
+			// Direction perpendicular to the line between first two oranges in
+			// the cluster. For a 2- or 4-cone gate laid out across the track,
+			// that's close enough to the true gate normal.
+			FVector LineDir = (FinishCluster[1] - FinishCluster[0]).GetSafeNormal();
 			FinishLineDirection = FVector(-LineDir.Y, LineDir.X, 0.f); // 90° rotation
 
 			// Position and orient the finish line trigger
-			float LineWidth = FVector::Dist(OrangePositions[0], OrangePositions[1]);
+			float LineWidth = FVector::Dist(FinishCluster[0], FinishCluster[1]);
 			FinishLineTrigger->SetWorldLocation(FVector(FinishLineCenter.X, FinishLineCenter.Y, 100.f));
 			FinishLineTrigger->SetBoxExtent(FVector(100.f, LineWidth / 2.f + 100.f, 200.f));
 			FinishLineTrigger->SetWorldRotation(LineDir.Rotation());
 
 			bFinishLineValid = true;
-			UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Finish line at (%.0f, %.0f) width=%.0f cm, %d orange cones"),
-				FinishLineCenter.X, FinishLineCenter.Y, LineWidth, OrangePositions.Num());
+			UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Finish line at (%.0f, %.0f) width=%.0f cm, %d/%d orange cones in finish cluster"),
+				FinishLineCenter.X, FinishLineCenter.Y, LineWidth, FinishCluster.Num(), OrangePositions.Num());
 		}
 	}
 }

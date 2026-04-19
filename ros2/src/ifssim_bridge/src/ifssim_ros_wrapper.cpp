@@ -138,6 +138,9 @@ void IFSSIMRosWrapper::initializePublishers()
     gss_pub_ = node_->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("gss", 10);
     lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", 10);
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
+    // Published edge-triggered when the referee's bFinished flips false->true;
+    // consumers (e.g. the control node) brake the car to end the event cleanly.
+    finished_signal_pub_ = node_->create_publisher<fs_msgs::msg::FinishedSignal>("signal/finished", 10);
 
     for (const auto& cam_name : camera_names_) {
         auto pub = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
@@ -165,10 +168,6 @@ void IFSSIMRosWrapper::initializeSubscribers()
     control_cmd_sub_ = node_->create_subscription<fs_msgs::msg::ControlCommand>(
         "control_command", 10,
         std::bind(&IFSSIMRosWrapper::controlCommandCb, this, std::placeholders::_1));
-
-    finished_signal_sub_ = node_->create_subscription<fs_msgs::msg::FinishedSignal>(
-        "signal/finished", 10,
-        std::bind(&IFSSIMRosWrapper::finishedSignalCb, this, std::placeholders::_1));
 
     reset_srv_ = node_->create_service<fs_msgs::srv::Reset>(
         "reset",
@@ -533,6 +532,19 @@ void IFSSIMRosWrapper::extraInfoTimerCb()
     msg.doo_counter = (uint32_t)client_->parseDouble(resp, "doo_counter");
     msg.laps = (uint32_t)client_->parseDouble(resp, "laps");
     extra_info_pub_->publish(msg);
+
+    // Detect finished edge (false -> true) and notify downstream.
+    // The referee's JSON carries `"finished":true|false`. parseDouble is lax
+    // enough to read the leading char: true -> 't' literal mismatch, so we
+    // look for the substring directly.
+    bool finished_now = resp.find("\"finished\":true") != std::string::npos;
+    if (finished_now && !last_finished_state_ && finished_signal_pub_) {
+        fs_msgs::msg::FinishedSignal fin;
+        fin.header.stamp = node_->now();
+        finished_signal_pub_->publish(fin);
+        RCLCPP_INFO(node_->get_logger(), "Event finished — published /signal/finished");
+    }
+    last_finished_state_ = finished_now;
 }
 
 void IFSSIMRosWrapper::trackPublishCb()
@@ -632,12 +644,6 @@ void IFSSIMRosWrapper::controlCommandCb(const fs_msgs::msg::ControlCommand::Shar
     std::ostringstream cmd;
     cmd << "setCarControls " << msg->throttle << " " << msg->steering << " " << msg->brake;
     client_->sendCommand(cmd.str());
-}
-
-void IFSSIMRosWrapper::finishedSignalCb(const fs_msgs::msg::FinishedSignal::SharedPtr msg)
-{
-    (void)msg;
-    RCLCPP_INFO(node_->get_logger(), "Received finished signal");
 }
 
 void IFSSIMRosWrapper::resetSrvCb(

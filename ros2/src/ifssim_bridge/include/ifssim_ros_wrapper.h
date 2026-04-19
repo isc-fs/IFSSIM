@@ -73,7 +73,6 @@ private:
 
     // Subscriber callbacks
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
-    void finishedSignalCb(const fs_msgs::msg::FinishedSignal::SharedPtr msg);
     void resetSrvCb(
         const std::shared_ptr<fs_msgs::srv::Reset::Request> request,
         std::shared_ptr<fs_msgs::srv::Reset::Response> response);
@@ -110,12 +109,15 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_pub_;
     std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
     rclcpp::Publisher<fs_msgs::msg::GoSignal>::SharedPtr go_signal_pub_;
+    rclcpp::Publisher<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::ExtraInfo>::SharedPtr extra_info_pub_;
     rclcpp::Publisher<fs_msgs::msg::Track>::SharedPtr track_pub_;
 
+    // Transient: previous referee.finished value, for edge-triggered publish
+    bool last_finished_state_ = false;
+
     // Subscribers
     rclcpp::Subscription<fs_msgs::msg::ControlCommand>::SharedPtr control_cmd_sub_;
-    rclcpp::Subscription<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_sub_;
     rclcpp::Service<fs_msgs::srv::Reset>::SharedPtr reset_srv_;
 
     // TF
