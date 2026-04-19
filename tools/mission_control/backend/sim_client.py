@@ -132,7 +132,12 @@ class SimConnection:
 
     def res_activate(self):
         self._require_connected()
+        # Order matters: apply the brake while api_control is still enabled,
+        # THEN disable api_control. A control node that hasn't died yet will
+        # keep sending throttle, but UE5 ignores it once api_control is off,
+        # so the brake we just latched holds.
         self._cmd("setCarControls 0 0 1")
+        self._cmd("disableApiControl")
 
     def res_release(self):
         self._require_connected()

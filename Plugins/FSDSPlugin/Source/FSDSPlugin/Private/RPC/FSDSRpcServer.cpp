@@ -181,6 +181,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (IsValid(VehiclePawn)) VehiclePawn->SetApiControlEnabled(true);
 		return TEXT("true");
 	}
+	else if (Method == TEXT("disableApiControl"))
+	{
+		// Counterpart to enableApiControl: both flags must flip so the pawn
+		// actually rejects incoming setCarControls. Used by RES so that a
+		// control node which is still winding down (supervisor polls at 1 Hz,
+		// so TERM can take up to 5 s) can't override the latched brake.
+		bApiControlEnabled = false;
+		if (IsValid(VehiclePawn)) VehiclePawn->SetApiControlEnabled(false);
+		return TEXT("true");
+	}
 	else if (Method == TEXT("isApiControlEnabled"))
 	{
 		return bApiControlEnabled ? TEXT("true") : TEXT("false");
