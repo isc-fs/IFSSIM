@@ -68,6 +68,15 @@ public:
 	FCarState GetCarState() const;
 	void SetApiControlEnabled(bool bEnabled) { bApiControlEnabled = bEnabled; }
 
+	// EBS analog: clamps the handbrake and locks all input channels (API +
+	// keyboard) until explicitly released. The real IFS-08 EBS is a
+	// pneumatic rear-axle brake that can only be reset manually, not by
+	// the autonomy stack — while latched, no throttle/brake/steering
+	// input takes effect and the handbrake stays engaged.
+	void ActivateEbs();
+	void ReleaseEbs();
+	bool IsEbsLatched() const { return bEbsLatched; }
+
 	// --- Components ---
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
@@ -129,6 +138,7 @@ private:
 	FCarControls CurrentControls;
 	bool bApiControlEnabled = false;
 	bool bChaosVehicleActive = false;
+	bool bEbsLatched = false;
 
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;

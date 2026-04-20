@@ -132,17 +132,17 @@ class SimConnection:
 
     def res_activate(self):
         self._require_connected()
-        # Order matters: apply the brake while api_control is still enabled,
-        # THEN disable api_control. A control node that hasn't died yet will
-        # keep sending throttle, but UE5 ignores it once api_control is off,
-        # so the brake we just latched holds.
-        self._cmd("setCarControls 0 0 1")
-        self._cmd("disableApiControl")
+        # EBS / RES = the pneumatic handbrake on the real car. The older
+        # `setCarControls 0 0 1 + disableApiControl` path was silently
+        # undone every tick by UE5's keyboard axis-input system — the
+        # "brake" axis reads 0 by default and overwrote the RPC-set
+        # CurrentControls.Brake, leaving the car coasting on drag alone.
+        # activateEbs latches the handbrake and locks all input channels.
+        self._cmd("activateEbs")
 
     def res_release(self):
         self._require_connected()
-        self._cmd("enableApiControl")
-        self._cmd("setCarControls 0 0 0")
+        self._cmd("releaseEbs")
 
     def get_vehicle_state(self) -> dict:
         state = self._json_cmd("getCarState")

@@ -665,14 +665,14 @@ void IFSSIMRosWrapper::ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg)
     (void)msg;
     if (ebs_triggered_ || !client_ || !client_->isConnected()) return;
     ebs_triggered_ = true;
-    // Order matters: apply the brake first while api_control is still
-    // enabled, then disable api_control so subsequent autonomy commands
-    // (which may still be in-flight for a tick or two while the node
-    // winds down) are silently dropped by UE5. Mirrors sim_client
-    // .res_activate in the MC backend.
-    client_->sendCommand("setCarControls 0 0 1");
-    client_->sendCommand("disableApiControl");
-    RCLCPP_INFO(node_->get_logger(), "EBS engaged — brake latched, api_control disabled");
+    // Route EBS through the dedicated handbrake channel. The older
+    // `setCarControls 0 0 1 + disableApiControl` sequence was silently
+    // undone every tick by UE5's axis-input system (keyboard brake axis
+    // reads 0 → overwrites CurrentControls.Brake), delivering only
+    // drag decel (~2 m/s²) instead of full brake (~11 m/s²). ActivateEbs
+    // locks all input channels and clamps handbrake=true.
+    client_->sendCommand("activateEbs");
+    RCLCPP_INFO(node_->get_logger(), "EBS engaged — handbrake latched, all inputs locked");
 }
 
 void IFSSIMRosWrapper::resetSrvCb(

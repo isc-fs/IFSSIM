@@ -574,35 +574,65 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 
 void AFSDSVehiclePawn::OnThrottleInput(float Value)
 {
+	if (bEbsLatched) return;
 	if (!bApiControlEnabled)
 		CurrentControls.Throttle = FMath::Clamp(Value, -1.f, 1.f);
 }
 
 void AFSDSVehiclePawn::OnSteeringInput(float Value)
 {
+	if (bEbsLatched) return;
 	if (!bApiControlEnabled)
 		CurrentControls.Steering = FMath::Clamp(Value, -1.f, 1.f);
 }
 
 void AFSDSVehiclePawn::OnBrakeInput(float Value)
 {
+	if (bEbsLatched) return;
 	if (!bApiControlEnabled)
 		CurrentControls.Brake = FMath::Clamp(Value, 0.f, 1.f);
 }
 
 void AFSDSVehiclePawn::OnHandbrakePressed()
 {
+	if (bEbsLatched) return;
 	if (!bApiControlEnabled) CurrentControls.bHandbrake = true;
 }
 
 void AFSDSVehiclePawn::OnHandbrakeReleased()
 {
+	if (bEbsLatched) return;
 	if (!bApiControlEnabled) CurrentControls.bHandbrake = false;
 }
 
 void AFSDSVehiclePawn::SetCarControls(const FCarControls& Controls)
 {
+	// While EBS is latched the autonomy cannot drive the car — it must
+	// be released explicitly (ReleaseEbs, or a reset).
+	if (bEbsLatched) return;
 	CurrentControls = Controls;
+}
+
+void AFSDSVehiclePawn::ActivateEbs()
+{
+	// Zero the drive and steering channels, engage handbrake, and lock
+	// all inputs. The handbrake is the sim analog of the real car's
+	// pneumatic EBS clamp — full rear-axle brake until manually reset.
+	CurrentControls.Throttle = 0.f;
+	CurrentControls.Steering = 0.f;
+	CurrentControls.Brake = 0.f;
+	CurrentControls.bHandbrake = true;
+	bEbsLatched = true;
+	bApiControlEnabled = false;
+}
+
+void AFSDSVehiclePawn::ReleaseEbs()
+{
+	// Unlatch and hand control back to whoever wants it. Called on sim
+	// reset or explicit operator release; the autonomy stack itself is
+	// NEVER able to invoke this (mirrors the real car — driver only).
+	CurrentControls.bHandbrake = false;
+	bEbsLatched = false;
 }
 
 AFSDSVehiclePawn::FCarControls AFSDSVehiclePawn::GetCarControls() const

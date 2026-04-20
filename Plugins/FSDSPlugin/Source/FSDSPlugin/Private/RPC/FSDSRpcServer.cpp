@@ -195,6 +195,43 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		return bApiControlEnabled ? TEXT("true") : TEXT("false");
 	}
+	else if (Method == TEXT("activateEbs"))
+	{
+		// EBS via the handbrake channel (pneumatic analog). The previous
+		// path (setCarControls 0 0 1 + disableApiControl) was silently
+		// undone every tick by UE5's axis-input system: the keyboard
+		// brake axis reads 0 by default and overwrites CurrentControls.
+		// Brake, so the latched brake evaporated within one frame.
+		// ActivateEbs locks *all* input channels (API + keyboard) until
+		// ReleaseEbs is called, and clamps the handbrake so the rear
+		// axle stays braked regardless.
+		if (IsValid(VehiclePawn))
+		{
+			AsyncTask(ENamedThreads::GameThread, [this]() {
+				if (IsValid(VehiclePawn)) VehiclePawn->ActivateEbs();
+			});
+		}
+		bApiControlEnabled = false;
+		return TEXT("true");
+	}
+	else if (Method == TEXT("releaseEbs"))
+	{
+		// Operator-only release — mirrors the real car where only the
+		// driver can reset EBS. Hands control back to the autonomy.
+		if (IsValid(VehiclePawn))
+		{
+			AsyncTask(ENamedThreads::GameThread, [this]() {
+				if (IsValid(VehiclePawn)) VehiclePawn->ReleaseEbs();
+			});
+		}
+		bApiControlEnabled = true;
+		return TEXT("true");
+	}
+	else if (Method == TEXT("isEbsLatched"))
+	{
+		if (IsValid(VehiclePawn)) return VehiclePawn->IsEbsLatched() ? TEXT("true") : TEXT("false");
+		return TEXT("false");
+	}
 	else if (Method == TEXT("getCarState"))
 	{
 		if (!IsValid(VehiclePawn)) return TEXT("{}");
@@ -585,6 +622,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		AsyncTask(ENamedThreads::GameThread, [this, PosUE, QuatUE, bHasOrientation]() {
 			if (IsValid(VehiclePawn))
 			{
+				// A soft reset releases any latched EBS — matches the
+				// real-car flow where the driver manually clears EBS
+				// before restarting a run.
+				VehiclePawn->ReleaseEbs();
 				if (bHasOrientation)
 					VehiclePawn->SetActorLocationAndRotation(PosUE, QuatUE, false, nullptr, ETeleportType::TeleportPhysics);
 				else
