@@ -48,7 +48,7 @@
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
-          "X": 1.4, "Y": 0, "Z": 0.3,
+          "X": 0.5, "Y": 0, "Z": 0.9,
           "RangeNoiseStd": 0.03,
           "DropoutRate": 0.01
         },
