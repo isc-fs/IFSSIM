@@ -16,6 +16,7 @@
 #include <fs_msgs/msg/track.hpp>
 #include <fs_msgs/msg/extra_info.hpp>
 #include <fs_msgs/srv/reset.hpp>
+#include <std_msgs/msg/empty.hpp>
 
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
@@ -73,6 +74,7 @@ private:
 
     // Subscriber callbacks
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
+    void ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg);
     void resetSrvCb(
         const std::shared_ptr<fs_msgs::srv::Reset::Request> request,
         std::shared_ptr<fs_msgs::srv::Reset::Response> response);
@@ -118,6 +120,11 @@ private:
 
     // Subscribers
     rclcpp::Subscription<fs_msgs::msg::ControlCommand>::SharedPtr control_cmd_sub_;
+    // /signal/ebs — autonomy-initiated emergency stop. On first message the
+    // bridge applies a full-brake command then disables api_control so no
+    // subsequent setCarControls can release the brake (real-car EBS analog).
+    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_request_sub_;
+    bool ebs_triggered_ = false;
     rclcpp::Service<fs_msgs::srv::Reset>::SharedPtr reset_srv_;
 
     // TF

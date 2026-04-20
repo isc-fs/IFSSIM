@@ -169,6 +169,14 @@ void IFSSIMRosWrapper::initializeSubscribers()
         "control_command", 10,
         std::bind(&IFSSIMRosWrapper::controlCommandCb, this, std::placeholders::_1));
 
+    // Latched QoS so a late-joining publisher that already fired its EBS
+    // signal still triggers a handler on connect. Only one in-flight msg
+    // needed — EBS is one-shot.
+    auto ebs_qos = rclcpp::QoS(1).transient_local();
+    ebs_request_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
+        "signal/ebs", ebs_qos,
+        std::bind(&IFSSIMRosWrapper::ebsRequestCb, this, std::placeholders::_1));
+
     reset_srv_ = node_->create_service<fs_msgs::srv::Reset>(
         "reset",
         std::bind(&IFSSIMRosWrapper::resetSrvCb, this, std::placeholders::_1, std::placeholders::_2));
@@ -641,9 +649,30 @@ void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)
 void IFSSIMRosWrapper::controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg)
 {
     if (!client_ || !client_->isConnected()) return;
+    // Drop any commands after EBS has latched — real-car EBS can't be
+    // overridden by the AS until it's released, and the sim's analog is
+    // api_control disabled. Keeping the if-check here as well means a late
+    // publisher won't slip a post-EBS setCarControls through the client
+    // before the disableApiControl call has propagated.
+    if (ebs_triggered_) return;
     std::ostringstream cmd;
     cmd << "setCarControls " << msg->throttle << " " << msg->steering << " " << msg->brake;
     client_->sendCommand(cmd.str());
+}
+
+void IFSSIMRosWrapper::ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg)
+{
+    (void)msg;
+    if (ebs_triggered_ || !client_ || !client_->isConnected()) return;
+    ebs_triggered_ = true;
+    // Order matters: apply the brake first while api_control is still
+    // enabled, then disable api_control so subsequent autonomy commands
+    // (which may still be in-flight for a tick or two while the node
+    // winds down) are silently dropped by UE5. Mirrors sim_client
+    // .res_activate in the MC backend.
+    client_->sendCommand("setCarControls 0 0 1");
+    client_->sendCommand("disableApiControl");
+    RCLCPP_INFO(node_->get_logger(), "EBS engaged — brake latched, api_control disabled");
 }
 
 void IFSSIMRosWrapper::resetSrvCb(
