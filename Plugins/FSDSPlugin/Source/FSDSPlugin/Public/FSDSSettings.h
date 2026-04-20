@@ -117,6 +117,14 @@ struct FFSDSVehiclePhysics
 	float MaxSteerAngle = 28.f;      // degrees
 	float MotorMaxTorque = 230.f;    // Nm (at motor)
 	float MotorMaxPower = 80000.f;   // Watts
+	// Regen braking limits. The IFS-08 has no hydraulic service brake —
+	// braking on the drive wheels is motor regen only, capped by the
+	// battery's max cell input current. MaxRegenTorque defaults to the
+	// same motor peak (no extra headroom on the negative-torque side);
+	// MaxRegenPower is the cell-limited cap and is the binding limit
+	// at typical driving speeds.
+	float MaxRegenTorque = 230.f;    // Nm (at motor, negative side)
+	float MaxRegenPower = 6000.f;    // Watts — cell input current limit
 	float GearRatio = 2.909f;
 	float DrivetrainEfficiency = 0.92f;
 	float CdA = 0.95f;              // drag

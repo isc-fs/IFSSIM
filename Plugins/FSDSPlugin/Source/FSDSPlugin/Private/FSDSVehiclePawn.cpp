@@ -126,8 +126,9 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// Motor: EMRAX 228, 230 Nm peak, 80 kW, 6500 RPM redline
 	// Gear ratio: 2.909 (32/11), drivetrain efficiency: 92%
 	// Torque at wheel = motor_torque * gear_ratio * efficiency
-	const float GearRatio = 2.909f;
-	const float DriveEff = 0.92f;
+	// (Local constants were hardcoded but unused; the settings path
+	//  overrides both below. Member GearRatio is shadowed by settings
+	//  in ApplyPhysicsSettings.)
 
 	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm
 	// Curve is NORMALIZED (0-1, multiplied by MaxTorque)
@@ -373,8 +374,29 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		ClA = P.ClA;
 		AeroBalanceFront = P.AeroBalanceFront;
 
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, mu=%.2f, CdA=%.2f, ClA=%.1f"),
-			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.TireMu, P.CdA, P.ClA);
+		// Regen parameters — shadowed for per-tick power-cap math.
+		MaxRegenTorque = P.MaxRegenTorque;
+		MaxRegenPower = P.MaxRegenPower;
+		GearRatio = P.GearRatio;
+		WheelRadius = P.WheelRadius;
+
+		// Size the rear-wheel brake torque to the max motor regen
+		// referred to the wheel. Brake input (0-1) then represents a
+		// fraction of max motor regen; the Tick caps further by
+		// MaxRegenPower/ω_motor. Front wheels keep MaxBrakeTorque=0
+		// from the class default — no hydraulic service brake on the
+		// real car.
+		float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
+		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
+		{
+			UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
+			if (!W) continue;
+			// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
+			if (i == 2 || i == 3) W->MaxBrakeTorque = RearPerWheelMax;
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, regen %.0fNm/%.0fW, mu=%.2f"),
+			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.MaxRegenTorque, P.MaxRegenPower, P.TireMu);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Configured %d cameras, LiDAR, IMU, GPS, GSS from settings (with noise)"),
@@ -502,7 +524,27 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		// Chaos vehicle mode
 		VehicleMovement->SetThrottleInput(CurrentControls.Throttle);
 		VehicleMovement->SetSteeringInput(CurrentControls.Steering);
-		VehicleMovement->SetBrakeInput(CurrentControls.Brake);
+
+		// Brake channel = motor regen, power-capped by the battery's
+		// cell input current limit. Driver/autonomy `Brake` input is a
+		// fraction of max motor regen torque; we scale it down by the
+		// ratio between the power-limited torque at current motor ω and
+		// the full motor torque. At low speeds the cap doesn't bind
+		// (plenty of torque headroom); at high speeds scale < 1 so the
+		// actual decel scales with 1/v (constant power shape).
+		float EffectiveBrake = CurrentControls.Brake;
+		if (EffectiveBrake > 0.f && MaxRegenTorque > 0.f)
+		{
+			float VFwd = FMath::Abs(FVector::DotProduct(GetVelocity(), GetActorForwardVector())) * 0.01f;  // cm/s -> m/s
+			float OmegaMotor = (VFwd / FMath::Max(WheelRadius, 0.01f)) * GearRatio;  // rad/s
+			if (OmegaMotor > 0.1f)
+			{
+				float TPowerLimited = MaxRegenPower / OmegaMotor;  // Nm at motor
+				float Scale = FMath::Min(1.f, TPowerLimited / MaxRegenTorque);
+				EffectiveBrake *= Scale;
+			}
+		}
+		VehicleMovement->SetBrakeInput(EffectiveBrake);
 		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
 
 		// Electric: always in gear 1 (single speed)

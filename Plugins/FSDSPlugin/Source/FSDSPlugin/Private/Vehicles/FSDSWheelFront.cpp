@@ -18,4 +18,10 @@ UFSDSWheelFront::UFSDSWheelFront()
 
 	// Hoosier R20 slick friction
 	FrictionForceMultiplier = 1.65f;
+
+	// IFS-08 has no hydraulic service brake — the only retarding channel
+	// on the front axle is aero drag. The brake input channel models
+	// motor regen, which is rear-axle (drive) only; EBS via handbrake is
+	// also rear-axle (pneumatic). Zero out the Chaos default (1500 Nm).
+	MaxBrakeTorque = 0.f;
 }
