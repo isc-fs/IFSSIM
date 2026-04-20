@@ -3,7 +3,10 @@
 UFSDSWheelFront::UFSDSWheelFront()
 {
 	AxleType = EAxleType::Front;
-	bAffectedByHandbrake = false;
+	// IFS-08 EBS is pneumatic, routed to all four calipers (not just the
+	// rear like a conventional handbrake). The sim models EBS via the
+	// Chaos handbrake channel, so front wheels must also respond to it.
+	bAffectedByHandbrake = true;
 	bAffectedBySteering = true;
 
 	// IFS-08: Hoosier 16.0x7.5-10 R20
