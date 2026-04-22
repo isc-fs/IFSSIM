@@ -66,9 +66,12 @@ services:
       - TRACKS_DIR=/tracks
       # Host-side path sent to UE5 via RPC (UE5 runs on host, needs the real absolute path)
       - UE5_TRACKS_DIR=${PWD}/Content/tracks
+      # Random track generator (MITMotorsports/random-track-generator, cloned as sibling of IFSSIM)
+      - TRACK_GEN_PATH=/track_gen
     volumes:
       - ./Content/tracks:/tracks
       - pipeline_ctrl:/pipeline_ctrl
+      - ../random-track-generator:/track_gen:ro
     ports:
       - "127.0.0.1:8000:8000"
     extra_hosts:
