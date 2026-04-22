@@ -326,7 +326,23 @@ void AFSDSReferee::SetEventType(EFSDSEventType Type, int32 NumLaps)
 	case EFSDSEventType::Acceleration:
 		State.RequiredLaps = 1; // Single run
 		ConeHitThreshold = 15.0f;
-		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Event = Acceleration (1 run)"));
+		// Acceleration is a single-gate event: the car launches from
+		// the start and crosses the finish line exactly once. The
+		// classic two-crossing timing (first crossing starts, second
+		// completes) cannot fire here because there is no second
+		// crossing. Pre-start the timer at event-set time — typically
+		// the moment the operator clicks Start in Mission Control —
+		// so the one finish-line overlap records the run time and
+		// completes the event. Ideal FS Acceleration timing would use
+		// a dedicated start-gate trigger on the orange cones at y≈5;
+		// this approximation trades ~100 ms of operator reaction time
+		// for not needing a second trigger box.
+		State.Laps.Empty();
+		LapStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		bLapTimerRunning = true;
+		bVehicleInsideFinishZone = false;
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Event = Acceleration (1 run, timer started at %.2f s)"),
+			LapStartTime);
 		break;
 	case EFSDSEventType::Skidpad:
 		State.RequiredLaps = 4; // 2 right + 2 left laps
