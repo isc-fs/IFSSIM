@@ -1,4 +1,5 @@
 #include "FSDSVehiclePawn.h"
+#include "FSDSPacejkaTireModel.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
@@ -372,6 +373,14 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		CdA = P.CdA;
 		ClA = P.ClA;
 		AeroBalanceFront = P.AeroBalanceFront;
+
+		// Pacejka Magic Formula — bake lateral and longitudinal slip curves into
+		// each wheel, replacing the flat FrictionForceMultiplier model.
+		// Gives correct peak-then-falloff shape vs constant-μ at all slip angles.
+		for (UChaosVehicleWheel* W : VehicleMovement->Wheels)
+		{
+			FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+		}
 
 		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, mu=%.2f, CdA=%.2f, ClA=%.1f"),
 			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.TireMu, P.CdA, P.ClA);

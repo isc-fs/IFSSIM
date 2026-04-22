@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Dom/JsonObject.h"
+#include "FSDSPacejkaTireModel.h"
 
 /**
  * FSDS Settings — Parses settings.json for vehicle, sensor, and camera configuration.
@@ -128,6 +129,11 @@ struct FFSDSVehiclePhysics
 	float SuspensionDamping = 1.5f;
 	TArray<float> MotorRPM;          // RPM points
 	TArray<float> MotorTorque;       // Nm at motor for each RPM
+
+	// Pacejka Magic Formula '96 tire coefficients.
+	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.
+	// See FSDSPacejkaTireModel.h for coefficient definitions.
+	FFSDSPacejkaCoeffs Pacejka;
 };
 
 struct FFSDSVehicleSettings
