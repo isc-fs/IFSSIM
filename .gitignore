@@ -41,3 +41,16 @@ ros2/log/
 
 # Binary content assets tracked via Git LFS (*.uasset, *.umap)
 .env
+
+# Claude internal files
+.claude/
+
+# Packaged builds
+Packaged/
+
+# Generated track files and runtime state
+Content/tracks/*.csv
+Content/tracks/.ifssim_state.json
+
+# Documents (not source)
+*.pdf
