@@ -443,7 +443,7 @@ void AFSDSVehiclePawn::BeginPlay()
 		TMap<FString, int32> ImportedNameCounts;
 		for (int32 i = 0; i < NumMaterials; i++)
 		{
-			FName ImportedName = SkelMesh->GetMaterials()[i].ImportedMaterialSlotName;
+			FName ImportedName = SkelMesh->GetMaterials()[i].MaterialSlotName;
 			FString Key = ImportedName.ToString();
 			if (ImportedNameCounts.Contains(Key))
 				ImportedNameCounts[Key]++;
