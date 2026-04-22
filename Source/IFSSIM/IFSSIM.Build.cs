@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class Blocks : ModuleRules
+public class IFSSIM : ModuleRules
 {
-	public Blocks(ReadOnlyTargetRules Target) : base(Target)
+	public IFSSIM(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		PublicDependencyModuleNames.AddRange(new string[] {

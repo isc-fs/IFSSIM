@@ -5,7 +5,7 @@
 	"Description": "IFS Formula Student Driverless Simulator",
 	"Modules": [
 		{
-			"Name": "Blocks",
+			"Name": "IFSSIM",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
 		}

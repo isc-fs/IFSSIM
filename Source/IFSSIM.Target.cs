@@ -1,12 +1,12 @@
 using UnrealBuildTool;
 
-public class BlocksTarget : TargetRules
+public class IFSSIMTarget : TargetRules
 {
-	public BlocksTarget(TargetInfo Target) : base(Target)
+	public IFSSIMTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.Latest;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
-		ExtraModuleNames.Add("Blocks");
+		ExtraModuleNames.Add("IFSSIM");
 	}
 }
