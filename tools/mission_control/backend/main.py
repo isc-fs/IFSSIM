@@ -433,21 +433,27 @@ def track_generate(params: TrackGenerate):
 
         name_base = params.name.strip() or f"track_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+        # output_yaml() builds its path as: os.path.realpath(os.path.dirname(__file__)) + output_location
+        # __file__ is inside TRACK_GEN_PATH (read-only mount), so we use a traversal to
+        # redirect output into a writable tmpdir: TRACK_GEN_PATH + /../../tmp/xxx = /tmp/xxx
+        import tempfile
+        tmp_dir = tempfile.mkdtemp()
+        rel_to_gen = os.path.relpath(tmp_dir, TRACK_GEN_PATH)
+        output_location = "/" + rel_to_gen  # e.g. "/../../tmp/tmpXXXXXX"
+
         orig_dir = os.getcwd()
         os.chdir(TRACK_GEN_PATH)
-        temp_rel = "_temp_gen"
-        os.makedirs(temp_rel, exist_ok=True)
 
         gen = TrackGenerator(
             n_points=params.n_points, n_regions=params.n_regions,
             min_bound=10., max_bound=float(params.max_bound),
             mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
-            create_output_file=True, output_location=f"/{temp_rel}",
+            create_output_file=True, output_location=output_location,
             sim_type=SimType.FSDS
         )
         gen.create_track()
 
-        gen_file = os.path.join(TRACK_GEN_PATH, temp_rel, "random_track.csv")
+        gen_file = os.path.join(tmp_dir, "random_track.csv")
         os.chdir(orig_dir)
 
         if os.path.exists(gen_file):
@@ -455,7 +461,7 @@ def track_generate(params: TrackGenerate):
             dest = os.path.join(TRACKS_DIR, f"{name_base}.csv")
             shutil.move(gen_file, dest)
             try:
-                shutil.rmtree(os.path.join(TRACK_GEN_PATH, temp_rel))
+                shutil.rmtree(tmp_dir)
             except Exception:
                 pass
 
