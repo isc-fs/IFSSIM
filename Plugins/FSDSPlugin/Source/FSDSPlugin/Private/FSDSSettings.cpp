@@ -179,6 +179,8 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxSteerAngle"), DblVal)) P.MaxSteerAngle = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxTorque"), DblVal)) P.MotorMaxTorque = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxPower"), DblVal)) P.MotorMaxPower = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxRegenTorque"), DblVal)) P.MaxRegenTorque = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxRegenPower"), DblVal)) P.MaxRegenPower = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("GearRatio"), DblVal)) P.GearRatio = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("DrivetrainEfficiency"), DblVal)) P.DrivetrainEfficiency = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("CdA"), DblVal)) P.CdA = DblVal;
