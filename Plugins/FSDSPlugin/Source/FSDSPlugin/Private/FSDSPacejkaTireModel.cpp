@@ -49,25 +49,25 @@ namespace FSDSPacejka
 		}
 
 		// ── Longitudinal slip graph ────────────────────────────────────────
-		// X = slip ratio κ in [0, 1], Y = friction coefficient.
-		// Peak is around κ ≈ 0.10 for this tire; sample densely in [0, 0.2].
+		// X = slip ratio κ in [0, 1], Y = scale factor applied to longitudinal force.
+		// Peak at κ ≈ 0.10; output normalised so curve peak = 1.0 (force is already
+		// bounded by AvailableGrip = FrictionForceMultiplier × Fz in WheelSystem.cpp).
 		{
 			static const float Kappas[] = {
 				0.00f, 0.02f, 0.04f, 0.06f, 0.08f, 0.10f,
 				0.12f, 0.15f, 0.20f, 0.30f, 0.50f, 0.75f, 1.00f
 			};
 
+			const float Peak = EvalLongitudinal(C, 0.10f, 1.0f);
 			FRichCurve* Curve = Wheel->LongitudinalSlipGraph.GetRichCurve();
 			Curve->Reset();
 			for (float Kappa : Kappas)
 			{
-				Curve->AddKey(Kappa, EvalLongitudinal(C, Kappa, PeakMu));
+				Curve->AddKey(Kappa, EvalLongitudinal(C, Kappa, 1.0f) / Peak);
 			}
-			Curve->SetDefaultValue(EvalLongitudinal(C, 1.0f, PeakMu));
+			Curve->SetDefaultValue(EvalLongitudinal(C, 1.0f, 1.0f) / Peak);
 		}
 
-		// Keep FrictionForceMultiplier = PeakMu as a safe fallback in case
-		// Chaos ignores the slip graphs (e.g. if the build strips them).
 		Wheel->FrictionForceMultiplier = PeakMu;
 
 		UE_LOG(LogTemp, Log,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ChaosVehicleWheel.h"
 
 /**
  * Pacejka Magic Formula '96 coefficients (pure lateral + pure longitudinal).
@@ -42,26 +43,19 @@ namespace FSDSPacejka
 	 */
 	float EvalLateral(const FFSDSPacejkaCoeffs& C, float SlipDeg, float PeakMu);
 
-	/**
-	 * Evaluate longitudinal friction coefficient at the given slip ratio.
-	 * @param C          Pacejka coefficients
-	 * @param SlipRatio  Slip ratio κ in [0, 1]
-	 * @param PeakMu     Peak friction coefficient
-	 * @return           Friction coefficient in [0, PeakMu]
-	 */
 	float EvalLongitudinal(const FFSDSPacejkaCoeffs& C, float SlipRatio, float PeakMu);
 
 	/**
 	 * Bake Pacejka curves into a Chaos wheel's LateralSlipGraph and
-	 * LongitudinalSlipGraph, replacing the flat FrictionForceMultiplier model.
+	 * LongitudinalSlipGraph (requires engine patch — feat/26-chaos-longitudinal-slip).
 	 *
-	 * LateralSlipGraph    — X: slip angle (degrees), Y: friction coefficient
-	 * LongitudinalSlipGraph — X: slip ratio [0,1],   Y: friction coefficient
+	 * LateralSlipGraph      — X: slip angle (degrees),  Y: friction coefficient
+	 * LongitudinalSlipGraph — X: slip ratio κ [0,1],    Y: normalised scale [0,1]
+	 *   (scale is normalised to peak=1; absolute grip ceiling = FrictionForceMultiplier × Fz)
 	 *
-	 * FrictionForceMultiplier is also set to PeakMu so the wheel falls back
-	 * correctly if Chaos ignores the slip graphs for any reason.
+	 * FrictionForceMultiplier is set to PeakMu as the absolute friction ceiling.
 	 */
-	void BakeToWheel(class UChaosVehicleWheel* Wheel,
+	void BakeToWheel(UChaosVehicleWheel* Wheel,
 	                 const FFSDSPacejkaCoeffs& C,
 	                 float PeakMu);
 }
