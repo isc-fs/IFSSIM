@@ -90,7 +90,7 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 		FallbackMovement->Acceleration = 4000.f;
 		FallbackMovement->Deceleration = 8000.f;
 
-		UE_LOG(LogTemp, Error, TEXT("FSDS: Skeleton failed — Chaos disabled, using FloatingPawnMovement"));
+		UE_LOG(LogTemp, Warning, TEXT("FSDS: Skeleton failed — Chaos disabled, using FloatingPawnMovement"));
 	}
 
 	// Spring arm for chase camera
