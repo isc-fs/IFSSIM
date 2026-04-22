@@ -1,4 +1,5 @@
 #include "FSDSVehiclePawn.h"
+#include "FSDSPacejkaTireModel.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
@@ -393,6 +394,10 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			if (!W) continue;
 			// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
 			if (i == 2 || i == 3) W->MaxBrakeTorque = RearPerWheelMax;
+
+			// Pacejka Magic Formula — bake lateral and longitudinal slip curves
+			// into each wheel, replacing the flat FrictionForceMultiplier model.
+			FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, regen %.0fNm/%.0fW, mu=%.2f"),

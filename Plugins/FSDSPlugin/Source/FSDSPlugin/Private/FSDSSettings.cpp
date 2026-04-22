@@ -203,6 +203,22 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 			for (auto& V : *TorqueArr) P.MotorTorque.Add(V->AsNumber());
 		}
 
+		// Pacejka Magic Formula coefficients (optional block)
+		const TSharedPtr<FJsonObject>* PacejkaObj;
+		if ((*PhysicsObj)->TryGetObjectField(TEXT("Pacejka"), PacejkaObj))
+		{
+			double D;
+			if ((*PacejkaObj)->TryGetNumberField(TEXT("LatB"), D)) P.Pacejka.LatB = (float)D;
+			if ((*PacejkaObj)->TryGetNumberField(TEXT("LatC"), D)) P.Pacejka.LatC = (float)D;
+			if ((*PacejkaObj)->TryGetNumberField(TEXT("LatE"), D)) P.Pacejka.LatE = (float)D;
+			if ((*PacejkaObj)->TryGetNumberField(TEXT("LonB"), D)) P.Pacejka.LonB = (float)D;
+			if ((*PacejkaObj)->TryGetNumberField(TEXT("LonC"), D)) P.Pacejka.LonC = (float)D;
+			if ((*PacejkaObj)->TryGetNumberField(TEXT("LonE"), D)) P.Pacejka.LonE = (float)D;
+			UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Pacejka loaded — lat(B=%.1f C=%.2f E=%.2f) lon(B=%.1f C=%.2f E=%.2f)"),
+				P.Pacejka.LatB, P.Pacejka.LatC, P.Pacejka.LatE,
+				P.Pacejka.LonB, P.Pacejka.LonC, P.Pacejka.LonE);
+		}
+
 		UE_LOG(LogTemp, Log, TEXT("FSDS Settings: VehiclePhysics loaded — Mass=%.0f, %s, Motor=%.0fNm/%.0fW, GR=%.3f, CdA=%.2f, ClA=%.1f, mu=%.2f"),
 			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.GearRatio, P.CdA, P.ClA, P.TireMu);
 	}
