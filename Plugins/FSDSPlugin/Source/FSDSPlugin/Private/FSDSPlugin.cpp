@@ -4,31 +4,23 @@
 
 #define LOCTEXT_NAMESPACE "FFSDSPluginModule"
 
-// Register /AirSim/ mount point as a static initializer — runs before CDO construction
-// This is critical so that FormulaMesh.uasset can find its skeleton at /AirSim/...
-struct FFSDSEarlyMountPoint
-{
-	FFSDSEarlyMountPoint()
-	{
-		FString PluginContentDir = FPaths::Combine(
-			FPaths::ProjectPluginsDir(), TEXT("FSDSPlugin"), TEXT("Content"));
-
-		if (FPaths::DirectoryExists(PluginContentDir))
-		{
-			FPackageName::RegisterMountPoint(TEXT("/AirSim/"), PluginContentDir + TEXT("/"));
-		}
-	}
-};
-static FFSDSEarlyMountPoint GEarlyMountPoint;
-
 void FFSDSPluginModule::StartupModule()
 {
-	UE_LOG(LogTemp, Log, TEXT("FSDSPlugin: Module started (mount point already registered)"));
+	// Register /AirSim/ mount point so assets whose internal references still use
+	// the old plugin name resolve correctly against FSDSPlugin/Content/.
+	FString PluginContentDir = FPaths::Combine(
+		FPaths::ProjectPluginsDir(), TEXT("FSDSPlugin"), TEXT("Content"));
+
+	if (FPaths::DirectoryExists(PluginContentDir))
+	{
+		FPackageName::RegisterMountPoint(TEXT("/AirSim/"), PluginContentDir + TEXT("/"));
+	}
 }
 
 void FFSDSPluginModule::ShutdownModule()
 {
-	UE_LOG(LogTemp, Log, TEXT("FSDSPlugin: Module shutdown"));
+	FPackageName::UnRegisterMountPoint(TEXT("/AirSim/"), FPaths::Combine(
+		FPaths::ProjectPluginsDir(), TEXT("FSDSPlugin"), TEXT("Content")) + TEXT("/"));
 }
 
 #undef LOCTEXT_NAMESPACE
