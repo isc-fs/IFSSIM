@@ -16,7 +16,7 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 
 	// Try to load the Formula Student skeletal mesh
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> CarMesh(
-		TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/FormulaMesh.FormulaMesh"));
+		TEXT("/Game/Vehicle/TechnionCar/FormulaMesh.FormulaMesh"));
 
 	if (CarMesh.Succeeded())
 	{
@@ -25,7 +25,7 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 
 		// Load physics asset
 		static ConstructorHelpers::FObjectFinder<UPhysicsAsset> PhysAsset(
-			TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/FormulaMesh_PhysicsAsset.FormulaMesh_PhysicsAsset"));
+			TEXT("/Game/Vehicle/TechnionCar/FormulaMesh_PhysicsAsset.FormulaMesh_PhysicsAsset"));
 		if (PhysAsset.Succeeded())
 		{
 			GetMesh()->SetPhysicsAsset(PhysAsset.Object);
@@ -419,7 +419,7 @@ void AFSDSVehiclePawn::BeginPlay()
 	// Load and apply FSDS car materials at runtime
 	if (GetMesh() && GetMesh()->GetSkeletalMeshAsset())
 	{
-		const FString MatPath = TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/matreials_and_textures/");
+		const FString MatPath = TEXT("/Game/Vehicle/TechnionCar/Materials/");
 
 		UMaterialInterface* RedMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "m_red_real_formula_mat.m_red_real_formula_mat"));
 		UMaterialInterface* CarbonMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_carbonFiber_Formula.mat_carbonFiber_Formula"));
@@ -472,7 +472,7 @@ void AFSDSVehiclePawn::BeginPlay()
 
 		// Load British Racing Green material
 		UMaterialInterface* GreenMat = LoadObject<UMaterialInterface>(nullptr,
-			TEXT("/FSDSPlugin/VehicleAdv/Cars/TechnionCar/matreials_and_textures/mat_british_green.mat_british_green"));
+			TEXT("/Game/Vehicle/TechnionCar/Materials/mat_british_green.mat_british_green"));
 
 		// Keep valid materials, fill nulls with chassis, apply green to Element 112 (body panel)
 		int32 Fixed = 0;
