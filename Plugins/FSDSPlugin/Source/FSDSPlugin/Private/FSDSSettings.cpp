@@ -266,6 +266,8 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("GyroNoiseStd"), DblVal)) Sensor.GyroNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("AccelBiasStd"), DblVal)) Sensor.AccelBiasStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("GyroBiasStd"), DblVal)) Sensor.GyroBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelBiasTau"), DblVal)) Sensor.AccelBiasTau = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroBiasTau"), DblVal)) Sensor.GyroBiasTau = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("VelocityNoiseStd"), DblVal)) Sensor.VelocityNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseStd"), DblVal)) Sensor.RangeNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;

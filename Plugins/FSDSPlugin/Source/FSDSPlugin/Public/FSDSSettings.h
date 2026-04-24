@@ -103,12 +103,19 @@ struct FFSDSSensorSettings
 	// AccelBiasStd (see FSDSVehiclePawn::SetupSensorsFromSettings);
 	// the bridge receives accel in m/s² (UEVelocityToENU) so covariance
 	// uses these values as-is.
+	//
+	// Bias is modelled as an Ornstein–Uhlenbeck process: AccelBiasStd /
+	// GyroBiasStd are the *long-run* steady-state stddevs (the bound),
+	// AccelBiasTau / GyroBiasTau the correlation time in seconds. Defaults
+	// to a BMI088-class τ=100 s.
 	float GpsPositionNoiseStd = 0.f;  // m
 	float GpsVelocityNoiseStd = 0.f;  // m/s
 	float AccelNoiseStd = 0.f;        // m/s²
 	float GyroNoiseStd = 0.f;         // rad/s
-	float AccelBiasStd = 0.f;         // m/s² per sqrt(s)
-	float GyroBiasStd = 0.f;          // rad/s per sqrt(s)
+	float AccelBiasStd = 0.f;         // m/s² steady-state σ
+	float GyroBiasStd = 0.f;          // rad/s steady-state σ
+	float AccelBiasTau = 100.f;       // s
+	float GyroBiasTau = 100.f;        // s
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)

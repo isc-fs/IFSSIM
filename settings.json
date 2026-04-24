@@ -43,7 +43,9 @@
           "AccelNoiseStd": 0.18,
           "GyroNoiseStd": 0.004,
           "AccelBiasStd": 0.01,
-          "GyroBiasStd": 0.0002
+          "GyroBiasStd": 0.0002,
+          "AccelBiasTau": 100.0,
+          "GyroBiasTau": 100.0
         },
         "Gps": {
           "SensorType": 3, "Enabled": true,
