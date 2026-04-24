@@ -144,6 +144,17 @@ private:
     bool competition_mode_ = false;
     std::vector<std::string> camera_names_;
 
+    // Sensor mount offsets (ROS body frame, metres). Queried once at
+    // connection time via `getSensorOffset <name>` so the static TFs the
+    // bridge publishes follow settings.json instead of stale hardcoded
+    // numbers.
+    struct Vec3 { double x = 0.0; double y = 0.0; double z = 0.0; bool valid = false; };
+    Vec3 lidar_offset_;
+    std::map<std::string, Vec3> camera_offsets_;
+
+    // Helper: query getSensorOffset for a single sensor, parse into Vec3.
+    Vec3 querySensorOffset(const std::string& name);
+
     // Per-sensor publish rates (divisors of the 400Hz sensor stream):
     //   IMU  → publish every frame    (400 Hz)
     //   GSS / TF / Odom → every 4    (100 Hz)

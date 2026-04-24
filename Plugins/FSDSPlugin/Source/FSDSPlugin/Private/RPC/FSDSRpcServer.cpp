@@ -503,6 +503,51 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		Result += TEXT("]");
 		return Result;
 	}
+	else if (Method == TEXT("getSensorOffset"))
+	{
+		// Return the ROS-ENU body-frame offset (meters) of a named sensor
+		// so clients (most importantly the ROS bridge, for its
+		// vehicle→sensor static TFs) don't have to hardcode positions
+		// that drift out of sync with settings.json.
+		//
+		// Supported names:
+		//   "lidar"            → the one LiDAR mount
+		//   "<camera_name>"    → any camera from settings.json
+		//
+		// Body frame here is REP-103 (X=forward, Y=left, Z=up); the
+		// plugin stores sensor positions in UE units (X=forward,
+		// Y=right, Z=up, centimetres), so we flip Y and convert cm→m.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2) return TEXT("{\"error\":\"usage: getSensorOffset <name>\"}");
+		if (!IsValid(VehiclePawn)) return TEXT("{\"error\":\"no vehicle\"}");
+
+		FString Name = Parts[1];
+		FVector UeOffsetCm(0.f, 0.f, 0.f);
+		bool bFound = false;
+
+		if (Name.Equals(TEXT("lidar"), ESearchCase::IgnoreCase))
+		{
+			if (VehiclePawn->LidarSensor)
+			{
+				UeOffsetCm = VehiclePawn->LidarSensor->SensorOffset;
+				bFound = true;
+			}
+		}
+		else if (auto* Cam = VehiclePawn->GetCamera(Name))
+		{
+			UeOffsetCm = Cam->GetRelativeLocation();
+			bFound = true;
+		}
+
+		if (!bFound) return FString::Printf(TEXT("{\"error\":\"no sensor named %s\"}"), *Name);
+
+		// UE (X=fwd, Y=right, Z=up, cm) → ROS body (X=fwd, Y=left, Z=up, m)
+		const float X = UeOffsetCm.X / 100.f;
+		const float Y = -UeOffsetCm.Y / 100.f;
+		const float Z = UeOffsetCm.Z / 100.f;
+		return FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}"), X, Y, Z);
+	}
 	else if (Method == TEXT("simGetGroundTruthKinematics"))
 	{
 		if (!IsValid(VehiclePawn)) return TEXT("{}");
