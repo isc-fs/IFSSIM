@@ -633,8 +633,13 @@ void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)
         try { return std::stod(settings.substr(pos)); } catch (...) { return 0.0; }
     };
 
+    // settings.json values are in SI (m, m/s, m/s², rad/s). The accel
+    // conversion that used to divide by 100 here was compensating for an
+    // older cm/s² convention inside the plugin — settings are now SI on
+    // both sides (the plugin ×100 bumps them to its internal cm/s² accel
+    // signal; the IMU RPC still emits m/s² via UEVelocityToENU).
     gps_position_noise_std_ = pf("GpsPositionNoiseStd");
-    imu_accel_noise_std_ = pf("AccelNoiseStd") / 100.0;
+    imu_accel_noise_std_ = pf("AccelNoiseStd");
     imu_gyro_noise_std_ = pf("GyroNoiseStd");
     gss_velocity_noise_std_ = pf("VelocityNoiseStd");
 
