@@ -12,7 +12,9 @@ interface ScoringData {
   oc_count: number;
   oc_penalty_s: number;
   corrected_time: number;
-  t_best_reference: number;
+  // Backend returns null until at least one lap is completed (no reference
+  // time yet). Anything that calls .toFixed on this MUST null-check.
+  t_best_reference: number | null;
   max_points: number;
   score: number;
 }
@@ -78,7 +80,11 @@ export default function Scoring() {
             className="w-40 px-3 py-1.5 bg-[#111] border border-[#444] rounded text-white text-sm"
           />
           <span className="text-xs text-gray-500">
-            {tBest ? `Using ${tBest}s` : `Auto: ${scoring.t_best_reference.toFixed(3)}s (best lap)`}
+            {tBest
+              ? `Using ${tBest}s`
+              : scoring.t_best_reference != null
+                ? `Auto: ${scoring.t_best_reference.toFixed(3)}s (best lap)`
+                : 'Auto: (waiting for first lap)'}
           </span>
         </div>
       </div>
