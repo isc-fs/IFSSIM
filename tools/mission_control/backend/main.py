@@ -13,6 +13,7 @@ import io
 import base64
 import asyncio
 import shutil
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -100,6 +101,25 @@ res_active = False
 home_pose = {"x": 0.0, "y": 0.0, "z": 0.3, "qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn pose
 _home_pose_captured = False  # set once we snapshot the pawn's map placement (or user pins a home)
 _sim_was_connected = False   # tracks connect/disconnect transitions so we re-capture after a UE5 restart
+
+# Compound-operation lock. FastAPI runs sync `def` handlers in a worker
+# thread pool, so two clients can land in `event_start`, `sim_reset` or
+# the RES endpoints simultaneously. Each of those does N sequential
+# RPCs *plus* mutates `res_active` / `current_event` / `PIPELINE_CTL_FILE`,
+# and we don't want one handler to interleave with another mid-update
+# (visible as RES toggle flicker, ghost pipeline restarts, and a
+# split-brain `res_active` flag). All wire-level RPC calls go through
+# `SimConnection._lock` already, so this lock is purely for the
+# *compound* state.
+_state_lock = threading.Lock()
+
+# `track_generate` calls `os.chdir` (the third-party generator uses
+# `__file__`-relative paths internally). chdir is process-global, so a
+# concurrent track-generate would clobber the other's CWD, and any
+# unrelated handler that runs in between would see the wrong CWD. The
+# generator is also cpu-heavy, so we don't want to share `_state_lock`
+# with the fast RES endpoints. Dedicated lock.
+_gen_lock = threading.Lock()
 
 
 def _ensure_home_pose_captured():
@@ -210,19 +230,20 @@ def sim_reset():
     global res_active
     if not sim.is_connected():
         return {"ok": False, "error": "sim not connected"}
-    # Stop pipeline so control node stops publishing commands
-    try:
-        os.remove(PIPELINE_CTL_FILE)
-    except FileNotFoundError:
-        pass
-    _ensure_home_pose_captured()
-    try:
-        sim.res_activate()
-        sim.teleport(**home_pose)
-        res_active = False
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    log_event("reset", "Soft reset: pipeline stopped, car teleported to start")
+    with _state_lock:
+        # Stop pipeline so control node stops publishing commands
+        try:
+            os.remove(PIPELINE_CTL_FILE)
+        except FileNotFoundError:
+            pass
+        _ensure_home_pose_captured()
+        try:
+            sim.res_activate()
+            sim.teleport(**home_pose)
+            res_active = False
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        log_event("reset", "Soft reset: pipeline stopped, car teleported to start")
     return {"ok": True}
 
 
@@ -252,37 +273,38 @@ def event_start(setup: EventSetup):
     global current_event, res_active
     if not sim.is_connected():
         return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
-    try:
-        # Stop any running pipeline
+    with _state_lock:
         try:
-            os.remove(PIPELINE_CTL_FILE)
-        except FileNotFoundError:
-            pass
-        # Activate RES (hard brake) then configure event
-        sim.res_activate()
-        res_active = True
-        sim.set_event(setup.event_type, setup.num_laps)
-        sim.resume()
-        # Release RES → enables API control
-        sim.res_release()
-        res_active = False
-        # Start pipeline
-        os.makedirs("/pipeline_ctrl", exist_ok=True)
-        open(PIPELINE_CTL_FILE, "w").close()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    current_event = setup.event_type
-    _save_state({"event": current_event})
-    # The plugin's SetEventType clamps lap counts per event type
-    # (Acceleration/Autocross → 1, Skidpad → 4, Trackdrive → requested).
-    # Echo the referee's actual required_laps so the UI reflects what
-    # the sim will enforce, not what we asked for.
-    try:
-        ref = sim.get_referee_state()
-        actual_laps = int(ref.get("required_laps", setup.num_laps))
-    except Exception:
-        actual_laps = setup.num_laps
-    log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
+            # Stop any running pipeline
+            try:
+                os.remove(PIPELINE_CTL_FILE)
+            except FileNotFoundError:
+                pass
+            # Activate RES (hard brake) then configure event
+            sim.res_activate()
+            res_active = True
+            sim.set_event(setup.event_type, setup.num_laps)
+            sim.resume()
+            # Release RES → enables API control
+            sim.res_release()
+            res_active = False
+            # Start pipeline
+            os.makedirs("/pipeline_ctrl", exist_ok=True)
+            open(PIPELINE_CTL_FILE, "w").close()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        current_event = setup.event_type
+        _save_state({"event": current_event})
+        # The plugin's SetEventType clamps lap counts per event type
+        # (Acceleration/Autocross → 1, Skidpad → 4, Trackdrive → requested).
+        # Echo the referee's actual required_laps so the UI reflects what
+        # the sim will enforce, not what we asked for.
+        try:
+            ref = sim.get_referee_state()
+            actual_laps = int(ref.get("required_laps", setup.num_laps))
+        except Exception:
+            actual_laps = setup.num_laps
+        log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
     return {"ok": True, "event": setup.event_type, "laps": actual_laps}
 
 
@@ -291,33 +313,38 @@ def event_start(setup: EventSetup):
 @app.post("/api/res/activate", dependencies=[Depends(require_api_key)])
 def res_activate_endpoint():
     global res_active
-    # Stop pipeline first so control node stops sending throttle commands
-    try:
-        os.remove(PIPELINE_CTL_FILE)
-    except FileNotFoundError:
-        pass
-    try:
-        sim.res_activate()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    res_active = True
-    log_event("res", "EMERGENCY STOP activated")
+    with _state_lock:
+        # Stop pipeline first so control node stops sending throttle commands
+        try:
+            os.remove(PIPELINE_CTL_FILE)
+        except FileNotFoundError:
+            pass
+        try:
+            sim.res_activate()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        res_active = True
+        log_event("res", "EMERGENCY STOP activated")
     return {"ok": True, "res": "activated", "res_active": True}
 
 @app.post("/api/res/release", dependencies=[Depends(require_api_key)])
 def res_release_endpoint():
     global res_active
-    if not res_active:
-        return JSONResponse(
-            {"ok": False, "error": "RES is not active"},
-            status_code=400,
-        )
-    try:
-        sim.res_release()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    res_active = False
-    log_event("res", "RES released")
+    with _state_lock:
+        # Re-check under the lock — without it, an `event_start` running
+        # concurrently could clear the flag between the check and the
+        # release, and we'd issue a redundant `releaseEbs` to the sim.
+        if not res_active:
+            return JSONResponse(
+                {"ok": False, "error": "RES is not active"},
+                status_code=400,
+            )
+        try:
+            sim.res_release()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        res_active = False
+        log_event("res", "RES released")
     return {"ok": True, "res": "released", "res_active": False}
 
 @app.get("/api/res/status")
@@ -423,23 +450,24 @@ def track_preview(name: str):
 
 @app.post("/api/track/{name}/load", dependencies=[Depends(require_api_key)])
 def track_load(name: str):
+    global current_event
     filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
     if not os.path.exists(filepath):
         return JSONResponse({"error": "Track not found"}, status_code=404)
     ue5_path = os.path.join(UE5_TRACKS_DIR, name)
-    result = sim.load_track(ue5_path)
     event_type = BUILTIN_TRACKS.get(name)
-    if event_type:
-        sim.set_event(event_type)
-        global current_event
-        current_event = event_type
-        _save_state({"event": current_event})
-    # Stop pipeline on track load (stale SLAM map would be invalid for new track)
-    try:
-        os.remove(PIPELINE_CTL_FILE)
-    except FileNotFoundError:
-        pass
-    log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
+    with _state_lock:
+        result = sim.load_track(ue5_path)
+        if event_type:
+            sim.set_event(event_type)
+            current_event = event_type
+            _save_state({"event": current_event})
+        # Stop pipeline on track load (stale SLAM map would be invalid for new track)
+        try:
+            os.remove(PIPELINE_CTL_FILE)
+        except FileNotFoundError:
+            pass
+        log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
     return {"result": result, "track": name, "event_type": event_type}
 
 
@@ -491,20 +519,28 @@ def track_generate(params: TrackGenerate):
         rel_to_gen = os.path.relpath(tmp_dir, TRACK_GEN_PATH)
         output_location = "/" + rel_to_gen  # e.g. "/../../tmp/tmpXXXXXX"
 
-        orig_dir = os.getcwd()
-        os.chdir(TRACK_GEN_PATH)
-
-        gen = TrackGenerator(
-            n_points=params.n_points, n_regions=params.n_regions,
-            min_bound=10., max_bound=float(params.max_bound),
-            mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
-            create_output_file=True, output_location=output_location,
-            sim_type=SimType.FSDS
-        )
-        gen.create_track()
+        # `os.chdir` is process-global. Two concurrent track-generate
+        # calls would race on CWD; an unrelated handler running in the
+        # same process between chdir-in and chdir-out would also see
+        # the wrong CWD. Serialize with a dedicated lock and restore
+        # CWD in finally so an exception inside `create_track()`
+        # doesn't leave the whole backend stuck in TRACK_GEN_PATH.
+        with _gen_lock:
+            orig_dir = os.getcwd()
+            os.chdir(TRACK_GEN_PATH)
+            try:
+                gen = TrackGenerator(
+                    n_points=params.n_points, n_regions=params.n_regions,
+                    min_bound=10., max_bound=float(params.max_bound),
+                    mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
+                    create_output_file=True, output_location=output_location,
+                    sim_type=SimType.FSDS
+                )
+                gen.create_track()
+            finally:
+                os.chdir(orig_dir)
 
         gen_file = os.path.join(tmp_dir, "random_track.csv")
-        os.chdir(orig_dir)
 
         if os.path.exists(gen_file):
             os.makedirs(TRACKS_DIR, exist_ok=True)
@@ -589,10 +625,17 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
     try:
         while True:
             try:
-                # Gather state from sim
-                vehicle = sim.get_vehicle_state()
-                ref = sim.get_referee_state()
-                sim_status = sim.get_status()
+                # Gather state from sim. The three calls go through
+                # SimConnection's threading.Lock, so a slow compound
+                # operation in another worker (event_start does ~5
+                # sequential RPCs while holding the lock) would freeze
+                # the event loop here for hundreds of ms — visible in
+                # the UI as telemetry "skipping". Run them on the
+                # thread pool so the loop stays responsive while we
+                # block on the wire.
+                vehicle = await asyncio.to_thread(sim.get_vehicle_state)
+                ref = await asyncio.to_thread(sim.get_referee_state)
+                sim_status = await asyncio.to_thread(sim.get_status)
 
                 data = {
                     "speed": vehicle.get("speed", 0),
