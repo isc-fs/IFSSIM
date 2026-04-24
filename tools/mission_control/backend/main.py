@@ -576,9 +576,14 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
     # WebSocket handshakes from browsers can't carry custom headers, so
     # the API key (if the server is configured with one) arrives as a
     # query parameter. Reject before accept so the handshake never
-    # completes for an unauthenticated caller.
+    # completes for an unauthenticated caller. The literal 1008 is the
+    # "policy violation" WS close code — hardcoded here rather than
+    # using `status.WS_1008_POLICY_VIOLATION` because the loop below
+    # reuses the name `status` for `sim.get_status()`, which would
+    # shadow the fastapi `status` module under Python's function-scope
+    # rule and UnboundLocalError this line.
     if not ws_api_key_ok(api_key):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await websocket.close(code=1008)
         return
     await websocket.accept()
     try:
@@ -587,7 +592,7 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                 # Gather state from sim
                 vehicle = sim.get_vehicle_state()
                 ref = sim.get_referee_state()
-                status = sim.get_status()
+                sim_status = sim.get_status()
 
                 data = {
                     "speed": vehicle.get("speed", 0),
@@ -615,16 +620,23 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                     "required_laps": ref.get("required_laps", 0),
                     "finished": ref.get("finished", False),
                     "event": current_event,
-                    "fps": status.get("fps", 0),
-                    "paused": status.get("paused", False),
+                    "fps": sim_status.get("fps", 0),
+                    "paused": sim_status.get("paused", False),
                     "res_active": res_active,
                     "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
                 }
 
                 await websocket.send_json(data)
             except Exception:
-                # Sim disconnected, send empty
-                await websocket.send_json({"error": "sim_disconnected"})
+                # Sim disconnected OR the primary send above just failed
+                # on an already-closed socket. Try one keep-alive-style
+                # error beacon; if that also fails the WS is gone and we
+                # bail out of the loop rather than spinning forever on
+                # RuntimeError.
+                try:
+                    await websocket.send_json({"error": "sim_disconnected"})
+                except Exception:
+                    break
 
             await asyncio.sleep(0.2)  # 5Hz
     except WebSocketDisconnect:
