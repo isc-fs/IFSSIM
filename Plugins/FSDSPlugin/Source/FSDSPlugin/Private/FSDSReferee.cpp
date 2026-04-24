@@ -93,15 +93,33 @@ void AFSDSReferee::Tick(float DeltaTime)
 			FVector VehiclePos = Vehicle->GetActorLocation();
 			FVector2D CarPos2D(VehiclePos.X, VehiclePos.Y);
 
-			bool bCurrentlyOffTrack = !IsInsideTrack(CarPos2D);
+			// Don't start counting off-track until the car has actually
+			// moved away from spawn. On events like Acceleration the
+			// spawn position lies between the start gate (y=0) and the
+			// first regular cone row (y=5 m), a gap wider than the
+			// IsInsideTrack algorithm's "sum of nearest blue+yellow
+			// distances" threshold. Without this gate the car registers
+			// two OCs at t=0 before the operator has even hit Start.
+			//
+			// 200 cm (2 m) is past the start gate (orange cones at y=3)
+			// and into the normal cone-lined stretch where IsInsideTrack
+			// reliably classifies position.
+			constexpr float OC_SPAWN_GUARD_CM = 200.f;
+			const float DistFromSpawn =
+				FVector2D::Distance(CarPos2D, State.CarStartLocation);
 
-			if (bCurrentlyOffTrack && !bWasOffTrack)
+			if (DistFromSpawn >= OC_SPAWN_GUARD_CM)
 			{
-				// Transition: on-track → off-track
-				State.OffTrackCounter++;
-				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: OFF TRACK (OC count: %d)"), State.OffTrackCounter);
+				bool bCurrentlyOffTrack = !IsInsideTrack(CarPos2D);
+
+				if (bCurrentlyOffTrack && !bWasOffTrack)
+				{
+					// Transition: on-track → off-track
+					State.OffTrackCounter++;
+					UE_LOG(LogTemp, Log, TEXT("FSDS Referee: OFF TRACK (OC count: %d)"), State.OffTrackCounter);
+				}
+				bWasOffTrack = bCurrentlyOffTrack;
 			}
-			bWasOffTrack = bCurrentlyOffTrack;
 		}
 	}
 

@@ -232,8 +232,17 @@ def event_start(setup: EventSetup):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     current_event = setup.event_type
     _save_state({"event": current_event})
-    log_event("event_start", f"{setup.event_type} started ({setup.num_laps} laps)")
-    return {"ok": True, "event": setup.event_type, "laps": setup.num_laps}
+    # The plugin's SetEventType clamps lap counts per event type
+    # (Acceleration/Autocross → 1, Skidpad → 4, Trackdrive → requested).
+    # Echo the referee's actual required_laps so the UI reflects what
+    # the sim will enforce, not what we asked for.
+    try:
+        ref = sim.get_referee_state()
+        actual_laps = int(ref.get("required_laps", setup.num_laps))
+    except Exception:
+        actual_laps = setup.num_laps
+    log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
+    return {"ok": True, "event": setup.event_type, "laps": actual_laps}
 
 
 # === RES (Remote Emergency Stop) ===
