@@ -4,6 +4,8 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <vector>
+#include <mutex>
 
 class FSocket;
 class AFSDSVehiclePawn;
@@ -52,6 +54,12 @@ private:
 	FCriticalSection BinaryDataLock;
 
 	std::unique_ptr<std::thread> ServerThread;
+	// Active per-connection worker threads. HandleClient runs in one of
+	// these; Stop() joins all of them so they cannot outlive the server
+	// object and dereference freed `this` in `HandleClient`'s bRunning
+	// check or in any AsyncTask lambda they dispatched.
+	std::vector<std::thread> ClientThreads;
+	std::mutex ClientThreadsMutex;
 	std::atomic<bool> bRunning{false};
 	std::atomic<bool> bApiControlEnabled{false};
 	std::atomic<bool> bSimPaused{false};
