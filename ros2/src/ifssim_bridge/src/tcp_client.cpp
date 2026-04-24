@@ -26,6 +26,7 @@
   static void init_wsa() {}
 #endif
 
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <sstream>
@@ -122,9 +123,17 @@ std::string TcpClient::sendCommand(const std::string& command)
     }
 
     // Read until we have a complete response (loop to handle TCP fragmentation and large payloads)
+    // A complete RPC response is newline-terminated; we buffer up to
+    // `kMaxResponseBytes` before giving up on the framing assumption.
+    // Bumped from the original 512 KB to 2 MB because the referee's
+    // getRefereeState payload grows linearly with cone count — a dense
+    // autocross layout can cross 600 KB and the old cap would silently
+    // truncate mid-JSON, leaving callers with malformed input.
+    constexpr size_t kMaxResponseBytes = 2 * 1024 * 1024;
     std::string response;
     response.reserve(65536);
     char buffer[16384];
+    bool truncated = false;
     while (true) {
         int bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
         if (bytes <= 0) {
@@ -132,10 +141,20 @@ std::string TcpClient::sendCommand(const std::string& command)
             return "";
         }
         response.append(buffer, bytes);
-        // A complete RPC response ends with '\n'
         if (response.back() == '\n' || response.back() == '\r') break;
-        // Safety: also break if we've read a suspiciously large response (>512KB)
-        if (response.size() > 524288) break;
+        if (response.size() > kMaxResponseBytes) {
+            truncated = true;
+            break;
+        }
+    }
+    if (truncated) {
+        // Log once per incident so downstream callers know why parsing failed.
+        // stderr so the bridge's RCLCPP_* output isn't the only place this
+        // shows up — TcpClient has no logger handle.
+        std::fprintf(stderr,
+            "[tcp_client] response exceeded %zu bytes without a terminating newline; "
+            "returning truncated data. Command was: %s\n",
+            kMaxResponseBytes, command.c_str());
     }
 
     while (!response.empty() && (response.back() == '\n' || response.back() == '\r'))
@@ -170,6 +189,20 @@ double TcpClient::parseDouble(const std::string& json, const std::string& key)
     } catch (...) {
         return 0.0;
     }
+}
+
+bool TcpClient::parseBool(const std::string& json, const std::string& key)
+{
+    std::string search = "\"" + key + "\":";
+    size_t pos = json.find(search);
+    if (pos == std::string::npos) return false;
+
+    pos += search.size();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+
+    // Compare against the literal 'true'; anything else (false, null,
+    // numeric, or EOF) returns false.
+    return json.compare(pos, 4, "true") == 0;
 }
 
 std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector<uint8_t>& outData)

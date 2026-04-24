@@ -542,10 +542,10 @@ void IFSSIMRosWrapper::extraInfoTimerCb()
     extra_info_pub_->publish(msg);
 
     // Detect finished edge (false -> true) and notify downstream.
-    // The referee's JSON carries `"finished":true|false`. parseDouble is lax
-    // enough to read the leading char: true -> 't' literal mismatch, so we
-    // look for the substring directly.
-    bool finished_now = resp.find("\"finished\":true") != std::string::npos;
+    // Robust JSON key-level parse — previously a raw substring search for
+    // `"finished":true`, which was fragile to key reordering and to any
+    // other field whose string value happened to contain that literal.
+    bool finished_now = client_->parseBool(resp, "finished");
     if (finished_now && !last_finished_state_ && finished_signal_pub_) {
         fs_msgs::msg::FinishedSignal fin;
         fin.header.stamp = node_->now();
