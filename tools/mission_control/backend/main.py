@@ -542,6 +542,16 @@ async def telemetry_ws(websocket: WebSocket):
                     "throttle": vehicle.get("controls", {}).get("throttle", 0),
                     "steering": vehicle.get("controls", {}).get("steering", 0),
                     "brake": vehicle.get("controls", {}).get("brake", 0),
+                    # Regen telemetry (motor-side). regen_torque/power reflect
+                    # what the sim is currently absorbing; regen_avail_torque
+                    # is the cap at the current ω_motor (motor-peak or
+                    # cell-power-limited, whichever binds); regen_max_*_limit
+                    # are the hardware ceilings from settings.json.
+                    "regen_torque": vehicle.get("regen_torque", 0),
+                    "regen_power": vehicle.get("regen_power", 0),
+                    "regen_avail_torque": vehicle.get("regen_avail_torque", 0),
+                    "regen_max_torque": vehicle.get("regen_max_torque", 0),
+                    "regen_max_power": vehicle.get("regen_max_power", 0),
                     "doo": ref.get("doo_counter", 0),
                     "oc": ref.get("oc_counter", 0),
                     "laps": ref.get("laps", 0),

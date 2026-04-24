@@ -123,40 +123,64 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 {
 	if (!VehicleMovement) return;
 
-	// === IFS-08 EMRAX 228 Powertrain ===
-	// Motor: EMRAX 228, 230 Nm peak, 80 kW, 6500 RPM redline
-	// Gear ratio: 2.909 (32/11), drivetrain efficiency: 92%
-	// Torque at wheel = motor_torque * gear_ratio * efficiency
-	// (Local constants were hardcoded but unused; the settings path
-	//  overrides both below. Member GearRatio is shadowed by settings
-	//  in ApplyPhysicsSettings.)
-
-	// Peak wheel torque: 240 * 2.909 * 0.92 = 643 Nm
-	// Curve is NORMALIZED (0-1, multiplied by MaxTorque)
-	// Power-limited above ~3000 RPM: T = P_max / omega
+	// === IFS-08 EMRAX 228 Powertrain — electric, motor-side semantics ===
+	// Motor: 230 Nm stall, 240 Nm peak (1-3183 RPM), 80 kW from ~3183 RPM
+	// up, 6500 RPM redline. Single-speed chain reduction 2.909 (32T/11T),
+	// 92% drivetrain efficiency.
+	//
+	// MaxTorque is MOTOR-side (pre-gearbox) and TorqueCurve keys are MOTOR
+	// RPM. Chaos applies ForwardGearRatio × FinalRatio × TransmissionEff
+	// internally to get wheel torque. Previous implementation baked the
+	// gear ratio and efficiency into MaxTorque=643 while leaving gear=1
+	// and the default TransmissionEfficiency=0.9 — the latter silently
+	// stole 10% on top, so the sim was delivering 579 Nm at the wheel
+	// instead of the 643 Nm spec. Moving to motor-side semantics makes
+	// the numbers match the EMRAX datasheet and the team's own tuning.
 	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
-	VehicleMovement->EngineSetup.MaxTorque = 643.f; // Full EMRAX peak at wheel
+	VehicleMovement->EngineSetup.MaxTorque = 240.f; // motor-side peak
+	// ICE leftovers — neutralise them for an electric drivetrain:
+	//  - EngineIdleRPM 1200 → 0: no idle, motor sits at 0 until commanded.
+	//  - EngineBrakeEffect 0.05 → 0: no compression/crank drag when
+	//    throttle=0. Retardation is pure drag + regen (fix/22).
+	//  - EngineRevUpMOI 5.0 → 0.05: EMRAX rotor inertia is ~0.02 kg·m².
+	//    The default is tuned for a V8 (≈100× heavier), which artificially
+	//    slows the motor's response to throttle changes.
+	//  - EngineRevDownRate 600 → 10000: with idle=0 and no engine-brake
+	//    the ramp-down rate barely matters, but big value keeps Chaos
+	//    from dragging RPM down artificially when throttle=0.
+	VehicleMovement->EngineSetup.EngineIdleRPM = 0.f;
+	VehicleMovement->EngineSetup.EngineBrakeEffect = 0.f;
+	VehicleMovement->EngineSetup.EngineRevUpMOI = 0.05f;
+	VehicleMovement->EngineSetup.EngineRevDownRate = 10000.f;
+
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
-	// EMRAX 228 torque curve (normalized, power-limited only)
-	TorqueCurve->AddKey(0.f,    0.958f);  // 616/643 — 230 Nm motor
-	TorqueCurve->AddKey(1000.f, 1.000f);  // 643/643 — 240 Nm motor (peak)
-	TorqueCurve->AddKey(2000.f, 1.000f);  // Full torque
-	TorqueCurve->AddKey(3000.f, 0.900f);  // Power limit starts
-	TorqueCurve->AddKey(4000.f, 0.700f);  // 80kW / (4000*2π/60) * GR * eff / 643
-	TorqueCurve->AddKey(5000.f, 0.560f);
-	TorqueCurve->AddKey(6000.f, 0.470f);
-	TorqueCurve->AddKey(6500.f, 0.430f);  // Redline
+	// Motor-side normalized (T(rpm) / 240 Nm). Flat 1.0 up to the
+	// power-limited transition ω_t = 80000/240 ≈ 333 rad/s ≈ 3183 RPM,
+	// then T = 80 kW / ω i.e. normalized = 764000 / (RPM × 240).
+	TorqueCurve->AddKey(0.f,    0.958f);  // 230 Nm stall
+	TorqueCurve->AddKey(1000.f, 1.000f);  // 240 Nm peak
+	TorqueCurve->AddKey(2000.f, 1.000f);
+	TorqueCurve->AddKey(3000.f, 1.000f);
+	TorqueCurve->AddKey(4000.f, 0.796f);  // 80 kW / (4000·2π/60) = 191 Nm → 0.796
+	TorqueCurve->AddKey(5000.f, 0.637f);
+	TorqueCurve->AddKey(6000.f, 0.531f);
+	TorqueCurve->AddKey(6500.f, 0.490f);  // redline
 
-	// --- Transmission (single speed, electric) ---
-	// Electric motor: single fixed gear, no shifting
+	// --- Transmission: single-speed chain reduction ---
+	// Chaos handles the gear ratio and efficiency natively — the torque
+	// curve above is motor-side.
 	VehicleMovement->TransmissionSetup.bUseAutomaticGears = false;
 	VehicleMovement->TransmissionSetup.GearChangeTime = 0.0f;
 	VehicleMovement->TransmissionSetup.ForwardGearRatios.Reset();
-	VehicleMovement->TransmissionSetup.ForwardGearRatios.Add(1.0f); // Single gear (reduction already in torque)
+	VehicleMovement->TransmissionSetup.ForwardGearRatios.Add(2.909f); // chain 32/11
 	VehicleMovement->TransmissionSetup.ReverseGearRatios.Reset();
-	VehicleMovement->TransmissionSetup.ReverseGearRatios.Add(1.0f);
-	VehicleMovement->TransmissionSetup.FinalRatio = 1.0f; // No additional reduction
+	VehicleMovement->TransmissionSetup.ReverseGearRatios.Add(2.909f);
+	VehicleMovement->TransmissionSetup.FinalRatio = 1.0f;
+	VehicleMovement->TransmissionSetup.TransmissionEfficiency = 0.92f;
+	// Single-gear shifts must never fire — set the thresholds out of reach.
+	VehicleMovement->TransmissionSetup.ChangeUpRPM = 99999.f;
+	VehicleMovement->TransmissionSetup.ChangeDownRPM = 0.f;
 
 	// --- Differential (RWD) ---
 	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
@@ -338,37 +362,55 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			VehicleMovement->DifferentialSetup.FrontRearSplit = P.WeightDistFront;
 		}
 
-		// Motor torque curve from settings (if provided)
+		// Motor torque curve from settings — MOTOR-side values (pre-gear).
+		// Chaos multiplies by ForwardGearRatio × FinalRatio × TransmissionEff
+		// internally, so we just set MaxTorque and the curve at motor RPM.
+		// Gear ratio and efficiency land on TransmissionSetup below.
 		if (P.MotorRPM.Num() > 0 && P.MotorRPM.Num() == P.MotorTorque.Num())
 		{
-			float PeakWheelTorque = 0.f;
+			float PeakMotorTorque = 0.f;
 			for (float T : P.MotorTorque)
 			{
-				float WheelT = T * P.GearRatio * P.DrivetrainEfficiency;
-				if (WheelT > PeakWheelTorque) PeakWheelTorque = WheelT;
+				if (T > PeakMotorTorque) PeakMotorTorque = T;
 			}
 
-			VehicleMovement->EngineSetup.MaxTorque = PeakWheelTorque;
+			VehicleMovement->EngineSetup.MaxTorque = PeakMotorTorque;
 			FRichCurve* TC = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 			TC->Reset();
 
 			for (int32 i = 0; i < P.MotorRPM.Num(); i++)
 			{
-				float WheelT = P.MotorTorque[i] * P.GearRatio * P.DrivetrainEfficiency;
-				// Power limit: T = min(T, P_max / omega)
+				float MotorT = P.MotorTorque[i];
+				// Power limit: T = min(T, P_max / ω_motor) — both motor-side.
 				float MotorOmega = P.MotorRPM[i] * 2.f * PI / 60.f;
 				if (MotorOmega > 1.f)
 				{
-					float PowerLimitT = (P.MotorMaxPower / MotorOmega) * P.GearRatio * P.DrivetrainEfficiency;
-					WheelT = FMath::Min(WheelT, PowerLimitT);
+					float PowerLimitT = P.MotorMaxPower / MotorOmega;
+					MotorT = FMath::Min(MotorT, PowerLimitT);
 				}
-				float Normalized = (PeakWheelTorque > 0.f) ? WheelT / PeakWheelTorque : 0.f;
+				float Normalized = (PeakMotorTorque > 0.f) ? MotorT / PeakMotorTorque : 0.f;
 				TC->AddKey(P.MotorRPM[i], Normalized);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("FSDS: Motor curve from settings — %d points, peak %.0f Nm at wheel"),
-				P.MotorRPM.Num(), PeakWheelTorque);
+			UE_LOG(LogTemp, Log, TEXT("FSDS: Motor curve from settings — %d points, peak %.0f Nm at motor (→ %.0f Nm at wheel after %.2f gear × %.2f eff)"),
+				P.MotorRPM.Num(), PeakMotorTorque,
+				PeakMotorTorque * P.GearRatio * P.DrivetrainEfficiency,
+				P.GearRatio, P.DrivetrainEfficiency);
 		}
+
+		// Transmission: single-speed chain reduction driven by settings.
+		// Overwrites the ForwardGearRatios[0] that SetupVehicleMovement set
+		// to the hardcoded default so the user's settings.json gear ratio
+		// actually takes effect.
+		if (VehicleMovement->TransmissionSetup.ForwardGearRatios.Num() > 0)
+		{
+			VehicleMovement->TransmissionSetup.ForwardGearRatios[0] = P.GearRatio;
+		}
+		if (VehicleMovement->TransmissionSetup.ReverseGearRatios.Num() > 0)
+		{
+			VehicleMovement->TransmissionSetup.ReverseGearRatios[0] = P.GearRatio;
+		}
+		VehicleMovement->TransmissionSetup.TransmissionEfficiency = P.DrivetrainEfficiency;
 
 		// Aero
 		CdA = P.CdA;
@@ -694,6 +736,26 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 		State.Gear = VehicleMovement->GetCurrentGear();
 		State.RPM = VehicleMovement->GetEngineRotationSpeed();
 		State.MaxRPM = VehicleMovement->GetEngineMaxRotationSpeed();
+	}
+
+	// Regen snapshot — compute from current speed and brake request so it
+	// tracks whatever the Tick is applying right now. All values are at
+	// the motor (pre-gear) side to match datasheet semantics.
+	State.RegenMaxTorqueLimit = MaxRegenTorque;
+	State.RegenMaxPowerLimit = MaxRegenPower;
+	if (MaxRegenTorque > 0.f)
+	{
+		const float VFwd = FMath::Abs(FVector::DotProduct(GetVelocity(), GetActorForwardVector())) * 0.01f; // cm/s → m/s
+		const float OmegaMotor = (VFwd / FMath::Max(WheelRadius, 0.01f)) * GearRatio; // rad/s
+		float TAvail = MaxRegenTorque;
+		if (OmegaMotor > 0.1f)
+		{
+			const float TPowerLimited = MaxRegenPower / OmegaMotor;
+			TAvail = FMath::Min(MaxRegenTorque, TPowerLimited);
+		}
+		State.RegenAvailTorque = TAvail;
+		State.RegenTorque = FMath::Clamp(CurrentControls.Brake, 0.f, 1.f) * TAvail;
+		State.RegenPower = State.RegenTorque * OmegaMotor;
 	}
 
 	State.Timestamp = FPlatformTime::Cycles64();

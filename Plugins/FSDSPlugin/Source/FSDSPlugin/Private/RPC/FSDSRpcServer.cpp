@@ -239,11 +239,13 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		FVector PosENU = FSDSCoord::UEToENU(State.Position);
 		FVector VelENU = FSDSCoord::UEVelocityToENU(State.LinearVelocity);
 		FQuat OriENU = FSDSCoord::UEQuatToENU(State.Orientation);
-		return FString::Printf(TEXT("{\"speed\":%.4f,\"gear\":%d,\"rpm\":%.1f,\"maxrpm\":%.1f,\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+		return FString::Printf(TEXT("{\"speed\":%.4f,\"gear\":%d,\"rpm\":%.1f,\"maxrpm\":%.1f,\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f,\"regen_torque\":%.3f,\"regen_power\":%.1f,\"regen_avail_torque\":%.3f,\"regen_max_torque\":%.1f,\"regen_max_power\":%.1f}"),
 			State.Speed, State.Gear, State.RPM, State.MaxRPM,
 			PosENU.X, PosENU.Y, PosENU.Z,
 			VelENU.X, VelENU.Y, VelENU.Z,
-			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
+			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z,
+			State.RegenTorque, State.RegenPower, State.RegenAvailTorque,
+			State.RegenMaxTorqueLimit, State.RegenMaxPowerLimit);
 	}
 	else if (Method == TEXT("getGpsData"))
 	{
