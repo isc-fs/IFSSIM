@@ -241,68 +241,43 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		return;
 	}
 
-	// Load cone Blueprint classes — try multiple loading strategies
-	auto LoadConeBP = [](const TCHAR* Path) -> UClass* {
-		FString FullPath(Path);
+	// Load per-color cone StaticMeshes.
+	// Note: blue_trafficone / yellow_trafficone / orange_trafficone / orange_mini_trafficone
+	// are Texture2D assets (not Blueprints) — use the trafficone_mini_* StaticMesh variants.
+	// These are cooked via DirectoriesToAlwaysCook = /Game/RaceCourse/Model/Environment/trafficones_scaled.
+	UStaticMesh* BlueConeMesh = LoadObject<UStaticMesh>(nullptr,
+		TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue.trafficone_mini_blue"));
+	UStaticMesh* YellowConeMesh = LoadObject<UStaticMesh>(nullptr,
+		TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow"));
+	UStaticMesh* OrangeConeMesh = LoadObject<UStaticMesh>(nullptr,
+		TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange.trafficone_mini_orange"));
+	UStaticMesh* OrangeBigConeMesh = LoadObject<UStaticMesh>(nullptr,
+		TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange.trafficone_big_orange"));
 
-		// Strategy 1: StaticLoadClass with _C suffix
-		FString ClassPath = FullPath + TEXT("_C");
-		UClass* Class = StaticLoadClass(AActor::StaticClass(), nullptr, *ClassPath);
-		if (Class) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via StaticLoadClass: %s"), *ClassPath); return Class; }
+	// Use the first available cooked mesh as fallback — do NOT rely on
+	// /Engine/BasicShapes/Cone which is not cooked in Shipping builds.
+	UStaticMesh* FallbackMesh = BlueConeMesh ? BlueConeMesh
+	                          : YellowConeMesh ? YellowConeMesh
+	                          : OrangeConeMesh ? OrangeConeMesh
+	                          : OrangeBigConeMesh;
 
-		// Strategy 2: Load UBlueprint then get GeneratedClass
-		UBlueprint* BP = LoadObject<UBlueprint>(nullptr, Path);
-		if (BP && BP->GeneratedClass) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via UBlueprint: %s"), Path); return BP->GeneratedClass; }
+	UE_LOG(LogTemp, Log, TEXT("FSDS Cones: blue=%s yellow=%s orange=%s big_orange=%s"),
+		BlueConeMesh    ? TEXT("OK") : TEXT("FAIL"),
+		YellowConeMesh  ? TEXT("OK") : TEXT("FAIL"),
+		OrangeConeMesh  ? TEXT("OK") : TEXT("FAIL"),
+		OrangeBigConeMesh ? TEXT("OK") : TEXT("FAIL"));
 
-		// Strategy 3: FSoftClassPath (async-safe)
-		FSoftClassPath SoftPath(FullPath + TEXT("_C"));
-		UClass* SoftClass = SoftPath.TryLoadClass<AActor>();
-		if (SoftClass) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via FSoftClassPath: %s"), Path); return SoftClass; }
-
-		// Strategy 4: Try with .asset_name suffix pattern
-		FString AssetName = FPaths::GetBaseFilename(FullPath);
-		FString PackagePath = FPaths::GetPath(FullPath);
-		FString AltPath = PackagePath + TEXT(".") + AssetName + TEXT("_C");
-		Class = StaticLoadClass(AActor::StaticClass(), nullptr, *AltPath);
-		if (Class) { UE_LOG(LogTemp, Log, TEXT("FSDS Cones: Loaded via alt path: %s"), *AltPath); return Class; }
-
-		UE_LOG(LogTemp, Warning, TEXT("FSDS Cones: ALL strategies failed for %s"), Path);
-		return nullptr;
-	};
-
-	UClass* BlueBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/blue_trafficone"));
-	UClass* YellowBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/yellow_trafficone"));
-	UClass* OrangeBigBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/orange_trafficone"));
-	UClass* OrangeSmallBP = LoadConeBP(TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/orange_mini_trafficone"));
-
-	// Fallback: load per-color cone StaticMeshes (these have baked materials)
-	UStaticMesh* BlueConeMesh = nullptr;
-	UStaticMesh* YellowConeMesh = nullptr;
-	UStaticMesh* OrangeConeMesh = nullptr;
-	UStaticMesh* OrangeBigConeMesh = nullptr;
-	UStaticMesh* DefaultConeMesh = nullptr;
-
-	if (!BlueBP || !YellowBP)
+	if (!FallbackMesh)
 	{
-		// Try per-color meshes first (these are complete colored cone models)
-		BlueConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue.trafficone_mini_blue"));
-		YellowConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow"));
-		OrangeConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange.trafficone_mini_orange"));
-		OrangeBigConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange.trafficone_big_orange"));
-
-		// Fallback to engine cone
-		DefaultConeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cone.Cone"));
-
-		if (!BlueConeMesh) BlueConeMesh = DefaultConeMesh;
-		if (!YellowConeMesh) YellowConeMesh = DefaultConeMesh;
-		if (!OrangeConeMesh) OrangeConeMesh = DefaultConeMesh;
-		if (!OrangeBigConeMesh) OrangeBigConeMesh = OrangeConeMesh;
-
-		UE_LOG(LogTemp, Log, TEXT("FSDS Cones: StaticMesh mode (blue=%s, yellow=%s, orange=%s)"),
-			BlueConeMesh != DefaultConeMesh ? TEXT("REAL") : TEXT("fallback"),
-			YellowConeMesh != DefaultConeMesh ? TEXT("REAL") : TEXT("fallback"),
-			OrangeConeMesh != DefaultConeMesh ? TEXT("REAL") : TEXT("fallback"));
+		UE_LOG(LogTemp, Error, TEXT("FSDS ConeSpawner: No cone mesh available. "
+			"Check DirectoriesToAlwaysCook includes /Game/RaceCourse/Model/Environment/trafficones_scaled"));
+		return;
 	}
+
+	if (!BlueConeMesh)      BlueConeMesh      = FallbackMesh;
+	if (!YellowConeMesh)    YellowConeMesh    = FallbackMesh;
+	if (!OrangeConeMesh)    OrangeConeMesh    = FallbackMesh;
+	if (!OrangeBigConeMesh) OrangeBigConeMesh = FallbackMesh;
 
 	TArray<FString> Lines;
 	FileContent.ParseIntoArrayLines(Lines);
@@ -317,38 +292,20 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		float X = FCString::Atof(*Parts[1]) * 100.f; // meters to cm
 		float Y = FCString::Atof(*Parts[2]) * -100.f; // flip Y, meters to cm
 
-		// Determine cone color
 		EFSDSConeColor Color = EFSDSConeColor::Unknown;
-		if (Type == TEXT("blue")) Color = EFSDSConeColor::Blue;
-		else if (Type == TEXT("yellow")) Color = EFSDSConeColor::Yellow;
-		else if (Type == TEXT("big_orange")) Color = EFSDSConeColor::OrangeLarge;
+		if      (Type == TEXT("blue"))                                   Color = EFSDSConeColor::Blue;
+		else if (Type == TEXT("yellow"))                                 Color = EFSDSConeColor::Yellow;
+		else if (Type == TEXT("big_orange"))                             Color = EFSDSConeColor::OrangeLarge;
 		else if (Type == TEXT("small_orange") || Type == TEXT("orange")) Color = EFSDSConeColor::OrangeSmall;
 
-		UClass* BPClass = nullptr;
-		if (Type == TEXT("blue")) BPClass = BlueBP;
-		else if (Type == TEXT("yellow")) BPClass = YellowBP;
-		else if (Type == TEXT("big_orange")) BPClass = OrangeBigBP;
-		else if (Type == TEXT("small_orange")) BPClass = OrangeSmallBP;
+		UStaticMesh* ConeMesh = FallbackMesh;
+		if      (Type == TEXT("blue"))                                   ConeMesh = BlueConeMesh;
+		else if (Type == TEXT("yellow"))                                 ConeMesh = YellowConeMesh;
+		else if (Type == TEXT("big_orange"))                             ConeMesh = OrangeBigConeMesh;
+		else if (Type == TEXT("small_orange") || Type == TEXT("orange")) ConeMesh = OrangeConeMesh;
 
 		FVector Location(X, Y, HeightOffset);
 		FRotator Rotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
-
-		if (BPClass)
-		{
-			SpawnConeBP(BPClass, Location, Rotation);
-		}
-		else if (BlueConeMesh || DefaultConeMesh)
-		{
-			// Select correct mesh per cone type
-			UStaticMesh* ConeMesh = DefaultConeMesh;
-			if (Type == TEXT("blue")) ConeMesh = BlueConeMesh;
-			else if (Type == TEXT("yellow")) ConeMesh = YellowConeMesh;
-			else if (Type == TEXT("big_orange")) ConeMesh = OrangeBigConeMesh;
-			else if (Type == TEXT("small_orange") || Type == TEXT("orange")) ConeMesh = OrangeConeMesh;
-
-			if (!ConeMesh) ConeMesh = DefaultConeMesh;
-
-			SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
-		}
+		SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
 	}
 }
