@@ -16,6 +16,65 @@
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
 
+namespace
+{
+	/**
+	 * Shared completion state for CallOnGameThread. Lives on the heap,
+	 * refcounted via TSharedPtr so the caller and the game-thread task
+	 * can release independently — the last holder destroys it. Safe
+	 * under caller-side timeout: if the caller gives up, the task
+	 * still owns a ref and can safely complete without touching any
+	 * dead stack memory.
+	 */
+	template <typename TResult>
+	struct TCallState
+	{
+		std::atomic<bool> Done{false};
+		TResult Value;
+	};
+
+	/**
+	 * Run `Fn()` on the engine game thread and block up to
+	 * `TimeoutSec` for it to complete. Returns the functor's result on
+	 * success, `OnTimeout` on expiry. `Tag` is used in the warning log
+	 * when a timeout fires.
+	 *
+	 * Replaces the previous `FEvent*` + `GetSynchEventFromPool/Return
+	 * SynchEventToPool` pattern, which had two bugs: (1) on timeout,
+	 * the caller's stack-captured result pointer became dangling while
+	 * the lambda could still execute and write to it; and (2) the
+	 * event was returned to the engine pool regardless of whether the
+	 * lambda had triggered it, so a subsequent reuse of the event by
+	 * an unrelated caller could be spuriously signalled by the
+	 * orphaned lambda.
+	 */
+	template <typename TResult, typename TFn>
+	TResult CallOnGameThread(TFn&& Fn, double TimeoutSec, TResult OnTimeout, const TCHAR* Tag)
+	{
+		using TState = TCallState<TResult>;
+		TSharedPtr<TState, ESPMode::ThreadSafe> State = MakeShared<TState, ESPMode::ThreadSafe>();
+
+		AsyncTask(ENamedThreads::GameThread, [State, Functor = std::forward<TFn>(Fn)]() mutable
+		{
+			TResult Local = Functor();
+			State->Value = MoveTemp(Local);
+			State->Done.store(true, std::memory_order_release);
+		});
+
+		const double Deadline = FPlatformTime::Seconds() + TimeoutSec;
+		while (FPlatformTime::Seconds() < Deadline)
+		{
+			if (State->Done.load(std::memory_order_acquire))
+			{
+				return MoveTemp(State->Value);
+			}
+			FPlatformProcess::Sleep(0.002f);
+		}
+		UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: game-thread call timed out (%s)"), Tag);
+		return OnTimeout;
+	}
+}
+
 FFSDSRpcServer::FFSDSRpcServer()
 {
 }
@@ -46,6 +105,20 @@ void FFSDSRpcServer::Stop()
 		ServerThread->join();
 	}
 	ServerThread.reset();
+
+	// Drain in-flight client threads before we return — otherwise they
+	// keep running detached after `this` is destroyed and the bRunning
+	// check in HandleClient dereferences a freed pointer. Each client
+	// thread's Wait() loop tops out at 5 s, so worst-case shutdown
+	// blocks for ~5 s per active client.
+	{
+		std::lock_guard<std::mutex> Lock(ClientThreadsMutex);
+		for (std::thread& T : ClientThreads)
+		{
+			if (T.joinable()) T.join();
+		}
+		ClientThreads.clear();
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Server stopped"));
 }
@@ -87,13 +160,21 @@ void FFSDSRpcServer::ServerThreadFunc()
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
 
-				// Handle each client in its own thread (supports streaming + concurrent clients)
-				std::thread ClientThread([this, ClientSocket, SocketSubsystem]() {
+				// Handle each client in its own thread. Store it so Stop()
+				// can join the full set before the server is destroyed —
+				// previously these were `.detach()`ed and kept running
+				// after shutdown, still holding the raw `this` pointer.
+				// The vector grows for the lifetime of the server; in
+				// practice client count is small (MC + bridge + camera
+				// + one streaming channel per stream), so an unbounded
+				// grow-only container is fine for the session lengths
+				// this sim sees.
+				std::lock_guard<std::mutex> Lock(ClientThreadsMutex);
+				ClientThreads.emplace_back([this, ClientSocket, SocketSubsystem]() {
 					HandleClient(ClientSocket);
 					ClientSocket->Close();
 					SocketSubsystem->DestroySocket(ClientSocket);
 				});
-				ClientThread.detach();
 			}
 		}
 
@@ -398,17 +479,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!Cam) return TEXT("{\"error\":\"no camera\"}");
 
 		// Image capture MUST run on game thread
-		int32 PngSize = 0;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
-
-		AsyncTask(ENamedThreads::GameThread, [Cam, ImgType, &PngSize, DoneEvent]() {
-			TArray<uint8> PngData = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
-			PngSize = PngData.Num();
-			DoneEvent->Trigger();
-		});
-
-		DoneEvent->Wait(3000); // 3 second timeout
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+		int32 PngSize = CallOnGameThread<int32>(
+			[Cam, ImgType]() -> int32 {
+				TArray<uint8> PngData = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
+				return PngData.Num();
+			},
+			3.0, 0, TEXT("getImageSize"));
 
 		return FString::Printf(TEXT("{\"size\":%d,\"camera\":\"%s\",\"type\":%d}"),
 			PngSize, *CamName, ImgType);
@@ -504,32 +580,29 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		FString Filter = (Parts.Num() >= 2) ? Parts[1] : TEXT("*");
 
-		FString Result;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
-
-		AsyncTask(ENamedThreads::GameThread, [this, Filter, &Result, DoneEvent]() {
-			Result = TEXT("[");
-			bool bFirst = true;
-			if (World)
-			{
-				for (TActorIterator<AActor> It(World); It; ++It)
+		return CallOnGameThread<FString>(
+			[this, Filter]() -> FString {
+				FString Result = TEXT("[");
+				bool bFirst = true;
+				if (World)
 				{
-					FString ActorName = It->GetName();
-					if (Filter == TEXT("*") || ActorName.Contains(Filter))
+					for (TActorIterator<AActor> It(World); It; ++It)
 					{
-						if (!bFirst) Result += TEXT(",");
-						Result += FString::Printf(TEXT("\"%s\""), *ActorName);
-						bFirst = false;
+						FString ActorName = It->GetName();
+						if (Filter == TEXT("*") || ActorName.Contains(Filter))
+						{
+							if (!bFirst) Result += TEXT(",");
+							Result += FString::Printf(TEXT("\"%s\""), *ActorName);
+							bFirst = false;
+						}
 					}
 				}
-			}
-			Result += TEXT("]");
-			DoneEvent->Trigger();
-		});
-
-		DoneEvent->Wait(3000);
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
-		return Result;
+				Result += TEXT("]");
+				return Result;
+			},
+			3.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("listSceneObjects"));
 	}
 	else if (Method == TEXT("getObjectPose"))
 	{
@@ -538,32 +611,26 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (Parts.Num() < 2) return TEXT("{\"error\":\"missing object_name\"}");
 		FString ObjName = Parts[1];
 
-		FString Result;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
-
-		AsyncTask(ENamedThreads::GameThread, [this, ObjName, &Result, DoneEvent]() {
-			if (World)
-			{
-				for (TActorIterator<AActor> It(World); It; ++It)
+		return CallOnGameThread<FString>(
+			[this, ObjName]() -> FString {
+				if (World)
 				{
-					if (It->GetName() == ObjName)
+					for (TActorIterator<AActor> It(World); It; ++It)
 					{
-						FVector PosENU = FSDSCoord::UEToENU(It->GetActorLocation());
-						FQuat OriENU = FSDSCoord::UEQuatToENU(It->GetActorQuat());
-						Result = FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
-							PosENU.X, PosENU.Y, PosENU.Z, OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
-						DoneEvent->Trigger();
-						return;
+						if (It->GetName() == ObjName)
+						{
+							FVector PosENU = FSDSCoord::UEToENU(It->GetActorLocation());
+							FQuat OriENU = FSDSCoord::UEQuatToENU(It->GetActorQuat());
+							return FString::Printf(TEXT("{\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+								PosENU.X, PosENU.Y, PosENU.Z, OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
+						}
 					}
 				}
-			}
-			Result = TEXT("{\"error\":\"object not found\"}");
-			DoneEvent->Trigger();
-		});
-
-		DoneEvent->Wait(3000);
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
-		return Result;
+				return TEXT("{\"error\":\"object not found\"}");
+			},
+			3.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("getObjectPose"));
 	}
 	else if (Method == TEXT("setObjectPose"))
 	{
@@ -575,30 +642,24 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		FVector PosENU(FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]), FCString::Atof(*Parts[4]));
 		FVector PosUE = FSDSCoord::ENUToUE(PosENU);
 
-		FString Result;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
-
-		AsyncTask(ENamedThreads::GameThread, [this, ObjName, PosUE, &Result, DoneEvent]() {
-			if (World)
-			{
-				for (TActorIterator<AActor> It(World); It; ++It)
+		return CallOnGameThread<FString>(
+			[this, ObjName, PosUE]() -> FString {
+				if (World)
 				{
-					if (It->GetName() == ObjName)
+					for (TActorIterator<AActor> It(World); It; ++It)
 					{
-						It->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
-						Result = TEXT("true");
-						DoneEvent->Trigger();
-						return;
+						if (It->GetName() == ObjName)
+						{
+							It->SetActorLocation(PosUE, false, nullptr, ETeleportType::TeleportPhysics);
+							return TEXT("true");
+						}
 					}
 				}
-			}
-			Result = TEXT("{\"error\":\"object not found\"}");
-			DoneEvent->Trigger();
-		});
-
-		DoneEvent->Wait(3000);
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
-		return Result;
+				return TEXT("{\"error\":\"object not found\"}");
+			},
+			3.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("setObjectPose"));
 	}
 	else if (Method == TEXT("simSetVehiclePose"))
 	{
@@ -749,15 +810,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			int32 ImgType = FCString::Atoi(*TypeStr);
 			UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
 			if (!Cam) continue;
-			int32 PngSize = 0;
-			FEvent* Done = FPlatformProcess::GetSynchEventFromPool(true);
-			AsyncTask(ENamedThreads::GameThread, [Cam, ImgType, &PngSize, Done]() {
-				TArray<uint8> Png = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
-				PngSize = Png.Num();
-				Done->Trigger();
-			});
-			Done->Wait(3000);
-			FPlatformProcess::ReturnSynchEventToPool(Done);
+			int32 PngSize = CallOnGameThread<int32>(
+				[Cam, ImgType]() -> int32 {
+					TArray<uint8> Png = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
+					return Png.Num();
+				},
+				3.0, 0, TEXT("simGetImages[i]"));
 			if (!bFirst) Result += TEXT(",");
 			Result += FString::Printf(TEXT("{\"camera\":\"%s\",\"type\":%d,\"size\":%d}"), *CamName, ImgType, PngSize);
 			bFirst = false;
@@ -792,60 +850,53 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	// === Cone diagnostic: report which cone meshes loaded successfully (game thread) ===
 	else if (Method == TEXT("debugCones"))
 	{
-		FString Result;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+		return CallOnGameThread<FString>(
+			[this]() -> FString {
+				static const TCHAR* ConePaths[] = {
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue.trafficone_mini_blue"),
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow"),
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange.trafficone_mini_orange"),
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange.trafficone_big_orange"),
+				};
+				// Also try without the .ObjectName suffix (package-only path)
+				static const TCHAR* ConePathsShort[] = {
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue"),
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow"),
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange"),
+					TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange"),
+				};
+				static const TCHAR* ConeNames[] = { TEXT("blue"), TEXT("yellow"), TEXT("orange"), TEXT("big_orange") };
 
-		AsyncTask(ENamedThreads::GameThread, [this, &Result, DoneEvent]() {
-			static const TCHAR* ConePaths[] = {
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue.trafficone_mini_blue"),
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow"),
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange.trafficone_mini_orange"),
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange.trafficone_big_orange"),
-			};
-			// Also try without the .ObjectName suffix (package-only path)
-			static const TCHAR* ConePathsShort[] = {
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue"),
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow"),
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange"),
-				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange"),
-			};
-			static const TCHAR* ConeNames[] = { TEXT("blue"), TEXT("yellow"), TEXT("orange"), TEXT("big_orange") };
-
-			FString Out = TEXT("{");
-			for (int32 i = 0; i < 4; i++)
-			{
-				UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, ConePaths[i]);
-				// Fallback: try FSoftObjectPath::TryLoad (uses async loader)
-				if (!Mesh)
+				FString Out = TEXT("{");
+				for (int32 i = 0; i < 4; i++)
 				{
-					FSoftObjectPath SoftPath(ConePaths[i]);
-					Mesh = Cast<UStaticMesh>(SoftPath.TryLoad());
+					UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, ConePaths[i]);
+					if (!Mesh)
+					{
+						FSoftObjectPath SoftPath(ConePaths[i]);
+						Mesh = Cast<UStaticMesh>(SoftPath.TryLoad());
+					}
+					if (!Mesh)
+					{
+						FSoftObjectPath SoftPath2(ConePathsShort[i]);
+						Mesh = Cast<UStaticMesh>(SoftPath2.TryLoad());
+					}
+					Out += FString::Printf(TEXT("\"%s\":%s"), ConeNames[i], Mesh ? TEXT("true") : TEXT("false"));
+					if (i < 3) Out += TEXT(",");
 				}
-				// Fallback 2: short path (no .ObjectName suffix)
-				if (!Mesh)
-				{
-					FSoftObjectPath SoftPath2(ConePathsShort[i]);
-					Mesh = Cast<UStaticMesh>(SoftPath2.TryLoad());
+
+				AFSDSConeSpawner* Spawner = nullptr;
+				if (World) {
+					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It) { Spawner = *It; break; }
 				}
-				Out += FString::Printf(TEXT("\"%s\":%s"), ConeNames[i], Mesh ? TEXT("true") : TEXT("false"));
-				if (i < 3) Out += TEXT(",");
-			}
-
-			// Spawner / world check
-			AFSDSConeSpawner* Spawner = nullptr;
-			if (World) {
-				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It) { Spawner = *It; break; }
-			}
-			Out += FString::Printf(TEXT(",\"spawner\":%s,\"world\":%s}"),
-				Spawner ? TEXT("true") : TEXT("false"),
-				World   ? TEXT("true") : TEXT("false"));
-			Result = Out;
-			DoneEvent->Trigger();
-		});
-
-		DoneEvent->Wait(5000);
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
-		return Result;
+				Out += FString::Printf(TEXT(",\"spawner\":%s,\"world\":%s}"),
+					Spawner ? TEXT("true") : TEXT("false"),
+					World   ? TEXT("true") : TEXT("false"));
+				return Out;
+			},
+			5.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("debugCones"));
 	}
 
 	// === Track loading ===
@@ -904,49 +955,37 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 
 		// Find and reload the ConeSpawner on game thread
-		FString Result;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+		return CallOnGameThread<FString>(
+			[this, TrackPath]() -> FString {
+				if (!World) return TEXT("{\"error\":\"no world\"}");
 
-		AsyncTask(ENamedThreads::GameThread, [this, TrackPath, &Result, DoneEvent]() {
-			if (!World) { Result = TEXT("{\"error\":\"no world\"}"); DoneEvent->Trigger(); return; }
-
-			// Find existing ConeSpawner
-			AFSDSConeSpawner* Spawner = nullptr;
-			for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
-			{
-				Spawner = *It;
-				break;
-			}
-
-			if (!Spawner) { Result = TEXT("{\"error\":\"no ConeSpawner found\"}"); DoneEvent->Trigger(); return; }
-
-			// Destroy all previously spawned cone actors (tracked by spawner)
-			for (AActor* ConeActor : Spawner->SpawnedCones)
-			{
-				if (ConeActor && IsValid(ConeActor))
+				AFSDSConeSpawner* Spawner = nullptr;
+				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
 				{
-					ConeActor->Destroy();
+					Spawner = *It;
+					break;
 				}
-			}
-			Spawner->SpawnedCones.Empty();
+				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
 
-			// Reset referee state for new track
-			if (Referee)
-			{
-				Referee->ResetState();
-			}
+				// Destroy all previously spawned cone actors (tracked by spawner)
+				for (AActor* ConeActor : Spawner->SpawnedCones)
+				{
+					if (ConeActor && IsValid(ConeActor)) ConeActor->Destroy();
+				}
+				Spawner->SpawnedCones.Empty();
 
-			// Set new CSV path and re-run spawning (ReloadTrack avoids double-calling Super::BeginPlay)
-			Spawner->ReloadTrack(TrackPath);
+				if (Referee) Referee->ResetState();
 
-			int32 NumCones = Spawner->SpawnedCones.Num();
-			Result = FString::Printf(TEXT("{\"loaded\":\"%s\",\"cones\":%d}"), *TrackPath, NumCones);
-			DoneEvent->Trigger();
-		});
+				// Set new CSV path and re-run spawning (ReloadTrack avoids
+				// double-calling Super::BeginPlay)
+				Spawner->ReloadTrack(TrackPath);
 
-		DoneEvent->Wait(5000);
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
-		return Result;
+				int32 NumCones = Spawner->SpawnedCones.Num();
+				return FString::Printf(TEXT("{\"loaded\":\"%s\",\"cones\":%d}"), *TrackPath, NumCones);
+			},
+			5.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("loadTrack"));
 	}
 
 	// === UDP Target Registration ===
@@ -1050,16 +1089,11 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 		if (!Cam) return false;
 
 		// Capture on game thread
-		TArray<uint8> PngData;
-		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
-
-		AsyncTask(ENamedThreads::GameThread, [Cam, ImgType, &PngData, DoneEvent]() {
-			PngData = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
-			DoneEvent->Trigger();
-		});
-
-		DoneEvent->Wait(5000);
-		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+		TArray<uint8> PngData = CallOnGameThread<TArray<uint8>>(
+			[Cam, ImgType]() -> TArray<uint8> {
+				return Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
+			},
+			5.0, TArray<uint8>(), TEXT("simGetImageBinary"));
 
 		// Send header: "IMG:size\n" followed by raw PNG bytes
 		FString Header = FString::Printf(TEXT("IMG:%d\n"), PngData.Num());

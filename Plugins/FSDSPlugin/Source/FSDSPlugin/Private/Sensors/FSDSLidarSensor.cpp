@@ -56,9 +56,22 @@ void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
 	// Dispatch scan to a background thread — line traces with bTraceComplex=false
 	// are read-only and safe to call from non-game threads in UE5.
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, World, Owner, OwnerTransform]()
+	//
+	// Owner/World are captured as TWeakObjectPtr so a Chaos vehicle pawn
+	// destroyed between this dispatch and the scan execution (e.g. level
+	// reload, pawn despawn) is noticed and skipped rather than
+	// dereferenced as a dangling raw pointer. The OwnerTransform snapshot
+	// is already by value.
+	TWeakObjectPtr<UWorld> WeakWorld(World);
+	TWeakObjectPtr<AActor> WeakOwner(Owner);
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, WeakWorld, WeakOwner, OwnerTransform]()
 	{
-		PerformScan(World, Owner, OwnerTransform);
+		UWorld* W = WeakWorld.Get();
+		AActor* O = WeakOwner.Get();
+		if (W && O)
+		{
+			PerformScan(W, O, OwnerTransform);
+		}
 		bScanInProgress = false;
 	});
 }
