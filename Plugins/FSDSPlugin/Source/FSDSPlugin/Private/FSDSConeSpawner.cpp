@@ -5,6 +5,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Blueprint.h"
 #include "Misc/FileHelper.h"
+#include "HAL/PlatformProcess.h"
 
 AFSDSConeSpawner::AFSDSConeSpawner()
 {
@@ -22,32 +23,59 @@ void AFSDSConeSpawner::BeginPlay()
 		FString MapName = GetWorld()->GetMapName();
 		MapName.RemoveFromStart(TEXT("UEDPIE_0_")); // Strip PIE prefix
 
-		FString TracksDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("Content"), TEXT("tracks"));
+		// Build candidate search directories.
+		// 1) Editor / PIE: ProjectDir()/Content/tracks  (source tree)
+		// 2) Packaged Mac: AdditionalNonUFSFiles are staged into LaunchDir, so the
+		//    CSV files land at <App>/Contents/UE/IFSSIM/Binaries/Mac/Content/tracks
+		TArray<FString> CandidateDirs;
+		CandidateDirs.Add(FPaths::Combine(FPaths::ProjectDir(),  TEXT("Content"), TEXT("tracks")));  // editor / PIE
+		CandidateDirs.Add(FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")));  // packaged (NonUFS staging)
+		CandidateDirs.Add(FPaths::Combine(FPaths::LaunchDir(),   TEXT("tracks")));                   // safety net
+		// User-writable location for runtime-generated tracks in packaged builds
+		CandidateDirs.Add(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM"), TEXT("tracks")));
+
+		// Helper: resolve a leaf CSV name across all candidate dirs, preferring the
+		// first directory that actually contains the file.
+		auto ResolveCSV = [&](const FString& Leaf) -> FString
+		{
+			for (const FString& Dir : CandidateDirs)
+			{
+				FString Full = FPaths::Combine(Dir, Leaf);
+				if (FPaths::FileExists(Full))
+				{
+					UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Resolved '%s' → %s"), *Leaf, *Full);
+					return Full;
+				}
+			}
+			// Return the primary candidate (may not exist; SpawnFromCSV will log the error)
+			FString Primary = FPaths::Combine(CandidateDirs[0], Leaf);
+			UE_LOG(LogTemp, Warning, TEXT("FSDS ConeSpawner: CSV not found in any search dir, will try primary path: %s"), *Primary);
+			return Primary;
+		};
 
 		if (MapName.Contains(TEXT("Acceleration")))
 		{
-			CSVFilePath = FPaths::Combine(TracksDir, TEXT("acceleration.csv"));
+			CSVFilePath = ResolveCSV(TEXT("acceleration.csv"));
 		}
 		else if (MapName.Contains(TEXT("Skidpad")))
 		{
-			CSVFilePath = FPaths::Combine(TracksDir, TEXT("skidpad.csv"));
+			CSVFilePath = ResolveCSV(TEXT("skidpad.csv"));
 		}
 		else if (MapName.Contains(TEXT("customMap")) || MapName.Contains(TEXT("Custom")))
 		{
-			CSVFilePath = FPaths::Combine(TracksDir, TEXT("random_track.csv"));
+			CSVFilePath = ResolveCSV(TEXT("random_track.csv"));
 		}
 		else
 		{
-			// Fallback: try to find a CSV matching the map name
-			FString MapCSV = FPaths::Combine(TracksDir, MapName.ToLower() + TEXT(".csv"));
+			// Try a CSV matching the map name, then fall back to random_track.csv
+			FString MapCSV = ResolveCSV(MapName.ToLower() + TEXT(".csv"));
 			if (FPaths::FileExists(MapCSV))
 			{
 				CSVFilePath = MapCSV;
 			}
 			else
 			{
-				// Final fallback: use random_track.csv if it exists (e.g. TrainingMap)
-				FString DefaultCSV = FPaths::Combine(TracksDir, TEXT("random_track.csv"));
+				FString DefaultCSV = ResolveCSV(TEXT("random_track.csv"));
 				if (FPaths::FileExists(DefaultCSV))
 				{
 					CSVFilePath = DefaultCSV;

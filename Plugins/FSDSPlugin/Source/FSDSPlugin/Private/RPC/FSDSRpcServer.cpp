@@ -798,6 +798,46 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 		FString TrackPath = Parts[1];
 
+		// --- Path resolution ---
+		// If the caller passes an absolute path that exists, use it directly.
+		// Otherwise treat it as a leaf filename and search the same candidate
+		// directories that FSDSConeSpawner uses at BeginPlay, so the track
+		// generator can write generated CSVs to any of those locations and
+		// just pass the bare filename (e.g. "track_20260404_013721.csv").
+		if (!FPaths::IsRelative(TrackPath) && FPaths::FileExists(TrackPath))
+		{
+			// absolute & exists — nothing to do
+		}
+		else
+		{
+			TArray<FString> SearchDirs = {
+				FPaths::Combine(FPaths::ProjectDir(),  TEXT("Content"), TEXT("tracks")), // editor / PIE source tree
+				FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")), // packaged (NonUFS staging)
+				FPaths::Combine(FPaths::LaunchDir(),   TEXT("tracks")),                  // safety net
+				// User-writable location for runtime-generated tracks in packaged builds
+				// (app bundle is read-only; track generator should write here)
+				FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM"), TEXT("tracks")),
+			};
+			FString Leaf = FPaths::GetCleanFilename(TrackPath);
+			bool bResolved = false;
+			for (const FString& Dir : SearchDirs)
+			{
+				FString Candidate = FPaths::Combine(Dir, Leaf);
+				if (FPaths::FileExists(Candidate))
+				{
+					UE_LOG(LogTemp, Log, TEXT("FSDS loadTrack: resolved '%s' → %s"), *TrackPath, *Candidate);
+					TrackPath = Candidate;
+					bResolved = true;
+					break;
+				}
+			}
+			if (!bResolved)
+			{
+				// Keep the original path — SpawnFromCSV will log the specific error
+				UE_LOG(LogTemp, Warning, TEXT("FSDS loadTrack: '%s' not found in any search dir, attempting as-is"), *TrackPath);
+			}
+		}
+
 		// Find and reload the ConeSpawner on game thread
 		FString Result;
 		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
