@@ -35,6 +35,45 @@ export default function Telemetry({ telemetry }: { telemetry: TelemetryData }) {
         </div>
       </div>
 
+      {/* Regen Brake (motor-side, real-car IFS-08 has regen-only drive-wheel braking) */}
+      <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
+        <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Regen Brake</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Gauge
+            label="Regen Power"
+            value={telemetry.regen_power / 1000}
+            unit="kW"
+            max={Math.max(1, telemetry.regen_max_power / 1000)}
+            color="#10b981"
+          />
+          <Gauge
+            label="Regen Torque"
+            value={telemetry.regen_torque}
+            unit="Nm (motor)"
+            max={Math.max(1, telemetry.regen_max_torque)}
+            color="#10b981"
+          />
+          <Gauge
+            label="Avail. Torque"
+            value={telemetry.regen_avail_torque}
+            unit="Nm cap @ ω"
+            max={Math.max(1, telemetry.regen_max_torque)}
+            color="#3b82f6"
+          />
+          <Gauge
+            label="Power Cap Binding"
+            value={
+              telemetry.regen_max_torque > 0
+                ? (1 - telemetry.regen_avail_torque / telemetry.regen_max_torque) * 100
+                : 0
+            }
+            unit="%"
+            max={100}
+            color="#f59e0b"
+          />
+        </div>
+      </div>
+
       {/* Position */}
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
         <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Vehicle Position (ENU)</h2>
