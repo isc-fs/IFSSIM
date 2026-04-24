@@ -68,6 +68,12 @@ services:
       - UE5_TRACKS_DIR=${PWD}/Content/tracks
       # Random track generator (MITMotorsports/random-track-generator, cloned as sibling of IFSSIM)
       - TRACK_GEN_PATH=/track_gen
+      # Auth. If IFSSIM_MC_API_KEY is unset/empty the backend runs
+      # unauthenticated (dev default). Set via .env or the shell env
+      # before `docker compose up` to require X-API-Key on mutating
+      # endpoints and the telemetry WebSocket.
+      - IFSSIM_MC_API_KEY=${IFSSIM_MC_API_KEY:-}
+      - IFSSIM_MC_CORS_ORIGINS=${IFSSIM_MC_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     volumes:
       - ./Content/tracks:/tracks
       - pipeline_ctrl:/pipeline_ctrl

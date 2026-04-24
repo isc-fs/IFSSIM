@@ -16,7 +16,7 @@ import shutil
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Header, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -42,14 +42,55 @@ UE5_TRACKS_DIR = os.environ.get("UE5_TRACKS_DIR", TRACKS_DIR)
 SIM_HOST = os.environ.get("IFSSIM_HOST", os.environ.get("SIM_HOST", "127.0.0.1"))
 SIM_PORT = int(os.environ.get("IFSSIM_PORT", os.environ.get("SIM_PORT", "41451")))
 
+# Optional API key. When set, every mutating endpoint (sim control, event
+# control, RES, pipeline, track load/gen/delete) and the telemetry WS
+# require a matching key. Read-only status endpoints stay open so a
+# monitor dashboard can attach without the key. When unset, the backend
+# logs a single warning and runs wide-open — fine for closed-network dev,
+# not for track day on untrusted wifi.
+MC_API_KEY = os.environ.get("IFSSIM_MC_API_KEY", "").strip()
+
+# CORS origins. Comma-separated list; default restricts to the frontend's
+# docker-compose-published address. Use the old wildcard `*` explicitly
+# if an external tool needs it — never silently anymore.
+_DEFAULT_CORS = "http://localhost:3000,http://127.0.0.1:3000"
+MC_CORS_ORIGINS = [o.strip() for o in
+    os.environ.get("IFSSIM_MC_CORS_ORIGINS", _DEFAULT_CORS).split(",")
+    if o.strip()]
+
 app = FastAPI(title="IFSSIM Mission Control", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=MC_CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if not MC_API_KEY:
+    print("[mc] IFSSIM_MC_API_KEY is empty — running unauthenticated. "
+          "Set it before exposing the backend beyond localhost.",
+          file=sys.stderr, flush=True)
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)):
+    """FastAPI dependency — validates X-API-Key header against MC_API_KEY.
+    No-op if the server wasn't configured with a key (dev mode)."""
+    if not MC_API_KEY:
+        return
+    if x_api_key != MC_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing or invalid X-API-Key",
+        )
+
+
+def ws_api_key_ok(api_key: Optional[str]) -> bool:
+    """WebSocket auth check. Browsers can't attach custom headers to
+    a WebSocket handshake, so WS uses a query-param token instead."""
+    if not MC_API_KEY:
+        return True
+    return api_key == MC_API_KEY
 
 sim = SimConnection(SIM_HOST, SIM_PORT)
 
@@ -145,7 +186,7 @@ def sim_status():
         "api_control": status.get("api_control", False),
     }
 
-@app.post("/api/sim/pause")
+@app.post("/api/sim/pause", dependencies=[Depends(require_api_key)])
 def sim_pause():
     try:
         sim.pause()
@@ -153,7 +194,7 @@ def sim_pause():
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-@app.post("/api/sim/resume")
+@app.post("/api/sim/resume", dependencies=[Depends(require_api_key)])
 def sim_resume():
     try:
         sim.resume()
@@ -161,7 +202,7 @@ def sim_resume():
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-@app.post("/api/sim/reset")
+@app.post("/api/sim/reset", dependencies=[Depends(require_api_key)])
 def sim_reset():
     """Soft reset: teleport car back to start position without crashing UE5.
     The destructive RPC 'reset' triggers a full level reload which crashes the
@@ -194,7 +235,7 @@ def event_state():
     except Exception:
         return {}
 
-@app.post("/api/event/set")
+@app.post("/api/event/set", dependencies=[Depends(require_api_key)])
 def event_set(setup: EventSetup):
     global current_event
     try:
@@ -206,7 +247,7 @@ def event_set(setup: EventSetup):
     log_event("event_set", f"{setup.event_type} ({setup.num_laps} laps)")
     return result
 
-@app.post("/api/event/start")
+@app.post("/api/event/start", dependencies=[Depends(require_api_key)])
 def event_start(setup: EventSetup):
     global current_event, res_active
     if not sim.is_connected():
@@ -247,7 +288,7 @@ def event_start(setup: EventSetup):
 
 # === RES (Remote Emergency Stop) ===
 
-@app.post("/api/res/activate")
+@app.post("/api/res/activate", dependencies=[Depends(require_api_key)])
 def res_activate_endpoint():
     global res_active
     # Stop pipeline first so control node stops sending throttle commands
@@ -263,7 +304,7 @@ def res_activate_endpoint():
     log_event("res", "EMERGENCY STOP activated")
     return {"ok": True, "res": "activated", "res_active": True}
 
-@app.post("/api/res/release")
+@app.post("/api/res/release", dependencies=[Depends(require_api_key)])
 def res_release_endpoint():
     global res_active
     if not res_active:
@@ -286,14 +327,14 @@ def res_status():
 
 # === Pipeline ===
 
-@app.post("/api/pipeline/start")
+@app.post("/api/pipeline/start", dependencies=[Depends(require_api_key)])
 def pipeline_start():
     os.makedirs("/pipeline_ctrl", exist_ok=True)
     open(PIPELINE_CTL_FILE, "w").close()
     log_event("pipeline", "Pipeline started")
     return {"ok": True, "pipeline": "started"}
 
-@app.post("/api/pipeline/stop")
+@app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
     try:
         os.remove(PIPELINE_CTL_FILE)
@@ -325,7 +366,7 @@ def vehicle_pose():
     except Exception:
         return {}
 
-@app.post("/api/vehicle/teleport")
+@app.post("/api/vehicle/teleport", dependencies=[Depends(require_api_key)])
 def vehicle_teleport(req: TeleportRequest):
     try:
         sim.teleport(req.x, req.y, req.z)
@@ -380,7 +421,7 @@ def track_preview(name: str):
         return {"image": plot}
     return JSONResponse({"error": "Failed to generate plot"}, status_code=500)
 
-@app.post("/api/track/{name}/load")
+@app.post("/api/track/{name}/load", dependencies=[Depends(require_api_key)])
 def track_load(name: str):
     filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
     if not os.path.exists(filepath):
@@ -402,7 +443,7 @@ def track_load(name: str):
     return {"result": result, "track": name, "event_type": event_type}
 
 
-@app.post("/api/vehicle/capture_home")
+@app.post("/api/vehicle/capture_home", dependencies=[Depends(require_api_key)])
 def capture_home():
     """Capture current vehicle pose as the home/reset position."""
     global home_pose, _home_pose_captured
@@ -421,7 +462,7 @@ def capture_home():
     _home_pose_captured = True
     return {"ok": True, "home_pose": home_pose}
 
-@app.delete("/api/track/{name}")
+@app.delete("/api/track/{name}", dependencies=[Depends(require_api_key)])
 def track_delete(name: str):
     if "/" in name or "\\" in name or ".." in name:
         return JSONResponse({"error": "Invalid name"}, status_code=400)
@@ -433,7 +474,7 @@ def track_delete(name: str):
         return {"deleted": name}
     return JSONResponse({"error": "Not found"}, status_code=404)
 
-@app.post("/api/track/generate")
+@app.post("/api/track/generate", dependencies=[Depends(require_api_key)])
 def track_generate(params: TrackGenerate):
     try:
         sys.path.insert(0, TRACK_GEN_PATH)
@@ -531,7 +572,14 @@ def export_session_log():
 # === WebSocket Telemetry ===
 
 @app.websocket("/ws/telemetry")
-async def telemetry_ws(websocket: WebSocket):
+async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(default=None)):
+    # WebSocket handshakes from browsers can't carry custom headers, so
+    # the API key (if the server is configured with one) arrives as a
+    # query parameter. Reject before accept so the handshake never
+    # completes for an unauthenticated caller.
+    if not ws_api_key_ok(api_key):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await websocket.accept()
     try:
         while True:

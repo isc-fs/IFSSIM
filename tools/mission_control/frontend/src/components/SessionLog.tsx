@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiFetch, promptForApiKey } from '../lib/api'
 
 interface LogEntry {
   timestamp: string;
@@ -10,7 +11,7 @@ export default function SessionLog() {
   const [log, setLog] = useState<LogEntry[]>([])
 
   const refresh = async () => {
-    const r = await fetch('/api/session/log')
+    const r = await apiFetch('/api/session/log', {}, promptForApiKey)
     setLog(await r.json())
   }
 

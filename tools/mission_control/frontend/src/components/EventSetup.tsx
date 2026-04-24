@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiFetch, promptForApiKey } from '../lib/api'
 
 const EVENTS = ['trackdrive', 'autocross', 'acceleration', 'skidpad'] as const
 
@@ -14,11 +15,11 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
   }, [telemetry.event])
 
   const api = async (url: string, body?: any) => {
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: 'POST',
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
-    })
+    }, promptForApiKey)
     return res.json()
   }
 

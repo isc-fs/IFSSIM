@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiFetch, promptForApiKey } from '../lib/api'
 
 interface Track {
   name: string; path: string; cones: number;
@@ -15,7 +16,7 @@ export default function TrackManager() {
   const [generating, setGenerating] = useState(false)
 
   const refresh = async () => {
-    const r = await fetch('/api/track/list')
+    const r = await apiFetch('/api/track/list', {}, promptForApiKey)
     setTracks(await r.json())
   }
 
@@ -24,14 +25,14 @@ export default function TrackManager() {
   const selectTrack = async (name: string) => {
     setSelected(name)
     setPreview(null)
-    const r = await fetch(`/api/track/${encodeURIComponent(name)}/preview`)
+    const r = await apiFetch(`/api/track/${encodeURIComponent(name)}/preview`, {}, promptForApiKey)
     const d = await r.json()
     if (d.image) setPreview(d.image)
   }
 
   const loadTrack = async (track: Track) => {
     setMsg(`Loading ${track.name}...`)
-    const r = await fetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' })
+    const r = await apiFetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' }, promptForApiKey)
     const d = await r.json()
     if (d.result?.error) {
       setMsg(`Error: ${d.result.error}`)
@@ -44,7 +45,7 @@ export default function TrackManager() {
 
   const deleteTrack = async (name: string) => {
     if (!confirm(`Delete ${name}?`)) return
-    await fetch(`/api/track/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    await apiFetch(`/api/track/${encodeURIComponent(name)}`, { method: 'DELETE' }, promptForApiKey)
     setMsg(`Deleted ${name}`)
     if (selected === name) { setSelected(null); setPreview(null) }
     refresh()
@@ -52,11 +53,11 @@ export default function TrackManager() {
 
   const generate = async () => {
     setGenerating(true)
-    const r = await fetch('/api/track/generate', {
+    const r = await apiFetch('/api/track/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(genParams),
-    })
+    }, promptForApiKey)
     const d = await r.json()
     setGenerating(false)
     if (d.name) {
