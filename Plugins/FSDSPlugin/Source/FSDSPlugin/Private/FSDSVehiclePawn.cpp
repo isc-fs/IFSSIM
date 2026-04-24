@@ -416,75 +416,64 @@ void AFSDSVehiclePawn::BeginPlay()
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
 
-	// Load and apply FSDS car materials at runtime
+	// Load and apply FSDS car materials at runtime.
+	// Materials are loaded from /Game/Vehicle/TechnionCar/Materials/ (cooked in pak).
+	// Some materials reference legacy SuvCar automotive textures that were removed;
+	// those will return null and fall back to mat_british_green.
 	if (GetMesh() && GetMesh()->GetSkeletalMeshAsset())
 	{
 		const FString MatPath = TEXT("/Game/Vehicle/TechnionCar/Materials/");
 
-		UMaterialInterface* RedMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "m_red_real_formula_mat.m_red_real_formula_mat"));
-		UMaterialInterface* CarbonMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_carbonFiber_Formula.mat_carbonFiber_Formula"));
-		UMaterialInterface* ChassisMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_chassis_Formula.mat_chassis_Formula"));
-		UMaterialInterface* YellowMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_yellow_Formula.mat_yellow_Formula"));
-		UMaterialInterface* DashMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_dashboard_Formula.mat_dashboard_Formula"));
-		UMaterialInterface* JuntsMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_junts_Formula.mat_junts_Formula"));
-		UMaterialInterface* NoseMat = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "nose_red_mat.nose_red_mat"));
+		// Load all car materials — some may be null if their texture deps were removed
+		UMaterialInterface* GreenMat    = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_british_green.mat_british_green"));
+		UMaterialInterface* RedMat      = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "m_red_real_formula_mat.m_red_real_formula_mat"));
+		UMaterialInterface* CarbonMat   = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_carbonFiber_Formula.mat_carbonFiber_Formula"));
+		UMaterialInterface* ChassisMat  = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_chassis_Formula.mat_chassis_Formula"));
+		UMaterialInterface* YellowMat   = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_yellow_Formula.mat_yellow_Formula"));
+		UMaterialInterface* DashMat     = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_dashboard_Formula.mat_dashboard_Formula"));
+		UMaterialInterface* JuntsMat    = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "mat_junts_Formula.mat_junts_Formula"));
+		UMaterialInterface* NoseMat     = LoadObject<UMaterialInterface>(nullptr, *(MatPath + "nose_red_mat.nose_red_mat"));
+
+		// Best available fallback: use GreenMat if chassis/red also fail
+		UMaterialInterface* FallbackMat = ChassisMat ? ChassisMat : (RedMat ? RedMat : GreenMat);
+
+		UE_LOG(LogTemp, Log, TEXT("FSDS Materials: green=%s red=%s carbon=%s chassis=%s yellow=%s dash=%s junts=%s nose=%s"),
+			GreenMat  ? TEXT("OK") : TEXT("FAIL"),
+			RedMat    ? TEXT("OK") : TEXT("FAIL"),
+			CarbonMat ? TEXT("OK") : TEXT("FAIL"),
+			ChassisMat? TEXT("OK") : TEXT("FAIL"),
+			YellowMat ? TEXT("OK") : TEXT("FAIL"),
+			DashMat   ? TEXT("OK") : TEXT("FAIL"),
+			JuntsMat  ? TEXT("OK") : TEXT("FAIL"),
+			NoseMat   ? TEXT("OK") : TEXT("FAIL"));
 
 		int32 NumMaterials = GetMesh()->GetNumMaterials();
 		USkeletalMesh* SkelMesh = GetMesh()->GetSkeletalMeshAsset();
 
-		// Log unique slot names to understand the mesh structure
-		TSet<FString> UniqueNames;
+		// Count null vs valid embedded material refs in the skeleton asset
+		int32 ValidMats = 0, NullMats = 0;
 		for (int32 i = 0; i < NumMaterials; i++)
 		{
-			FName SlotName = SkelMesh->GetMaterials()[i].MaterialSlotName;
-			UniqueNames.Add(SlotName.ToString());
+			if (SkelMesh->GetMaterials()[i].MaterialInterface) ValidMats++; else NullMats++;
 		}
-		// Log unique imported names (these contain the original material references)
-		TMap<FString, int32> ImportedNameCounts;
-		for (int32 i = 0; i < NumMaterials; i++)
-		{
-			FName ImportedName = SkelMesh->GetMaterials()[i].MaterialSlotName;
-			FString Key = ImportedName.ToString();
-			if (ImportedNameCounts.Contains(Key))
-				ImportedNameCounts[Key]++;
-			else
-				ImportedNameCounts.Add(Key, 1);
-		}
-		UE_LOG(LogTemp, Log, TEXT("FSDS: %d slots, %d unique imported names:"), NumMaterials, ImportedNameCounts.Num());
-		for (auto& Pair : ImportedNameCounts)
-		{
-			UE_LOG(LogTemp, Log, TEXT("  '%s' (%d slots)"), *Pair.Key, Pair.Value);
-		}
+		UE_LOG(LogTemp, Log, TEXT("FSDS: %d material slots — %d embedded valid, %d embedded null"), NumMaterials, ValidMats, NullMats);
 
-		// Check how many slots already have valid materials loaded
-		// (the /AirSim/ mount point may have resolved them automatically)
-		int32 ValidMats = 0;
-		int32 NullMats = 0;
-		for (int32 i = 0; i < NumMaterials; i++)
-		{
-			UMaterialInterface* ExistingMat = SkelMesh->GetMaterials()[i].MaterialInterface;
-			if (ExistingMat)
-				ValidMats++;
-			else
-				NullMats++;
-		}
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Materials — %d valid, %d null (out of %d)"), ValidMats, NullMats, NumMaterials);
-
-		// Load British Racing Green material
-		UMaterialInterface* GreenMat = LoadObject<UMaterialInterface>(nullptr,
-			TEXT("/Game/Vehicle/TechnionCar/Materials/mat_british_green.mat_british_green"));
-
-		// Keep valid materials, fill nulls with chassis, apply green to Element 112 (body panel)
+		// Apply materials slot by slot.
+		// Slot assignment priority (highest first):
+		//   1. Specific runtime material that loaded successfully
+		//   2. Embedded material from the skeleton asset (if valid)
+		//   3. FallbackMat (chassis > red > green) — ensures no slot is grey
 		int32 Fixed = 0;
 		for (int32 i = 0; i < NumMaterials; i++)
 		{
-			if (i == 112 && GreenMat)
+			// Element 112: body panel → British Racing Green (or fallback)
+			if (i == 112)
 			{
-				// Element 112: body panel → British Racing Green
-				GetMesh()->SetMaterial(i, GreenMat);
+				GetMesh()->SetMaterial(i, GreenMat ? GreenMat : FallbackMat);
 				continue;
 			}
 
+			// Try the embedded skeleton material reference first
 			UMaterialInterface* ExistingMat = SkelMesh->GetMaterials()[i].MaterialInterface;
 			if (ExistingMat)
 			{
@@ -492,12 +481,13 @@ void AFSDSVehiclePawn::BeginPlay()
 			}
 			else
 			{
-				GetMesh()->SetMaterial(i, ChassisMat ? ChassisMat : RedMat);
+				// No embedded material — use fallback so slot isn't grey
+				GetMesh()->SetMaterial(i, FallbackMat);
 				Fixed++;
 			}
 		}
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Kept %d original, %d null→chassis, Element 112→%s"),
-			ValidMats, Fixed, GreenMat ? TEXT("British Green") : TEXT("fallback"));
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Applied materials — %d from skeleton, %d null→fallback, elem112→green"),
+			ValidMats, Fixed);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Vehicle pawn spawned at %s (Chaos: %s)"),
