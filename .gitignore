@@ -26,6 +26,11 @@ venv/
 __pycache__/
 *.pyc
 
+# Frontend build / dev-server caches (Mission Control is Vite)
+node_modules/
+.vite/
+dist/
+
 # OS files
 .DS_Store
 Thumbs.db
