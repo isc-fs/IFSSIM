@@ -28,6 +28,13 @@ public:
     /** Convenience: send and parse a float response from JSON */
     double parseDouble(const std::string& json, const std::string& key);
 
+    /** Parse a JSON boolean field by key. Returns true if the value is
+     *  the literal `true`, false otherwise (including missing key). Robust
+     *  to JSON key reordering and whitespace — unlike a naive substring
+     *  match on `"key":true` which breaks the moment the plugin reorders
+     *  its output fields. */
+    bool parseBool(const std::string& json, const std::string& key);
+
     /** Send a binary command and receive header + binary data
      * Protocol: send "command\n", receive "HEADER:value\n" + raw bytes
      * Returns the header line and fills outData with binary payload */
