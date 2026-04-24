@@ -72,9 +72,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	float MinRange = 50.f; // 0.5m
 
-	/** Sensor offset from vehicle origin (cm, local space) */
+	/** Sensor offset from vehicle origin (cm, local space).
+	 *  Z must place the sensor ABOVE the vehicle origin — if it ends up below the
+	 *  ground collider, downward rays start inside world geometry and register no
+	 *  hits, producing a flat 2D scan. +60cm ≈ roof-mounted lidar for a formula car. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
-	FVector SensorOffset = FVector(140.f, 0.f, -20.f);
+	FVector SensorOffset = FVector(140.f, 0.f, 60.f);
 
 	/** Draw debug points in editor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
