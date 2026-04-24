@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- No app-sandbox: the simulator needs to read CSV track files from
+	     arbitrary user-accessible paths and bind a TCP server socket (port 41451).
+	     Without app-sandbox both are allowed by macOS by default.
+	     com.apple.security.get-task-allow permits debugger attachment. -->
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+</dict>
+</plist>

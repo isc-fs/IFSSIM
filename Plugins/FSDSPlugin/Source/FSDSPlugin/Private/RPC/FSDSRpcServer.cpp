@@ -787,6 +787,65 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("simGetSegmentationObjectID")) { return TEXT("0"); }
 	else if (Method == TEXT("simSwapTextures")) { return TEXT("[]"); }
 
+	// === Cone diagnostic: report which cone meshes loaded successfully (game thread) ===
+	else if (Method == TEXT("debugCones"))
+	{
+		FString Result;
+		FEvent* DoneEvent = FPlatformProcess::GetSynchEventFromPool(true);
+
+		AsyncTask(ENamedThreads::GameThread, [this, &Result, DoneEvent]() {
+			static const TCHAR* ConePaths[] = {
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue.trafficone_mini_blue"),
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow"),
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange.trafficone_mini_orange"),
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange.trafficone_big_orange"),
+			};
+			// Also try without the .ObjectName suffix (package-only path)
+			static const TCHAR* ConePathsShort[] = {
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_blue"),
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow"),
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_orange"),
+				TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_big_orange"),
+			};
+			static const TCHAR* ConeNames[] = { TEXT("blue"), TEXT("yellow"), TEXT("orange"), TEXT("big_orange") };
+
+			FString Out = TEXT("{");
+			for (int32 i = 0; i < 4; i++)
+			{
+				UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, ConePaths[i]);
+				// Fallback: try FSoftObjectPath::TryLoad (uses async loader)
+				if (!Mesh)
+				{
+					FSoftObjectPath SoftPath(ConePaths[i]);
+					Mesh = Cast<UStaticMesh>(SoftPath.TryLoad());
+				}
+				// Fallback 2: short path (no .ObjectName suffix)
+				if (!Mesh)
+				{
+					FSoftObjectPath SoftPath2(ConePathsShort[i]);
+					Mesh = Cast<UStaticMesh>(SoftPath2.TryLoad());
+				}
+				Out += FString::Printf(TEXT("\"%s\":%s"), ConeNames[i], Mesh ? TEXT("true") : TEXT("false"));
+				if (i < 3) Out += TEXT(",");
+			}
+
+			// Spawner / world check
+			AFSDSConeSpawner* Spawner = nullptr;
+			if (World) {
+				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It) { Spawner = *It; break; }
+			}
+			Out += FString::Printf(TEXT(",\"spawner\":%s,\"world\":%s}"),
+				Spawner ? TEXT("true") : TEXT("false"),
+				World   ? TEXT("true") : TEXT("false"));
+			Result = Out;
+			DoneEvent->Trigger();
+		});
+
+		DoneEvent->Wait(5000);
+		FPlatformProcess::ReturnSynchEventToPool(DoneEvent);
+		return Result;
+	}
+
 	// === Track loading ===
 
 	else if (Method == TEXT("loadTrack"))
