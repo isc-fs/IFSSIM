@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { apiWsUrl } from '../lib/api';
 
 export interface TelemetryData {
   speed: number;
@@ -47,7 +48,12 @@ export function useWebSocket(url: string) {
 
   const connect = useCallback(() => {
     try {
-      const ws = new WebSocket(url);
+      // apiWsUrl appends ?api_key=... when the user has one configured.
+      // If the backend enforces auth and the key is missing/wrong, it
+      // closes the handshake with 1008 and we fall through to the
+      // reconnect loop (give the user a chance to set the key, then
+      // retry).
+      const ws = new WebSocket(apiWsUrl(url));
       wsRef.current = ws;
 
       ws.onopen = () => setConnected(true);

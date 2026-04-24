@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiFetch, promptForApiKey } from '../lib/api'
 
 interface ScoringData {
   event: string;
@@ -22,7 +23,7 @@ export default function Scoring() {
 
   const refresh = async () => {
     const url = tBest ? `/api/scoring/summary?t_best=${tBest}` : '/api/scoring/summary'
-    const r = await fetch(url)
+    const r = await apiFetch(url, {}, promptForApiKey)
     const d = await r.json()
     if (!d.error) setScoring(d)
   }

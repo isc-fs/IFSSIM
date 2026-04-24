@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useWebSocket } from './hooks/useWebSocket'
+import { apiFetch, promptForApiKey } from './lib/api'
 import StatusBar from './components/StatusBar'
 import EventSetup from './components/EventSetup'
 import TrackManager from './components/TrackManager'
@@ -32,9 +33,9 @@ function App() {
         <button
           onClick={async () => {
             if (telemetry.res_active) {
-              await fetch('/api/res/release', { method: 'POST' })
+              await apiFetch('/api/res/release', { method: 'POST' }, promptForApiKey)
             } else {
-              await fetch('/api/res/activate', { method: 'POST' })
+              await apiFetch('/api/res/activate', { method: 'POST' }, promptForApiKey)
             }
           }}
           className={`font-bold px-6 py-2 rounded-lg text-sm uppercase tracking-wider border-2
