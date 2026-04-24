@@ -16,7 +16,10 @@ class UWorld;
  * FSDS RPC Server — TCP server on port 41451.
  * Protocol: "method_name [args]\n" -> "json_response\n"
  *
- * Simulation control: simPause, simResume, simStep, reset
+ * Simulation control: simPause, simResume, simStep, simSetVehiclePose
+ *   (the legacy `reset` method was removed in fix/12 — it tried to
+ *    OpenLevel and crashed the editor. `simSetVehiclePose` plus the
+ *    plugin's ReleaseEbs is the supported soft-reset path.)
  * Object APIs: listSceneObjects, getObjectPose, setObjectPose
  */
 class FSDSPLUGIN_API FFSDSRpcServer

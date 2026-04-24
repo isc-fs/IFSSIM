@@ -824,28 +824,39 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return Result;
 	}
 
-	// === Weather / TimeOfDay stubs ===
-
+	// === Weather / TimeOfDay — still "true" stubs ===
+	// Left as-is because no client cares about the return value today and
+	// the team hasn't decided whether it wants real weather/TOD simulation
+	// or silent no-ops. Revisit when that decision lands.
 	else if (Method == TEXT("simEnableWeather") || Method == TEXT("simSetWeatherParameter") || Method == TEXT("simSetTimeOfDay"))
 	{
 		return TEXT("true");
 	}
 
-	// === Visualization stubs ===
-
+	// === Visualization helpers — not implemented ===
+	// The AirSim-era simPlot* APIs would draw persistent debug primitives
+	// in the world. The driverless pipeline never called them, so nobody
+	// missed them when the plugin migrated off AirSim. Previously returned
+	// the string "true" as a silent accept, which hides bugs if any new
+	// client starts relying on them — report the real state instead.
 	else if (Method == TEXT("simPlotPoints") || Method == TEXT("simPlotLineStrip") ||
 		Method == TEXT("simPlotLineList") || Method == TEXT("simPlotArrows") ||
 		Method == TEXT("simPlotStrings") || Method == TEXT("simPlotTransforms") ||
 		Method == TEXT("simPlotTransformsWithNames") || Method == TEXT("simFlushPersistentMarkers"))
 	{
-		return TEXT("true");
+		return FString::Printf(TEXT("{\"error\":\"method not implemented: %s\"}"), *Method);
 	}
 
-	// === Segmentation stubs ===
-
-	else if (Method == TEXT("simSetSegmentationObjectID")) { return TEXT("true"); }
-	else if (Method == TEXT("simGetSegmentationObjectID")) { return TEXT("0"); }
-	else if (Method == TEXT("simSwapTextures")) { return TEXT("[]"); }
+	// === Segmentation — not implemented ===
+	// Segmentation camera requires a custom post-process material per
+	// object class + per-actor stencil assignment; out of scope today.
+	// Returning explicit not-implemented rather than faked success.
+	else if (Method == TEXT("simSetSegmentationObjectID") ||
+		Method == TEXT("simGetSegmentationObjectID") ||
+		Method == TEXT("simSwapTextures"))
+	{
+		return FString::Printf(TEXT("{\"error\":\"method not implemented: %s\"}"), *Method);
+	}
 
 	// === Cone diagnostic: report which cone meshes loaded successfully (game thread) ===
 	else if (Method == TEXT("debugCones"))
