@@ -85,6 +85,11 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 
 	FCollisionQueryParams TraceParams;
 	TraceParams.AddIgnoredActor(InOwner);
+	// Chaos vehicles have wheels/suspension as attached actors — recursively ignore
+	// them so horizontal rays don't graze wheel collision at ground level.
+	TArray<AActor*> AttachedActors;
+	InOwner->GetAttachedActors(AttachedActors, /*bResetArray*/ true, /*bRecursivelyIncludeAttachedActors*/ true);
+	for (AActor* Attached : AttachedActors) TraceParams.AddIgnoredActor(Attached);
 	TraceParams.bTraceComplex = false;
 	TraceParams.bReturnPhysicalMaterial = false;
 
