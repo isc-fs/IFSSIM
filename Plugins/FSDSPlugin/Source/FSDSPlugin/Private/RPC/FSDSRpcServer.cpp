@@ -810,12 +810,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		else
 		{
-			TArray<FString> SearchDirs = {
+			// Packaged: sibling tracks/ dir next to the .app
+		// ProjectDir = {App}/Contents/UE/IFSSIM/  →  ../../../../ = parent of {App}
+		FString SiblingTracksDir = FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../../tracks")));
+		TArray<FString> SearchDirs = {
 				FPaths::Combine(FPaths::ProjectDir(),  TEXT("Content"), TEXT("tracks")), // editor / PIE source tree
-				FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")), // packaged (NonUFS staging)
+				SiblingTracksDir,                                                         // next to .app (distribution layout)
+				FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")), // LaunchDir fallback
 				FPaths::Combine(FPaths::LaunchDir(),   TEXT("tracks")),                  // safety net
-				// User-writable location for runtime-generated tracks in packaged builds
-				// (app bundle is read-only; track generator should write here)
+				// User-writable fallback for generated tracks
 				FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM"), TEXT("tracks")),
 			};
 			FString Leaf = FPaths::GetCleanFilename(TrackPath);

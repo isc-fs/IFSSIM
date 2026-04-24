@@ -28,10 +28,17 @@ void AFSDSConeSpawner::BeginPlay()
 		// 2) Packaged Mac: AdditionalNonUFSFiles are staged into LaunchDir, so the
 		//    CSV files land at <App>/Contents/UE/IFSSIM/Binaries/Mac/Content/tracks
 		TArray<FString> CandidateDirs;
-		CandidateDirs.Add(FPaths::Combine(FPaths::ProjectDir(),  TEXT("Content"), TEXT("tracks")));  // editor / PIE
-		CandidateDirs.Add(FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")));  // packaged (NonUFS staging)
+		CandidateDirs.Add(FPaths::Combine(FPaths::ProjectDir(),  TEXT("Content"), TEXT("tracks")));  // editor / PIE source tree
+		CandidateDirs.Add(FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")));  // LaunchDir fallback
 		CandidateDirs.Add(FPaths::Combine(FPaths::LaunchDir(),   TEXT("tracks")));                   // safety net
-		// User-writable location for runtime-generated tracks in packaged builds
+		// Packaged: tracks/ lives NEXT TO the .app in the distribution folder.
+		// ProjectDir = {App}/Contents/UE/IFSSIM/  →  ../../../../ = parent of {App}
+		{
+			FString SiblingTracksDir = FPaths::ConvertRelativePathToFull(
+				FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../../tracks")));
+			CandidateDirs.Add(SiblingTracksDir);
+		}
+		// User-writable fallback for runtime-generated tracks
 		CandidateDirs.Add(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM"), TEXT("tracks")));
 
 		// Helper: resolve a leaf CSV name across all candidate dirs, preferring the
