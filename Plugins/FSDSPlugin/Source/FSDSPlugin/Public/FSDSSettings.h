@@ -97,15 +97,20 @@ struct FFSDSSensorSettings
 	float MaxRange = 100.f; // meters
 	bool bDrawDebugPoints = false;
 
-	// Noise parameters (apply to all sensor types, 0 = no noise)
-	float GpsPositionNoiseStd = 0.f;  // meters
+	// Noise parameters (apply to all sensor types, 0 = no noise).
+	// All values are SI: m, m/s, m/s², rad/s. The plugin converts to its
+	// internal cm/s²-based accel signal when applying AccelNoiseStd /
+	// AccelBiasStd (see FSDSVehiclePawn::SetupSensorsFromSettings);
+	// the bridge receives accel in m/s² (UEVelocityToENU) so covariance
+	// uses these values as-is.
+	float GpsPositionNoiseStd = 0.f;  // m
 	float GpsVelocityNoiseStd = 0.f;  // m/s
-	float AccelNoiseStd = 0.f;        // cm/s²
+	float AccelNoiseStd = 0.f;        // m/s²
 	float GyroNoiseStd = 0.f;         // rad/s
-	float AccelBiasStd = 0.f;         // cm/s² per sqrt(s)
+	float AccelBiasStd = 0.f;         // m/s² per sqrt(s)
 	float GyroBiasStd = 0.f;          // rad/s per sqrt(s)
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
-	float RangeNoiseStd = 0.f;        // cm (LiDAR)
+	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
 };
 

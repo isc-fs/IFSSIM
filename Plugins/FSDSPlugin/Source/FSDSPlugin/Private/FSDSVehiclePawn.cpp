@@ -258,11 +258,16 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		UFSDSCameraSensor* Cam = NewObject<UFSDSCameraSensor>(this, FName(*CamPair.Key));
 		Cam->SetupAttachment(GetRootComponent());
 
-		// Position: settings uses meters, UE uses cm
+		// Position: settings in meters, UE in cm. Convention is UE-native
+		// (X = forward, Y = right, Z = up); matches the LiDAR mount block
+		// above. Previously the camera path negated Z with the comment
+		// "Z is inverted in settings (negative = up)" — an AirSim/NED
+		// hangover — which meant settings.json had to bury one sign flip
+		// only for cameras while LiDAR was up-positive. Harmonised.
 		Cam->SetRelativeLocation(FVector(
 			CamSettings.Position.X * 100.f,
 			CamSettings.Position.Y * 100.f,
-			CamSettings.Position.Z * -100.f // Z is inverted in settings (negative = up)
+			CamSettings.Position.Z * 100.f
 		));
 		Cam->SetRelativeRotation(CamSettings.Rotation);
 
@@ -279,7 +284,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			*CamPair.Key,
 			CamSettings.Position.X * 100.f,
 			CamSettings.Position.Y * 100.f,
-			CamSettings.Position.Z * -100.f);
+			CamSettings.Position.Z * 100.f);
 	}
 
 	// Configure LiDAR from settings
@@ -318,16 +323,21 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		}
 	}
 
-	// Configure noise from settings — IMU (SensorType 2)
+	// Configure noise from settings — IMU (SensorType 2).
+	// Settings are in SI (m/s², rad/s). The IMU sensor's
+	// Output.LinearAcceleration is in cm/s² (gravity is added as
+	// `WorldAccel.Z += 980.f`, matching UE's cm-based units), so the
+	// accel-side values need a ×100 bump to match that scale. Gyro
+	// values are rad/s on both sides and go through unchanged.
 	if (ImuSensor)
 	{
 		for (auto& SensorPair : VehicleSettings->Sensors)
 		{
 			if (SensorPair.Value.SensorType == 2 && SensorPair.Value.bEnabled)
 			{
-				ImuSensor->AccelNoiseStd = SensorPair.Value.AccelNoiseStd;
+				ImuSensor->AccelNoiseStd = SensorPair.Value.AccelNoiseStd * 100.f;
 				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
-				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd;
+				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd * 100.f;
 				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
 				break;
 			}
