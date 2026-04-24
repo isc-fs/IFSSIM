@@ -212,15 +212,19 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
 
 	// === IFS-08 Mass & Inertia ===
-	// Total mass: 290 kg (car 210 + driver 80)
-	// Wheelbase: 1627 mm, weight dist front: 43.8%
-	// CoG at 713mm from front axle = 813.5mm - 713mm = 100.5mm behind mesh center
-	// CoG height: 344mm from ground
-	VehicleMovement->Mass = 290.f;
+	// IFS-08 driving mass (corner-weight-measured):
+	//   Car    210 kg   Driver ≈ 65 kg  → total 275 kg
+	// Susp_Geometry sheet (CAD authoritative):
+	//   Wheelbase  1600 mm
+	//   CoG height  300 mm
+	//   Weight dist front 0.438 → CoG is 0.562 · 1600 = 899 mm from
+	//   the front axle, i.e. 99 mm rearward of the wheelbase midpoint
+	//   (800 mm) → -9.9 cm in UE X relative to the mesh center.
+	// Settings.json overrides all three of these via ApplyPhysicsSettings;
+	// the hardcoded values below are only used if settings.json is
+	// missing.
+	VehicleMovement->Mass = 275.f;
 	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
-	// CoG offset: negative X = rearward (43.8% front means rear-biased)
-	// Mesh center is roughly at wheelbase/2 = 813mm from front
-	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
 	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
 }
