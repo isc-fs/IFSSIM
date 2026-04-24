@@ -288,8 +288,9 @@ response = s.recv(1024)  # b"true"
 | `enableApiControl` | `true` | Enable API mode, disable manual input |
 | `isApiControlEnabled` | `true`/`false` | Query API control state |
 | `getSettingsString` | JSON string | Full contents of settings.json |
-| `reset` | `true` | Reload current level (full state reset) |
+| `reset` | `true` | Reload current level (full state reset) — note: the server-info advert no longer lists this command, but the handler is still wired up for legacy clients |
 | `listCameras` | `["cam1","cam2",...]` | List configured camera names |
+| `getSensorOffset <name>` | `x, y, z, roll, pitch, yaw` (m / rad) | Static body-frame offset of a sensor as configured in settings.json. The ROS 2 bridge calls this on init to publish accurate static TFs instead of hardcoding values. |
 
 #### Vehicle State
 
@@ -671,6 +672,14 @@ Mission Control is a web-based operator interface split into a **FastAPI backend
 
 ### Backend (FastAPI, port 8000)
 
+#### Authentication (optional)
+
+When the backend process has `IFSSIM_MC_API_KEY` set in its environment, every mutating REST call must include the header `X-API-Key: <value>`, and the WebSocket handshake must include `?api_key=<value>` as a query parameter. Calls without a valid key get HTTP 401 (or a 1008 close on the WS).
+
+When the env var is **unset**, no key is required — convenient for solo dev. CORS is similarly env-driven via `IFSSIM_MC_CORS_ORIGINS` (defaults to `http://localhost:3000`).
+
+The frontend stores the key in `localStorage` under `mc_api_key`; on the first 401 it prompts for the value and retries the call.
+
 #### REST API
 
 **Simulation:**
@@ -735,7 +744,7 @@ Mission Control is a web-based operator interface split into a **FastAPI backend
 ws://localhost:8000/ws/telemetry
 ```
 
-Pushes JSON at **10 Hz**:
+Pushes JSON at **5 Hz** (200 ms loop):
 
 ```json
 {
@@ -744,15 +753,27 @@ Pushes JSON at **10 Hz**:
   "gear": 2,
   "x": 45.2, "y": 12.1, "z": 0.3,
   "throttle": 0.7, "steering": 0.05, "brake": 0.0,
+
+  "regen_torque": 12.5,
+  "regen_power": 4200.0,
+  "regen_avail_torque": 18.0,
+  "regen_max_torque": 240.0,
+  "regen_max_power": 80000.0,
+
   "doo": 1, "oc": 0,
   "laps": 3, "required_laps": 10,
   "finished": false,
   "event": "trackdrive",
   "fps": 60,
   "paused": false,
-  "res_active": false
+  "res_active": false,
+  "pipeline_enabled": true
 }
 ```
+
+The five `regen_*` fields surface live brake-energy-recovery telemetry (motor-side, pre-gearbox) — `*_avail_torque` is the cap at the current motor ω, `*_max_torque/power` are the hardware ceilings from `settings.json`. `pipeline_enabled` mirrors the `/pipeline_ctrl/enable` flag the bridge watches.
+
+If the backend can't talk to the sim, the loop emits `{"error": "sim_disconnected"}` instead of the schema above.
 
 ### Frontend (React + TypeScript + Tailwind, port 3000)
 

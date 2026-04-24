@@ -4,6 +4,33 @@ Status as of 2026-04-18. Car can be launched from Mission Control (Start Session
 
 ---
 
+## Update — 2026-04-25
+
+The list below has been partially addressed by fix/26 → fix/37. Updated status:
+
+| # | Item | Status | PR / Note |
+|---|------|--------|-----------|
+| 1 | Stanley/velocity controller tuning | **deferred** | Pipeline-internal — explicitly out of scope for the sim/plugin/bridge audit |
+| 2 | SLAM map quality under motion | **deferred** | Pipeline-internal |
+| 3 | Path planner heading | **deferred** | Pipeline-internal |
+| 4 | Skidpad / acceleration events untested | **deferred** | Tracked in `project_followups.md` (Acceleration finish-detection) |
+| 5 | Lap counting / OC at spawn | **fixed** | #80 (fix/29) — OC suppressed until car moves past spawn; laps echo correct |
+| 6 | UE5 reconnect — control commands dropped during gap | **partially fixed** | #84 (fix/31) added truncation warning + robust `finished` parse; bridge graceful-fallback on disconnect still TODO |
+| 7 | Lichtblick "dots to the left" — TF mismatch | **fixed** | #92 (fix/35) — bridge now queries `getSensorOffset` from plugin instead of hardcoding stale values |
+| 8 | No integration tests | **still open** | No CI runner for the UE side; deferred |
+
+Additionally, the following sim/plugin/bridge gaps were caught during the audit and shipped in the same window (not in the original list):
+
+- Plugin memory-safety: 3 UAFs in RPC server + LiDAR sensor (#81)
+- Camera Z axis polarity + IMU noise unit harmonisation to SI (#86)
+- seg/plot stubs return errors instead of silently lying (#90)
+- MC API-key auth + tightened CORS default (#94)
+- MC telemetry WS regressions + Scoring tab null guard (#95)
+
+Original list below preserved for reference.
+
+---
+
 ## What works
 
 - **Mission Control one-button flow**: Start Session → stops pipeline → activates RES → sets event/laps → resumes sim → releases RES → starts pipeline automatically.
