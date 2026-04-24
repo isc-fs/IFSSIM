@@ -129,6 +129,36 @@ void IFSSIMRosWrapper::initializeConnection()
 
     std::string settings = client_->sendCommand("getSettingsString");
     parseNoiseSettings(settings);
+
+    // Cache sensor mount offsets from the plugin so static TFs don't
+    // drift out of sync with settings.json. Queried once; offsets are
+    // constructor-time constants on the sim side and won't change until
+    // the sim is restarted.
+    lidar_offset_ = querySensorOffset("lidar");
+    for (const auto& cam_name : camera_names_) {
+        camera_offsets_[cam_name] = querySensorOffset(cam_name);
+    }
+}
+
+IFSSIMRosWrapper::Vec3 IFSSIMRosWrapper::querySensorOffset(const std::string& name)
+{
+    Vec3 v;
+    if (!client_ || !client_->isConnected()) return v;
+    std::string resp = client_->sendCommand("getSensorOffset " + name);
+    if (resp.empty() || resp.find("\"error\"") != std::string::npos) {
+        RCLCPP_WARN(node_->get_logger(),
+            "getSensorOffset(%s) failed: %s — static TF for this sensor will be skipped",
+            name.c_str(), resp.empty() ? "no response" : resp.c_str());
+        return v;
+    }
+    v.x = client_->parseDouble(resp, "x");
+    v.y = client_->parseDouble(resp, "y");
+    v.z = client_->parseDouble(resp, "z");
+    v.valid = true;
+    RCLCPP_INFO(node_->get_logger(),
+        "Sensor '%s' mount: (%.3f, %.3f, %.3f) m (REP-103 body frame)",
+        name.c_str(), v.x, v.y, v.z);
+    return v;
 }
 
 void IFSSIMRosWrapper::initializePublishers()
@@ -600,22 +630,32 @@ void IFSSIMRosWrapper::staticTfCb()
 {
     auto now = node_->now();
 
-    // LiDAR
-    geometry_msgs::msg::TransformStamped tf;
-    tf.header.stamp = now;
-    tf.header.frame_id = vehicle_frame_id_;
-    tf.child_frame_id = vehicle_frame_id_ + "/Lidar1";
-    tf.transform.translation.x = 1.4;  // 1.4m forward (REP-103: body X = forward)
-    tf.transform.translation.z = -0.2;
-    tf.transform.rotation.w = 1.0;
-    static_tf_broadcaster_->sendTransform(tf);
+    // Positions come from the plugin via getSensorOffset (cached at
+    // initializeConnection). Previously hardcoded to 1.4 m / 1.6 m
+    // forward — stale any time settings.json moved the mounts, which
+    // happened multiple times during fix/21-26.
+    if (lidar_offset_.valid) {
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header.stamp = now;
+        tf.header.frame_id = vehicle_frame_id_;
+        tf.child_frame_id = vehicle_frame_id_ + "/Lidar1";
+        tf.transform.translation.x = lidar_offset_.x;
+        tf.transform.translation.y = lidar_offset_.y;
+        tf.transform.translation.z = lidar_offset_.z;
+        tf.transform.rotation.w = 1.0;
+        static_tf_broadcaster_->sendTransform(tf);
+    }
 
     for (const auto& cam_name : camera_names_) {
+        auto it = camera_offsets_.find(cam_name);
+        if (it == camera_offsets_.end() || !it->second.valid) continue;
         geometry_msgs::msg::TransformStamped ctf;
         ctf.header.stamp = now;
         ctf.header.frame_id = vehicle_frame_id_;
         ctf.child_frame_id = vehicle_frame_id_ + "/" + cam_name;
-        ctf.transform.translation.x = 1.6;  // 1.6m forward
+        ctf.transform.translation.x = it->second.x;
+        ctf.transform.translation.y = it->second.y;
+        ctf.transform.translation.z = it->second.z;
         ctf.transform.rotation.w = 1.0;
         static_tf_broadcaster_->sendTransform(ctf);
     }
