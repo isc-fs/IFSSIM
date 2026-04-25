@@ -26,7 +26,8 @@ public:
 
 	FGssOutput GetOutput() const { return CachedOutput; }
 
-	/** Velocity noise σ in m/s per axis (0 = no noise). Typical wheel speed sensor ~0.02 */
+	/** Velocity noise σ in m/s per axis, Gaussian (0 = no noise). Typical
+	 *  wheel-speed sensor ~0.02. Bridge publishes twist covariance as σ². */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GSS Noise")
 	float VelocityNoiseStd = 0.0f;
 

@@ -2,6 +2,9 @@
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "Async/Async.h"
+#include "FSDSSensorNoise.h"
+
+using FSDSNoise::RandStandardNormal;
 
 UFSDSLidarSensor::UFSDSLidarSensor()
 {
@@ -128,8 +131,12 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 
 				float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
 
+				// Gaussian range jitter (cm — see header comment on
+				// RangeNoiseStd; FSDSVehiclePawn converts m → cm at the
+				// wire site). FRandRange(-1, 1) was uniform, emitting
+				// ~0.58× the declared stddev.
 				if (RangeNoiseStd > 0.f)
-					Dist += FMath::FRandRange(-1.f, 1.f) * RangeNoiseStd;
+					Dist += RangeNoiseStd * RandStandardNormal();
 
 				if (Dist >= MinRange)
 				{

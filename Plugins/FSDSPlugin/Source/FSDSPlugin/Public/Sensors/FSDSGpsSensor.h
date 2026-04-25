@@ -39,11 +39,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GPS")
 	float HomeAltitude = 122.f;
 
-	/** Position noise standard deviation in meters (0 = no noise) */
+	/** Position noise σ in metres, Gaussian (0 = no noise). Bridge publishes
+	 *  position_covariance.diag = σ² so emitted noise must match this stddev. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GPS Noise")
 	float GpsPositionNoiseStd = 0.0f;
 
-	/** Velocity noise standard deviation in m/s (0 = no noise) */
+	/** Velocity noise σ in m/s per axis, Gaussian (0 = no noise). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS GPS Noise")
 	float GpsVelocityNoiseStd = 0.0f;
 

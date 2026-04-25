@@ -1,4 +1,7 @@
 #include "Sensors/FSDSGssSensor.h"
+#include "FSDSSensorNoise.h"
+
+using FSDSNoise::RandStandardNormal;
 
 UFSDSGssSensor::UFSDSGssSensor()
 {
@@ -22,12 +25,16 @@ void UFSDSGssSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	FQuat InvRotation = Owner->GetActorQuat().Inverse();
 	Output.LinearVelocity = InvRotation.RotateVector(WorldVelocity);
 
-	// Apply velocity noise
+	// Apply velocity noise — Gaussian. The bridge publishes the GSS twist
+	// covariance as VelocityNoiseStd², so the emitted noise must match the
+	// declared stddev. The earlier FRandRange(-1, 1) was uniform, giving
+	// 1/√3 ≈ 0.58× the declared stddev — silently overstating GSS noise
+	// to any consumer EKF.
 	if (VelocityNoiseStd > 0.f)
 	{
-		Output.LinearVelocity.X += FMath::FRandRange(-1.f, 1.f) * VelocityNoiseStd;
-		Output.LinearVelocity.Y += FMath::FRandRange(-1.f, 1.f) * VelocityNoiseStd;
-		Output.LinearVelocity.Z += FMath::FRandRange(-1.f, 1.f) * VelocityNoiseStd;
+		Output.LinearVelocity.X += VelocityNoiseStd * RandStandardNormal();
+		Output.LinearVelocity.Y += VelocityNoiseStd * RandStandardNormal();
+		Output.LinearVelocity.Z += VelocityNoiseStd * RandStandardNormal();
 	}
 
 	CachedOutput = Output;

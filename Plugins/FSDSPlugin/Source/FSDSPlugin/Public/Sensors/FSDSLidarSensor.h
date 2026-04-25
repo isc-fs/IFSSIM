@@ -83,7 +83,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;
 
-	/** Range measurement noise σ in cm (0 = no noise). Hesai ATX ~2cm */
+	/** Range measurement noise σ in cm, Gaussian (0 = no noise). Hesai ATX ~2 cm.
+	 *  settings.json declares this in metres; FSDSVehiclePawn does the m→cm
+	 *  conversion (× 100) when wiring it through. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float RangeNoiseStd = 0.0f;
 
