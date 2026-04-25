@@ -302,7 +302,14 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->HorizontalFOVStart = SensorPair.Value.HorizontalFOVStart;
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
-				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
+				// RangeNoiseStd is declared in SI metres (settings.json) but
+				// the LiDAR's PerformScan() applies it inside the cm-space
+				// `Dist` distance buffer — convert m → cm here so a declared
+				// 0.03 m (3 cm) is actually emitted as 3 cm of stddev.
+				// Without this `* 100.f` the previous code emitted ~170×
+				// less noise than declared (declared 3 cm → actual ~0.17 mm),
+				// making sim point clouds unrealistically clean.
+				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd * 100.f;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 				break;
 			}

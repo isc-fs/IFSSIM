@@ -166,13 +166,13 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Vertical FOV lower | −16° | ✓ |
 | Horizontal FOV | ±60° | ✓ |
 | Max range | 100 m | ✓ |
-| Range noise std | 2.0 cm | ✓ |
+| Range noise std (Gaussian) | 3.0 cm | ✓ |
 | Point dropout rate | 1% | ✓ |
 | Mount position | X=1.4m, Z=−0.2m | ✓ |
 
 Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up). Each point is 3 floats (x, y, z) in metres.
 
-**Noise model:** Gaussian range noise applied per point. Independent Bernoulli dropout per point with configurable probability.
+**Noise model:** Gaussian range noise applied per point (settings.json declares it in metres; the plugin converts to its cm-internal scale at the wire site). Independent Bernoulli dropout per point.
 
 ### 4.2 IMU
 
@@ -203,11 +203,13 @@ so `*BiasStd` is the *long-run* steady-state stddev (the bound), not a drift rat
 
 | Parameter | Default | Configurable |
 |---|---|---|
-| Position noise std | 0.5 m | ✓ |
-| Velocity noise std | 0.1 m/s | ✓ |
+| Position noise std (Gaussian) | 0.5 m | ✓ |
+| Velocity noise std (Gaussian) | 0.1 m/s | ✓ |
 | Reference origin | Map centre | — |
 
 **Coordinate conversion:** ENU position → latitude/longitude using a flat-Earth approximation anchored to a configurable reference origin. Output is WGS84 latitude, longitude, altitude.
+
+The bridge publishes `position_covariance.diag = σ²`. Earlier versions emitted noise from `FRandRange(-1,1)` (uniform), so actual stddev was 0.58× the declared value — the bridge over-stated GPS noise to consumers by √3.
 
 ### 4.4 Ground Speed Sensor (GSS)
 
@@ -215,7 +217,7 @@ so `*BiasStd` is the *long-run* steady-state stddev (the bound), not a drift rat
 
 | Parameter | Default | Configurable |
 |---|---|---|
-| Velocity noise std | 0.02 m/s | ✓ |
+| Velocity noise std (Gaussian) | 0.02 m/s | ✓ |
 
 **Outputs:** Linear velocity vector (vx, vy, vz) in vehicle body frame (ENU convention: X forward, Y left).
 

@@ -1,4 +1,7 @@
 #include "Sensors/FSDSGpsSensor.h"
+#include "FSDSSensorNoise.h"
+
+using FSDSNoise::RandStandardNormal;
 
 UFSDSGpsSensor::UFSDSGpsSensor()
 {
@@ -33,19 +36,23 @@ void UFSDSGpsSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	// Velocity in m/s
 	Output.Velocity = WorldVel / 100.f;
 
-	// Apply GPS noise
+	// Apply GPS noise — Gaussian. The bridge publishes
+	// position_covariance.diag = GpsPositionNoiseStd², so the actual
+	// emitted noise must match the declared stddev. Earlier
+	// `FRandRange(-1, 1)` gave 1/√3 ≈ 0.58× the declared stddev,
+	// silently overstating noise to any consumer EKF.
 	if (GpsPositionNoiseStd > 0.f)
 	{
-		Output.Latitude += FMath::FRandRange(-1.f, 1.f) * GpsPositionNoiseStd / MetersPerDegreeLat;
-		Output.Longitude += FMath::FRandRange(-1.f, 1.f) * GpsPositionNoiseStd / MetersPerDegreeLon;
-		Output.Altitude += FMath::FRandRange(-1.f, 1.f) * GpsPositionNoiseStd;
+		Output.Latitude  += GpsPositionNoiseStd * RandStandardNormal() / MetersPerDegreeLat;
+		Output.Longitude += GpsPositionNoiseStd * RandStandardNormal() / MetersPerDegreeLon;
+		Output.Altitude  += GpsPositionNoiseStd * RandStandardNormal();
 	}
 
 	if (GpsVelocityNoiseStd > 0.f)
 	{
-		Output.Velocity.X += FMath::FRandRange(-1.f, 1.f) * GpsVelocityNoiseStd;
-		Output.Velocity.Y += FMath::FRandRange(-1.f, 1.f) * GpsVelocityNoiseStd;
-		Output.Velocity.Z += FMath::FRandRange(-1.f, 1.f) * GpsVelocityNoiseStd;
+		Output.Velocity.X += GpsVelocityNoiseStd * RandStandardNormal();
+		Output.Velocity.Y += GpsVelocityNoiseStd * RandStandardNormal();
+		Output.Velocity.Z += GpsVelocityNoiseStd * RandStandardNormal();
 	}
 
 	CachedOutput = Output;
