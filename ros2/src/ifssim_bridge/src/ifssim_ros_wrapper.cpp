@@ -207,6 +207,16 @@ void IFSSIMRosWrapper::initializeSubscribers()
         "signal/ebs", ebs_qos,
         std::bind(&IFSSIMRosWrapper::ebsRequestCb, this, std::placeholders::_1));
 
+    // /signal/ebs_reset — explicit release of the EBS latch. Without this
+    // the bridge's `ebs_triggered_` had no way to flip back to false after
+    // a session ended with the autonomous-stop logic firing — every
+    // subsequent Start Session would silently drop setCarControls until
+    // the user restarted ros_stack. The control node publishes this once
+    // on init, so a fresh session always starts with controls accepted.
+    ebs_reset_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
+        "signal/ebs_reset", ebs_qos,
+        std::bind(&IFSSIMRosWrapper::ebsResetCb, this, std::placeholders::_1));
+
     reset_srv_ = node_->create_service<fs_msgs::srv::Reset>(
         "reset",
         std::bind(&IFSSIMRosWrapper::resetSrvCb, this, std::placeholders::_1, std::placeholders::_2));
@@ -347,6 +357,13 @@ void IFSSIMRosWrapper::triggerReconnect()
     if (sensor_stream_fd_ >= 0 && lidar_stream_fd_ >= 0) return;
 
     RCLCPP_INFO(node_->get_logger(), "Reconnecting to IFSSIM (level reset?)...");
+
+    // Belt-and-suspenders: clear any latched EBS state on UE5 reconnect.
+    // The primary release path is /signal/ebs_reset published by the control
+    // node on init, but if the control node crashed without publishing — or
+    // if UE5 itself was restarted — we don't want a stale flag to keep
+    // dropping setCarControls forever.
+    ebs_triggered_ = false;
 
     // Reconnect command client — retry until UE5 is back up
     int attempt = 0;
@@ -718,6 +735,14 @@ void IFSSIMRosWrapper::ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg)
     // locks all input channels and clamps handbrake=true.
     client_->sendCommand("activateEbs");
     RCLCPP_INFO(node_->get_logger(), "EBS engaged — handbrake latched, all inputs locked");
+}
+
+void IFSSIMRosWrapper::ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg)
+{
+    (void)msg;
+    if (!ebs_triggered_) return;  // already cleared, nothing to do
+    ebs_triggered_ = false;
+    RCLCPP_INFO(node_->get_logger(), "EBS latch released — control commands re-enabled");
 }
 
 void IFSSIMRosWrapper::resetSrvCb(

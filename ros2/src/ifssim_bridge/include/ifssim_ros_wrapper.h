@@ -75,6 +75,7 @@ private:
     // Subscriber callbacks
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
     void ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg);
+    void ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg);
     void resetSrvCb(
         const std::shared_ptr<fs_msgs::srv::Reset::Request> request,
         std::shared_ptr<fs_msgs::srv::Reset::Response> response);
@@ -123,7 +124,14 @@ private:
     // /signal/ebs — autonomy-initiated emergency stop. On first message the
     // bridge applies a full-brake command then disables api_control so no
     // subsequent setCarControls can release the brake (real-car EBS analog).
+    //
+    // /signal/ebs_reset — release the latch. Published by the control node
+    // on init so a fresh session always starts with controls accepted, even
+    // if the previous session ended with a latched EBS. Without this, the
+    // bridge would silently drop every setCarControls until ros_stack was
+    // restarted (the flag had no reset path).
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_request_sub_;
+    rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_reset_sub_;
     bool ebs_triggered_ = false;
     rclcpp::Service<fs_msgs::srv::Reset>::SharedPtr reset_srv_;
 
