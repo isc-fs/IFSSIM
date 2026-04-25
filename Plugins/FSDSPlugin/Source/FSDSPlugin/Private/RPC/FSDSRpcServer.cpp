@@ -33,7 +33,7 @@ namespace
 	 * problem" from "occasional hiccup". A genuine `bOk=false` still
 	 * returns immediately so a real disconnect isn't masked.
 	 */
-	static bool SendAll(FSocket* Socket, const uint8* Buffer, int32 Length, int32 MaxIdleMs = 200)
+	static bool SendAll(FSocket* Socket, const uint8* Buffer, int32 Length, int32 MaxIdleMs = 1000)
 	{
 		if (!Socket || Length <= 0) return Socket != nullptr;
 		int32 Sent = 0;
@@ -200,6 +200,17 @@ void FFSDSRpcServer::ServerThreadFunc()
 			if (ClientSocket)
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
+
+				// Bump the kernel send buffer well above the default (~64 KB
+				// on Linux/Win). LiDAR frames can hit ~150 KB at higher
+				// resolutions, and the bridge's downstream consumers (numba
+				// cone detection + multiple foxglove subscribers) drain
+				// unevenly. With a small buffer, the kernel is full after a
+				// single frame and the next Send returns ChunkSent=0 — the
+				// failure mode SendAll has to time out on. 1 MB gives ~20
+				// LiDAR frames of headroom, smoothing over consumer hiccups.
+				int32 ActualSize = 0;
+				ClientSocket->SetSendBufferSize(1024 * 1024, ActualSize);
 
 				// Handle each client in its own thread. Store it so Stop()
 				// can join the full set before the server is destroyed —
