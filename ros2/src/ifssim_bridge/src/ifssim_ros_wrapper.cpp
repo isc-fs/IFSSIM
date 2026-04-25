@@ -166,7 +166,20 @@ void IFSSIMRosWrapper::initializePublishers()
     gps_pub_ = node_->create_publisher<sensor_msgs::msg::NavSatFix>("gps", 10);
     imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu", 10);
     gss_pub_ = node_->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("gss", 10);
-    lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", 10);
+    // /lidar/Lidar1 uses BEST_EFFORT QoS (rather than the default RELIABLE
+    // keep_last(10)) so a slow subscriber — most notably the numba-JIT
+    // cone-detection node during its first ~15 s of warmup, but also any
+    // foxglove_bridge consumer that pauses to render a frame — drops
+    // messages locally instead of backpressuring the bridge's lidar_thread.
+    // Without this, the lidar_thread blocks inside `publish()`, the kernel
+    // TCP recv buffer fills, the *plugin's* TCP send buffer fills, the
+    // plugin's SendAll hits its 1 s timeout, the plugin closes the stream,
+    // and the bridge sees a dead socket → reconnect cascade. Net effect on
+    // a real autocross run: LiDAR drops from 10 Hz to ~1 Hz the moment
+    // pipeline subscribers come online. Sensor data is fundamentally a
+    // best-effort stream — drops are fine, backpressure is not.
+    auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(5)).best_effort();
+    lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", lidar_qos);
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
     // Published edge-triggered when the referee's bFinished flips false->true;
     // consumers (e.g. the control node) brake the car to end the event cleanly.

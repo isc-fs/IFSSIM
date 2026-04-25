@@ -282,6 +282,12 @@ void AFSDSConeSpawner::SpawnFromCSV()
 	TArray<FString> Lines;
 	FileContent.ParseIntoArrayLines(Lines);
 
+	// Reset the position caches that ComputeStartGatePose() reads from.
+	// Doing it here (not in ReloadTrack) means a fresh BeginPlay-time
+	// spawn also gets a clean slate.
+	BigOrangePositions.Reset();
+	BlueYellowPositions.Reset();
+
 	for (const FString& Line : Lines)
 	{
 		TArray<FString> Parts;
@@ -307,5 +313,135 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		FVector Location(X, Y, HeightOffset);
 		FRotator Rotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
 		SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
+
+		// Record positions for the start-gate-pose derivation. We capture
+		// the *post-flip* UE world-space coords so ComputeStartGatePose
+		// returns values directly usable by SetActorLocationAndRotation.
+		if (Color == EFSDSConeColor::OrangeLarge)
+		{
+			BigOrangePositions.Add(Location);
+		}
+		else if (Color == EFSDSConeColor::Blue || Color == EFSDSConeColor::Yellow)
+		{
+			BlueYellowPositions.Add(Location);
+		}
 	}
+}
+
+bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm) const
+{
+	// Need a full 4-cone gate for PCA. Track cones used only for sign
+	// disambiguation (which way "forward" points along the gate axis).
+	if (BigOrangePositions.Num() < 4 || BlueYellowPositions.Num() < 1)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS ConeSpawner: ComputeStartGatePose — not enough cones "
+				 "(big_orange=%d, need 4; blue+yellow=%d, need ≥1)"),
+			BigOrangePositions.Num(), BlueYellowPositions.Num());
+		return false;
+	}
+
+	// Orange centroid = the gate anchor (vehicle spawns BackupCm
+	// behind this point, along the inferred forward axis).
+	FVector OrangeCentroid = FVector::ZeroVector;
+	for (const FVector& P : BigOrangePositions) OrangeCentroid += P;
+	OrangeCentroid /= BigOrangePositions.Num();
+
+	// PCA on the 4 orange cones to recover the gate axes.
+	//
+	// FSG start gates are wider than deep (4.4 m × 2.6 m for the standard
+	// layout): the gate spans the *cross-track* axis (cones across the
+	// track width) more than the *along-track* axis (the small offset
+	// between front and back gate pairs). So the eigenvector with the
+	// LARGER variance is cross-track, and the eigenvector with the
+	// SMALLER variance is along-track — that's our "forward" axis.
+	//
+	// Why PCA over centroid-of-track-cones (the v1/v2 approaches): on
+	// closed-loop tracks (autocross/trackdrive) the loop centroid sits
+	// off to one side of the gate, and even k-nearest-cones picks up
+	// both the entry-side and the loop-return-side cones. The orange
+	// gate's own geometry is the only stable axis reference.
+	float Cxx = 0.f, Cyy = 0.f, Cxy = 0.f;
+	for (const FVector& P : BigOrangePositions)
+	{
+		const float dx = P.X - OrangeCentroid.X;
+		const float dy = P.Y - OrangeCentroid.Y;
+		Cxx += dx * dx;
+		Cyy += dy * dy;
+		Cxy += dx * dy;
+	}
+
+	// Eigendecomposition of the 2×2 symmetric covariance matrix:
+	//   [[Cxx, Cxy], [Cxy, Cyy]]
+	// Eigenvalues: λ = (Cxx + Cyy)/2 ± √((Cxx + Cyy)²/4 − (Cxx·Cyy − Cxy²))
+	const float HalfTrace = 0.5f * (Cxx + Cyy);
+	const float Det = Cxx * Cyy - Cxy * Cxy;
+	const float Disc = FMath::Max(0.f, HalfTrace * HalfTrace - Det);
+	const float SqrtDisc = FMath::Sqrt(Disc);
+	const float LambdaSmall = HalfTrace - SqrtDisc;
+
+	// Eigenvector for the smaller eigenvalue. For a symmetric 2×2
+	// matrix M with eigenvalue λ, an eigenvector is (M_01, λ − M_00) =
+	// (Cxy, λ − Cxx). Falls back to a coordinate axis when Cxy ≈ 0
+	// (perfectly axis-aligned gate, like a generated track in canonical
+	// pose). In the axis-aligned case the smaller variance axis is
+	// trivially X if Cxx < Cyy, else Y.
+	FVector Forward = FVector::ZeroVector;
+	if (FMath::Abs(Cxy) > 1e-3f)
+	{
+		Forward.X = Cxy;
+		Forward.Y = LambdaSmall - Cxx;
+	}
+	else
+	{
+		Forward = (Cxx <= Cyy) ? FVector(1.f, 0.f, 0.f) : FVector(0.f, 1.f, 0.f);
+	}
+	Forward.Z = 0.f;
+	if (Forward.IsNearlyZero()) return false;
+	Forward.Normalize();
+
+	// Sign disambiguation: PCA gives the axis but not the direction.
+	// Pick the half-line that points TOWARD the bulk of nearby track
+	// cones. We use the K=4 nearest blue/yellow cones to the orange
+	// centroid because:
+	//   - K small enough that only the immediate gate-entry cones
+	//     dominate (loop-return cones are ≥ a lap-length away)
+	//   - K large enough to be robust to a single misclassified cone
+	constexpr int32 K_DIRECTION = 4;
+	struct FConeDist { double DSq; FVector Pos; };
+	TArray<FConeDist> Sorted;
+	Sorted.Reserve(BlueYellowPositions.Num());
+	for (const FVector& P : BlueYellowPositions)
+	{
+		Sorted.Add({FVector::DistSquaredXY(P, OrangeCentroid), P});
+	}
+	Sorted.Sort([](const FConeDist& A, const FConeDist& B) { return A.DSq < B.DSq; });
+
+	const int32 N = FMath::Min(K_DIRECTION, Sorted.Num());
+	FVector NearbyCentroid = FVector::ZeroVector;
+	for (int32 i = 0; i < N; i++) NearbyCentroid += Sorted[i].Pos;
+	NearbyCentroid /= N;
+
+	const FVector ToNearby = NearbyCentroid - OrangeCentroid;
+	if (FVector::DotProduct(ToNearby, Forward) < 0.f) Forward = -Forward;
+
+	// Back up from the gate along -Forward, lifted slightly above
+	// ground so the wheels settle without clipping into terrain.
+	OutLocation = OrangeCentroid - Forward * BackupCm;
+	OutLocation.Z = HeightOffset + 50.f; // 50 cm above cone base height
+
+	const float YawDeg = FMath::RadiansToDegrees(FMath::Atan2(Forward.Y, Forward.X));
+	OutRotation = FRotator(0.f, YawDeg, 0.f).Quaternion();
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS ConeSpawner: PCA start-gate pose — "
+			 "orange centroid (%.1f, %.1f), Cxx=%.1f Cyy=%.1f Cxy=%.1f, "
+			 "forward (%.2f, %.2f) [sign-checked vs %d nearest], "
+			 "spawn (%.1f, %.1f), yaw %.1f°"),
+		OrangeCentroid.X, OrangeCentroid.Y,
+		Cxx, Cyy, Cxy,
+		Forward.X, Forward.Y, N,
+		OutLocation.X, OutLocation.Y, YawDeg);
+
+	return true;
 }

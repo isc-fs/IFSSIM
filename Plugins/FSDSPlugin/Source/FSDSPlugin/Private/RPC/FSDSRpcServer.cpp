@@ -1089,7 +1089,44 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				Spawner->ReloadTrack(TrackPath);
 
 				int32 NumCones = Spawner->SpawnedCones.Num();
-				return FString::Printf(TEXT("{\"loaded\":\"%s\",\"cones\":%d}"), *TrackPath, NumCones);
+
+				// Auto-orient the car to the track's start gate. Without
+				// this, the level's PlayerStart pose (e.g. customMap
+				// spawns at (0, 0) yaw=+90°) leaves the autonomy stack
+				// fighting a gross misalignment on every fresh track —
+				// it has to either teleport the car manually or drive
+				// the wrong way through the gate. Spawning behind the
+				// orange cones, facing the bulk of the track, makes
+				// loadTrack a single self-sufficient operation:
+                //   "load this CSV → cones placed → car aligned → ready."
+				FVector StartLoc;
+				FQuat StartRot;
+				bool bAligned = false;
+				if (Spawner->ComputeStartGatePose(StartLoc, StartRot, 300.f) && IsValid(VehiclePawn))
+				{
+					// Mirrors simSetVehiclePose's teleport-with-velocity-reset
+					// path. EBS gets cleared as a soft reset (matches the
+					// real-car flow where the driver must release EBS before
+					// each run). The skeletal mesh BodyInstance has to be
+					// snapped explicitly because Chaos vehicles otherwise
+					// keep their old physics-body rotation and snap the
+					// actor transform back on the next tick.
+					VehiclePawn->ReleaseEbs();
+					VehiclePawn->SetActorLocationAndRotation(StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+					USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
+					if (Mesh && Mesh->IsSimulatingPhysics())
+					{
+						FTransform NewXform(StartRot, StartLoc, Mesh->GetComponentScale());
+						Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
+						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+					}
+					bAligned = true;
+				}
+
+				return FString::Printf(
+					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s}"),
+					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"));
 			},
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
