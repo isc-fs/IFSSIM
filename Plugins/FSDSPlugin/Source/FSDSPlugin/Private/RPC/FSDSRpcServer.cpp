@@ -19,6 +19,47 @@
 namespace
 {
 	/**
+	 * Robust full-buffer Send for FSocket. UE's FSocket can return
+	 *   bOk = true, BytesSent = 0
+	 * when the kernel send buffer is momentarily full on a non-blocking
+	 * socket (the default mode for client connections accepted by an
+	 * FTcpListener). Treating that as a fatal disconnect — which the
+	 * stream loops below were doing — caused the bridge to tear down
+	 * the LiDAR push every ~1 s during an autocross run, dropping the
+	 * effective rate from 10 Hz to ~3 Hz and starving perception.
+	 *
+	 * This helper retries on the transient-zero case for up to
+	 * `MaxIdleMs` (default 200 ms), distinguishing "stuck buffer = real
+	 * problem" from "occasional hiccup". A genuine `bOk=false` still
+	 * returns immediately so a real disconnect isn't masked.
+	 */
+	static bool SendAll(FSocket* Socket, const uint8* Buffer, int32 Length, int32 MaxIdleMs = 1000)
+	{
+		if (!Socket || Length <= 0) return Socket != nullptr;
+		int32 Sent = 0;
+		int32 IdleMs = 0;
+		while (Sent < Length)
+		{
+			int32 ChunkSent = 0;
+			const bool bOk = Socket->Send(Buffer + Sent, Length - Sent, ChunkSent);
+			if (!bOk) return false;                 // hard error — peer gone
+			if (ChunkSent <= 0)
+			{
+				// Kernel send buffer momentarily full. Sleep briefly and
+				// try again; bound the total wait so a genuinely dead
+				// peer still returns false within ~MaxIdleMs.
+				if (IdleMs >= MaxIdleMs) return false;
+				FPlatformProcess::Sleep(0.005f);
+				IdleMs += 5;
+				continue;
+			}
+			IdleMs = 0;                              // progress — reset idle counter
+			Sent += ChunkSent;
+		}
+		return true;
+	}
+
+	/**
 	 * Shared completion state for CallOnGameThread. Lives on the heap,
 	 * refcounted via TSharedPtr so the caller and the game-thread task
 	 * can release independently — the last holder destroys it. Safe
@@ -159,6 +200,17 @@ void FFSDSRpcServer::ServerThreadFunc()
 			if (ClientSocket)
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
+
+				// Bump the kernel send buffer well above the default (~64 KB
+				// on Linux/Win). LiDAR frames can hit ~150 KB at higher
+				// resolutions, and the bridge's downstream consumers (numba
+				// cone detection + multiple foxglove subscribers) drain
+				// unevenly. With a small buffer, the kernel is full after a
+				// single frame and the next Send returns ChunkSent=0 — the
+				// failure mode SendAll has to time out on. 1 MB gives ~20
+				// LiDAR frames of headroom, smoothing over consumer hiccups.
+				int32 ActualSize = 0;
+				ClientSocket->SetSendBufferSize(1024 * 1024, ActualSize);
 
 				// Handle each client in its own thread. Store it so Stop()
 				// can join the full set before the server is destroyed —
@@ -1295,10 +1347,9 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		Frame.Steering = Controls.Steering;
 		Frame.Brake = Controls.Brake;
 
-		// Send frame
-		int32 BytesSent = 0;
-		bool bOk = ClientSocket->Send((const uint8*)&Frame, sizeof(Frame), BytesSent);
-		if (!bOk || BytesSent != sizeof(Frame))
+		// Send frame — SendAll retries on transient zero-progress (kernel
+		// buffer momentarily full) instead of treating it as a disconnect.
+		if (!SendAll(ClientSocket, (const uint8*)&Frame, sizeof(Frame)))
 		{
 			UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Sensor stream client disconnected"));
 			return;
@@ -1331,7 +1382,10 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 
 		if (TotalPoints > 0)
 		{
-			// Send header
+			// Send header — SendAll handles partial-write retry. The
+			// previous code only checked `!bOk` for the header, leaving a
+			// silent way for a partial header send (BytesSent < sizeof
+			// header) to corrupt the bridge's stream framing.
 			FFSDSLidarChunkHeader Header;
 			Header.Magic = 0x4C494452;
 			Header.ChunkIndex = 0;
@@ -1341,20 +1395,21 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 			Header.TotalPoints = TotalPoints;
 			Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
 
-			int32 BytesSent = 0;
-			bool bOk = ClientSocket->Send((const uint8*)&Header, sizeof(Header), BytesSent);
-			if (!bOk) { UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected")); return; }
-
-			// Send point data
-			int32 DataSize = TotalPoints * 3 * sizeof(float);
-			int32 TotalSent = 0;
-			const uint8* Data = (const uint8*)Points.GetData();
-			while (TotalSent < DataSize)
+			if (!SendAll(ClientSocket, (const uint8*)&Header, sizeof(Header)))
 			{
-				int32 ChunkSent = 0;
-				bOk = ClientSocket->Send(Data + TotalSent, DataSize - TotalSent, ChunkSent);
-				if (!bOk || ChunkSent <= 0) { UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected")); return; }
-				TotalSent += ChunkSent;
+				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected (header)"));
+				return;
+			}
+
+			// Send point data — bigger payload (points * 12 bytes), most
+			// likely place to hit a momentarily-full send buffer with the
+			// 3 cm range jitter introduced in #106 producing larger packet
+			// variance per scan.
+			const int32 DataSize = TotalPoints * 3 * sizeof(float);
+			if (!SendAll(ClientSocket, (const uint8*)Points.GetData(), DataSize))
+			{
+				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected (body, %d bytes)"), DataSize);
+				return;
 			}
 		}
 
