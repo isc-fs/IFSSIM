@@ -81,6 +81,30 @@ public:
 	UPROPERTY()
 	TArray<AActor*> SpawnedCones;
 
+	/**
+	 * Derive the canonical "behind the start gate, facing the track"
+	 * vehicle pose from the cones spawned by the most recent
+	 * SpawnFromCSV call. Used by the loadTrack RPC to teleport the car
+	 * into a known-good starting pose so the autonomy stack doesn't
+	 * have to fight a 90° map/track misalignment on first ticks.
+	 *
+	 * Algorithm — robust to any gate geometry:
+	 *   OrangeCentroid = mean(big_orange positions)
+	 *   TrackCentroid  = mean(blue + yellow positions)
+	 *   Forward        = normalize(TrackCentroid − OrangeCentroid)
+	 *   OutLocation    = OrangeCentroid − BackupCm × Forward, lifted by HeightOffset
+	 *   OutRotation    = yaw = atan2(Forward.Y, Forward.X)
+	 *
+	 * Returns false (and leaves out-params untouched) when there isn't
+	 * enough cone data to compute a sensible answer (≥1 big_orange and
+	 * ≥2 track cones required). Caller falls back to the level's
+	 * PlayerStart in that case.
+	 *
+	 * BackupCm is the gap behind the start gate in centimetres
+	 * (default 300 cm = 3 m, matches FS Driverless start-area spec).
+	 */
+	bool ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm = 300.f) const;
+
 private:
 	void SpawnTestTrack();
 	void SpawnFromCSV();
@@ -91,6 +115,13 @@ private:
 	AActor* SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation, EFSDSConeColor Color);
 
 	int32 TotalSpawned = 0;
+
+	// Cone-position bookkeeping populated by SpawnFromCSV, consumed by
+	// ComputeStartGatePose. UE world-space cm. Cleared at the start of
+	// each spawn pass so a track reload always sees only the current
+	// track's cones.
+	TArray<FVector> BigOrangePositions;
+	TArray<FVector> BlueYellowPositions;
 
 	UPROPERTY()
 	AFSDSReferee* Referee = nullptr;
