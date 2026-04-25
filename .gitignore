@@ -65,5 +65,11 @@ Packaged/
 Content/tracks/*.csv
 Content/tracks/.ifssim_state.json
 
+# UE5 editor scratch — *_BuiltData.uasset is regenerated lighting / nav
+# data the editor saves alongside its .umap. We don't track it (its
+# sibling .umap content already has all the source authoring info), so
+# it just sits in everyone's `git status` after launching the editor.
+*_BuiltData.uasset
+
 # Documents (not source)
 *.pdf
