@@ -339,6 +339,8 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
 				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd * 100.f;
 				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
+				ImuSensor->AccelBiasTau = SensorPair.Value.AccelBiasTau;
+				ImuSensor->GyroBiasTau = SensorPair.Value.GyroBiasTau;
 				break;
 			}
 		}

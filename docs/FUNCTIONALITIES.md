@@ -180,12 +180,20 @@ Point cloud is output as a flat `float[]` array in sensor-local frame (X forward
 
 | Parameter | Default | Configurable |
 |---|---|---|
-| Accelerometer noise std | 0.18 m/s² | ✓ |
-| Gyroscope noise std | 0.004 rad/s | ✓ |
-| Accelerometer bias std | 0.01 m/s² | ✓ |
-| Gyroscope bias std | 0.0002 rad/s | ✓ |
+| Accelerometer noise std (white, Gaussian) | 0.18 m/s² | ✓ |
+| Gyroscope noise std (white, Gaussian) | 0.004 rad/s | ✓ |
+| Accelerometer bias steady-state σ | 0.01 m/s² | ✓ |
+| Gyroscope bias steady-state σ | 0.0002 rad/s | ✓ |
+| Accelerometer bias correlation time τ | 100 s | ✓ |
+| Gyroscope bias correlation time τ | 100 s | ✓ |
 
-**Noise model:** White Gaussian noise + random-walk bias (accumulated per tick). Bias is seeded at startup and drifts over time.
+**Noise model:** Gaussian white noise plus an **Ornstein–Uhlenbeck** bias process. The discrete update each tick is
+
+```
+bias[k+1] = bias[k]·exp(-Δt/τ) + σ·√(1 - exp(-2Δt/τ))·N(0,1)
+```
+
+so `*BiasStd` is the *long-run* steady-state stddev (the bound), not a drift rate. Realistic τ for a BMI088-class IMU is ~100 s. Earlier versions used a pure random walk (unbounded over long sessions) and `FRandRange(-1,1)` (uniform — gave 1/√3 ≈ 58% of the declared stddev).
 
 **Outputs:** Linear acceleration (m/s²), angular velocity (rad/s), orientation quaternion — all in ENU body frame.
 
