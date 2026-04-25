@@ -21,8 +21,12 @@
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
 
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <vector>
 #include <map>
 #include <vector>
 #include <thread>
@@ -60,6 +64,7 @@ private:
     // Streaming threads
     void sensorStreamThread();
     void lidarStreamThread();
+    void lidarPublishThread();  // Drains the single-slot buffer, calls onLidarFrame
 
     // Stream data handlers
     void onSensorFrame(const SensorFrame& frame);
@@ -94,6 +99,25 @@ private:
     std::thread lidar_thread_;
     std::atomic<bool> streaming_{false};
     std::mutex reconnect_mutex_;  // Ensures only one thread reconnects at a time
+
+    // LiDAR producer-consumer split. The recv thread used to call
+    // publish() inline, which under sustained pipeline-subscriber load
+    // would block long enough for the kernel TCP recv buffer to fill ⇒
+    // plugin's send buffer fills ⇒ plugin's SendAll hits its 1 s timeout
+    // ⇒ stream tear-down ⇒ reconnect cascade. By moving publish() to a
+    // dedicated thread the recv thread never blocks on ROS work — it
+    // pushes the latest frame into a single-slot buffer (dropping any
+    // unconsumed older frame) and immediately re-enters recv. Drops are
+    // intentional: LiDAR is a streaming firehose, latency matters more
+    // than every-frame delivery.
+    struct PendingLidarFrame {
+        LidarChunkHeader header;
+        std::vector<float> points;
+    };
+    std::mutex lidar_pub_mutex_;
+    std::condition_variable lidar_pub_cv_;
+    std::optional<PendingLidarFrame> lidar_pending_;
+    std::thread lidar_pub_thread_;
 
     // Connection params
     std::string host_;

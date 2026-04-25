@@ -48,8 +48,12 @@ IFSSIMRosWrapper::~IFSSIMRosWrapper()
     int lfd = lidar_stream_fd_.exchange(-1);
     if (sfd >= 0) close(sfd);
     if (lfd >= 0) close(lfd);
+    // Wake the publish-thread out of its condition_variable wait so it
+    // can observe streaming_=false and exit.
+    lidar_pub_cv_.notify_all();
     if (sensor_thread_.joinable()) sensor_thread_.join();
     if (lidar_thread_.joinable()) lidar_thread_.join();
+    if (lidar_pub_thread_.joinable()) lidar_pub_thread_.join();
 }
 
 int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
@@ -278,6 +282,7 @@ void IFSSIMRosWrapper::startStreaming()
 
     sensor_thread_ = std::thread(&IFSSIMRosWrapper::sensorStreamThread, this);
     lidar_thread_  = std::thread(&IFSSIMRosWrapper::lidarStreamThread, this);
+    lidar_pub_thread_ = std::thread(&IFSSIMRosWrapper::lidarPublishThread, this);
 
     // If initial connection failed (UE5 not in Play mode yet), kick off reconnect
     if (sensor_stream_fd_ < 0 || lidar_stream_fd_ < 0) {
@@ -358,8 +363,49 @@ void IFSSIMRosWrapper::lidarStreamThread()
             continue;
         }
 
-        onLidarFrame(header, points.data());
+        // Hand the frame off to the publish thread. Single-slot buffer
+        // with drop-oldest semantics: if the consumer hasn't yet
+        // drained the previous frame, the new one overwrites it. This
+        // keeps the recv loop free to immediately re-enter recv() and
+        // drain the kernel TCP buffer — preventing the backpressure
+        // chain that used to cause stream tear-downs every ~1 s under
+        // pipeline load. The mutex is held only long enough to swap
+        // the std::optional (a pointer-swap level operation since
+        // the underlying vector is moved); publish() runs entirely
+        // outside the lock on the consumer side.
+        {
+            std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
+            lidar_pending_ = PendingLidarFrame{header, std::move(points)};
+        }
+        lidar_pub_cv_.notify_one();
     }
+}
+
+void IFSSIMRosWrapper::lidarPublishThread()
+{
+    RCLCPP_INFO(node_->get_logger(), "LiDAR publish thread started");
+
+    while (streaming_) {
+        PendingLidarFrame frame;
+        {
+            std::unique_lock<std::mutex> lock(lidar_pub_mutex_);
+            lidar_pub_cv_.wait(lock, [this] {
+                return !streaming_ || lidar_pending_.has_value();
+            });
+            if (!streaming_) break;
+            frame = std::move(*lidar_pending_);
+            lidar_pending_.reset();
+        }
+
+        // publish() runs OUTSIDE the lock so the recv thread can keep
+        // pushing new frames into the slot. Whatever time this takes
+        // (PointCloud2 serialization + DDS fan-out + downstream subscriber
+        // back-pressure) is purely consumer-side; the recv loop never
+        // sees it.
+        onLidarFrame(frame.header, frame.points.data());
+    }
+
+    RCLCPP_INFO(node_->get_logger(), "LiDAR publish thread exiting");
 }
 
 void IFSSIMRosWrapper::triggerReconnect()
