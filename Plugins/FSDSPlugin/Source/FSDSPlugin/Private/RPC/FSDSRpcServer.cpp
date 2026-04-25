@@ -806,6 +806,13 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 					Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 				}
+				// Clear Chaos vehicle wheel angular velocities + raw inputs +
+				// shift to neutral gear. See loadTrack handler for the long
+				// explanation; same reasoning applies to any manual teleport.
+				if (VehiclePawn->VehicleMovement)
+				{
+					VehiclePawn->VehicleMovement->ResetVehicleState();
+				}
 			}
 		});
 		return TEXT("true");
@@ -1120,6 +1127,28 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
 						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+					}
+					// Chaos vehicles store *wheel* angular velocity in the
+					// vehicle simulation core (FWheeledVehicleSimulation), not
+					// in the rigid-body's angular velocity. Zeroing the body
+					// above doesn't touch it. Without this, after the teleport
+					// the wheels keep spinning at their pre-teleport speed and
+					// propel the car a few metres in the OLD forward direction
+					// before friction stops them — observed in the autocross
+					// run validating fix/45: car drifted east-southeast even
+					// with throttle=0, the path planner re-anchored to the
+					// drifted position, picked the wrong loop direction, and
+					// the cascade locked in.
+					//
+					// `ResetVehicleState()` does StopMovementImmediately
+					// (redundant with the SetPhysics*Velocity above, but cheap)
+					// + OnDestroyPhysicsState + OnCreatePhysicsState (which
+					// rebuilds the wheels with zero angular velocity) +
+					// shifts to neutral gear + clears raw throttle/brake/
+					// steering inputs. Equivalent to a fresh PIE spawn.
+					if (VehiclePawn->VehicleMovement)
+					{
+						VehiclePawn->VehicleMovement->ResetVehicleState();
 					}
 					bAligned = true;
 				}
