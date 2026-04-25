@@ -733,8 +733,18 @@ void AFSDSVehiclePawn::ReleaseEbs()
 	// Unlatch and hand control back to whoever wants it. Called on sim
 	// reset or explicit operator release; the autonomy stack itself is
 	// NEVER able to invoke this (mirrors the real car — driver only).
+	//
+	// CRITICAL: must restore `bApiControlEnabled` symmetrically with
+	// `ActivateEbs()`. Without this, after the first activate→release
+	// cycle the keyboard input handlers (lines 680-707) treat the pawn as
+	// keyboard-driven and overwrite `CurrentControls` with their default
+	// zero readings every tick — silently zeroing every `setCarControls`.
+	// The bug was masked for months by the bridge's reconnect loop
+	// re-issuing `enableApiControl` ~1×/s; once that thrash was fixed
+	// (#107) the asymmetry stopped the car cold mid-autocross.
 	CurrentControls.bHandbrake = false;
 	bEbsLatched = false;
+	bApiControlEnabled = true;
 }
 
 AFSDSVehiclePawn::FCarControls AFSDSVehiclePawn::GetCarControls() const
