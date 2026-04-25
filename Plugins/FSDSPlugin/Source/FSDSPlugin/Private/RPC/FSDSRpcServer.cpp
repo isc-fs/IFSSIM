@@ -33,7 +33,7 @@ namespace
 	 * problem" from "occasional hiccup". A genuine `bOk=false` still
 	 * returns immediately so a real disconnect isn't masked.
 	 */
-	static bool SendAll(FSocket* Socket, const uint8* Buffer, int32 Length, int32 MaxIdleMs = 1000)
+	static bool SendAll(FSocket* Socket, const uint8* Buffer, int32 Length, int32 MaxIdleMs = 5000)
 	{
 		if (!Socket || Length <= 0) return Socket != nullptr;
 		int32 Sent = 0;
