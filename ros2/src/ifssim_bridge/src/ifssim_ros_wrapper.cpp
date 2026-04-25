@@ -358,24 +358,41 @@ void IFSSIMRosWrapper::triggerReconnect()
 
     RCLCPP_INFO(node_->get_logger(), "Reconnecting to IFSSIM (level reset?)...");
 
-    // Belt-and-suspenders: clear any latched EBS state on UE5 reconnect.
-    // The primary release path is /signal/ebs_reset published by the control
-    // node on init, but if the control node crashed without publishing — or
-    // if UE5 itself was restarted — we don't want a stale flag to keep
-    // dropping setCarControls forever.
-    ebs_triggered_ = false;
+    // Only recreate the command client if it's actually broken. A transient
+    // stream glitch (partial LiDAR frame, brief sensor recv hiccup) does NOT
+    // mean UE5 is gone — the streams use *separate* TCP connections from
+    // the command client. Tearing down and rebuilding `client_` on every
+    // stream hiccup was breaking control: each reconnect dropped any
+    // in-flight setCarControls and re-issued enableApiControl, while
+    // `controlCommandCb` reads `client_` lock-free.
+    //
+    // Symptom that surfaced today: with a 10 Hz LiDAR push and the plugin
+    // occasionally closing its push socket mid-frame, this function fired
+    // ~once per second. Each fire tore down the command client for ~30 ms,
+    // so a meaningful fraction of `setCarControls` were silently dropped.
+    // The car drove like the controls were lagging by 1 s.
+    if (!client_ || !client_->isConnected()) {
+        // Belt-and-suspenders: clear any latched EBS state when we reconnect
+        // the *command* client. The primary release path is
+        // /signal/ebs_reset published by the control node on init, but if
+        // the control node crashed without publishing — or if UE5 itself was
+        // restarted — we don't want a stale flag to keep dropping
+        // setCarControls forever. Doing this here (instead of on every
+        // stream-only reconnect) prevents the EBS flag from being cleared
+        // mid-session by spurious LiDAR-stream reconnects.
+        ebs_triggered_ = false;
 
-    // Reconnect command client — retry until UE5 is back up
-    int attempt = 0;
-    while (streaming_) {
-        client_ = std::make_unique<TcpClient>();
-        if (client_->connect(host_, port_, 3.0)) {
-            client_->sendBool("enableApiControl");
-            RCLCPP_INFO(node_->get_logger(), "Command client reconnected (attempt %d)", ++attempt);
-            break;
+        int attempt = 0;
+        while (streaming_) {
+            client_ = std::make_unique<TcpClient>();
+            if (client_->connect(host_, port_, 3.0)) {
+                client_->sendBool("enableApiControl");
+                RCLCPP_INFO(node_->get_logger(), "Command client reconnected (attempt %d)", ++attempt);
+                break;
+            }
+            RCLCPP_INFO(node_->get_logger(), "Reconnect attempt %d failed, retrying in 2s...", ++attempt);
+            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
-        RCLCPP_INFO(node_->get_logger(), "Reconnect attempt %d failed, retrying in 2s...", ++attempt);
-        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 
     // Reconnect sensor stream
