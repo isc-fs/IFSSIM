@@ -44,41 +44,59 @@ map  (loop-closed, owned by GLIM)
 
 ## 4. Container additions
 
-`docker/dv_pipeline_stack/Dockerfile` grows to include the GLIM build chain. Estimated first-build time **20–30 min** because GTSAM is a heavy C++ dependency.
+**Build from source — no `koide3/glim_ros2` prebuilt image, no CUDA.** Two reasons:
+- Real-car compute is unlikely to ship with a CUDA-class GPU; a CPU-only stack means the same Docker image runs in sim and on the car.
+- Building from source means we own the version pins (GTSAM, gtsam_points, glim, glim_ros2) — no opaque base-image upgrades changing things under us.
+
+We use GLIM's `OdometryEstimationCPU` module (no GPU). This drops the CUDA toolkit, gtsam_points-with-CUDA flag, and CUDA-related apt deps from the Dockerfile entirely. Estimated first-build time **15–25 min** (lower than the CUDA-included path).
+
+`docker/dv_pipeline_stack/Dockerfile` adds, in order (cache-friendly: heaviest layers first):
 
 ```dockerfile
-# Build deps
+# C++ build deps for GTSAM + gtsam_points + glim
 RUN apt-get update && apt-get install -y \
     libboost-all-dev libtbb-dev libgoogle-glog-dev \
     libsuitesparse-dev libeigen3-dev libnanoflann-dev \
-    cmake build-essential
+    libfmt-dev libspdlog-dev \
+    cmake build-essential git \
+  && rm -rf /var/lib/apt/lists/*
 
-# GTSAM 4.2a9 — pinned per koide3/glim docs
-RUN cd /tmp && git clone --depth 1 --branch 4.2a9 \
-    https://github.com/borglab/gtsam.git && \
+# GTSAM 4.3a0 — gtsam_points 1.2.0 supports both 4.2a9 and 4.3a0, picking newer
+RUN cd /tmp && git clone --depth 1 --branch 4.3a0 \
+        https://github.com/borglab/gtsam.git && \
     cd gtsam && mkdir build && cd build && \
-    cmake -DGTSAM_BUILD_PYTHON=OFF -DGTSAM_USE_SYSTEM_EIGEN=ON \
-          -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DGTSAM_BUILD_TESTS=OFF .. && \
-    make -j$(nproc) && make install && ldconfig
+    cmake -DGTSAM_BUILD_PYTHON=OFF \
+          -DGTSAM_USE_SYSTEM_EIGEN=ON \
+          -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+          -DGTSAM_BUILD_TESTS=OFF \
+          -DGTSAM_BUILD_UNSTABLE=OFF \
+          -DGTSAM_WITH_TBB=ON \
+          -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc) && make install && ldconfig && \
+    rm -rf /tmp/gtsam
 
-# gtsam_points — koide3's optimized point library
-RUN cd /tmp && git clone --depth 1 https://github.com/koide3/gtsam_points.git && \
+# gtsam_points 1.2.0 — CPU only (no CUDA)
+RUN cd /tmp && git clone --depth 1 --branch v1.2.0 \
+        https://github.com/koide3/gtsam_points.git && \
     cd gtsam_points && mkdir build && cd build && \
-    cmake -DBUILD_DEMO=OFF .. && make -j$(nproc) && make install && ldconfig
+    cmake -DBUILD_DEMO=OFF \
+          -DBUILD_WITH_CUDA=OFF \
+          -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc) && make install && ldconfig && \
+    rm -rf /tmp/gtsam_points
 
-# GLIM core + ROS 2 wrapper
+# GLIM core + ROS 2 wrapper, cloned into the colcon workspace src/
+# (built alongside our packages by the existing colcon build step)
 RUN cd /dv_pipeline_stack_ws/src && \
     git clone --depth 1 https://github.com/koide3/glim.git && \
     git clone --depth 1 https://github.com/koide3/glim_ros2.git
 ```
 
-Then `colcon build --symlink-install` picks them up alongside our packages.
-
-**Cache the layers carefully.** The GTSAM `RUN` step should be a separate Docker layer so it caches and doesn't rebuild on every pipeline source change.
+Place these RUN blocks **before** `COPY pipeline/ src/` so the heavy GTSAM layer caches across pipeline-source changes. The GLIM clone goes into `src/` so the existing `colcon build --symlink-install` step picks it up.
 
 ## 5. GLIM YAML config
 
-A new file `docker/dv_pipeline_stack/glim_ros2.yaml` (mounted into the container at `/glim_config.yaml`):
+A new file `docker/dv_pipeline_stack/glim_ros2.yaml` (mounted into the container or COPY'd to `/dv_pipeline_stack_ws/glim_config.yaml`):
 
 ```yaml
 # Sensor input
@@ -88,14 +106,20 @@ common:
   points_topic: "/lidar/Lidar1"
   lidar_frame_id: "fsds/Lidar"
 
-# Frame outputs
+# Frame outputs (GLIM owns this whole subtree)
 frame:
   map_frame_id: "map"
   odom_frame_id: "odom"
   base_frame_id: "base_link"
 
-# IMU rate handling — IFSSIM bridge publishes at 400 Hz; GLIM defaults
-# to ~100-200 Hz. Configure to accept the higher rate without dropping.
+# >>> ESTIMATION BACKEND: CPU module per project decision (2026-04-26).
+# OdometryEstimationCPU runs without CUDA; matches real-car compute envelope.
+odometry_estimation:
+  type: "OdometryEstimationCPU"
+  num_threads: 4
+
+# IMU rate handling — IFSSIM bridge publishes at 400 Hz; GLIM examples
+# use 100-200 Hz. Configure to accept the higher rate without dropping.
 imu:
   imu_frequency: 400.0
   acc_noise: 0.18         # match settings.json AccelNoiseStd
@@ -174,8 +198,9 @@ If (1) or (2) fail by ≥ 2× the threshold, fall back per §11.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| GTSAM 4.2a9 build incompatibility with newer Eigen / Boost in `ros:humble-ros-base` | Medium | Pin Eigen with `apt-get install libeigen3-dev=3.4.0-2ubuntu2`; if conflict persists, build Eigen from source too |
+| GTSAM 4.3a0 build incompatibility with Eigen / Boost shipped in `ros:humble-ros-base` (Ubuntu 22.04) | Medium | Pin to system Eigen via `-DGTSAM_USE_SYSTEM_EIGEN=ON`. If a deeper conflict shows up, fall back to GTSAM 4.2a9 (gtsam_points 1.2.0 supports both) |
 | GLIM doesn't track on simulated LiDAR (sim point cloud may differ in density / noise from real Hesai output) | Medium | Tune `min_distance`, `max_distance`, `k_correspondences`. If still bad, try downsampling LiDAR to 64 ch to match GLIM examples better |
+| `OdometryEstimationCPU` slower than real-time on full 200k-pts/s scans | Medium | Drop `PointsPerSecond` in `settings.json` from 200000 → 100000 (still 10k pts/scan at 10 Hz, plenty for cone-density geometry). Monitor GLIM's per-scan latency |
 | First container build hits Docker layer cache miss every time GLIM source changes | Low | Pin GLIM to a specific commit hash (not `--depth 1`) once we settle on a working version |
 | 400 Hz IMU exceeds GLIM's internal queue, drops samples | Medium | Downsample IMU to 200 Hz at the bridge as a per-config option (gated by `competition_mode` so the real car can still publish 400 Hz if it wants) |
 | Real-car LiDAR-IMU sync mismatches sim (different timestamp clock) | High when bringing up real car | Out of scope for this PR; real-car bring-up handles its own synchronization |
