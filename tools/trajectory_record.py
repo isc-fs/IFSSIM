@@ -3,13 +3,13 @@
 Record the vehicle's trajectory in odom/ENU during a session, then plot it
 on top of the ground-truth track + detected cones + the latest planned path.
 
-Designed to run inside the ros_stack container alongside the live pipeline.
-Run BEFORE starting the session so the trajectory captures from t=0:
+Designed to run inside the dv_pipeline_stack container alongside the live
+pipeline. Run BEFORE starting the session so the trajectory captures from t=0:
 
-    docker exec -it ifssim-ros_stack-1 bash -c \
+    docker exec -it ifssim-dv_pipeline_stack-1 bash -c \
       "source /opt/ros/humble/setup.bash && \
-       source /ros_stack_ws/install/setup.bash && \
-       python3 /ros_stack_ws/src/tools/trajectory_record.py --duration 30"
+       source /dv_pipeline_stack_ws/install/setup.bash && \
+       python3 /dv_pipeline_stack_ws/src/tools/trajectory_record.py --duration 30"
 
 Or attach for a fixed duration with --duration N (seconds), or stop early
 with Ctrl-C — either way a PNG drops at /tmp/trajectory.png.

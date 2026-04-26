@@ -240,7 +240,7 @@ void IFSSIMRosWrapper::initializeSubscribers()
     // the bridge's `ebs_triggered_` had no way to flip back to false after
     // a session ended with the autonomous-stop logic firing — every
     // subsequent Start Session would silently drop setCarControls until
-    // the user restarted ros_stack. The control node publishes this once
+    // the user restarted dv_pipeline_stack. The control node publishes this once
     // on init, so a fresh session always starts with controls accepted.
     ebs_reset_sub_ = node_->create_subscription<std_msgs::msg::Empty>(
         "signal/ebs_reset", ebs_qos,
