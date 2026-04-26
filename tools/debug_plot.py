@@ -3,7 +3,7 @@
 Plot ground-truth track + detected cones (/Conos) + planned path (/Path)
 + vehicle frame, all in odom/ENU.
 
-Designed to run inside the ros_stack container.
+Designed to run inside the dv_pipeline_stack container.
 Outputs /tmp/track_path_vehicle.png.
 """
 import json

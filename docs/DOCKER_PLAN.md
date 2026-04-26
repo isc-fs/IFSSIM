@@ -11,12 +11,12 @@ One `docker compose up` that brings up the full IFS driverless sim stack on any 
 ```
 HOST (Mac / Windows / Linux)
   UE5 / IFSSIM
-    TCP  :41451  ──────────────► ros_stack (outbound from container)
-    UDP  :41452  ──────────────► ros_stack (Docker port-mapped)
-    UDP  :41453  ──────────────► ros_stack (Docker port-mapped)
+    TCP  :41451  ──────────────► dv_pipeline_stack (outbound from container)
+    UDP  :41452  ──────────────► dv_pipeline_stack (Docker port-mapped)
+    UDP  :41453  ──────────────► dv_pipeline_stack (Docker port-mapped)
 
 DOCKER COMPOSE
-  ros_stack                         ports: 41452/udp, 41453/udp
+  dv_pipeline_stack                         ports: 41452/udp, 41453/udp
     ifssim_bridge   → ROS2 topics
     slam            ← /lidar/Lidar1
     odometria       ← /testing_only/odom
@@ -27,7 +27,7 @@ DOCKER COMPOSE
   mission_control_frontend          port: 3000
 ```
 
-**Why single `ros_stack` container:**
+**Why single `dv_pipeline_stack` container:**
 - DDS multicast works on localhost — no per-platform networking config
 - Docker Desktop (Mac/Windows) + port mapping handles UDP forwarding from host transparently
 - Linux works the same way — no `network_mode: host` override needed
@@ -54,7 +54,7 @@ IFSSIM/
 │   ├── backend/
 │   └── frontend/
 ├── docker/
-│   ├── ros_stack/
+│   ├── dv_pipeline_stack/
 │   │   ├── Dockerfile
 │   │   ├── entrypoint.sh
 │   │   └── pipeline.launch.py
@@ -87,9 +87,9 @@ Camera (YOLO not included): FSDS raw `Image` vs IFSSIM `CompressedImage` — irr
 
 ## Implementation steps
 
-### 1. `docker/ros_stack/Dockerfile`
-### 2. `docker/ros_stack/entrypoint.sh`
-### 3. `docker/ros_stack/pipeline.launch.py`
+### 1. `docker/dv_pipeline_stack/Dockerfile`
+### 2. `docker/dv_pipeline_stack/entrypoint.sh`
+### 3. `docker/dv_pipeline_stack/pipeline.launch.py`
 ### 4. `docker/mission_control_backend/Dockerfile`
 ### 5. `docker/mission_control_frontend/Dockerfile` + `nginx.conf`
 ### 6. `docker-compose.yml`
@@ -103,5 +103,5 @@ Camera (YOLO not included): FSDS raw `Image` vs IFSSIM `CompressedImage` — irr
 ## Open items
 
 - **IFS07-DV source**: copied directly into `pipeline/` for now. Will become a submodule when the pipeline gets its own repo.
-- **Numba cache**: mount named Docker volume at `/ros_stack_ws/src/slam` and `/ros_stack_ws/src/control` so JIT cache persists across restarts (avoids 20s warmup every time).
+- **Numba cache**: mount named Docker volume at `/dv_pipeline_stack_ws/src/slam` and `/dv_pipeline_stack_ws/src/control` so JIT cache persists across restarts (avoids 20s warmup every time).
 - **YOLO**: excluded. Can be added back as an opt-in service later.

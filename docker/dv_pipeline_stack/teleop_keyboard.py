@@ -8,7 +8,7 @@ Keyboard teleop for IFSSIM — publishes fs_msgs/ControlCommand to /control_comm
   Q      : quit
 
 Run inside the container:
-  docker exec -it ifssim-ros_stack-1 python3 /ros_stack_ws/teleop_keyboard.py
+  docker exec -it ifssim-dv_pipeline_stack-1 python3 /dv_pipeline_stack_ws/teleop_keyboard.py
 """
 
 import sys

@@ -16,7 +16,7 @@ Procedure:
              any direct RPC controls. Poll getCarState for speed/pos.
   3. Report decel shape (avg, peak, stop distance).
 
-Requires: UE5 in Play mode, ros_stack container up with the bridge
+Requires: UE5 in Play mode, dv_pipeline_stack container up with the bridge
 subscribed to /signal/ebs (the default state of the container — pipeline
 does not need to be running for this test).
 """
@@ -34,7 +34,7 @@ TARGET_V = 17.0
 T_MAX_LAUNCH = 8.0
 T_MAX_EBS = 10.0
 OUT_CSV = Path("tests/output/bench_ebs.csv")
-ROS_CONTAINER = "ifssim-ros_stack-1"
+ROS_CONTAINER = "ifssim-dv_pipeline_stack-1"
 
 
 def _send(sock: socket.socket, cmd: str) -> str:
@@ -57,11 +57,11 @@ def _parse_state(resp: str) -> dict:
 
 
 def _publish_ebs_via_ros() -> None:
-    """Fire one Empty on /signal/ebs through the running ros_stack."""
+    """Fire one Empty on /signal/ebs through the running dv_pipeline_stack."""
     cmd = [
         "docker", "exec", ROS_CONTAINER, "bash", "-lc",
         "source /opt/ros/humble/setup.bash && "
-        "source /ros_stack_ws/install/setup.bash && "
+        "source /dv_pipeline_stack_ws/install/setup.bash && "
         "ros2 topic pub --once -t 1 /signal/ebs std_msgs/msg/Empty '{}'",
     ]
     # Fire-and-forget: we don't want to block the sampling loop.

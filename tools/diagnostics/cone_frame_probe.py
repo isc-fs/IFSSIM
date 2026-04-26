@@ -7,11 +7,11 @@ transform. Prints one summary line per second:
            | cones_n=12 cones_x=[2.10, 48.50]
            | orange_n=2 orange_x=[3.05, 7.10]
 
-Run inside the ros_stack container with the pipeline up:
+Run inside the dv_pipeline_stack container with the pipeline up:
 
-    docker exec -it ros_stack bash -lc \\
-      "source /opt/ros/humble/setup.bash && source /ws/install/setup.bash && \\
-       python3 /ws/tools/diagnostics/cone_frame_probe.py"
+    docker exec -it ifssim-dv_pipeline_stack-1 bash -lc \\
+      "source /opt/ros/humble/setup.bash && source /dv_pipeline_stack_ws/install/setup.bash && \\
+       python3 /dv_pipeline_stack_ws/src/tools/diagnostics/cone_frame_probe.py"
 
 Interpretation:
 - If `cones_x` tracks car motion (decreases as car=x grows) → cones ARE

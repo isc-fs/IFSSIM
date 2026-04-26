@@ -171,7 +171,7 @@ private:
     // /signal/ebs_reset — release the latch. Published by the control node
     // on init so a fresh session always starts with controls accepted, even
     // if the previous session ended with a latched EBS. Without this, the
-    // bridge would silently drop every setCarControls until ros_stack was
+    // bridge would silently drop every setCarControls until dv_pipeline_stack was
     // restarted (the flag had no reset path).
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_request_sub_;
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_reset_sub_;

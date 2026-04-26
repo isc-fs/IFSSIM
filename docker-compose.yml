@@ -2,10 +2,10 @@ services:
 
   # ROS2 bridge + full driverless pipeline in one container
   # Connects to UE5/IFSSIM running natively on the host
-  ros_stack:
+  dv_pipeline_stack:
     build:
       context: .
-      dockerfile: docker/ros_stack/Dockerfile
+      dockerfile: docker/dv_pipeline_stack/Dockerfile
     environment:
       - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
       - IFSSIM_PORT=${IFSSIM_PORT:-41451}

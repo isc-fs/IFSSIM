@@ -46,7 +46,7 @@ docker compose build
 This builds the custom services (Lichtblick is pulled from the registry, not built locally):
 - **`mission_control_backend`** — FastAPI server (port 8000), handles sim commands, scoring, track management
 - **`mission_control_frontend`** — React dashboard served via Nginx (port 3000)
-- **`ros_stack`** — ROS 2 Humble pipeline with sensors, SLAM, control nodes (port 8765)
+- **`dv_pipeline_stack`** — ROS 2 Humble pipeline with sensors, SLAM, control nodes (port 8765)
 - **`lichtblick`** — Web-based ROS 2 visualizer (port 8080), connects to the Foxglove bridge
 
 > First build takes several minutes. Subsequent builds are cached.

@@ -2,11 +2,11 @@
 set -e
 
 source /opt/ros/humble/setup.bash
-source /ros_stack_ws/install/setup.bash
+source /dv_pipeline_stack_ws/install/setup.bash
 
 # ament_cmake packages (fs_msgs, ifssim_bridge) are not added to AMENT_PREFIX_PATH
 # by the colcon-generated setup scripts — add them explicitly.
-export AMENT_PREFIX_PATH="/ros_stack_ws/install/fs_msgs:/ros_stack_ws/install/ifssim_bridge:$AMENT_PREFIX_PATH"
+export AMENT_PREFIX_PATH="/dv_pipeline_stack_ws/install/fs_msgs:/dv_pipeline_stack_ws/install/ifssim_bridge:$AMENT_PREFIX_PATH"
 
 PIPELINE_CTL=/pipeline_ctrl/enable
 PIPELINE_PID=""
@@ -20,7 +20,7 @@ mkdir -p /pipeline_ctrl
 rm -f $PIPELINE_CTL
 
 # Always start the bridge (background so we can monitor pipeline flag)
-ros2 launch /ros_stack_ws/bridge.launch.py \
+ros2 launch /dv_pipeline_stack_ws/bridge.launch.py \
     host:=$IFSSIM_HOST \
     port:=$IFSSIM_PORT \
     mission_name:=$MISSION_NAME \
@@ -36,7 +36,7 @@ while kill -0 $BRIDGE_PID 2>/dev/null; do
         # unit when the stop flag clears. Without setsid, `kill $PID` only
         # hits the launcher — the node children keep running, saturating
         # CPU and blocking future restarts.
-        setsid ros2 launch /ros_stack_ws/pipeline_only.launch.py \
+        setsid ros2 launch /dv_pipeline_stack_ws/pipeline_only.launch.py \
             host:=$IFSSIM_HOST \
             port:=$IFSSIM_PORT \
             mission_name:=$MISSION_NAME \
