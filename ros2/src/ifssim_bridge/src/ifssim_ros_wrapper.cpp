@@ -555,8 +555,18 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
     // IMU
     {
+        // Monotonic guard — see last_imu_stamp_ comment in the header. GLIM
+        // rejects any IMU sample whose stamp ≤ the previously-accepted one;
+        // bump by 1 ns when node_->now() would regress so the publish stream
+        // is strictly increasing.
+        rclcpp::Time imu_stamp = now;
+        if (last_imu_stamp_.nanoseconds() > 0 && imu_stamp <= last_imu_stamp_) {
+            imu_stamp = last_imu_stamp_ + rclcpp::Duration::from_nanoseconds(1);
+        }
+        last_imu_stamp_ = imu_stamp;
+
         sensor_msgs::msg::Imu msg;
-        msg.header.stamp = now;
+        msg.header.stamp = imu_stamp;
         msg.header.frame_id = vehicle_frame_id_;
         msg.linear_acceleration.x = f.accel_x;
         msg.linear_acceleration.y = f.accel_y;
@@ -640,8 +650,16 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     int total_points = header.total_points;
     if (total_points <= 0) return;
 
+    // Monotonic guard — same rationale as the IMU clamp in onSensorFrame.
+    // GLIM expects strictly increasing timestamps on /lidar/Lidar1.
+    rclcpp::Time lidar_stamp = node_->now();
+    if (last_lidar_stamp_.nanoseconds() > 0 && lidar_stamp <= last_lidar_stamp_) {
+        lidar_stamp = last_lidar_stamp_ + rclcpp::Duration::from_nanoseconds(1);
+    }
+    last_lidar_stamp_ = lidar_stamp;
+
     sensor_msgs::msg::PointCloud2 msg;
-    msg.header.stamp = node_->now();
+    msg.header.stamp = lidar_stamp;
     msg.header.frame_id = vehicle_frame_id_;
     msg.height = 1;
     msg.width = total_points;
