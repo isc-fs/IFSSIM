@@ -1,6 +1,6 @@
 """Cone-frame diagnostic for fix/21.
 
-Listens to /lidar/Lidar1, /Conos_raw, /Conos_Orange and the odom→fsds/FSCar
+Listens to /lidar/Lidar1, /Conos_raw, /Conos_Orange and the odom→base_link
 transform. Prints one summary line per second:
 
     [t=3.2s] car=(11.14, 0.04) | lidar_n=... lidar_xrange=[-1.80, 50.20]
@@ -104,7 +104,7 @@ class Probe(Node):
 
     def _car_pose(self):
         try:
-            tf = self.tf_buffer.lookup_transform("odom", "fsds/FSCar", rclpy.time.Time())
+            tf = self.tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time())
             return tf.transform.translation.x, tf.transform.translation.y
         except Exception:
             return (math.nan, math.nan)

@@ -123,7 +123,7 @@ class Cone_Detection(Node):
             marker.pose.position.z = 0.0
 
             ###Hacer compatible con RVIZ####
-            marker.header.frame_id = "fsds/FSCar"  ##El mapa esta en el sistema de referencia Odom no el coche
+            marker.header.frame_id = "base_link"  ##El mapa esta en el sistema de referencia Odom no el coche
             marker.type = marker.CUBE
             if (
                 i == 0
@@ -152,7 +152,7 @@ class Cone_Detection(Node):
             if is_big_orange:
                 # Same pose, distinct marker list, orange colour for RViz.
                 orange = Marker()
-                orange.header.frame_id = "fsds/FSCar"
+                orange.header.frame_id = "base_link"
                 orange.header.stamp = msg.header.stamp
                 orange.type = Marker.CUBE
                 orange.action = 3 if orange_i == 0 else Marker.ADD

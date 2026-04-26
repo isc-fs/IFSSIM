@@ -144,7 +144,7 @@ class Publicar_Mapa(Node):
 
         try:  ###Generar Objeto de transformada entre Odom y el coche
             t = self.tf_buffer.lookup_transform(
-                "odom", "fsds/FSCar", rclpy.time.Time()
+                "odom", "base_link", rclpy.time.Time()
             )
         except TransformException as ex:
             self.get_logger().warn(f"TF lookup failed: {ex}")
@@ -152,7 +152,7 @@ class Publicar_Mapa(Node):
 
         try:  ###Generar Objeto de transformada entre coche y odom. Transformada inversa
             t_inv = self.tf_buffer.lookup_transform(
-                "fsds/FSCar", "odom", rclpy.time.Time()
+                "base_link", "odom", rclpy.time.Time()
             )
         except TransformException as ex:
             self.get_logger().warn(f"TF inverse lookup failed: {ex}")

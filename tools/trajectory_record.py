@@ -92,7 +92,7 @@ class TrajectoryRecorder(Node):
     def _sample_tf(self):
         try:
             tf = self.tf_buf.lookup_transform(
-                "odom", "fsds/FSCar", rclpy.time.Time()
+                "odom", "base_link", rclpy.time.Time()
             )
         except Exception:
             return
