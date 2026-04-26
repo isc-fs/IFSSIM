@@ -8,9 +8,8 @@ from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
 
 REMAP_LIDAR  = ('/fsds/lidar/Lidar1',       '/lidar/Lidar1')
-REMAP_ODOM   = ('/fsds/testing_only/odom',  '/testing_only/odom')
-REMAP_TRACK  = ('/fsds/testing_only/track', '/testing_only/track')
-REMAP_GSS    = ('/fsds/gss',                '/gss')
+REMAP_ODOM   = ('/fsds/testing_only/odom',  '/testing_only/odom')  # control's lateral velocity (TODO PR #4: replace with motor-RPM)
+REMAP_GSS    = ('/fsds/gss',                '/gss')                 # control's longitudinal velocity (TODO PR #4: replace with motor-RPM)
 REMAP_CMD    = ('/fsds/control_command',    '/control_command')
 
 
@@ -23,12 +22,8 @@ def generate_launch_description():
 
         # GLIM (LiDAR-IMU SLAM). CPU-only odometry estimation per the
         # docs/glim_integration.md plan. Consumes /lidar/Lidar1 + /imu,
-        # publishes map → odom → base_link via TF. Coexists with
-        # Odometria_perfecta during steps 2-3 of the integration:
-        # Odometria_perfecta still publishes odom → fsds/FSCar (different
-        # child of the same odom frame), no TF conflict. Step 5 deletes
-        # Odometria_perfecta once the rest of the pipeline is migrated
-        # to base_link.
+        # publishes map → odom → base_link via TF. Single source of truth
+        # for vehicle localization after step 5 deleted Odometria_perfecta.
         Node(
             package='glim_ros',
             executable='glim_rosnode',
@@ -39,13 +34,6 @@ def generate_launch_description():
             }],
         ),
 
-        Node(
-            package='odometria',
-            executable='Odometria_perfecta',
-            name='Odometria_perfecta',
-            output='screen',
-            remappings=[REMAP_ODOM],
-        ),
         Node(
             package='slam',
             executable='Cone_Detection',
@@ -58,13 +46,6 @@ def generate_launch_description():
             executable='Publicar_Mapa',
             name='Publicar_Mapa',
             output='screen',
-        ),
-        Node(
-            package='slam',
-            executable='Publicar_Track',
-            name='Publicar_Track',
-            output='screen',
-            remappings=[REMAP_TRACK],
         ),
         Node(
             package='path_planning',

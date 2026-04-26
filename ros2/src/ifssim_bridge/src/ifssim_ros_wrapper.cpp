@@ -812,22 +812,11 @@ void IFSSIMRosWrapper::staticTfCb()
     publishIdentityStatic("base_link", "fsds/Lidar");
     publishIdentityStatic("base_link", "fsds/GPS");
 
-    // Camera statics — kept under vehicle_frame_id_ for now; cameras don't
-    // exist on the real IFS-08 (memo: project_no_cameras_on_real_car.md), so
-    // they're sim-only debug visualization. Move to base_link in step 4.
-    for (const auto& cam_name : camera_names_) {
-        auto it = camera_offsets_.find(cam_name);
-        if (it == camera_offsets_.end() || !it->second.valid) continue;
-        geometry_msgs::msg::TransformStamped ctf;
-        ctf.header.stamp = now;
-        ctf.header.frame_id = vehicle_frame_id_;
-        ctf.child_frame_id = vehicle_frame_id_ + "/" + cam_name;
-        ctf.transform.translation.x = it->second.x;
-        ctf.transform.translation.y = it->second.y;
-        ctf.transform.translation.z = it->second.z;
-        ctf.transform.rotation.w = 1.0;
-        static_tf_broadcaster_->sendTransform(ctf);
-    }
+    // Camera static TFs — REMOVED in PR #3 step 5. Cameras don't exist on
+    // the real IFS-08 (memo: project_no_cameras_on_real_car.md), and after
+    // Odometria_perfecta was deleted, the legacy fsds/FSCar parent has
+    // no publisher anyway — leaving the camera children would create a
+    // disconnected subtree. Camera *image* publishing is unaffected.
 }
 
 void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)
