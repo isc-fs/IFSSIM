@@ -20,12 +20,21 @@ services:
       # re-JIT on every container boot and get SIGKILL'd mid-compile when the
       # pipeline was restarted.
       - NUMBA_CACHE_DIR=/numba_cache
-      # Force Fast DDS to use UDP-only transport. Docker's default /dev/shm
-      # is 64 MB; intermittent "RTPS_TRANSPORT_SHM Error: Failed init_port"
-      # stalls the pub/sub layer even when topics register — messages silently
-      # stop arriving at foxglove_bridge / Lichtblick. UDP is slightly less
-      # efficient but reliable on a single-node setup like this.
-      - FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+      # Fast DDS transport: SHM + UDP fallback (the default). SHM is
+      # ~order-of-magnitude cheaper than UDP for same-container pub/sub
+      # and is the dominant cost on the bridge's 400 Hz sensor publish
+      # thread under pipeline load (sensor topics dropped from ~95 % of
+      # nominal idle → ~55 % of nominal with the full pipeline running,
+      # not because of subscriber backpressure but because per-publish
+      # DDS UDP serialisation + send was wall-clock-bound).
+      #
+      # Previously forced to UDPv4 because Docker's default /dev/shm
+      # (64 MB) caused "RTPS_TRANSPORT_SHM Error: Failed init_port"
+      # stalls. shm_size below is now 1 GB (see below), so SHM has
+      # plenty of room and the original failure mode no longer applies.
+      # Let Fast DDS pick its default (SHM-preferred, UDP fallback for
+      # any host-external traffic — UE5 plugin still uses raw TCP/UDP
+      # on its own sockets).
     ports:
       # UE5 pushes sensor data to these ports — must be mapped so host→container works
       - "127.0.0.1:41452:41452/udp"
@@ -44,8 +53,10 @@ services:
       - pipeline_ctrl:/pipeline_ctrl
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
     memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
-    shm_size: 1gb         # Default 64 MB is too small for Fast DDS SHM; belt
-                          # and braces with FASTDDS_BUILTIN_TRANSPORTS=UDPv4.
+    shm_size: 1gb         # Default 64 MB is too small for Fast DDS SHM —
+                          # 1 GB lets DDS use its native shared-memory
+                          # transport which is dramatically cheaper than
+                          # UDP for same-container pub/sub.
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "pgrep", "-f", "ifssim_bridge"]
