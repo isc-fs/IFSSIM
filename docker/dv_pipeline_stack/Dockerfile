@@ -96,6 +96,19 @@ RUN ln -s /dv_pipeline_stack_ws/src/path_planning/path_planning/fsd_path_plannin
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install \
     --cmake-args -DBUILD_WITH_VIEWER=OFF
 
+# === GLIM runtime config directory ===
+# GLIM's glim_rosnode reads a directory of JSON configs. We seed the dir
+# with all the defaults from the GLIM install (so config_odometry_cpu.json,
+# config_sensors.json, etc. are present) and then overlay our two overrides
+# (config.json and config_ros.json) which select OdometryEstimationCPU and
+# point GLIM at our topics + frames.
+RUN mkdir -p /dv_pipeline_stack_ws/glim_config && \
+    cp /dv_pipeline_stack_ws/install/glim/share/glim/config/*.json \
+       /dv_pipeline_stack_ws/glim_config/
+
+COPY docker/dv_pipeline_stack/glim_config/config.json     /dv_pipeline_stack_ws/glim_config/config.json
+COPY docker/dv_pipeline_stack/glim_config/config_ros.json /dv_pipeline_stack_ws/glim_config/config_ros.json
+
 # Copy launch files, teleop, and entrypoint
 COPY docker/dv_pipeline_stack/bridge.launch.py        /dv_pipeline_stack_ws/bridge.launch.py
 COPY docker/dv_pipeline_stack/pipeline.launch.py      /dv_pipeline_stack_ws/pipeline.launch.py

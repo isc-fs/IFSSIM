@@ -21,6 +21,24 @@ def generate_launch_description():
         DeclareLaunchArgument('mission_name', default_value='trackdrive'),
         DeclareLaunchArgument('track_name',   default_value='A'),
 
+        # GLIM (LiDAR-IMU SLAM). CPU-only odometry estimation per the
+        # docs/glim_integration.md plan. Consumes /lidar/Lidar1 + /imu,
+        # publishes map → odom → base_link via TF. Coexists with
+        # Odometria_perfecta during steps 2-3 of the integration:
+        # Odometria_perfecta still publishes odom → fsds/FSCar (different
+        # child of the same odom frame), no TF conflict. Step 5 deletes
+        # Odometria_perfecta once the rest of the pipeline is migrated
+        # to base_link.
+        Node(
+            package='glim_ros',
+            executable='glim_rosnode',
+            name='glim_ros',
+            output='screen',
+            parameters=[{
+                'config_path': '/dv_pipeline_stack_ws/glim_config',
+            }],
+        ),
+
         Node(
             package='odometria',
             executable='Odometria_perfecta',
