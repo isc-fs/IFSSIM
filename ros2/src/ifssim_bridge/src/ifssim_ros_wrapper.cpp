@@ -541,7 +541,7 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     {
         sensor_msgs::msg::NavSatFix msg;
         msg.header.stamp = now;
-        msg.header.frame_id = vehicle_frame_id_;
+        msg.header.frame_id = "fsds/GPS";
         msg.latitude = f.latitude;
         msg.longitude = f.longitude;
         msg.altitude = f.altitude;
@@ -567,7 +567,7 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
         sensor_msgs::msg::Imu msg;
         msg.header.stamp = imu_stamp;
-        msg.header.frame_id = vehicle_frame_id_;
+        msg.header.frame_id = "fsds/IMU";
         msg.linear_acceleration.x = f.accel_x;
         msg.linear_acceleration.y = f.accel_y;
         msg.linear_acceleration.z = f.accel_z;
@@ -604,21 +604,14 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
             gss_pub_->publish(msg);
         }
 
-        // TF (map → vehicle)
-        {
-            geometry_msgs::msg::TransformStamped tf;
-            tf.header.stamp = now;
-            tf.header.frame_id = map_frame_id_;
-            tf.child_frame_id = vehicle_frame_id_;
-            tf.transform.translation.x = f.pos_x;
-            tf.transform.translation.y = f.pos_y;
-            tf.transform.translation.z = f.pos_z;
-            tf.transform.rotation.x = f.pose_qx;
-            tf.transform.rotation.y = f.pose_qy;
-            tf.transform.rotation.z = f.pose_qz;
-            tf.transform.rotation.w = f.pose_qw;
-            tf_broadcaster_->sendTransform(tf);
-        }
+        // TF odom → fsds/FSCar — REMOVED in PR #3 of the GLIM rebuild.
+        // GLIM (LiDAR-IMU SLAM) owns odom → base_link now. Odometria_perfecta
+        // continues to publish odom → fsds/FSCar from /fsds/testing_only/odom
+        // until step 4 of the rebuild renames pipeline frame references and
+        // step 5 deletes Odometria_perfecta entirely. The bridge no longer
+        // needs to publish a duplicate sim-GT TF — and doing so would conflict
+        // with GLIM's odom frame (multiple writers to the same TF parent
+        // cause non-deterministic last-writer-wins behavior in TF2).
 
         // Odom (testing only)
         if (odom_pub_) {
@@ -660,7 +653,7 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = lidar_stamp;
-    msg.header.frame_id = vehicle_frame_id_;
+    msg.header.frame_id = "fsds/Lidar";
     msg.height = 1;
     msg.width = total_points;
     msg.is_dense = true;
@@ -791,22 +784,37 @@ void IFSSIMRosWrapper::staticTfCb()
 {
     auto now = node_->now();
 
-    // Positions come from the plugin via getSensorOffset (cached at
-    // initializeConnection). Previously hardcoded to 1.4 m / 1.6 m
-    // forward — stale any time settings.json moved the mounts, which
-    // happened multiple times during fix/21-26.
-    if (lidar_offset_.valid) {
+    // Sensor static transforms — base_link → fsds/{IMU,Lidar,GPS}.
+    //
+    // GLIM (LiDAR-IMU SLAM) owns the odom→base_link dynamic transform; the
+    // bridge owns the static base_link→sensor chain. GLIM uses these to
+    // compute T_lidar_imu for scan undistortion and to express its output
+    // in the body frame.
+    //
+    // Identity transforms — UE5 already pre-transforms LiDAR points and IMU
+    // readings into the vehicle frame before sending them to the bridge.
+    // Applying the settings.json offsets (Lidar1.X/Y/Z = 0.5/0/0.9) here
+    // would double-apply them and place sensor data at the wrong location.
+    //
+    // TODO real-car: when the actual IFS-08 sends LiDAR points in the
+    // sensor's own frame, replace these with the real CAD offsets, source
+    // from getSensorOffset RPC (cached at initializeConnection).
+    auto publishIdentityStatic = [&](const std::string& parent, const std::string& child) {
         geometry_msgs::msg::TransformStamped tf;
         tf.header.stamp = now;
-        tf.header.frame_id = vehicle_frame_id_;
-        tf.child_frame_id = vehicle_frame_id_ + "/Lidar1";
-        tf.transform.translation.x = lidar_offset_.x;
-        tf.transform.translation.y = lidar_offset_.y;
-        tf.transform.translation.z = lidar_offset_.z;
-        tf.transform.rotation.w = 1.0;
+        tf.header.frame_id = parent;
+        tf.child_frame_id = child;
+        tf.transform.rotation.w = 1.0;  // identity (translation defaults to zero)
         static_tf_broadcaster_->sendTransform(tf);
-    }
+    };
 
+    publishIdentityStatic("base_link", "fsds/IMU");
+    publishIdentityStatic("base_link", "fsds/Lidar");
+    publishIdentityStatic("base_link", "fsds/GPS");
+
+    // Camera statics — kept under vehicle_frame_id_ for now; cameras don't
+    // exist on the real IFS-08 (memo: project_no_cameras_on_real_car.md), so
+    // they're sim-only debug visualization. Move to base_link in step 4.
     for (const auto& cam_name : camera_names_) {
         auto it = camera_offsets_.find(cam_name);
         if (it == camera_offsets_.end() || !it->second.valid) continue;

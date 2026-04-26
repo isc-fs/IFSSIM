@@ -13,7 +13,9 @@
     "map_frame_id": "map",
     "publish_imu2lidar": true,
     "tf_time_offset": 1e-6,
-    "extension_modules": [],
+    "extension_modules": [
+      "librviz_viewer.so"
+    ],
     "imu_topic": "/imu",
     "points_topic": "/lidar/Lidar1",
     "image_topic": "/image",
