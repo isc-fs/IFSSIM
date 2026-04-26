@@ -142,8 +142,17 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				{
 					FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
 					FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
+					// UE5 vehicle local frame is left-handed (X-fwd, Y-RIGHT, Z-up).
+					// ROS REP-103 vehicle frame is right-handed (X-fwd, Y-LEFT, Z-up).
+					// Without the Y flip, every cone shows up mirrored across the
+					// vehicle's longitudinal axis in /lidar/Lidar1, which then
+					// mirrors the cones detected, the SLAM map, and the planned
+					// path. On a straight track the mirror is self-symmetric so
+					// the car drives fine; at the first curve the mirrored path
+					// diverges from physical geometry and the controller turns
+					// the wrong way (DIAG showed +25° yaw_err step in 200 ms).
 					NewPoints.Add(LocalHit.X / 100.f);
-					NewPoints.Add(LocalHit.Y / 100.f);
+					NewPoints.Add(-LocalHit.Y / 100.f);
 					NewPoints.Add(LocalHit.Z / 100.f);
 					HitCount++;
 

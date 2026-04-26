@@ -48,10 +48,12 @@ IFSSIMRosWrapper::~IFSSIMRosWrapper()
     int lfd = lidar_stream_fd_.exchange(-1);
     if (sfd >= 0) close(sfd);
     if (lfd >= 0) close(lfd);
-    // Wake the publish-thread out of its condition_variable wait so it
-    // can observe streaming_=false and exit.
+    // Wake the publish-threads out of their condition_variable waits so
+    // they can observe streaming_=false and exit.
+    sensor_pub_cv_.notify_all();
     lidar_pub_cv_.notify_all();
     if (sensor_thread_.joinable()) sensor_thread_.join();
+    if (sensor_pub_thread_.joinable()) sensor_pub_thread_.join();
     if (lidar_thread_.joinable()) lidar_thread_.join();
     if (lidar_pub_thread_.joinable()) lidar_pub_thread_.join();
 }
@@ -167,9 +169,19 @@ IFSSIMRosWrapper::Vec3 IFSSIMRosWrapper::querySensorOffset(const std::string& na
 
 void IFSSIMRosWrapper::initializePublishers()
 {
-    gps_pub_ = node_->create_publisher<sensor_msgs::msg::NavSatFix>("gps", 10);
-    imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu", 10);
-    gss_pub_ = node_->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("gss", 10);
+    // High-rate sensors use BEST_EFFORT QoS for the same reason /lidar/Lidar1
+    // does (see comment below). With the default RELIABLE keep_last(10), a
+    // single slow subscriber stalled the publish thread → kernel TCP recv
+    // buffer filled → plugin SendAll hit its 1 s timeout → stream tear-down,
+    // and /imu / /gps fell to 0 Hz under pipeline load. Sensor topics are a
+    // "latest sample wins" stream by nature; drops are correct, backpressure
+    // is not. GPS at 10 Hz is the marginal case — kept BEST_EFFORT for
+    // consistency since its subscribers (none currently reliable-only) can
+    // tolerate the rare drop.
+    auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(5)).best_effort();
+    gps_pub_ = node_->create_publisher<sensor_msgs::msg::NavSatFix>("gps", sensor_qos);
+    imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu", sensor_qos);
+    gss_pub_ = node_->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("gss", sensor_qos);
     // /lidar/Lidar1 uses BEST_EFFORT QoS (rather than the default RELIABLE
     // keep_last(10)) so a slow subscriber — most notably the numba-JIT
     // cone-detection node during its first ~15 s of warmup, but also any
@@ -197,7 +209,7 @@ void IFSSIMRosWrapper::initializePublishers()
     }
 
     if (!competition_mode_) {
-        odom_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("testing_only/odom", 10);
+        odom_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("testing_only/odom", sensor_qos);
         auto qos = rclcpp::QoS(1).transient_local();
         track_pub_ = node_->create_publisher<fs_msgs::msg::Track>("testing_only/track", qos);
         extra_info_pub_ = node_->create_publisher<fs_msgs::msg::ExtraInfo>("testing_only/extra_info", 10);
@@ -280,9 +292,10 @@ void IFSSIMRosWrapper::startStreaming()
 
     streaming_ = true;
 
-    sensor_thread_ = std::thread(&IFSSIMRosWrapper::sensorStreamThread, this);
-    lidar_thread_  = std::thread(&IFSSIMRosWrapper::lidarStreamThread, this);
-    lidar_pub_thread_ = std::thread(&IFSSIMRosWrapper::lidarPublishThread, this);
+    sensor_thread_     = std::thread(&IFSSIMRosWrapper::sensorStreamThread,  this);
+    sensor_pub_thread_ = std::thread(&IFSSIMRosWrapper::sensorPublishThread, this);
+    lidar_thread_      = std::thread(&IFSSIMRosWrapper::lidarStreamThread,   this);
+    lidar_pub_thread_  = std::thread(&IFSSIMRosWrapper::lidarPublishThread,  this);
 
     // If initial connection failed (UE5 not in Play mode yet), kick off reconnect
     if (sensor_stream_fd_ < 0 || lidar_stream_fd_ < 0) {
@@ -326,8 +339,45 @@ void IFSSIMRosWrapper::sensorStreamThread()
         }
 
         if (frame.magic != SENSOR_MAGIC) continue;
+
+        // Hand off to the publish thread. Single-slot buffer with
+        // drop-oldest semantics — if the consumer hasn't yet drained the
+        // previous frame, we overwrite it. The mutex is held only long
+        // enough to swap the std::optional; publish() runs entirely
+        // outside the lock on the consumer side. See the header comment
+        // for the failure mode this prevents.
+        {
+            std::lock_guard<std::mutex> lock(sensor_pub_mutex_);
+            sensor_pending_ = frame;
+        }
+        sensor_pub_cv_.notify_one();
+    }
+}
+
+void IFSSIMRosWrapper::sensorPublishThread()
+{
+    RCLCPP_INFO(node_->get_logger(), "Sensor publish thread started");
+
+    while (streaming_) {
+        SensorFrame frame;
+        {
+            std::unique_lock<std::mutex> lock(sensor_pub_mutex_);
+            sensor_pub_cv_.wait(lock, [this] {
+                return !streaming_ || sensor_pending_.has_value();
+            });
+            if (!streaming_) break;
+            frame = *sensor_pending_;
+            sensor_pending_.reset();
+        }
+
+        // publish() runs OUTSIDE the lock so the recv thread can keep
+        // pushing new frames. Whatever time DDS / subscriber back-
+        // pressure costs is purely consumer-side; the recv loop never
+        // sees it.
         onSensorFrame(frame);
     }
+
+    RCLCPP_INFO(node_->get_logger(), "Sensor publish thread exiting");
 }
 
 void IFSSIMRosWrapper::lidarStreamThread()

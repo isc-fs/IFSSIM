@@ -63,8 +63,9 @@ private:
 
     // Streaming threads
     void sensorStreamThread();
+    void sensorPublishThread();  // Drains the single-slot buffer, calls onSensorFrame
     void lidarStreamThread();
-    void lidarPublishThread();  // Drains the single-slot buffer, calls onLidarFrame
+    void lidarPublishThread();   // Drains the single-slot buffer, calls onLidarFrame
 
     // Stream data handlers
     void onSensorFrame(const SensorFrame& frame);
@@ -99,6 +100,24 @@ private:
     std::thread lidar_thread_;
     std::atomic<bool> streaming_{false};
     std::mutex reconnect_mutex_;  // Ensures only one thread reconnects at a time
+
+    // Sensor producer-consumer split — same pattern as the LiDAR split
+    // below. Before this, the 400 Hz sensor recv thread published IMU
+    // (400 Hz), GSS/TF/Odom (100 Hz), GPS (10 Hz) inline, so any DDS
+    // backpressure (slow subscriber, full RELIABLE buffer) blocked the
+    // recv loop and the kernel TCP buffer filled within ~milliseconds.
+    // Plugin's SendAll then hit its 1 s timeout, tore the stream down,
+    // and ALL sensor topics fell to ~0 Hz under pipeline load. Symptom
+    // captured: with pipeline running, /imu and /gps each reported
+    // "topic does not appear to be published" for 10 s. Move publishes
+    // to a dedicated thread; recv thread now only pushes the latest
+    // SensorFrame into a single-slot buffer and immediately re-enters
+    // recv. Frame drops are acceptable: at 400 Hz a missed sample is
+    // 2.5 ms of IMU.
+    std::mutex sensor_pub_mutex_;
+    std::condition_variable sensor_pub_cv_;
+    std::optional<SensorFrame> sensor_pending_;
+    std::thread sensor_pub_thread_;
 
     // LiDAR producer-consumer split. The recv thread used to call
     // publish() inline, which under sustained pipeline-subscriber load

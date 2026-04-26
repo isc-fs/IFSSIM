@@ -54,7 +54,8 @@
         },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "NumberOfChannels": 116, "PointsPerSecond": 900000,
+          "_comment_lidar": "Sim-friendly subset of the real Hesai ATX (128 ch, ~1.5 M pts/s, 0.1° H) the car will run. NumberOfChannels matches the real unit so vertical resolution and channel-based logic (height-based big-orange detection) carry over; PointsPerSecond is dialed down so the host can hit a stable 10 Hz scan + the bridge can serialize PointCloud2 + cone detection can keep up. 200000 pts/s = 20 k pts/scan = 0.77° H step at 128 ch — still multiple beams per cone at 20 m, enough for clustering + cone fit. Was 116 ch / 900 k pts/s which kept the publish thread CPU-bound and dropped /lidar to ~5 Hz under pipeline load.",
+          "NumberOfChannels": 128, "PointsPerSecond": 200000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
