@@ -69,6 +69,21 @@ from cone_slam.landmark_db import Landmark, LandmarkDb
 DISTANCE_GATE_M = 2.0
 
 
+# Time-since-association gate expansion was tested on 2026-04-29 in
+# two variants (cap 1.5×, cap 4.0×). Both passed the iter-15
+# regression but made the cascade WORSE (80 s drift 5.8–11.9 m vs
+# A-alone's 2.1 m): once the gate opens past 3 m the optimizer
+# starts matching cones from adjacent track sections, accelerating
+# rather than recovering from the cascade. The mechanism only helps
+# if pose drift during a rejection burst is the *dominant* cause of
+# DA failure — but on cone-only LiDAR scenes the cascade is more
+# often dominated by wrong-match-when-gate-opens. Disabled.
+# Kept the current_step plumbing in associate() so re-enabling is a
+# threshold change.
+GATE_EXPANSION_PER_SCAN = 0.0    # disabled (no expansion)
+GATE_EXPANSION_CAP      = 1.0    # static gate
+
+
 # χ² threshold for the Mahalanobis gate. 2 DOF (xy in body frame).
 #   95 % → 5.99
 #   99 % → 9.21  (default, generous for early-iteration sparse data)
@@ -162,6 +177,7 @@ def associate(
     landmark_covariance_fn: Optional[
         Callable[[int], Optional[np.ndarray]]] = None,
     pose_xy_yaw_cov: Optional[np.ndarray] = None,
+    current_step: int = -1,
 ) -> List[Match]:
     """Match observations to landmarks. One Match per observation.
 
@@ -244,6 +260,17 @@ def associate(
         for j in range(n_lm):
             lm_body = lm_bodies[j]
             sigma_lm = lm_cov_body[j]
+            # Per-landmark gate expansion based on staleness. When
+            # current_step is unknown (caller didn't pass it) we fall
+            # back to the static gate.
+            if current_step >= 0:
+                stale = max(0, current_step - candidates[j].last_seen_step)
+                gate_mult = min(
+                    GATE_EXPANSION_CAP,
+                    1.0 + GATE_EXPANSION_PER_SCAN * stale)
+                gate_eff = DISTANCE_GATE_M * gate_mult
+            else:
+                gate_eff = DISTANCE_GATE_M
 
             # Pose-uncertainty contribution to Σ_innov via the Jacobian
             # of body-frame projection w.r.t. (yaw, x_w, y_w). With
@@ -274,9 +301,11 @@ def associate(
                 dx = o.body_x - lm_body[0]
                 dy = o.body_y - lm_body[1]
                 d_eu = float(np.hypot(dx, dy))
-                if d_eu > DISTANCE_GATE_M:
+                if d_eu > gate_eff:
                     # Euclidean physical-spacing backstop — skip
-                    # before doing the matrix math.
+                    # before doing the matrix math. Per-landmark
+                    # expansion via gate_eff lets stale landmarks
+                    # be re-acquired after a pose-drift window.
                     continue
                 obs_var = (o.sigma_xy ** 2) if o.sigma_xy > 0 \
                     else default_obs_var

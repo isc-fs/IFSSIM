@@ -308,8 +308,13 @@ class ConeGraphSlamNode(Node):
         # APIs in factor_graph (pose_covariance, landmark_covariance)
         # and data_association (inflation constants) stay in place
         # for future revisits.
+        # Pass current_step so associate() can expand per-landmark
+        # gates for landmarks that haven't been associated recently —
+        # the recovery mechanism for the rejection bursts triggered
+        # by improvement A.
         matches = associate(
-            observations, pred_x, pred_y, pred_yaw, self._db)
+            observations, pred_x, pred_y, pred_yaw, self._db,
+            current_step=self._graph.step)
 
         # Pre-stage cascade-trigger detection. The cascade signature
         # observed on trackA_manual_001602 around t≈80 s is: a single
