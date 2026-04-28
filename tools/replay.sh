@@ -76,6 +76,13 @@ docker run --rm \
         source /dv_pipeline_stack_ws/install/setup.bash
         export AMENT_PREFIX_PATH=/dv_pipeline_stack_ws/install/fs_msgs:/dv_pipeline_stack_ws/install/ifssim_bridge:\$AMENT_PREFIX_PATH
 
+        echo '==> Starting Cone_Detection (LIVE — picks up algorithm changes since the bag was recorded)'
+        ros2 run slam Cone_Detection \\
+            --ros-args -r /fsds/lidar/Lidar1:=/lidar/Lidar1 \\
+            > /tmp/cone_detection.log 2>&1 &
+        CONE_PID=\$!
+        sleep 3   # numba JIT warmup
+
         echo '==> Starting cone_graph_slam'
         ros2 run cone_slam cone_graph_slam \\
             > /tmp/slam.log 2>&1 &
@@ -86,8 +93,16 @@ docker run --rm \
         # ahead of the subscription and miss the calibration window.
         sleep 2
 
-        echo '==> Starting bag play (no Cone_Detection — /Conos_raw is in the bag)'
+        echo '==> Starting bag play (remap bag /Conos_raw to /dev/null so Cone_Detection owns the topic)'
+        # The bag was recorded with cone_detection running live. Remap
+        # the recorded /Conos_raw to a dead topic so the live
+        # Cone_Detection's output (with current algorithm fixes —
+        # cluster-centroid fallback + lower c bound) is the one
+        # cone_slam consumes. Without this remap we'd get two
+        # publishers with identical timestamps and integrate_to would
+        # see the same t_end twice, raising 'skip scan' errors.
         ros2 bag play /replay/bag --disable-keyboard-controls \\
+            --remap /Conos_raw:=/Conos_raw_recorded_unused \\
             > /tmp/bag.log 2>&1 &
         BAG_PID=\$!
 
@@ -101,7 +116,7 @@ docker run --rm \
         echo '==> SLAM log tail (last 30 lines):'
         tail -30 /tmp/slam.log || true
 
-        kill \$SLAM_PID \$BAG_PID 2>/dev/null || true
+        kill \$SLAM_PID \$BAG_PID \$CONE_PID 2>/dev/null || true
     " | tee "$HOST_BAG_DIR/replay_pose_cmp_cone_slam.txt"
 
 echo
