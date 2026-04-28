@@ -20,11 +20,21 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	Output.Timestamp = FPlatformTime::Cycles64();
 	Output.Orientation = Owner->GetActorQuat();
 
-	// Angular velocity from physics body
+	// Pre-compute the world→body rotation once; angular velocity and
+	// linear acceleration both need it.
+	const FQuat InvRotation = Owner->GetActorQuat().Inverse();
+
+	// Angular velocity. GetPhysicsAngularVelocityInRadians() returns
+	// world-space ω; a real IMU gyro outputs body-frame ω, so rotate it
+	// into the body frame here. Without this, downstream SLAM nodes
+	// integrate a mirrored attitude during turns (validated empirically
+	// against fast_LIMO — yaw direction was inverted vs. ground-truth
+	// odom, see 2026-04-27 Phase 2 drive test).
 	UPrimitiveComponent* RootPrim = Cast<UPrimitiveComponent>(Owner->GetRootComponent());
 	if (RootPrim && RootPrim->IsSimulatingPhysics())
 	{
-		Output.AngularVelocity = RootPrim->GetPhysicsAngularVelocityInRadians();
+		const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+		Output.AngularVelocity = InvRotation.RotateVector(WorldAngVel);
 	}
 
 	// Linear acceleration from velocity delta
@@ -35,8 +45,7 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 		// Add gravity
 		WorldAccel.Z += 980.f; // cm/s^2
 
-		// Transform to body frame
-		FQuat InvRotation = Owner->GetActorQuat().Inverse();
+		// Transform to body frame (re-uses the InvRotation above)
 		Output.LinearAcceleration = InvRotation.RotateVector(WorldAccel);
 	}
 	PreviousVelocity = CurrentVelocity;

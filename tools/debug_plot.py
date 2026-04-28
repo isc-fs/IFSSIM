@@ -65,7 +65,7 @@ class GrabState(Node):
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                return self.tf_buf.lookup_transform("odom", "fsds/FSCar", rclpy.time.Time())
+                return self.tf_buf.lookup_transform("odom", "base_link", rclpy.time.Time())
             except Exception:
                 rclpy.spin_once(self, timeout_sec=0.1)
         return None

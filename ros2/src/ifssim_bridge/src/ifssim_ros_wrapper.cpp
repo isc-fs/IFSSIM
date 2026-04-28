@@ -182,6 +182,13 @@ void IFSSIMRosWrapper::initializePublishers()
     gps_pub_ = node_->create_publisher<sensor_msgs::msg::NavSatFix>("gps", sensor_qos);
     imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu", sensor_qos);
     gss_pub_ = node_->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("gss", sensor_qos);
+    // /motor_rpm — engine RPM straight from Chaos VehicleMovement
+    // (FSDSVehiclePawn::GetCarState → SensorFrame.rpm). Real-car parity:
+    // IFS-08 inverter publishes motor RPM on CAN at 100 Hz. cone_slam
+    // consumes it as a body-frame longitudinal velocity factor:
+    //   v_x = rpm × (2π × WheelRadius / GearRatio) / 60
+    // For IFS-08 (WheelRadius=0.228 m, GearRatio=2.909): v ≈ rpm × 0.00821 m/s.
+    motor_rpm_pub_ = node_->create_publisher<std_msgs::msg::Float32>("motor_rpm", sensor_qos);
     // /lidar/Lidar1 uses BEST_EFFORT QoS (rather than the default RELIABLE
     // keep_last(10)) so a slow subscriber — most notably the numba-JIT
     // cone-detection node during its first ~15 s of warmup, but also any
@@ -541,7 +548,7 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     {
         sensor_msgs::msg::NavSatFix msg;
         msg.header.stamp = now;
-        msg.header.frame_id = vehicle_frame_id_;
+        msg.header.frame_id = "fsds/GPS";
         msg.latitude = f.latitude;
         msg.longitude = f.longitude;
         msg.altitude = f.altitude;
@@ -555,15 +562,44 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
     // IMU
     {
+        // Monotonic guard — see last_imu_stamp_ comment in the header. GLIM
+        // rejects any IMU sample whose stamp ≤ the previously-accepted one;
+        // bump by 1 ns when node_->now() would regress so the publish stream
+        // is strictly increasing.
+        rclcpp::Time imu_stamp = now;
+        if (last_imu_stamp_.nanoseconds() > 0 && imu_stamp <= last_imu_stamp_) {
+            imu_stamp = last_imu_stamp_ + rclcpp::Duration::from_nanoseconds(1);
+        }
+        last_imu_stamp_ = imu_stamp;
+
         sensor_msgs::msg::Imu msg;
-        msg.header.stamp = now;
-        msg.header.frame_id = vehicle_frame_id_;
-        msg.linear_acceleration.x = f.accel_x;
-        msg.linear_acceleration.y = f.accel_y;
-        msg.linear_acceleration.z = f.accel_z;
-        msg.angular_velocity.x = f.gyro_x;
-        msg.angular_velocity.y = f.gyro_y;
-        msg.angular_velocity.z = f.gyro_z;
+        msg.header.stamp = imu_stamp;
+        msg.header.frame_id = "fsds/IMU";
+        // Convert UE5 body frame (left-handed: X=fwd, Y=right, Z=up) to
+        // ROS REP-103 body frame (right-handed: X=fwd, Y=left, Z=up).
+        // The UDP broadcaster forwards FSDSImuSensor's body-frame outputs
+        // (accel was already body-framed in the sensor; gyro was made
+        // body-framed by the same sensor file as of 2026-04-27).
+        //
+        // Linear acceleration is a polar vector — under the Y-axis basis
+        // change det(R)=-1 it transforms as v → (vx, -vy, vz).
+        //
+        // Angular velocity is a pseudovector (axial vector). Under the
+        // same basis change with det(R)=-1 the transformation gains an
+        // extra det factor: ω → (-ωx, ωy, -ωz). Only the polar transform
+        // (Y-flip) was applied originally; that produced the right
+        // gravity vector but mirrored yaw direction, which the
+        // 2026-04-27 Phase 2 drive made obvious — fast_LIMO integrated
+        // turns the wrong way.
+        //
+        // The orientation quat is already ENU-converted via UEQuatToENU
+        // upstream and needs no further flip here.
+        msg.linear_acceleration.x =  f.accel_x;
+        msg.linear_acceleration.y = -f.accel_y;
+        msg.linear_acceleration.z =  f.accel_z;
+        msg.angular_velocity.x = -f.gyro_x;
+        msg.angular_velocity.y =  f.gyro_y;
+        msg.angular_velocity.z = -f.gyro_z;
         msg.orientation.x = f.orient_x;
         msg.orientation.y = f.orient_y;
         msg.orientation.z = f.orient_z;
@@ -594,21 +630,23 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
             gss_pub_->publish(msg);
         }
 
-        // TF (map → vehicle)
+        // Motor RPM — straight from Chaos. Real IFS-08 publishes the
+        // same field on CAN at 100 Hz; matching rate keeps sim/real
+        // parity for the cone_slam velocity factor.
         {
-            geometry_msgs::msg::TransformStamped tf;
-            tf.header.stamp = now;
-            tf.header.frame_id = map_frame_id_;
-            tf.child_frame_id = vehicle_frame_id_;
-            tf.transform.translation.x = f.pos_x;
-            tf.transform.translation.y = f.pos_y;
-            tf.transform.translation.z = f.pos_z;
-            tf.transform.rotation.x = f.pose_qx;
-            tf.transform.rotation.y = f.pose_qy;
-            tf.transform.rotation.z = f.pose_qz;
-            tf.transform.rotation.w = f.pose_qw;
-            tf_broadcaster_->sendTransform(tf);
+            std_msgs::msg::Float32 msg;
+            msg.data = f.rpm;
+            motor_rpm_pub_->publish(msg);
         }
+
+        // TF odom → fsds/FSCar — REMOVED in PR #3 of the GLIM rebuild.
+        // GLIM (LiDAR-IMU SLAM) owns odom → base_link now. Odometria_perfecta
+        // continues to publish odom → fsds/FSCar from /fsds/testing_only/odom
+        // until step 4 of the rebuild renames pipeline frame references and
+        // step 5 deletes Odometria_perfecta entirely. The bridge no longer
+        // needs to publish a duplicate sim-GT TF — and doing so would conflict
+        // with GLIM's odom frame (multiple writers to the same TF parent
+        // cause non-deterministic last-writer-wins behavior in TF2).
 
         // Odom (testing only)
         if (odom_pub_) {
@@ -640,27 +678,71 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     int total_points = header.total_points;
     if (total_points <= 0) return;
 
+    // Monotonic guard — same rationale as the IMU clamp in onSensorFrame.
+    // GLIM expects strictly increasing timestamps on /lidar/Lidar1.
+    rclcpp::Time lidar_stamp = node_->now();
+    if (last_lidar_stamp_.nanoseconds() > 0 && lidar_stamp <= last_lidar_stamp_) {
+        lidar_stamp = last_lidar_stamp_ + rclcpp::Duration::from_nanoseconds(1);
+    }
+    last_lidar_stamp_ = lidar_stamp;
+
     sensor_msgs::msg::PointCloud2 msg;
-    msg.header.stamp = node_->now();
-    msg.header.frame_id = vehicle_frame_id_;
+    msg.header.stamp = lidar_stamp;
+    msg.header.frame_id = "fsds/Lidar";
     msg.height = 1;
     msg.width = total_points;
     msg.is_dense = true;
     msg.is_bigendian = false;
 
+    // x/y/z + per-point absolute timestamp (FLOAT64, seconds). fast_LIMO's
+    // HESAI handler hard-requires the timestamp field; without it the
+    // node throws "FATAL ERROR: invalid pointcloud structure" on the
+    // first scan.
+    //
+    // The IFSSIM LiDAR sensor (FSDSLidarSensor.cpp) is INSTANTANEOUS —
+    // it snapshots the car transform ONCE per scan and ray-traces all
+    // ~20000 points from that single pose. No physical sweep, no
+    // motion-during-scan. The real Hesai ATX (which we model) is a
+    // hybrid solid-state LiDAR: 128 vertical lasers fire simultaneously,
+    // and a MEMS mirror sweeps horizontally over the 100 ms scan
+    // period, so the real hardware DOES have per-azimuth time
+    // variation. The simulator collapses that sweep into a single tick.
+    //
+    // We therefore set every point's timestamp to the scan stamp.
+    // fast_LIMO's deskew uses per-point time to interpolate IMU pose at
+    // each point's capture instant; with all-equal times the
+    // interpolation collapses to identity and no fake motion
+    // compensation is applied. This matches the simulator's actual
+    // behavior.
+    //
+    // History:
+    //   - Initial (linear-by-index): t = scan_start + (i/N) * 0.1
+    //   - Tried (azimuthal, fetty31 #13): t = scan_start + (pi - atan2(y,x))/(2*pi) * 0.1
+    // Both assumed a real spinning sweep and applied wrong deskew on the
+    // sim's instantaneous data. The 2026-04-27 audit confirmed FSDS is
+    // single-tick by reading FSDSLidarSensor.cpp:52 (single
+    // GetActorTransform() before the ray trace loop).
     sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.setPointCloud2Fields(4,
+        "x",         1, sensor_msgs::msg::PointField::FLOAT32,
+        "y",         1, sensor_msgs::msg::PointField::FLOAT32,
+        "z",         1, sensor_msgs::msg::PointField::FLOAT32,
+        "timestamp", 1, sensor_msgs::msg::PointField::FLOAT64);
     modifier.resize(total_points);
 
-    sensor_msgs::PointCloud2Iterator<float> iter_x(msg, "x");
-    sensor_msgs::PointCloud2Iterator<float> iter_y(msg, "y");
-    sensor_msgs::PointCloud2Iterator<float> iter_z(msg, "z");
+    sensor_msgs::PointCloud2Iterator<float>  iter_x(msg, "x");
+    sensor_msgs::PointCloud2Iterator<float>  iter_y(msg, "y");
+    sensor_msgs::PointCloud2Iterator<float>  iter_z(msg, "z");
+    sensor_msgs::PointCloud2Iterator<double> iter_t(msg, "timestamp");
+
+    const double scan_stamp_sec = lidar_stamp.seconds();
 
     for (int i = 0; i < total_points; i++) {
         *iter_x = points[i * 3];
         *iter_y = points[i * 3 + 1];
         *iter_z = points[i * 3 + 2];
-        ++iter_x; ++iter_y; ++iter_z;
+        *iter_t = scan_stamp_sec;
+        ++iter_x; ++iter_y; ++iter_z; ++iter_t;
     }
 
     lidar_pub_->publish(msg);
@@ -773,35 +855,39 @@ void IFSSIMRosWrapper::staticTfCb()
 {
     auto now = node_->now();
 
-    // Positions come from the plugin via getSensorOffset (cached at
-    // initializeConnection). Previously hardcoded to 1.4 m / 1.6 m
-    // forward — stale any time settings.json moved the mounts, which
-    // happened multiple times during fix/21-26.
-    if (lidar_offset_.valid) {
+    // Sensor static transforms — base_link → fsds/{IMU,Lidar,GPS}.
+    //
+    // GLIM (LiDAR-IMU SLAM) owns the odom→base_link dynamic transform; the
+    // bridge owns the static base_link→sensor chain. GLIM uses these to
+    // compute T_lidar_imu for scan undistortion and to express its output
+    // in the body frame.
+    //
+    // Identity transforms — UE5 already pre-transforms LiDAR points and IMU
+    // readings into the vehicle frame before sending them to the bridge.
+    // Applying the settings.json offsets (Lidar1.X/Y/Z = 0.5/0/0.9) here
+    // would double-apply them and place sensor data at the wrong location.
+    //
+    // TODO real-car: when the actual IFS-08 sends LiDAR points in the
+    // sensor's own frame, replace these with the real CAD offsets, source
+    // from getSensorOffset RPC (cached at initializeConnection).
+    auto publishIdentityStatic = [&](const std::string& parent, const std::string& child) {
         geometry_msgs::msg::TransformStamped tf;
         tf.header.stamp = now;
-        tf.header.frame_id = vehicle_frame_id_;
-        tf.child_frame_id = vehicle_frame_id_ + "/Lidar1";
-        tf.transform.translation.x = lidar_offset_.x;
-        tf.transform.translation.y = lidar_offset_.y;
-        tf.transform.translation.z = lidar_offset_.z;
-        tf.transform.rotation.w = 1.0;
+        tf.header.frame_id = parent;
+        tf.child_frame_id = child;
+        tf.transform.rotation.w = 1.0;  // identity (translation defaults to zero)
         static_tf_broadcaster_->sendTransform(tf);
-    }
+    };
 
-    for (const auto& cam_name : camera_names_) {
-        auto it = camera_offsets_.find(cam_name);
-        if (it == camera_offsets_.end() || !it->second.valid) continue;
-        geometry_msgs::msg::TransformStamped ctf;
-        ctf.header.stamp = now;
-        ctf.header.frame_id = vehicle_frame_id_;
-        ctf.child_frame_id = vehicle_frame_id_ + "/" + cam_name;
-        ctf.transform.translation.x = it->second.x;
-        ctf.transform.translation.y = it->second.y;
-        ctf.transform.translation.z = it->second.z;
-        ctf.transform.rotation.w = 1.0;
-        static_tf_broadcaster_->sendTransform(ctf);
-    }
+    publishIdentityStatic("base_link", "fsds/IMU");
+    publishIdentityStatic("base_link", "fsds/Lidar");
+    publishIdentityStatic("base_link", "fsds/GPS");
+
+    // Camera static TFs — REMOVED in PR #3 step 5. Cameras don't exist on
+    // the real IFS-08 (memo: project_no_cameras_on_real_car.md), and after
+    // Odometria_perfecta was deleted, the legacy fsds/FSCar parent has
+    // no publisher anyway — leaving the camera children would create a
+    // disconnected subtree. Camera *image* publishing is unaffected.
 }
 
 void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)

@@ -13,7 +13,7 @@
         "near": 0.01,
         "far": 5000
       },
-      "followTf": "fsds/FSCar",
+      "followTf": "base_link",
       "followMode": "follow-position",
       "scene": {
         "syncCamera": false,
@@ -37,36 +37,28 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/Conos": {
-          "visible": true
+        "/fast_limo/pointcloud": {
+          "visible": false,
+          "colorField": "z",
+          "colorMode": "flat",
+          "flatColor": { "r": 0.4, "g": 0.4, "b": 0.4, "a": 0.6 },
+          "pointSize": 1,
+          "pointShape": "circle",
+          "decayTime": 0
         },
-        "/Conos_raw": {
-          "visible": false
-        },
-        "/Conos_Orange": {
-          "visible": true
-        },
-        "/Path": {
-          "visible": true
-        },
-        "/Track": {
-          "visible": true
-        },
-        "/Track_azul": {
-          "visible": false
-        },
-        "/Track_amarillo": {
-          "visible": false
-        },
-        "/testing_only/track": {
-          "visible": false
-        }
+        "/Conos": { "visible": true },
+        "/Conos_raw": { "visible": false },
+        "/Conos_Orange": { "visible": true },
+        "/Path": { "visible": true },
+        "/Track_azul": { "visible": false },
+        "/Track_amarillo": { "visible": false },
+        "/testing_only/track": { "visible": false }
       },
       "layers": []
     },
 
     "Plot!speed_control": {
-      "title": "Speed & Control",
+      "title": "Speed & control",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -78,9 +70,9 @@
       "maxYValue": 12,
       "paths": [
         {
-          "value": "/gss.twist.twist.linear.x",
+          "value": "/fast_limo/state.twist.twist.linear.x",
           "enabled": true,
-          "label": "Speed (m/s)",
+          "label": "vx (LIMO, m/s)",
           "color": "#00cc88",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",

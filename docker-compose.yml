@@ -6,6 +6,16 @@ services:
     build:
       context: .
       dockerfile: docker/dv_pipeline_stack/Dockerfile
+    # Pin image name so it stays `ifssim-dv_pipeline_stack` regardless
+    # of which directory `docker compose` runs from. Without this,
+    # compose auto-prefixes the image with the project name (the
+    # directory it was invoked from), so the same image was getting
+    # tagged `silly-black-47c6f4-dv_pipeline_stack` when built inside a
+    # worktree and `ifssim-dv_pipeline_stack` only from the main
+    # checkout. Tools (tools/replay.sh, tools/diagnostics/*) and the
+    # cone_graph_slam progress doc all assume the `ifssim-` prefix, so
+    # canonicalize on that.
+    image: ifssim-dv_pipeline_stack:latest
     environment:
       - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
       - IFSSIM_PORT=${IFSSIM_PORT:-41451}
@@ -13,6 +23,9 @@ services:
       - TRACK_NAME=${TRACK_NAME:-A}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - PIPELINE_ENABLED=${PIPELINE_ENABLED:-false}
+      # Skip the autonomous control node — useful for SLAM-only validation
+      # or when keyboard-driving for motion sanity checks.
+      - DV_DISABLE_CONTROL=${DV_DISABLE_CONTROL:-false}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed

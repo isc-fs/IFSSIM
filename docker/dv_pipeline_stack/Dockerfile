@@ -27,16 +27,42 @@ RUN pip install --no-cache-dir \
     matplotlib \
     icecream \
     typing_extensions
+
+# GTSAM Python bindings — backbone of the cone-graph SLAM (PR A+).
+# Pinned to 4.3a0. The previous "4.2.0" pin was a phantom (never
+# released; only 4.2a1–4.2a9 and 4.3a0 actually shipped to PyPI), so
+# any fresh image build was guaranteed to fail. 4.2a9 was the obvious
+# fallback but ships no aarch64 wheel — only manylinux2014_x86_64 —
+# which breaks the build on Apple Silicon hosts. 4.3a0 is the only
+# remaining version with both x86_64 and aarch64 wheels for cp310.
+# factor_graph.py uses the "4.2.x mixed API" (setRelinearizeThreshold
+# method + relinearizeSkip property); both still work in 4.3a0 per
+# upstream's compatibility shim.
+RUN pip install --no-cache-dir "gtsam==4.3a0"
+
 # Re-pin numpy after all installs to prevent any dependency from upgrading it
 RUN pip install --no-cache-dir "numpy==1.24.*"
 
 
+# === Build deps for ifssim_bridge (C++) ===
+# cone_slam is pure Python (gtsam wheel, numpy, scipy) so the only
+# native build is the bridge. cmake + build-essential + git are enough.
+# Earlier revisions of this Dockerfile carried PCL/Eigen/fmt for the
+# fast_LIMO C++ build; that toolchain has been dropped along with all
+# legacy SLAM approaches (GLIM → FAST_LIO2 → fast_LIMO) which never
+# tracked our cone-only LiDAR scenes cleanly. cone_slam (PR A+) is the
+# single SLAM path the stack ships with.
+RUN apt-get update && apt-get install -y \
+      cmake build-essential git \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /dv_pipeline_stack_ws
 
 # Copy bridge packages (fs_msgs + ifssim_bridge)
+RUN mkdir -p src
 COPY ros2/src/ src/
 
-# Copy pipeline packages (slam, odometria, path_planning, control)
+# Copy pipeline packages (slam, cone_slam, path_planning, control)
 COPY pipeline/ src/
 
 # Install fsd_path_planning (bundled inside path_planning package)
@@ -45,7 +71,9 @@ RUN pip install --no-cache-dir -e src/path_planning/
 RUN ln -s /dv_pipeline_stack_ws/src/path_planning/path_planning/fsd_path_planning \
           /usr/local/lib/python3.10/dist-packages/fsd_path_planning
 
-# Build everything
+# Build everything. With fast_LIMO removed, this is just the bridge
+# C++ + a handful of Python packages (--symlink-install means edits
+# under src/ are live without re-running colcon).
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
 
 # Copy launch files, teleop, and entrypoint

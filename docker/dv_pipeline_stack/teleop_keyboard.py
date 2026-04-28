@@ -9,8 +9,11 @@ Keyboard teleop for IFSSIM — publishes fs_msgs/ControlCommand to /control_comm
 
 Run inside the container:
   docker exec -it ifssim-dv_pipeline_stack-1 python3 /dv_pipeline_stack_ws/teleop_keyboard.py
+  docker exec -it ifssim-dv_pipeline_stack-1 python3 /dv_pipeline_stack_ws/teleop_keyboard.py \
+      --max-throttle 0.3 --max-steer 0.4
 """
 
+import argparse
 import sys
 import tty
 import termios
@@ -44,6 +47,20 @@ def get_key(fd, old):
 
 
 def main():
+    # Caps clamp the *output* command, not the input step — so W/D still
+    # ramp at full STEP rate but the published message saturates at the
+    # cap. Lets you "feel" the cap as a ceiling without changing the
+    # keystroke cadence. Safe defaults are conservative; pass --max-* to
+    # widen for aggressive validation.
+    parser = argparse.ArgumentParser(description="IFSSIM keyboard teleop")
+    parser.add_argument("--max-throttle", type=float, default=1.0,
+                        help="upper bound on published throttle (0–1)")
+    parser.add_argument("--max-steer", type=float, default=1.0,
+                        help="upper bound on |published steer| (0–1)")
+    args = parser.parse_args()
+    max_throttle = max(0.0, min(1.0, args.max_throttle))
+    max_steer    = max(0.0, min(1.0, args.max_steer))
+
     rclpy.init()
     node = rclpy.create_node('teleop_keyboard')
     pub  = node.create_publisher(ControlCommand, '/control_command', 10)
@@ -55,6 +72,7 @@ def main():
     steer    = 0.0
     brake    = 0.0
 
+    print(f"caps: throttle ≤ {max_throttle:.2f}, |steer| ≤ {max_steer:.2f}")
     print(HELP.format(throttle, steer, brake))
 
     try:
@@ -83,13 +101,20 @@ def main():
                 throttle = max(0.0, throttle - 0.02)
                 brake    = 0.0
 
+            # Apply caps right before publish (preserves internal state
+            # so STEP/DECAY behavior is unchanged).
+            pub_throttle = min(throttle, max_throttle)
+            if steer >= 0.0:
+                pub_steer = min(steer, max_steer)
+            else:
+                pub_steer = max(steer, -max_steer)
             msg          = ControlCommand()
-            msg.throttle = float(throttle)
-            msg.steering = float(steer)
+            msg.throttle = float(pub_throttle)
+            msg.steering = float(pub_steer)
             msg.brake    = float(brake)
             pub.publish(msg)
 
-            sys.stdout.write('\r' + f'throttle: {throttle:.2f}  steer: {steer:+.2f}  brake: {brake:.2f}   ')
+            sys.stdout.write('\r' + f'throttle: {pub_throttle:.2f}  steer: {pub_steer:+.2f}  brake: {brake:.2f}   ')
             sys.stdout.flush()
 
     finally:

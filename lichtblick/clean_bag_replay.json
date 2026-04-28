@@ -1,0 +1,216 @@
+{
+  "configById": {
+    "3D!main": {
+      "cameraState": {
+        "distance": 35,
+        "perspective": true,
+        "phi": 60,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 0.7,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followTf": "fsds/FSCar",
+      "followMode": "follow-position",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 1.5
+        },
+        "background": { "color": "#0a0a14" }
+      },
+      "transforms": {
+        "frame:odom":        { "visible": true },
+        "frame:fsds/FSCar":  { "visible": true },
+        "frame:fsds/Lidar":  { "visible": false },
+        "frame:base_link":   { "visible": false }
+      },
+      "topics": {
+        "/lidar/Lidar1": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -1.0,
+          "maxValue": 2.0,
+          "pointSize": 4,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/testing_only/odom": {
+          "visible": true,
+          "type": "nav_msgs/msg/Odometry",
+          "covariance": false,
+          "axisScale": 0.8
+        },
+        "/Conos_raw": {
+          "visible": false,
+          "type": "visualization_msgs/msg/MarkerArray"
+        },
+        "/track_overlay": {
+          "visible": true,
+          "type": "visualization_msgs/msg/MarkerArray"
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26
+      }
+    },
+
+    "3D!world": {
+      "cameraState": {
+        "distance": 120,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followTf": "odom",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 2.0
+        },
+        "background": { "color": "#0a0a14" }
+      },
+      "transforms": {
+        "frame:odom":        { "visible": true },
+        "frame:fsds/FSCar":  { "visible": true },
+        "frame:fsds/Lidar":  { "visible": false },
+        "frame:base_link":   { "visible": false }
+      },
+      "topics": {
+        "/lidar/Lidar1": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -1.0,
+          "maxValue": 2.0,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/testing_only/odom": {
+          "visible": true,
+          "type": "nav_msgs/msg/Odometry",
+          "covariance": false,
+          "axisScale": 0.5
+        },
+        "/Conos_raw": {
+          "visible": false,
+          "type": "visualization_msgs/msg/MarkerArray"
+        },
+        "/track_overlay": {
+          "visible": true,
+          "type": "visualization_msgs/msg/MarkerArray"
+        }
+      }
+    },
+
+    "Plot!speed_rpm": {
+      "title": "Speed: GT body-frame v_x vs RPM-derived",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": -0.5,
+      "paths": [
+        {
+          "value": "/testing_only/odom.twist.twist.linear.x",
+          "enabled": true,
+          "label": "GT v_body_x (m/s)",
+          "color": "#44ffaa",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/motor_rpm.data * 0.00898",
+          "enabled": true,
+          "label": "RPM × 0.00898 (m/s)",
+          "color": "#aa44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+
+    "Plot!yaw_rate": {
+      "title": "Yaw rate",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "label": "IMU yaw rate (rad/s)",
+          "color": "#aaff44",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/testing_only/odom.twist.twist.angular.z",
+          "enabled": true,
+          "label": "GT yaw rate (rad/s)",
+          "color": "#44ffaa",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    }
+  },
+
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+
+  "layout": {
+    "direction": "row",
+    "first": {
+      "direction": "column",
+      "first": "3D!main",
+      "second": "3D!world",
+      "splitPercentage": 60
+    },
+    "second": {
+      "direction": "column",
+      "first": "Plot!speed_rpm",
+      "second": "Plot!yaw_rate",
+      "splitPercentage": 50
+    },
+    "splitPercentage": 70
+  }
+}

@@ -73,3 +73,6 @@ Content/tracks/.ifssim_state.json
 
 # Documents (not source)
 *.pdf
+
+# Recorded ROS2 bags — large binary sqlite DBs, not source
+tools/bags/

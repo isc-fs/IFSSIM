@@ -51,8 +51,13 @@
             "second": {
               "direction": "column",
               "first": "Plot!cone_count_slam",
-              "second": "RawMessages!conos",
-              "splitPercentage": 40
+              "second": {
+                "direction": "column",
+                "first": "Plot!pose_drift",
+                "second": "RawMessages!conos",
+                "splitPercentage": 50
+              },
+              "splitPercentage": 33
             },
             "splitPercentage": 70
           }
@@ -92,7 +97,7 @@
         "near": 0.01,
         "far": 5000
       },
-      "followTf": "fsds/FSCar",
+      "followTf": "base_link",
       "followMode": "follow-position",
       "scene": {
         "syncCamera": false,
@@ -125,7 +130,7 @@
 
     "3D!slam_map": {
       "cameraState": {
-        "distance": 40,
+        "distance": 60,
         "perspective": false,
         "phi": 0,
         "target": [0, 0, 0],
@@ -136,34 +141,44 @@
         "near": 0.01,
         "far": 5000
       },
-      "followTf": "fsds/FSCar",
-      "followMode": "follow-position",
+      "followTf": "odom",
+      "followMode": "follow-none",
       "scene": {
         "syncCamera": false,
-        "transforms": { "showAxes": true, "showLabels": false, "axisScale": 1 },
+        "transforms": { "showAxes": true, "showLabels": true, "axisScale": 1 },
         "background": { "color": "#111111" }
       },
       "transforms": {},
       "topics": {
-        "/lidar/Lidar1": {
+        "/fast_limo/pointcloud": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
           "colorMap": "turbo",
           "minValue": -0.5,
           "maxValue": 1.5,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/fast_limo/deskewed": {
+          "visible": false,
+          "colorMode": "flat",
+          "flatColor": { "r": 0.2, "g": 0.9, "b": 1, "a": 1 },
           "pointSize": 3,
           "pointShape": "circle",
           "decayTime": 0
         },
+        "/lidar/Lidar1": { "visible": false },
         "/Conos_raw": { "visible": true },
         "/Conos": { "visible": true },
         "/Conos_Orange": { "visible": true },
         "/Path": { "visible": true },
-        "/Track": { "visible": true },
         "/Track_azul": { "visible": true },
         "/Track_amarillo": { "visible": true },
-        "/testing_only/track": { "visible": false }
+        "/testing_only/track": { "visible": false },
+        "/testing_only/odom": { "visible": true },
+        "/fast_limo/state": { "visible": true }
       },
       "layers": []
     },
@@ -181,7 +196,7 @@
         "near": 0.01,
         "far": 5000
       },
-      "followTf": "fsds/FSCar",
+      "followTf": "base_link",
       "followMode": "follow-pose",
       "scene": {
         "syncCamera": false,
@@ -207,7 +222,7 @@
     },
 
     "Plot!steering": {
-      "title": "Steering [rad]",
+      "title": "Steering [-1…1]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -241,18 +256,18 @@
       "minYValue": 0,
       "paths": [
         {
-          "value": "/gss.twist.twist.linear.x",
+          "value": "/fast_limo/state.twist.twist.linear.x",
           "enabled": true,
-          "label": "vx",
+          "label": "vx (LIMO)",
           "color": "#ff8800",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true
         },
         {
-          "value": "/gss.twist.twist.linear.y",
+          "value": "/fast_limo/state.twist.twist.linear.y",
           "enabled": true,
-          "label": "vy",
+          "label": "vy (LIMO)",
           "color": "#ff4444",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
@@ -263,7 +278,7 @@
     },
 
     "Plot!throttle_brake": {
-      "title": "Throttle / Brake",
+      "title": "Throttle / brake",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -329,7 +344,7 @@
     },
 
     "Plot!yaw_rate": {
-      "title": "Yaw Rate [rad/s]",
+      "title": "Yaw rate [rad/s]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -349,8 +364,8 @@
         },
         {
           "value": "/testing_only/odom.twist.twist.angular.z",
-          "enabled": false,
-          "label": "Yaw rate (odom)",
+          "enabled": true,
+          "label": "Yaw rate (GT odom)",
           "color": "#44ffaa",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
@@ -361,7 +376,7 @@
     },
 
     "Plot!cone_count": {
-      "title": "Mapped Cones",
+      "title": "Mapped cones",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -385,7 +400,7 @@
     },
 
     "Plot!cone_count_slam": {
-      "title": "Detected Cones",
+      "title": "Mapped cones",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -408,8 +423,58 @@
       "sidebarDimension": 240
     },
 
+    "Plot!pose_drift": {
+      "title": "Position (LIMO vs GT)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/fast_limo/state.pose.pose.position.x",
+          "enabled": true,
+          "label": "LIMO x",
+          "color": "#4488ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/fast_limo/state.pose.pose.position.y",
+          "enabled": true,
+          "label": "LIMO y",
+          "color": "#88ff44",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/testing_only/odom.pose.pose.position.x",
+          "enabled": true,
+          "label": "GT x",
+          "color": "#ff4488",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/testing_only/odom.pose.pose.position.y",
+          "enabled": true,
+          "label": "GT y",
+          "color": "#ffaa44",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
     "Plot!imu_accel_xyz": {
-      "title": "IMU Linear Acceleration [m/s²]",
+      "title": "IMU linear acceleration [m/s²]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -450,7 +515,7 @@
     },
 
     "Plot!angular_vel": {
-      "title": "IMU Angular Velocity [rad/s]",
+      "title": "IMU angular velocity [rad/s]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -491,7 +556,7 @@
     },
 
     "Plot!speed_imu": {
-      "title": "Speed [m/s]",
+      "title": "Speed (LIMO state) [m/s]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -502,7 +567,7 @@
       "minYValue": 0,
       "paths": [
         {
-          "value": "/gss.twist.twist.linear.x",
+          "value": "/fast_limo/state.twist.twist.linear.x",
           "enabled": true,
           "label": "vx",
           "color": "#ff8800",
@@ -511,7 +576,7 @@
           "showLine": true
         },
         {
-          "value": "/gss.twist.twist.linear.y",
+          "value": "/fast_limo/state.twist.twist.linear.y",
           "enabled": true,
           "label": "vy",
           "color": "#ff4444",

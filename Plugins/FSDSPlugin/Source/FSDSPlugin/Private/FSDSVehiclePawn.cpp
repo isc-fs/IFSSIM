@@ -581,8 +581,17 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	// Apply controls
 	if (bChaosVehicleActive && VehicleMovement)
 	{
+		// TEMPORARY: throttle cap for SLAM-tuning bag recording. Keeps
+		// keyboard / RPC inputs below 30% so the car stays in fast_LIMO's
+		// tracking envelope (~2 m/s) while we record a tunable bag. Set
+		// back to 1.0 (or remove the FMath::Min) to restore full
+		// throttle. Added 2026-04-27 for the tuning round; revert before
+		// merging to dev.
+		constexpr float kMaxThrottleForTuning = 0.3f;
+		const float CappedThrottle = FMath::Min(CurrentControls.Throttle, kMaxThrottleForTuning);
+
 		// Chaos vehicle mode
-		VehicleMovement->SetThrottleInput(CurrentControls.Throttle);
+		VehicleMovement->SetThrottleInput(CappedThrottle);
 		VehicleMovement->SetSteeringInput(CurrentControls.Steering);
 
 		// Brake channel = motor regen, power-capped by the battery's

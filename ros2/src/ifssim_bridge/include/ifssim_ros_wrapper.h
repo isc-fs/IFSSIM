@@ -17,6 +17,7 @@
 #include <fs_msgs/msg/extra_info.hpp>
 #include <fs_msgs/srv/reset.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/float32.hpp>
 
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
@@ -151,6 +152,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr motor_rpm_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_pub_;
     std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
@@ -161,6 +163,20 @@ private:
 
     // Transient: previous referee.finished value, for edge-triggered publish
     bool last_finished_state_ = false;
+
+    // Monotonic-stamp guards for IMU and LiDAR. GLIM (and any LiDAR-IMU
+    // SLAM pipeline) rejects samples whose timestamp ≤ the last accepted
+    // sample's timestamp. The bridge's `node_->now()` snapshot in the
+    // sensor and lidar publish threads can race occasionally — at 400 Hz
+    // IMU we observed ~5-10 ms rewinds in 2026-04-26 step-2 verification,
+    // which caused GLIM to reject every subsequent IMU sample after one
+    // outlier-future sample landed first. Clamp each stream's published
+    // stamp to be strictly greater than the previous one (bump by 1 ns
+    // when the natural `now()` would regress). Same clock domain for both
+    // streams (wall-clock from container), so no cross-stream alignment
+    // is needed beyond per-stream monotonicity.
+    rclcpp::Time last_imu_stamp_   = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    rclcpp::Time last_lidar_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
 
     // Subscribers
     rclcpp::Subscription<fs_msgs::msg::ControlCommand>::SharedPtr control_cmd_sub_;

@@ -68,16 +68,8 @@ def generate_launch_description():
     if PIPELINE_ENABLED:
         nodes += [
 
-            # --- Odometry: /testing_only/odom → TF odom→fsds/FSCar ---
-            Node(
-                package='odometria',
-                executable='Odometria_perfecta',
-                name='Odometria_perfecta',
-                output='screen',
-                remappings=[REMAP_ODOM],
-            ),
-
-            # --- SLAM: LiDAR → raw cone detections ---
+            # --- SLAM: LiDAR → raw cone detections (per-cone σ_xy on
+            # marker.scale.x for cone_graph_slam) ---
             # Uses Numba JIT — compiles on first message, cache persists via volume
             Node(
                 package='slam',
@@ -87,21 +79,17 @@ def generate_launch_description():
                 remappings=[REMAP_LIDAR],
             ),
 
-            # --- SLAM: cone accumulation → persistent map ---
+            # --- Cone-graph SLAM (cone_slam): IMU + cones + motor_rpm
+            # → odom→base_link TF, /cone_slam/state, /Conos (persistent
+            # landmark IDs, world frame). Replaces the legacy
+            # Odometria_perfecta (GT-only sim hack), Publicar_Mapa
+            # (downstream of fast_LIMO's TF) and Publicar_Track
+            # (debug viz only) — none ran on the real car.
             Node(
-                package='slam',
-                executable='Publicar_Mapa',
-                name='Publicar_Mapa',
+                package='cone_slam',
+                executable='cone_graph_slam',
+                name='cone_graph_slam',
                 output='screen',
-            ),
-
-            # --- SLAM: publish real cone positions from simulator (debug/benchmark) ---
-            Node(
-                package='slam',
-                executable='Publicar_Track',
-                name='Publicar_Track',
-                output='screen',
-                remappings=[REMAP_TRACK],
             ),
 
             # --- Path planning: cone map → target path ---

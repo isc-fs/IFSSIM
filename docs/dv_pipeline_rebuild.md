@@ -4,6 +4,32 @@
 **Successor to:** `fix/49-stanley-clean-baseline` (closed in PR #119, the keepers commit)
 **Driving issue:** the autonomy pipeline never completes a clean autocross lap (DOO=0) on the simulator. Five-run sweeps under iterated tuning consistently fail at or shortly after the first turn. Root cause traced not to a single bug but to a foundation that is sim-only by construction: ground-truth pose, ground-speed sensor, and a feature-mapping layer that all silently depend on UE5's perfect telemetry. Real-car deployment has none of these.
 
+## 0. Pivot 2026-04-27 — from dense scan-match SLAM to cone-graph SLAM
+
+**The original plan in §3 specified a LiDAR-IMU dense scan-matching SLAM** (GLIM-anchored). After implementation we determined that this whole class of SLAM (GLIM, FAST-LIO, fast_LIMO, KISS-ICP, …) is **structurally wrong for our environment.** Three rounds of integration, each replacing the previous:
+
+1. **GLIM** — diverged at vehicle speeds (76% drift, OOM under load). Aborted 2026-04-26.
+2. **FAST_LIO_ROS2** (Ericsii fork) — yaw direction inverted vs. ground truth on every drive (`feat(slam): swap GLIM → FAST_LIO_ROS2`, then realized fundamental issue). Aborted 2026-04-27 morning.
+3. **fast_LIMO** (fetty31, ros2-v2.1.0) — survived an "easy" drive at 1.05× distance ratio after extensive tuning, but **catastrophically diverges through every sharp turn** on a slow controlled drive: world-frame flips 180°, position error grows to 60-130 m over 45 s of motion, IKFoM oscillates between two scan-match local minima.
+
+The audit (3 parallel investigations: fast_LIMO source, upstream config comparison, repo issues) made the diagnosis unambiguous: **dense scan-matching SLAM assumes geometrically rich environments** (walls, vegetation, signage) where the scan is over-constrained against the prior map. **FS Driverless tracks are cone-only by competition rules** — sparse landmarks with rotational symmetry — and we can't add features to fix it. The fast_LIMO author's own Issue #13 thread confirms this: FSDS+fast_LIMO drift cannot be fully fixed by timestamps or tuning; fast_LIMO assumes scan-match richness we don't have.
+
+**Real winning DV teams (AMZ, MIT, MUR, Edinburgh) do not use FAST-LIO style SLAM.** They use cone-association graph SLAM with explicit per-cone data association, IMU preintegration factors, and (often) GPS factors. AMZ's documented architecture is FastSLAM 2.0 with color-aware association.
+
+**New plan (replaces §3.2 sensor data path and §4 PR #3 SLAM swap):**
+
+- Build a **GTSAM-based cone-graph SLAM node** — pose nodes, IMU preintegration factors, cone landmark nodes with `BearingRangeFactor`, GPS factors, iSAM2 incremental backend.
+- Add the missing **data-association layer** to `pipeline/slam/` (current cone detection re-detects fresh every scan with no cone-id persistence; see audit notes in `Publicar_Mapa`/`actualizar_mapa`).
+- Keep cone detection (`Cone_Detection`), color classification (spatial Y-sign + cache), big-orange height separation — those work and don't need to change.
+- Drop fast_LIMO entirely. Branch `feat/28-cone-graph-slam` (renamed from `feat/28-glim-localization` to reflect the actual direction).
+
+**What §3 below still applies:**
+- §3.1 TF tree convention (`map → odom → base_link`) — same.
+- §3.2 base_link rename across the pipeline — already shipped in commit `5ef63f7`, keep.
+- §4 PR #4–#6 (motor RPM, cone map slim, controller retune) — unchanged, just unblocked by the new SLAM rather than fast_LIMO.
+
+**Sections §3.2 SLAM box, §4 PR #3, and §5 Open decision #1 are now historical** — read for context, but the answers are: *we tried, those approaches don't work for us, see §0 for what replaces them.*
+
 ## 1. Why a rebuild
 
 The 2026-04-26 audit catalogued every "ideal" leak in the pipeline. The findings are not isolated bugs — they're a foundation problem. Specifically:
@@ -141,11 +167,13 @@ Files touched:
 
 **Validation:** `docker compose build && docker compose up -d` succeeds, pipeline starts, autonomy commands flow end-to-end. No behavior change in any controller / planner / SLAM logic. PR diff should be 100% renames + path updates.
 
-### PR #3 — GLIM integration + frame swap
+### PR #3 — LiDAR-IMU SLAM integration + frame swap
 
-**Branch:** `feat/N-glim-localization`
+**Branch:** `feat/N-glim-localization` → reused for FAST-LIO2 after the GLIM pivot (2026-04-27); will be renamed at PR-merge time.
 **Target:** `dev`
 **Scope:** the foundational swap.
+
+**Library choice:** **FAST-LIO ROS2** (Ericsii fork) — pivoted from GLIM after step 6 validation showed GLIM cannot track our sim's LiDAR-IMU stream at sustained vehicle speeds. See `docs/glim_integration.md` §15 (post-mortem) for the full story. FAST-LIO2 has dramatically lighter deps (PCL + Eigen, no GTSAM), is known to run real-time on Raspberry Pi-class CPUs, and per the design doc fallback path was already pre-approved as the GLIM substitute.
 
 Files touched:
 - `docker/dv_pipeline_stack/Dockerfile` — install GLIM dependencies (GTSAM, gtsam_points, Eigen, nanoflann), build `glim_ros2`
