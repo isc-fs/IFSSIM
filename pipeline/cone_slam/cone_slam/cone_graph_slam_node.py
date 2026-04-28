@@ -290,23 +290,24 @@ class ConeGraphSlamNode(Node):
         pred_y = predicted_pose.y()
         pred_yaw = predicted_pose.rotation().yaw()
 
-        # Mahalanobis DA stays disabled. Two attempts (2026-04-28):
-        # (1) Σ_innov = Σ_landmark + σ_obs² I  →  cascaded immediately
-        #     because Σ_landmark goes tight after ~3 observations and
-        #     the gate collapses below the actual pose-prediction
-        #     drift between scans.
-        # (2) Σ_innov = Σ_landmark + σ_obs² I + J Σ_pose J^T (proper
-        #     pose-aware) → cascaded by step 420. Root cause: iSAM2's
-        #     reported marginal pose covariance is the optimizer's
-        #     internal certainty, not the true pose error — with a
-        #     good IMU + cones, iSAM2 returns ~1 cm while the actual
-        #     pose has drifted ~1 m due to model errors / unmodeled
-        #     bias drift. Mahalanobis built on that is over-confident
-        #     → tight gate → DA fails → cascade.
-        # The landmark_covariance / pose_covariance APIs in
-        # FactorGraph stay available for future work (e.g. an
-        # explicitly-inflated covariance scheme or robust DA), but
-        # we ship Euclidean DA for now since it actually tracks.
+        # Mahalanobis DA stays disabled. Three variants tested on
+        # 2026-04-29:
+        # (1) full pose-aware Mahalanobis (4×/16× covariance inflation
+        #     + 0.49 m² floor): cascaded at t≈75s. iSAM2 marginal is
+        #     internal certainty not actual error; even with inflation
+        #     the gate is wrong during empty-scan-driven pose drift.
+        # (2) Mahalanobis gate + Euclidean Hungarian cost: same.
+        # (3) Landmark-cov-only Mahalanobis (no pose Jacobian): same.
+        # In every variant, mid-drive tracking was comparable to
+        # Euclidean (60 s ≈ 0.8 m) but the cascade still triggered
+        # at the same lap position because the cascade root cause is
+        # pose drift > gate during empty-scan windows — no DA
+        # strategy can fix this because there's nothing to associate.
+        # Real fix needs lost-track detection / scan rejection during
+        # pose-prediction-confidence collapse, not gate widening.
+        # APIs in factor_graph (pose_covariance, landmark_covariance)
+        # and data_association (inflation constants) stay in place
+        # for future revisits.
         matches = associate(
             observations, pred_x, pred_y, pred_yaw, self._db)
 

@@ -88,6 +88,29 @@ DEFAULT_LANDMARK_SIGMA_M = 0.5
 DEFAULT_OBS_SIGMA_M = 0.20
 
 
+# === Covariance inflation for Mahalanobis gating ============================
+# iSAM2's marginal covariance is the optimizer's INTERNAL certainty,
+# not the true error. With a good IMU + cones, iSAM2 reports σ ~ 1 cm
+# even when the actual pose has drifted 1+ m due to model errors,
+# unmodeled bias drift, etc. Two prior attempts to enable Mahalanobis
+# DA without inflation cascaded immediately because the gate
+# collapsed to ~0.3 m on tightly-constrained landmarks. The fix is to
+# (a) multiply Σ by a conservative factor before using it for gating,
+# and (b) impose a per-component variance floor so the gate never
+# collapses below physical cone-spacing bounds.
+#
+# Effective gate radius for typical regimes (with χ²=9.21):
+#   tight lm + tight pose:  σ_eff ≈ 0.55 m → gate ≈ 1.66 m
+#   loose lm + tight pose:  σ_eff ≈ 1.05 m → gate ≈ 3.18 m  (capped to
+#                                              DISTANCE_GATE_M=2.0 m)
+#   tight lm + loose pose:  σ_eff ≈ 0.85 m → gate ≈ 2.58 m
+POSE_COV_INFLATION    = 16.0  # multiplier on iSAM2's pose marginal
+LANDMARK_COV_INFLATION = 16.0  # multiplier on iSAM2's landmark marginal
+# Per-axis variance floor added to Σ_innov. (0.7 m)² = 0.49 m² so even
+# a perfectly-constrained landmark/pose pair retains a ~0.7 m σ_eff.
+COV_FLOOR_VAR_M2      = 0.49
+
+
 @dataclass
 class Observation:
     """One cone observation in body frame, post-color-classification.
@@ -213,7 +236,9 @@ def associate(
             if landmark_covariance_fn is not None:
                 cov_world = landmark_covariance_fn(lm.id)
                 if cov_world is not None:
-                    sigma_world_xy = cov_world[:2, :2]
+                    # Inflate to compensate for iSAM2's optimistic
+                    # internal estimate (see CONS_COV_INFLATION above).
+                    sigma_world_xy = LANDMARK_COV_INFLATION * cov_world[:2, :2]
                     lm_cov_body[j] = R_w2b @ sigma_world_xy @ R_w2b.T
 
         for j in range(n_lm):
@@ -237,7 +262,10 @@ def associate(
                     [ lm_body[1], -c_yaw, -s_yaw],
                     [-lm_body[0],  s_yaw, -c_yaw],
                 ])
-                sigma_pose_contrib = J @ pose_xy_yaw_cov @ J.T
+                # Inflate the pose marginal too (same rationale as
+                # the landmark inflation above).
+                sigma_pose_contrib = (
+                    POSE_COV_INFLATION * (J @ pose_xy_yaw_cov @ J.T))
             else:
                 sigma_pose_contrib = np.zeros((2, 2))
 
@@ -252,9 +280,14 @@ def associate(
                     continue
                 obs_var = (o.sigma_xy ** 2) if o.sigma_xy > 0 \
                     else default_obs_var
+                # Σ_innov = (4× Σ_lm) + σ_obs² I + (4× JΣ_poseJᵀ) + floor
+                # The floor adds (0.5 m)² to each diagonal so the gate
+                # never collapses below physical-cone-spacing bounds
+                # even when iSAM2 reports near-zero uncertainty.
                 sigma_innov = (sigma_lm
                                + obs_var * np.eye(2)
-                               + sigma_pose_contrib)
+                               + sigma_pose_contrib
+                               + COV_FLOOR_VAR_M2 * np.eye(2))
                 innov = np.array([dx, dy])
                 try:
                     sol = np.linalg.solve(sigma_innov, innov)
@@ -262,7 +295,14 @@ def associate(
                     continue
                 d2 = float(innov @ sol)
                 if d2 <= MAHALANOBIS_CHI2:
-                    cost[ii, j] = d2
+                    # Mahalanobis as gate, Euclidean as Hungarian cost.
+                    # Mahalanobis-squared distance varies wildly with
+                    # tight-vs-loose covariances and was making
+                    # Hungarian prefer "information-cheap" but
+                    # physically-wrong matches in dense cone scenes.
+                    # Once the gate has confirmed a match is plausible,
+                    # the assignment cost should be physical proximity.
+                    cost[ii, j] = d_eu
 
         # Hungarian doesn't accept +∞; replace with a large finite value.
         big = 1e6
