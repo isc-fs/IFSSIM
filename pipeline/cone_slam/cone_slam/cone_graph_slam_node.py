@@ -311,6 +311,31 @@ class ConeGraphSlamNode(Node):
         matches = associate(
             observations, pred_x, pred_y, pred_yaw, self._db)
 
+        # Pre-stage cascade-trigger detection. The cascade signature
+        # observed on trackA_manual_001602 around t≈80 s is: a single
+        # scan flips DA from "steady, mostly-associated" to "mostly
+        # new" (e.g., obs=8 new=6 assoc=2). The optimizer then jumps
+        # pose ~17 m to accommodate the falsely-new landmarks and the
+        # graph never recovers. Detection: if the new-rate suddenly
+        # spikes when (a) we have ≥5 observations to be statistically
+        # meaningful, (b) we're past the early-discovery phase
+        # (step > 30, so most cones in the local map are mature),
+        # (c) >60 % of obs are flagged new — the predicted pose is
+        # likely wrong and committing the staged factors will corrupt
+        # the graph. Drop the IMU factor too and re-try on the next
+        # scan from the same prev pose.
+        n_new_pre  = sum(1 for m in matches if m.landmark_id == -1)
+        total_pre  = len(matches)
+        if (total_pre >= 5
+                and self._graph.step > 30
+                and n_new_pre > int(0.60 * total_pre)):
+            self.get_logger().warn(
+                f"skip scan: DA-failure spike "
+                f"(obs={total_pre} new={n_new_pre} "
+                f"assoc={total_pre - n_new_pre}) — pose-jump rejected")
+            self._graph.discard_staged()
+            return
+
         # For each matched obs → factor between current pose and the
         # known landmark. For unmatched → allocate a new landmark and
         # add a factor to it.
