@@ -123,64 +123,48 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 {
 	if (!VehicleMovement) return;
 
-	// === IFS-08 EMRAX 228 Powertrain — electric, motor-side semantics ===
-	// Motor: 230 Nm stall, 240 Nm peak (1-3183 RPM), 80 kW from ~3183 RPM
-	// up, 6500 RPM redline. Single-speed chain reduction 2.909 (32T/11T),
-	// 92% drivetrain efficiency.
-	//
-	// MaxTorque is MOTOR-side (pre-gearbox) and TorqueCurve keys are MOTOR
-	// RPM. Chaos applies ForwardGearRatio × FinalRatio × TransmissionEff
-	// internally to get wheel torque. Previous implementation baked the
-	// gear ratio and efficiency into MaxTorque=643 while leaving gear=1
-	// and the default TransmissionEfficiency=0.9 — the latter silently
-	// stole 10% on top, so the sim was delivering 579 Nm at the wheel
-	// instead of the 643 Nm spec. Moving to motor-side semantics makes
-	// the numbers match the EMRAX datasheet and the team's own tuning.
-	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
-	VehicleMovement->EngineSetup.MaxTorque = 240.f; // motor-side peak
-	// ICE leftovers — neutralise them for an electric drivetrain:
-	//  - EngineIdleRPM 1200 → 0: no idle, motor sits at 0 until commanded.
-	//  - EngineBrakeEffect 0.05 → 0: no compression/crank drag when
-	//    throttle=0. Retardation is pure drag + regen (fix/22).
-	//  - EngineRevUpMOI 5.0 → 0.05: EMRAX rotor inertia is ~0.02 kg·m².
-	//    The default is tuned for a V8 (≈100× heavier), which artificially
-	//    slows the motor's response to throttle changes.
-	//  - EngineRevDownRate 600 → 10000: with idle=0 and no engine-brake
-	//    the ramp-down rate barely matters, but big value keeps Chaos
-	//    from dragging RPM down artificially when throttle=0.
-	VehicleMovement->EngineSetup.EngineIdleRPM = 0.f;
-	VehicleMovement->EngineSetup.EngineBrakeEffect = 0.f;
-	VehicleMovement->EngineSetup.EngineRevUpMOI = 0.05f;
-	VehicleMovement->EngineSetup.EngineRevDownRate = 10000.f;
+	// === IFS-08 EMRAX 228 Powertrain ===
+	// Motor: EMRAX 228, 230 Nm peak, 80 kW, 6500 RPM redline
+	// Gear ratio: 2.909 (32/11), drivetrain efficiency: 92%
+	// Torque at wheel = motor_torque * gear_ratio * efficiency
+	// (Local constants were hardcoded but unused; the settings path
+	//  overrides both below. Member GearRatio is shadowed by settings
+	//  in ApplyPhysicsSettings.)
 
+	// Chaos engine setup is left mostly nominal but neutered: we own
+	// the powertrain via UEmraxMotor and override per-wheel drive
+	// torque each tick (see Tick() below). Setting MaxTorque = 0 and
+	// EngineIdleRPM = 0 removes Chaos's two ICE-style behaviours that
+	// don't apply to an EV:
+	//   1. The default 1200 RPM idle floor — Chaos clamps motor RPM
+	//      to EngineIdleRPM at standstill, which fed our SLAM
+	//      velocity prior with a 10 m/s phantom motion on a parked
+	//      car (live UE5 run, 2026-04-29).
+	//   2. The internal torque curve — every wheel-drive impulse
+	//      Chaos computes from EngineSetup.TorqueCurve gets discarded
+	//      anyway by SetDriveTorqueOverride, but zeroing MaxTorque
+	//      makes that explicit and avoids double-counting in any
+	//      future code path that reads .EngineTorque.
+	// MaxRPM stays at 6500 so blueprint UI code that reads it for a
+	// gauge still gets the correct value; the actual speed clamp
+	// happens inside UEmraxMotor::Step.
+	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
+	VehicleMovement->EngineSetup.MaxTorque = 0.f;
+	VehicleMovement->EngineSetup.EngineIdleRPM = 0.f;
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
-	// Motor-side normalized (T(rpm) / 240 Nm). Flat 1.0 up to the
-	// power-limited transition ω_t = 80000/240 ≈ 333 rad/s ≈ 3183 RPM,
-	// then T = 80 kW / ω i.e. normalized = 764000 / (RPM × 240).
-	TorqueCurve->AddKey(0.f,    0.958f);  // 230 Nm stall
-	TorqueCurve->AddKey(1000.f, 1.000f);  // 240 Nm peak
-	TorqueCurve->AddKey(2000.f, 1.000f);
-	TorqueCurve->AddKey(3000.f, 1.000f);
-	TorqueCurve->AddKey(4000.f, 0.796f);  // 80 kW / (4000·2π/60) = 191 Nm → 0.796
-	TorqueCurve->AddKey(5000.f, 0.637f);
-	TorqueCurve->AddKey(6000.f, 0.531f);
-	TorqueCurve->AddKey(6500.f, 0.490f);  // redline
+	TorqueCurve->AddKey(0.f, 0.f);
+	TorqueCurve->AddKey(6500.f, 0.f);
 
-	// --- Transmission: single-speed chain reduction ---
-	// Chaos handles the gear ratio and efficiency natively — the torque
-	// curve above is motor-side.
+	// --- Transmission (single speed, electric) ---
+	// Electric motor: single fixed gear, no shifting
 	VehicleMovement->TransmissionSetup.bUseAutomaticGears = false;
 	VehicleMovement->TransmissionSetup.GearChangeTime = 0.0f;
 	VehicleMovement->TransmissionSetup.ForwardGearRatios.Reset();
-	VehicleMovement->TransmissionSetup.ForwardGearRatios.Add(2.909f); // chain 32/11
+	VehicleMovement->TransmissionSetup.ForwardGearRatios.Add(1.0f); // Single gear (reduction already in torque)
 	VehicleMovement->TransmissionSetup.ReverseGearRatios.Reset();
-	VehicleMovement->TransmissionSetup.ReverseGearRatios.Add(2.909f);
-	VehicleMovement->TransmissionSetup.FinalRatio = 1.0f;
-	VehicleMovement->TransmissionSetup.TransmissionEfficiency = 0.92f;
-	// Single-gear shifts must never fire — set the thresholds out of reach.
-	VehicleMovement->TransmissionSetup.ChangeUpRPM = 99999.f;
-	VehicleMovement->TransmissionSetup.ChangeDownRPM = 0.f;
+	VehicleMovement->TransmissionSetup.ReverseGearRatios.Add(1.0f);
+	VehicleMovement->TransmissionSetup.FinalRatio = 1.0f; // No additional reduction
 
 	// --- Differential (RWD) ---
 	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
@@ -212,19 +196,15 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
 
 	// === IFS-08 Mass & Inertia ===
-	// IFS-08 driving mass (corner-weight-measured):
-	//   Car    210 kg   Driver ≈ 65 kg  → total 275 kg
-	// Susp_Geometry sheet (CAD authoritative):
-	//   Wheelbase  1600 mm
-	//   CoG height  300 mm
-	//   Weight dist front 0.438 → CoG is 0.562 · 1600 = 899 mm from
-	//   the front axle, i.e. 99 mm rearward of the wheelbase midpoint
-	//   (800 mm) → -9.9 cm in UE X relative to the mesh center.
-	// Settings.json overrides all three of these via ApplyPhysicsSettings;
-	// the hardcoded values below are only used if settings.json is
-	// missing.
-	VehicleMovement->Mass = 275.f;
+	// Total mass: 290 kg (car 210 + driver 80)
+	// Wheelbase: 1627 mm, weight dist front: 43.8%
+	// CoG at 713mm from front axle = 813.5mm - 713mm = 100.5mm behind mesh center
+	// CoG height: 344mm from ground
+	VehicleMovement->Mass = 290.f;
 	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
+	// CoG offset: negative X = rearward (43.8% front means rear-biased)
+	// Mesh center is roughly at wheelbase/2 = 813mm from front
+	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
 	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
 }
@@ -258,16 +238,11 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		UFSDSCameraSensor* Cam = NewObject<UFSDSCameraSensor>(this, FName(*CamPair.Key));
 		Cam->SetupAttachment(GetRootComponent());
 
-		// Position: settings in meters, UE in cm. Convention is UE-native
-		// (X = forward, Y = right, Z = up); matches the LiDAR mount block
-		// above. Previously the camera path negated Z with the comment
-		// "Z is inverted in settings (negative = up)" — an AirSim/NED
-		// hangover — which meant settings.json had to bury one sign flip
-		// only for cameras while LiDAR was up-positive. Harmonised.
+		// Position: settings uses meters, UE uses cm
 		Cam->SetRelativeLocation(FVector(
 			CamSettings.Position.X * 100.f,
 			CamSettings.Position.Y * 100.f,
-			CamSettings.Position.Z * 100.f
+			CamSettings.Position.Z * -100.f // Z is inverted in settings (negative = up)
 		));
 		Cam->SetRelativeRotation(CamSettings.Rotation);
 
@@ -284,7 +259,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			*CamPair.Key,
 			CamSettings.Position.X * 100.f,
 			CamSettings.Position.Y * 100.f,
-			CamSettings.Position.Z * 100.f);
+			CamSettings.Position.Z * -100.f);
 	}
 
 	// Configure LiDAR from settings
@@ -302,14 +277,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->HorizontalFOVStart = SensorPair.Value.HorizontalFOVStart;
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
-				// RangeNoiseStd is declared in SI metres (settings.json) but
-				// the LiDAR's PerformScan() applies it inside the cm-space
-				// `Dist` distance buffer — convert m → cm here so a declared
-				// 0.03 m (3 cm) is actually emitted as 3 cm of stddev.
-				// Without this `* 100.f` the previous code emitted ~170×
-				// less noise than declared (declared 3 cm → actual ~0.17 mm),
-				// making sim point clouds unrealistically clean.
-				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd * 100.f;
+				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 				break;
 			}
@@ -330,24 +298,17 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		}
 	}
 
-	// Configure noise from settings — IMU (SensorType 2).
-	// Settings are in SI (m/s², rad/s). The IMU sensor's
-	// Output.LinearAcceleration is in cm/s² (gravity is added as
-	// `WorldAccel.Z += 980.f`, matching UE's cm-based units), so the
-	// accel-side values need a ×100 bump to match that scale. Gyro
-	// values are rad/s on both sides and go through unchanged.
+	// Configure noise from settings — IMU (SensorType 2)
 	if (ImuSensor)
 	{
 		for (auto& SensorPair : VehicleSettings->Sensors)
 		{
 			if (SensorPair.Value.SensorType == 2 && SensorPair.Value.bEnabled)
 			{
-				ImuSensor->AccelNoiseStd = SensorPair.Value.AccelNoiseStd * 100.f;
+				ImuSensor->AccelNoiseStd = SensorPair.Value.AccelNoiseStd;
 				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
-				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd * 100.f;
+				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd;
 				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
-				ImuSensor->AccelBiasTau = SensorPair.Value.AccelBiasTau;
-				ImuSensor->GyroBiasTau = SensorPair.Value.GyroBiasTau;
 				break;
 			}
 		}
@@ -385,55 +346,37 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			VehicleMovement->DifferentialSetup.FrontRearSplit = P.WeightDistFront;
 		}
 
-		// Motor torque curve from settings — MOTOR-side values (pre-gear).
-		// Chaos multiplies by ForwardGearRatio × FinalRatio × TransmissionEff
-		// internally, so we just set MaxTorque and the curve at motor RPM.
-		// Gear ratio and efficiency land on TransmissionSetup below.
+		// Motor torque curve from settings (if provided)
 		if (P.MotorRPM.Num() > 0 && P.MotorRPM.Num() == P.MotorTorque.Num())
 		{
-			float PeakMotorTorque = 0.f;
+			float PeakWheelTorque = 0.f;
 			for (float T : P.MotorTorque)
 			{
-				if (T > PeakMotorTorque) PeakMotorTorque = T;
+				float WheelT = T * P.GearRatio * P.DrivetrainEfficiency;
+				if (WheelT > PeakWheelTorque) PeakWheelTorque = WheelT;
 			}
 
-			VehicleMovement->EngineSetup.MaxTorque = PeakMotorTorque;
+			VehicleMovement->EngineSetup.MaxTorque = PeakWheelTorque;
 			FRichCurve* TC = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 			TC->Reset();
 
 			for (int32 i = 0; i < P.MotorRPM.Num(); i++)
 			{
-				float MotorT = P.MotorTorque[i];
-				// Power limit: T = min(T, P_max / ω_motor) — both motor-side.
+				float WheelT = P.MotorTorque[i] * P.GearRatio * P.DrivetrainEfficiency;
+				// Power limit: T = min(T, P_max / omega)
 				float MotorOmega = P.MotorRPM[i] * 2.f * PI / 60.f;
 				if (MotorOmega > 1.f)
 				{
-					float PowerLimitT = P.MotorMaxPower / MotorOmega;
-					MotorT = FMath::Min(MotorT, PowerLimitT);
+					float PowerLimitT = (P.MotorMaxPower / MotorOmega) * P.GearRatio * P.DrivetrainEfficiency;
+					WheelT = FMath::Min(WheelT, PowerLimitT);
 				}
-				float Normalized = (PeakMotorTorque > 0.f) ? MotorT / PeakMotorTorque : 0.f;
+				float Normalized = (PeakWheelTorque > 0.f) ? WheelT / PeakWheelTorque : 0.f;
 				TC->AddKey(P.MotorRPM[i], Normalized);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("FSDS: Motor curve from settings — %d points, peak %.0f Nm at motor (→ %.0f Nm at wheel after %.2f gear × %.2f eff)"),
-				P.MotorRPM.Num(), PeakMotorTorque,
-				PeakMotorTorque * P.GearRatio * P.DrivetrainEfficiency,
-				P.GearRatio, P.DrivetrainEfficiency);
+			UE_LOG(LogTemp, Log, TEXT("FSDS: Motor curve from settings — %d points, peak %.0f Nm at wheel"),
+				P.MotorRPM.Num(), PeakWheelTorque);
 		}
-
-		// Transmission: single-speed chain reduction driven by settings.
-		// Overwrites the ForwardGearRatios[0] that SetupVehicleMovement set
-		// to the hardcoded default so the user's settings.json gear ratio
-		// actually takes effect.
-		if (VehicleMovement->TransmissionSetup.ForwardGearRatios.Num() > 0)
-		{
-			VehicleMovement->TransmissionSetup.ForwardGearRatios[0] = P.GearRatio;
-		}
-		if (VehicleMovement->TransmissionSetup.ReverseGearRatios.Num() > 0)
-		{
-			VehicleMovement->TransmissionSetup.ReverseGearRatios[0] = P.GearRatio;
-		}
-		VehicleMovement->TransmissionSetup.TransmissionEfficiency = P.DrivetrainEfficiency;
 
 		// Aero
 		CdA = P.CdA;
@@ -480,6 +423,25 @@ void AFSDSVehiclePawn::BeginPlay()
 	// Load settings and create cameras
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
+
+	// Instantiate the EMRAX 228 motor model. We own the powertrain
+	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup
+	// (MaxTorque=0, EngineIdleRPM=0) and Tick below feeds per-wheel
+	// drive torque from this object. Default FEmraxMotorParams matches
+	// the EMRAX 228 MV / LC datasheet; we forward the regen caps from
+	// settings.json so a user override (e.g. a bigger battery raising
+	// MaxRegenPower) is honoured by the motor model too. The other
+	// EMRAX parameters (envelope, peak power, thermal budget) are
+	// motor-specific and stay at the class defaults.
+	if (!Motor)
+	{
+		Motor = NewObject<UEmraxMotor>(this, TEXT("EmraxMotor"));
+	}
+	if (Motor)
+	{
+		Motor->P.MaxRegenPowerW = MaxRegenPower;
+		Motor->P.MaxRegenTorqueNm = MaxRegenTorque;
+	}
 
 	// Load and apply FSDS car materials at runtime.
 	// Materials are loaded from /Game/Vehicle/TechnionCar/Materials/ (cooked in pak).
@@ -581,43 +543,79 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	// Apply controls
 	if (bChaosVehicleActive && VehicleMovement)
 	{
-		// TEMPORARY: throttle cap for SLAM-tuning bag recording. Keeps
-		// keyboard / RPC inputs below 30% so the car stays in fast_LIMO's
-		// tracking envelope (~2 m/s) while we record a tunable bag. Set
-		// back to 1.0 (or remove the FMath::Min) to restore full
-		// throttle. Added 2026-04-27 for the tuning round; revert before
-		// merging to dev.
-		constexpr float kMaxThrottleForTuning = 0.3f;
-		const float CappedThrottle = FMath::Min(CurrentControls.Throttle, kMaxThrottleForTuning);
-
-		// Chaos vehicle mode
-		VehicleMovement->SetThrottleInput(CappedThrottle);
+		// Chaos vehicle mode. SetThrottleInput is still called so any
+		// Blueprint UI that visualizes throttle gets the value, but
+		// it has no physical effect — EngineSetup.MaxTorque was
+		// zeroed in SetupVehicleMovement and the actual drive torque
+		// is computed by UEmraxMotor below.
+		VehicleMovement->SetThrottleInput(CurrentControls.Throttle);
 		VehicleMovement->SetSteeringInput(CurrentControls.Steering);
 
-		// Brake channel = motor regen, power-capped by the battery's
-		// cell input current limit. Driver/autonomy `Brake` input is a
-		// fraction of max motor regen torque; we scale it down by the
-		// ratio between the power-limited torque at current motor ω and
-		// the full motor torque. At low speeds the cap doesn't bind
-		// (plenty of torque headroom); at high speeds scale < 1 so the
-		// actual decel scales with 1/v (constant power shape).
-		float EffectiveBrake = CurrentControls.Brake;
-		if (EffectiveBrake > 0.f && MaxRegenTorque > 0.f)
-		{
-			float VFwd = FMath::Abs(FVector::DotProduct(GetVelocity(), GetActorForwardVector())) * 0.01f;  // cm/s -> m/s
-			float OmegaMotor = (VFwd / FMath::Max(WheelRadius, 0.01f)) * GearRatio;  // rad/s
-			if (OmegaMotor > 0.1f)
-			{
-				float TPowerLimited = MaxRegenPower / OmegaMotor;  // Nm at motor
-				float Scale = FMath::Min(1.f, TPowerLimited / MaxRegenTorque);
-				EffectiveBrake *= Scale;
-			}
-		}
-		VehicleMovement->SetBrakeInput(EffectiveBrake);
+		// SetBrakeInput is left at 0: regenerative braking is the
+		// EMRAX motor producing negative shaft torque (driven by the
+		// `brake` channel folded into the motor command below), and
+		// the IFS-08 has no front hydraulic friction brake on which
+		// the rear-wheel SetBrakeInput would map cleanly. Mechanical
+		// stopping power for emergencies comes from the handbrake +
+		// EBS latch, both of which use SetHandbrakeInput.
+		VehicleMovement->SetBrakeInput(0.f);
 		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
 
 		// Electric: always in gear 1 (single speed)
 		VehicleMovement->SetTargetGear(1, true);
+
+		// --- EMRAX 228 drive-torque override ----------------------
+		// We bypass Chaos's engine entirely (MaxTorque was zeroed in
+		// SetupVehicleMovement) and compute the shaft torque from
+		// our motor model. The motor's RPM tracks actual wheel speed
+		// × gear ratio so a parked car reads zero RPM (vs Chaos's
+		// 1200 idle floor that fed the SLAM velocity prior with a
+		// 10 m/s phantom motion on a stationary car).
+		if (Motor)
+		{
+			// Vehicle longitudinal speed (cm/s → m/s).
+			const float VFwdMs = FMath::Abs(FVector::DotProduct(
+				GetVelocity(), GetActorForwardVector())) * 0.01f;
+			// Wheel angular velocity assuming no slip, then geared
+			// up to motor rotor speed. WheelRadius / GearRatio are
+			// captured from settings in ApplyPhysicsSettings.
+			const float WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			const float MotorOmega = WheelOmega * GearRatio;
+			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));
+			Motor->SetMechRpm(MotorRpm);
+
+			// Combine throttle + brake into a single signed motor
+			// command in [-1, 1]. Brake feeds regen on the motor side
+			// (negative torque, capped by MaxRegenPowerW inside the
+			// EMRAX class). Simultaneous throttle+brake (e.g. 0.5 +
+			// 0.5) cancels out — physically a driver request for two
+			// opposing forces; we honour the simpler "net demand"
+			// interpretation.
+			const float ThrottleCmd = bEbsLatched
+				? 0.f
+				: FMath::Clamp(
+					CurrentControls.Throttle - CurrentControls.Brake,
+					-1.f, 1.f);
+			const float ShaftTorqueNm = Motor->Step(ThrottleCmd, DeltaTime);
+
+			// Shaft → axle: torque multiplied by gear ratio and the
+			// drivetrain efficiency we already cache from settings.
+			// The 92% default mirrors the EMRAX-driven IFS-08
+			// gearbox + chain losses. Sign carries through so a
+			// negative ShaftTorqueNm (regen) becomes a negative
+			// per-wheel torque — Chaos applies it as a decelerating
+			// force on the rear axle, which is the actual physical
+			// behaviour of regen on a RWD EV.
+			constexpr float DrivetrainEfficiency = 0.92f;
+			const float AxleTorqueNm = ShaftTorqueNm * GearRatio * DrivetrainEfficiency;
+			const float PerWheelTorqueNm = 0.5f * AxleTorqueNm;
+
+			// SetDriveTorque takes Nm; internally scales to Nm·cm.
+			// Wheels 2 and 3 are RearLeft / RearRight (RWD), per the
+			// WheelSetups order in SetupVehicleMovement.
+			VehicleMovement->SetDriveTorque(PerWheelTorqueNm, 2);
+			VehicleMovement->SetDriveTorque(PerWheelTorqueNm, 3);
+		}
 	}
 	else if (FallbackMovement)
 	{
@@ -742,18 +740,8 @@ void AFSDSVehiclePawn::ReleaseEbs()
 	// Unlatch and hand control back to whoever wants it. Called on sim
 	// reset or explicit operator release; the autonomy stack itself is
 	// NEVER able to invoke this (mirrors the real car — driver only).
-	//
-	// CRITICAL: must restore `bApiControlEnabled` symmetrically with
-	// `ActivateEbs()`. Without this, after the first activate→release
-	// cycle the keyboard input handlers (lines 680-707) treat the pawn as
-	// keyboard-driven and overwrite `CurrentControls` with their default
-	// zero readings every tick — silently zeroing every `setCarControls`.
-	// The bug was masked for months by the bridge's reconnect loop
-	// re-issuing `enableApiControl` ~1×/s; once that thrash was fixed
-	// (#107) the asymmetry stopped the car cold mid-autocross.
 	CurrentControls.bHandbrake = false;
 	bEbsLatched = false;
-	bApiControlEnabled = true;
 }
 
 AFSDSVehiclePawn::FCarControls AFSDSVehiclePawn::GetCarControls() const
@@ -776,28 +764,22 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 	if (VehicleMovement)
 	{
 		State.Gear = VehicleMovement->GetCurrentGear();
-		State.RPM = VehicleMovement->GetEngineRotationSpeed();
-		State.MaxRPM = VehicleMovement->GetEngineMaxRotationSpeed();
-	}
-
-	// Regen snapshot — compute from current speed and brake request so it
-	// tracks whatever the Tick is applying right now. All values are at
-	// the motor (pre-gear) side to match datasheet semantics.
-	State.RegenMaxTorqueLimit = MaxRegenTorque;
-	State.RegenMaxPowerLimit = MaxRegenPower;
-	if (MaxRegenTorque > 0.f)
-	{
-		const float VFwd = FMath::Abs(FVector::DotProduct(GetVelocity(), GetActorForwardVector())) * 0.01f; // cm/s → m/s
-		const float OmegaMotor = (VFwd / FMath::Max(WheelRadius, 0.01f)) * GearRatio; // rad/s
-		float TAvail = MaxRegenTorque;
-		if (OmegaMotor > 0.1f)
+		// RPM source priority: prefer the EMRAX motor model (zero at
+		// standstill, scales with actual wheel speed) over Chaos's
+		// GetEngineRotationSpeed() which returns the ICE-style idle
+		// floor (1200 RPM) even when the car isn't moving.
+		// VehicleMovement still owns MaxRPM since the EMRAX motor
+		// model's MaxMechRpm matches the EngineSetup.MaxRPM (6500)
+		// and any future Blueprint UI that reads it stays in sync.
+		if (Motor)
 		{
-			const float TPowerLimited = MaxRegenPower / OmegaMotor;
-			TAvail = FMath::Min(MaxRegenTorque, TPowerLimited);
+			State.RPM = Motor->GetMechRpm();
 		}
-		State.RegenAvailTorque = TAvail;
-		State.RegenTorque = FMath::Clamp(CurrentControls.Brake, 0.f, 1.f) * TAvail;
-		State.RegenPower = State.RegenTorque * OmegaMotor;
+		else
+		{
+			State.RPM = VehicleMovement->GetEngineRotationSpeed();
+		}
+		State.MaxRPM = VehicleMovement->GetEngineMaxRotationSpeed();
 	}
 
 	State.Timestamp = FPlatformTime::Cycles64();

@@ -16,6 +16,7 @@
 #include "Sensors/FSDSMagnetometerSensor.h"
 #include "Vehicles/FSDSWheelFront.h"
 #include "Vehicles/FSDSWheelRear.h"
+#include "EmraxMotor.h"
 #include "FSDSVehiclePawn.generated.h"
 
 /**
@@ -61,20 +62,6 @@ public:
 		FVector AngularVelocity = FVector::ZeroVector;
 		FVector LinearAcceleration = FVector::ZeroVector;
 		uint64 Timestamp = 0;
-
-		// Regen brake telemetry — all motor-side values.
-		//   RegenTorque        current regen torque being absorbed (Nm, motor)
-		//   RegenPower         current regen power being absorbed (W)
-		//   RegenAvailTorque   max regen torque available at this ω_motor
-		//                      (min of motor peak AND battery cell-current
-		//                      power cap referred through ω_motor)
-		//   RegenMaxTorqueLimit  hardware motor regen torque ceiling (Nm)
-		//   RegenMaxPowerLimit   hardware cell-input power ceiling (W)
-		float RegenTorque = 0.f;
-		float RegenPower = 0.f;
-		float RegenAvailTorque = 0.f;
-		float RegenMaxTorqueLimit = 0.f;
-		float RegenMaxPowerLimit = 0.f;
 	};
 
 	void SetCarControls(const FCarControls& Controls);
@@ -101,6 +88,12 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UCameraComponent* FollowCamera;
+
+	/** EMRAX 228 motor model. Replaces Chaos's ICE-style EngineSetup
+	 *  with an EV-correct envelope-curve + thermal-derate model.
+	 *  See EmraxMotor.h for details. Instantiated in BeginPlay. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Instanced, Category = "Powertrain")
+	UEmraxMotor* Motor = nullptr;
 
 	// --- Sensors ---
 
