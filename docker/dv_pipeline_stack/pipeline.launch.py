@@ -100,15 +100,20 @@ def generate_launch_description():
                 output='screen',
             ),
 
-            # --- Control: path + GSS → control command ---
-            # Delayed 20s to let Numba finish compiling in Cone_Detection first
+            # --- Control: path + /cone_slam/state → control command ---
+            # Delayed 20s to let Numba finish compiling in Cone_Detection
+            # first. Control no longer subscribes to GSS or any bridge-side
+            # odom topic — it consumes /cone_slam/state for vehicle-frame
+            # velocity, since the real car won't have GSS mounted and the
+            # SLAM node already integrates motor RPM + IMU into the same
+            # twist field we'd otherwise read from the sensor.
             Node(
                 package='control',
                 executable='Control',
                 name='control',
                 output='screen',
                 prefix=["bash -c 'sleep 20; $0 $@' "],
-                remappings=[REMAP_GSS, REMAP_ODOM, REMAP_CMD],
+                remappings=[REMAP_CMD],
             ),
         ]
 
