@@ -104,10 +104,23 @@ docker run --rm \
             > /tmp/path.log 2>&1 &
         PATH_PID=\$!
 
-        # Give SLAM + Plan_Path a moment to subscribe before the bag
-        # starts publishing — otherwise the very first IMU samples can
-        # race ahead of the subscription and miss the calibration window,
-        # and Plan_Path can miss the first few /Conos publications.
+        echo '==> Starting Control'
+        # Same /control_command remap as the live launch; control no
+        # longer needs GSS/odom subscriptions (it reads /cone_slam/state).
+        # /Conos_Orange isn't published in replay (Cone_Detection only
+        # emits /Conos_raw), so Control's orange-stop branch is naturally
+        # disabled here — orange_callback just never receives.
+        ros2 run control Control \\
+            --ros-args \\
+              -r /fsds/control_command:=/control_command \\
+            > /tmp/control.log 2>&1 &
+        CTRL_PID=\$!
+
+        # Give SLAM + Plan_Path + Control a moment to subscribe before
+        # the bag starts publishing — otherwise the very first IMU
+        # samples can race ahead of the SLAM subscription and miss the
+        # calibration window, and the downstream planners can miss the
+        # first few publications.
         sleep 2
 
         echo '==> Starting MCAP recorder for SLAM outputs'
@@ -119,6 +132,7 @@ docker run --rm \
         ros2 bag record \\
             -o /replay/out/replay_cone_slam \\
             /tf /tf_static /cone_slam/state /Conos /Conos_raw /Path \\
+            /control_command \\
             > /tmp/recorder.log 2>&1 &
         REC_PID=\$!
         sleep 1
@@ -151,6 +165,16 @@ docker run --rm \
         echo '   --- last 5 lines of path.log ---'
         tail -5 /tmp/path.log || true
 
+        echo '==> Control log tail (DIAG lines + last 5):'
+        grep DIAG /tmp/control.log | tail -10 || true
+        echo '   --- last 5 lines of control.log ---'
+        tail -5 /tmp/control.log || true
+
+        # Persist the full control log next to the recording so the
+        # smoke test (and humans triaging) can scan the entire run, not
+        # just the tail.
+        cp /tmp/control.log /replay/out/replay_control.log 2>/dev/null || true
+
         echo '==> Recorder log tail (last 20 lines):'
         tail -20 /tmp/recorder.log || true
 
@@ -161,7 +185,7 @@ docker run --rm \
         kill -INT \$REC_PID 2>/dev/null || true
         wait \$REC_PID 2>/dev/null || true
 
-        kill \$SLAM_PID \$BAG_PID \$CONE_PID \$PATH_PID 2>/dev/null || true
+        kill \$SLAM_PID \$BAG_PID \$CONE_PID \$PATH_PID \$CTRL_PID 2>/dev/null || true
 
         # Convert the sqlite3 recording to a single .mcap file for
         # Lichtblick. Once the image rebuild picks up the
