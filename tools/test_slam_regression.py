@@ -51,7 +51,10 @@ from typing import Dict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BAG = "trackA_manual_001602"
-REPLAY_DURATION_S = 100   # bag is 151 s but we only care about pre-cascade
+REPLAY_DURATION_S = 145   # full lap incl. loop closure (~t=137s).
+                          # Bag is 151 s; we stop a few seconds short of the
+                          # trailing standstill because GT goes flat there
+                          # (no useful info beyond confirming the car parked).
 
 # (timestamp_s, max_drift_m). Re-baselined on 2026-04-29 against the
 # mix-approach cone_detection (parametric fit primary, range-aware

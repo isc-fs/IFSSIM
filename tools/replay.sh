@@ -61,9 +61,20 @@ echo
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL="*"
 
+# Recorded SLAM-side outputs land here; Lichtblick opens the directory
+# directly (it understands rosbag2 storage). We blow away any previous
+# replay's recording first since `ros2 bag record` refuses to overwrite.
+# Storage is sqlite3 (the default) because the dv_pipeline_stack image
+# doesn't carry the mcap rosbag2 plugin yet — once an image rebuild
+# picks up Dockerfile's ros-humble-rosbag2-storage-mcap line, switch
+# the -s flag below to mcap to write a single .mcap file instead.
+HOST_REC_DIR="$HOST_BAG_DIR/replay_cone_slam"
+rm -rf "$HOST_REC_DIR"
+
 docker run --rm \
     --name "ifssim-replay-$$" \
     -v "$HOST_BAG_DIR:/replay/bag:ro" \
+    -v "$HOST_BAG_DIR:/replay/out" \
     -v "$REPO/tools/pose_cmp.py:/replay/pose_cmp.py:ro" \
     -e ROS_DOMAIN_ID=42 \
     -e "SLAM_TOPIC=$SLAM_TOPIC" \
@@ -93,6 +104,19 @@ docker run --rm \
         # ahead of the subscription and miss the calibration window.
         sleep 2
 
+        echo '==> Starting MCAP recorder for SLAM outputs'
+        # Record the SLAM-side topics into an mcap so the user can open
+        # the run in Lichtblick afterward. We deliberately skip raw
+        # sensor topics (already in the source bag) to keep the file
+        # small. /tf_static is captured because Lichtblick needs it for
+        # the 3D panel even though it rarely changes.
+        ros2 bag record \\
+            -o /replay/out/replay_cone_slam \\
+            /tf /tf_static /cone_slam/state /Conos /Conos_raw \\
+            > /tmp/recorder.log 2>&1 &
+        REC_PID=\$!
+        sleep 1
+
         echo '==> Starting bag play (remap bag /Conos_raw to /dev/null so Cone_Detection owns the topic)'
         # The bag was recorded with cone_detection running live. Remap
         # the recorded /Conos_raw to a dead topic so the live
@@ -116,8 +140,22 @@ docker run --rm \
         echo '==> SLAM log tail (last 30 lines):'
         tail -30 /tmp/slam.log || true
 
+        echo '==> Recorder log tail (last 20 lines):'
+        tail -20 /tmp/recorder.log || true
+
+        # Stop the recorder cleanly first so its mcap closes properly.
+        # SIGINT lets ros2 bag flush; SIGTERM would truncate the trailing
+        # message_index/footer chunks and Lichtblick refuses to open the
+        # file (\"could not read magic\").
+        kill -INT \$REC_PID 2>/dev/null || true
+        wait \$REC_PID 2>/dev/null || true
+
         kill \$SLAM_PID \$BAG_PID \$CONE_PID 2>/dev/null || true
     " | tee "$HOST_BAG_DIR/replay_pose_cmp_cone_slam.txt"
 
 echo
 echo "==> Done. Comparison saved to $HOST_BAG_DIR/replay_pose_cmp_cone_slam.txt"
+if [ -d "$HOST_REC_DIR" ]; then
+    echo "==> Lichtblick: open the directory $HOST_REC_DIR"
+    echo "    (Lichtblick at http://localhost:8080 → Open data source → ROS 2 bag → pick the dir)"
+fi
