@@ -143,19 +143,57 @@ docker run --rm \
         echo '==> Recorder log tail (last 20 lines):'
         tail -20 /tmp/recorder.log || true
 
-        # Stop the recorder cleanly first so its mcap closes properly.
+        # Stop the recorder cleanly first so its db3 closes properly.
         # SIGINT lets ros2 bag flush; SIGTERM would truncate the trailing
         # message_index/footer chunks and Lichtblick refuses to open the
-        # file (\"could not read magic\").
+        # file.
         kill -INT \$REC_PID 2>/dev/null || true
         wait \$REC_PID 2>/dev/null || true
 
         kill \$SLAM_PID \$BAG_PID \$CONE_PID 2>/dev/null || true
+
+        # Convert the sqlite3 recording to a single .mcap file for
+        # Lichtblick. Once the image rebuild picks up the
+        # ros-humble-rosbag2-storage-mcap line in Dockerfile, this is a
+        # no-op apt-get; until then we install on the fly here so the
+        # conversion works against today's image.
+        if ! dpkg -s ros-humble-rosbag2-storage-mcap >/dev/null 2>&1; then
+            echo '==> Installing rosbag2-storage-mcap (one-shot)'
+            apt-get update -qq >/dev/null 2>&1 || true
+            apt-get install -y ros-humble-rosbag2-storage-mcap >/dev/null 2>&1 || true
+        fi
+        if dpkg -s ros-humble-rosbag2-storage-mcap >/dev/null 2>&1; then
+            echo '==> Converting recording to MCAP'
+            cat > /tmp/convert.yaml <<YAML
+output_bags:
+  - uri: /replay/out/replay_cone_slam_mcap
+    storage_id: mcap
+    all: true
+YAML
+            rm -rf /replay/out/replay_cone_slam_mcap
+            ros2 bag convert -i /replay/out/replay_cone_slam -o /tmp/convert.yaml \\
+                > /tmp/convert.log 2>&1 || tail -20 /tmp/convert.log
+            # Flatten: move the inner .mcap up one level and drop the dir.
+            INNER_MCAP=\$(ls -1 /replay/out/replay_cone_slam_mcap/*.mcap 2>/dev/null | head -1 || true)
+            if [ -n \"\$INNER_MCAP\" ]; then
+                mv \"\$INNER_MCAP\" /replay/out/replay_cone_slam.mcap
+                rm -rf /replay/out/replay_cone_slam_mcap
+                echo \"==> MCAP at /replay/out/replay_cone_slam.mcap (\$(du -h /replay/out/replay_cone_slam.mcap | cut -f1))\"
+            else
+                echo '==> WARN: mcap conversion produced no file; sqlite3 dir is still available'
+            fi
+        else
+            echo '==> mcap plugin unavailable; keeping sqlite3 recording'
+        fi
     " | tee "$HOST_BAG_DIR/replay_pose_cmp_cone_slam.txt"
 
 echo
 echo "==> Done. Comparison saved to $HOST_BAG_DIR/replay_pose_cmp_cone_slam.txt"
-if [ -d "$HOST_REC_DIR" ]; then
+HOST_MCAP_PATH="$HOST_BAG_DIR/replay_cone_slam.mcap"
+if [ -f "$HOST_MCAP_PATH" ]; then
+    echo "==> Lichtblick: open $HOST_MCAP_PATH"
+    echo "    (http://localhost:8080 → Open file → drag the .mcap in)"
+elif [ -d "$HOST_REC_DIR" ]; then
     echo "==> Lichtblick: open the directory $HOST_REC_DIR"
     echo "    (Lichtblick at http://localhost:8080 → Open data source → ROS 2 bag → pick the dir)"
 fi
