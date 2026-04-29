@@ -99,9 +99,15 @@ docker run --rm \
             > /tmp/slam.log 2>&1 &
         SLAM_PID=\$!
 
-        # Give the SLAM node a moment to subscribe before the bag starts
-        # publishing — otherwise the very first IMU samples can race
-        # ahead of the subscription and miss the calibration window.
+        echo '==> Starting Plan_Path (path_planning)'
+        ros2 run path_planning Plan_Path \\
+            > /tmp/path.log 2>&1 &
+        PATH_PID=\$!
+
+        # Give SLAM + Plan_Path a moment to subscribe before the bag
+        # starts publishing — otherwise the very first IMU samples can
+        # race ahead of the subscription and miss the calibration window,
+        # and Plan_Path can miss the first few /Conos publications.
         sleep 2
 
         echo '==> Starting MCAP recorder for SLAM outputs'
@@ -112,7 +118,7 @@ docker run --rm \
         # the 3D panel even though it rarely changes.
         ros2 bag record \\
             -o /replay/out/replay_cone_slam \\
-            /tf /tf_static /cone_slam/state /Conos /Conos_raw \\
+            /tf /tf_static /cone_slam/state /Conos /Conos_raw /Path \\
             > /tmp/recorder.log 2>&1 &
         REC_PID=\$!
         sleep 1
@@ -140,6 +146,11 @@ docker run --rm \
         echo '==> SLAM log tail (last 30 lines):'
         tail -30 /tmp/slam.log || true
 
+        echo '==> Path planning log tail (PATH_RATE lines + last 5):'
+        grep PATH_RATE /tmp/path.log | tail -10 || true
+        echo '   --- last 5 lines of path.log ---'
+        tail -5 /tmp/path.log || true
+
         echo '==> Recorder log tail (last 20 lines):'
         tail -20 /tmp/recorder.log || true
 
@@ -150,7 +161,7 @@ docker run --rm \
         kill -INT \$REC_PID 2>/dev/null || true
         wait \$REC_PID 2>/dev/null || true
 
-        kill \$SLAM_PID \$BAG_PID \$CONE_PID 2>/dev/null || true
+        kill \$SLAM_PID \$BAG_PID \$CONE_PID \$PATH_PID 2>/dev/null || true
 
         # Convert the sqlite3 recording to a single .mcap file for
         # Lichtblick. Once the image rebuild picks up the
