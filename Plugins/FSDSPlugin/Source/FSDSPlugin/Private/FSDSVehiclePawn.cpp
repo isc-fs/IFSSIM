@@ -131,30 +131,41 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	//  overrides both below. Member GearRatio is shadowed by settings
 	//  in ApplyPhysicsSettings.)
 
-	// Chaos engine setup is left mostly nominal but neutered: we own
-	// the powertrain via UEmraxMotor and override per-wheel drive
-	// torque each tick (see Tick() below). Setting MaxTorque = 0 and
-	// EngineIdleRPM = 0 removes Chaos's two ICE-style behaviours that
-	// don't apply to an EV:
-	//   1. The default 1200 RPM idle floor — Chaos clamps motor RPM
-	//      to EngineIdleRPM at standstill, which fed our SLAM
-	//      velocity prior with a 10 m/s phantom motion on a parked
-	//      car (live UE5 run, 2026-04-29).
-	//   2. The internal torque curve — every wheel-drive impulse
-	//      Chaos computes from EngineSetup.TorqueCurve gets discarded
-	//      anyway by SetDriveTorqueOverride, but zeroing MaxTorque
-	//      makes that explicit and avoids double-counting in any
-	//      future code path that reads .EngineTorque.
-	// MaxRPM stays at 6500 so blueprint UI code that reads it for a
-	// gauge still gets the correct value; the actual speed clamp
-	// happens inside UEmraxMotor::Step.
+	// Chaos engine setup. We own the powertrain via UEmraxMotor and
+	// override per-wheel drive torque each tick via SetDriveTorque
+	// (see Tick() below) — Chaos's internally-computed engine torque
+	// gets discarded at the wheel level. We DO NOT zero MaxTorque or
+	// flatten the TorqueCurve here: doing so triggered NaN AABB
+	// bounds during vehicle init on 2026-04-29 (Chaos's vehicle
+	// simulator computes EngineRevDownRate × Sqr((Omega - idle/2) /
+	// MaxOmega) and similar terms that go degenerate when the curve
+	// collapses to zero; that NaN propagated into the skeletal mesh's
+	// root-bone transform and the GJK collision iterator hit its
+	// limit on the first physics tick). Leaving the original curve
+	// in place is harmless because SetDriveTorqueOverride runs after
+	// Chaos applies engine torque and replaces it.
+	//
+	// EngineIdleRPM = 0 IS still set: it's the change that actually
+	// fixes our SLAM-visible bug (the 1200 RPM idle floor that fed
+	// iSAM2 a 10 m/s velocity prior on a parked car). Setting only
+	// idle to 0 (without zeroing MaxTorque/curve) leaves Chaos's
+	// init math well-conditioned.
 	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
-	VehicleMovement->EngineSetup.MaxTorque = 0.f;
+	VehicleMovement->EngineSetup.MaxTorque = 643.f; // Full EMRAX peak at wheel
 	VehicleMovement->EngineSetup.EngineIdleRPM = 0.f;
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
-	TorqueCurve->AddKey(0.f, 0.f);
-	TorqueCurve->AddKey(6500.f, 0.f);
+	// EMRAX 228 torque curve (normalized, power-limited only) — kept
+	// for Chaos's init even though SetDriveTorque overrides per-wheel
+	// torque every tick.
+	TorqueCurve->AddKey(0.f,    0.958f);
+	TorqueCurve->AddKey(1000.f, 1.000f);
+	TorqueCurve->AddKey(2000.f, 1.000f);
+	TorqueCurve->AddKey(3000.f, 0.900f);
+	TorqueCurve->AddKey(4000.f, 0.700f);
+	TorqueCurve->AddKey(5000.f, 0.560f);
+	TorqueCurve->AddKey(6000.f, 0.470f);
+	TorqueCurve->AddKey(6500.f, 0.430f);
 
 	// --- Transmission (single speed, electric) ---
 	// Electric motor: single fixed gear, no shifting
@@ -543,12 +554,15 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	// Apply controls
 	if (bChaosVehicleActive && VehicleMovement)
 	{
-		// Chaos vehicle mode. SetThrottleInput is still called so any
-		// Blueprint UI that visualizes throttle gets the value, but
-		// it has no physical effect — EngineSetup.MaxTorque was
-		// zeroed in SetupVehicleMovement and the actual drive torque
-		// is computed by UEmraxMotor below.
-		VehicleMovement->SetThrottleInput(CurrentControls.Throttle);
+		// Throttle is held at zero for Chaos's internal engine. The
+		// rear wheels' combine method is Additive (see FSDSWheelRear),
+		// so SetDriveTorque() below adds the EMRAX-computed torque on
+		// top of whatever Chaos's engine produces. By zeroing the
+		// throttle input here we ensure the engine's contribution is
+		// always zero and EMRAX is the sole drive-torque source —
+		// without disabling Chaos's engine module entirely (which
+		// caused NaN bounds during init in an earlier attempt).
+		VehicleMovement->SetThrottleInput(0.f);
 		VehicleMovement->SetSteeringInput(CurrentControls.Steering);
 
 		// SetBrakeInput is left at 0: regenerative braking is the
@@ -615,6 +629,22 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			// WheelSetups order in SetupVehicleMovement.
 			VehicleMovement->SetDriveTorque(PerWheelTorqueNm, 2);
 			VehicleMovement->SetDriveTorque(PerWheelTorqueNm, 3);
+
+			// Diagnostic — log every ~0.5 s while the throttle is
+			// non-zero, so the Output Log shows whether the EMRAX path
+			// is producing torque and at what magnitude. Easy to delete
+			// once the live run is verified.
+			static double LastLogT = 0.0;
+			const double NowT = FPlatformTime::Seconds();
+			if (FMath::Abs(ThrottleCmd) > 0.01f && (NowT - LastLogT) > 0.5)
+			{
+				LastLogT = NowT;
+				UE_LOG(LogTemp, Log,
+					TEXT("EMRAX: throttle_cmd=%.3f rpm=%.1f shaft=%.1f Nm "
+					     "axle=%.1f Nm per_wheel=%.1f Nm vfwd=%.2f m/s"),
+					ThrottleCmd, MotorRpm, ShaftTorqueNm,
+					AxleTorqueNm, PerWheelTorqueNm, VFwdMs);
+			}
 		}
 	}
 	else if (FallbackMovement)

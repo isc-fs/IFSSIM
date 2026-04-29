@@ -6,6 +6,17 @@ UFSDSWheelRear::UFSDSWheelRear()
 	bAffectedByHandbrake = true;
 	bAffectedBySteering = false;
 
+	// AFSDSVehiclePawn::Tick injects per-wheel drive torque from the
+	// EMRAX motor model via VehicleMovement->SetDriveTorque(). That call
+	// writes to ExternalDriveTorque on the wheel, which is *only*
+	// applied if the wheel's combine method is Override or Additive —
+	// the Chaos default (None) silently discards it. We use Additive
+	// here (vs Override) so internal brake torques (handbrake / EBS)
+	// still reach the wheel; we keep the engine's internal drive
+	// torque effectively at zero by passing throttle=0 to
+	// VehicleMovement->SetThrottleInput() in the pawn Tick.
+	ExternalTorqueCombineMethod = ETorqueCombineMethod::Additive;
+
 	// IFS-08: Hoosier 16.0x7.5-10 R20
 	WheelRadius = 20.f;       // 200mm tire radius
 	WheelWidth = 19.f;        // 7.5 inch = 190mm
