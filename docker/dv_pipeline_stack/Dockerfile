@@ -66,12 +66,6 @@ COPY ros2/src/ src/
 # Copy pipeline packages (slam, cone_slam, path_planning, control)
 COPY pipeline/ src/
 
-# Install fsd_path_planning (bundled inside path_planning package)
-RUN pip install --no-cache-dir -e src/path_planning/
-# Expose fsd_path_planning as a top-level module (it lives inside path_planning/)
-RUN ln -s /dv_pipeline_stack_ws/src/path_planning/path_planning/fsd_path_planning \
-          /usr/local/lib/python3.10/dist-packages/fsd_path_planning
-
 # Build everything. With fast_LIMO removed, this is just the bridge
 # C++ + a handful of Python packages (--symlink-install means edits
 # under src/ are live without re-running colcon).
