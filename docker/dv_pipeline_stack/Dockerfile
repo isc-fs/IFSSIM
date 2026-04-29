@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-nav-msgs \
     clang-12 clang++-12 libc++-12-dev libc++abi-12-dev \
     ros-humble-foxglove-bridge \
+    ros-humble-rosbag2-storage-mcap \
   && rm -rf /var/lib/apt/lists/*
 
 # Python deps — pin numpy<2 (cv_bridge in ros:humble compiled against 1.x)
