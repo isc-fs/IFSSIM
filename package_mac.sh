@@ -34,6 +34,22 @@ mkdir -p "$TRACKS_DST"
 cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
 echo "  Tracks staged: $(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') files"
 
+# 3b. Copy settings.json next to the .app (AdditionalNonUFSFiles misses it on Mac)
+cp "$SCRIPT_DIR/settings.json" "$SCRIPT_DIR/Saved/StagedBuilds/Mac/settings.json"
+echo "  settings.json staged"
+
+# 4. Force windowed mode in UECommandLine.txt (BuildCookRun overwrites this file)
+CMDLINE="$SCRIPT_DIR/Saved/StagedBuilds/Mac/UECommandLine.txt"
+if [ -f "$CMDLINE" ]; then
+  # Append -windowed if not already present
+  if ! grep -q '\-windowed' "$CMDLINE"; then
+    sed -i '' 's/$/ -windowed/' "$CMDLINE"
+  fi
+else
+  echo '-project="../../../IFSSIM/IFSSIM.uproject" -windowed' > "$CMDLINE"
+fi
+echo "  UECommandLine.txt: $(cat "$CMDLINE")"
+
 echo ""
 echo "=== Done — distribution in Saved/StagedBuilds/Mac/ ==="
 echo "  App:    IFSSIM-Mac-Shipping.app"
