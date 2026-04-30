@@ -74,6 +74,15 @@ private:
 	FString SettingsString;
 	class FFSDSUdpBroadcaster* UdpBroadcaster = nullptr;
 
+	// Start-gate pose set by loadTrack when car_aligned=true. Returned by
+	// getStartGatePose so the ROS bridge always resets to the right gate
+	// (position AND track-aligned heading) even after the car has driven
+	// away from it. Without the rotation, /reset put the car at the right
+	// xy but facing whatever direction it had ended up in.
+	FVector LastStartGateLoc_UE = FVector::ZeroVector;
+	FQuat   LastStartGateRot_UE = FQuat::Identity;
+	bool bHasStartGate = false;
+
 	// Cached car controls for immediate readback (set from TCP thread before game thread applies)
 	struct FCachedControls {
 		float Throttle = 0.f;

@@ -144,6 +144,21 @@ void IFSSIMRosWrapper::initializeConnection()
     for (const auto& cam_name : camera_names_) {
         camera_offsets_[cam_name] = querySensorOffset(cam_name);
     }
+
+    // Capture spawn position for the /reset service. Must happen after the
+    // track is loaded (the vehicle is already placed at the start gate by
+    // the time the bridge connects), so this is the correct reset target.
+    std::string pose_resp = client_->sendCommand("simGetVehiclePose");
+    if (!pose_resp.empty() && pose_resp.find("\"error\"") == std::string::npos) {
+        home_pose_.x = client_->parseDouble(pose_resp, "x");
+        home_pose_.y = client_->parseDouble(pose_resp, "y");
+        home_pose_.z = client_->parseDouble(pose_resp, "z");
+        home_pose_.valid = true;
+        RCLCPP_INFO(node_->get_logger(),
+            "Home pose captured: (%.3f, %.3f, %.3f) ENU", home_pose_.x, home_pose_.y, home_pose_.z);
+    } else {
+        RCLCPP_WARN(node_->get_logger(), "simGetVehiclePose failed — /reset will be a no-op");
+    }
 }
 
 IFSSIMRosWrapper::Vec3 IFSSIMRosWrapper::querySensorOffset(const std::string& name)
@@ -504,6 +519,19 @@ void IFSSIMRosWrapper::triggerReconnect()
             if (client_->connect(host_, port_, 3.0)) {
                 client_->sendBool("enableApiControl");
                 RCLCPP_INFO(node_->get_logger(), "Command client reconnected (attempt %d)", ++attempt);
+                // UE5 was restarted — car is back at spawn. Re-capture home pose
+                // so /reset targets the new session's start position, not the
+                // stale one from the previous session.
+                std::string pose_resp = client_->sendCommand("simGetVehiclePose");
+                if (!pose_resp.empty() && pose_resp.find("\"error\"") == std::string::npos) {
+                    home_pose_.x = client_->parseDouble(pose_resp, "x");
+                    home_pose_.y = client_->parseDouble(pose_resp, "y");
+                    home_pose_.z = client_->parseDouble(pose_resp, "z");
+                    home_pose_.valid = true;
+                    RCLCPP_INFO(node_->get_logger(),
+                        "Home pose re-captured after reconnect: (%.3f, %.3f, %.3f) ENU",
+                        home_pose_.x, home_pose_.y, home_pose_.z);
+                }
                 break;
             }
             RCLCPP_INFO(node_->get_logger(), "Reconnect attempt %d failed, retrying in 2s...", ++attempt);
@@ -737,6 +765,10 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     const double scan_stamp_sec = lidar_stamp.seconds();
 
+    // NOTE: points are passed through verbatim — the downstream pipeline
+    // (cone detection / SLAM) was written against UE's left-handed axis
+    // convention, so "correcting" to REP-103 by negating Y here breaks
+    // cone clustering. Leave as-is for compatibility.
     for (int i = 0; i < total_points; i++) {
         *iter_x = points[i * 3];
         *iter_y = points[i * 3 + 1];
@@ -984,10 +1016,65 @@ void IFSSIMRosWrapper::resetSrvCb(
     std::shared_ptr<fs_msgs::srv::Reset::Response> response)
 {
     (void)request;
-    if (client_ && client_->isConnected()) {
-        client_->sendCommand("reset");
-        response->success = true;
-    } else {
-        response->success = false;
+    // Command client can silently die (send failure sets connected_=false) without
+    // triggering triggerReconnect, which is only fired by stream disconnects. Attempt
+    // one inline reconnect so /reset works even after a crash-induced command client drop.
+    if (!client_ || !client_->isConnected()) {
+        RCLCPP_WARN(node_->get_logger(), "/reset: command client down, attempting reconnect");
+        client_ = std::make_unique<TcpClient>();
+        if (!client_->connect(host_, port_, 3.0)) {
+            RCLCPP_ERROR(node_->get_logger(), "/reset: reconnect failed");
+            response->success = false;
+            return;
+        }
+        client_->sendBool("enableApiControl");
+        // Re-capture home pose since we reconnected (sim may have restarted)
+        std::string pose_resp = client_->sendCommand("simGetVehiclePose");
+        if (!pose_resp.empty() && pose_resp.find("\"error\"") == std::string::npos) {
+            home_pose_.x = client_->parseDouble(pose_resp, "x");
+            home_pose_.y = client_->parseDouble(pose_resp, "y");
+            home_pose_.z = client_->parseDouble(pose_resp, "z");
+            home_pose_.valid = true;
+        }
     }
+    if (!home_pose_.valid) {
+        RCLCPP_WARN(node_->get_logger(), "/reset called but home pose was never captured");
+        response->success = false;
+        return;
+    }
+    // Latch handbrake before teleporting so the car can't roll on arrival.
+    client_->sendCommand("activateEbs");
+    // Prefer the start gate captured by the last loadTrack (always the right
+    // reset target after a track change), including its track-aligned heading.
+    // Fall back to the startup spawn pose (position only) if no track is loaded.
+    double rx = home_pose_.x, ry = home_pose_.y, rz = home_pose_.z;
+    bool has_gate_rot = false;
+    double qw = 1.0, qx = 0.0, qy = 0.0, qz = 0.0;
+    std::string gate = client_->sendCommand("getStartGatePose");
+    if (!gate.empty() && gate.find("\"error\"") == std::string::npos) {
+        rx = client_->parseDouble(gate, "x");
+        ry = client_->parseDouble(gate, "y");
+        rz = client_->parseDouble(gate, "z");
+        if (gate.find("\"qw\"") != std::string::npos) {
+            qw = client_->parseDouble(gate, "qw");
+            qx = client_->parseDouble(gate, "qx");
+            qy = client_->parseDouble(gate, "qy");
+            qz = client_->parseDouble(gate, "qz");
+            has_gate_rot = true;
+        }
+    }
+    char cmd[192];
+    if (has_gate_rot) {
+        // Pass the track-aligned heading captured at loadTrack so /reset always
+        // ends up facing down the track (orange cones in front), not whatever
+        // direction the car happened to be facing when reset was called.
+        snprintf(cmd, sizeof(cmd),
+                 "simSetVehiclePose %.4f %.4f %.4f %.6f %.6f %.6f %.6f",
+                 rx, ry, rz, qw, qx, qy, qz);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+                 "simSetVehiclePose %.4f %.4f %.4f", rx, ry, rz);
+    }
+    client_->sendCommand(cmd);
+    response->success = true;
 }
