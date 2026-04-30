@@ -529,6 +529,17 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			PosENU.X, PosENU.Y, PosENU.Z, QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
+	else if (Method == TEXT("getStartGatePose"))
+	{
+		if (!bHasStartGate) return TEXT("{\"error\":\"no track loaded\"}");
+		FVector PosENU = FSDSCoord::UEToENU(LastStartGateLoc_UE);
+		FQuat   QuatENU = FSDSCoord::UEQuatToENU(LastStartGateRot_UE);
+		return FString::Printf(
+			TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
+			PosENU.X, PosENU.Y, PosENU.Z,
+			QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
+	}
+
 	else if (Method == TEXT("simGetImage"))
 	{
 		// Parse: simGetImage camera_name image_type
@@ -811,6 +822,18 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				// /api/event/start) already do it explicitly via the
 				// releaseEbs RPC; everyone else gets to keep the EBS
 				// state they had going in.
+				// For position-only teleports, save the current heading before
+				// ResetVehicleState() so we can restore it after. Chaos's
+				// ResetVehicleState/StopMovementImmediately resets the physics
+				// body to a canonical (identity) orientation, wiping the
+				// track-aligned heading set by loadTrack. This made the car
+				// face East instead of North after every teleport-kick, driving
+				// it into the cone wall on launch and placing it perpendicular
+				// to the start line on reset.
+				const FQuat HeadingToRestore = bHasOrientation
+					? QuatUE
+					: VehiclePawn->GetActorQuat();
+
 				if (bHasOrientation)
 					VehiclePawn->SetActorLocationAndRotation(PosUE, QuatUE, false, nullptr, ETeleportType::TeleportPhysics);
 				else
@@ -837,6 +860,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				{
 					VehiclePawn->VehicleMovement->ResetVehicleState();
 				}
+				// Restore the saved heading — ResetVehicleState wipes it to
+				// identity. Apply to both the actor and the physics body so
+				// the two stay in sync across the teleport.
+				if (Mesh && Mesh->IsSimulatingPhysics())
+				{
+					FTransform RestoredXform(HeadingToRestore, PosUE, Mesh->GetComponentScale());
+					Mesh->BodyInstance.SetBodyTransform(RestoredXform, ETeleportType::TeleportPhysics);
+				}
+				VehiclePawn->SetActorRotation(HeadingToRestore, ETeleportType::TeleportPhysics);
 				// Tiny body-forward kick (5 cm/s) — applied LAST, after
 				// ResetVehicleState() above, because Chaos's
 				// StopMovementImmediately() inside ResetVehicleState
@@ -1196,6 +1228,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						VehiclePawn->VehicleMovement->ResetVehicleState();
 					}
 					bAligned = true;
+				LastStartGateLoc_UE = StartLoc;
+				LastStartGateRot_UE = StartRot;
+				bHasStartGate = true;
 				}
 
 				return FString::Printf(

@@ -33,7 +33,7 @@ BUILTIN_TRACKS = {
 
 # Track generator path
 TRACK_GEN_PATH = os.path.abspath(os.environ.get("TRACK_GEN_PATH",
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "random-track-generator")))
+    os.path.join(os.path.dirname(__file__), "..", "..", "random-track-generator")))
 TRACKS_DIR = os.path.abspath(os.environ.get("TRACKS_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "Content", "tracks")))
 PIPELINE_CTL_FILE = "/pipeline_ctrl/enable"
@@ -441,7 +441,12 @@ def vehicle_pose():
 @app.post("/api/vehicle/teleport", dependencies=[Depends(require_api_key)])
 def vehicle_teleport(req: TeleportRequest):
     try:
-        sim.teleport(req.x, req.y, req.z)
+        # Position-only — sim.teleport() defaults to qw=1 (identity quaternion)
+        # which would snap the car to face East regardless of its current
+        # heading. teleport_pos sends `simSetVehiclePose x y z` without the
+        # quaternion, which the plugin treats as a position-only teleport
+        # and preserves the actor's existing yaw across ResetVehicleState.
+        sim.teleport_pos(req.x, req.y, req.z)
         return {"teleported": True}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

@@ -226,6 +226,12 @@ private:
     Vec3 lidar_offset_;
     std::map<std::string, Vec3> camera_offsets_;
 
+    // Spawn position captured once at connection time via simGetVehiclePose.
+    // resetSrvCb teleports back here; position-only (no quaternion) to avoid
+    // the ENU↔UE5 ~90° yaw drift described in feedback_reset_orientation.md.
+    struct HomePose { double x = 0.0; double y = 0.0; double z = 0.3; bool valid = false; };
+    HomePose home_pose_;
+
     // Helper: query getSensorOffset for a single sensor, parse into Vec3.
     Vec3 querySensorOffset(const std::string& name);
 
