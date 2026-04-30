@@ -1,0 +1,3 @@
+[submodule "tools/random-track-generator"]
+	path = tools/random-track-generator
+	url = https://github.com/MITMotorsports/random-track-generator

@@ -90,7 +90,7 @@ services:
       - TRACKS_DIR=/tracks
       # Host-side path sent to UE5 via RPC (UE5 runs on host, needs the real absolute path)
       - UE5_TRACKS_DIR=${PWD}/Content/tracks
-      # Random track generator (MITMotorsports/random-track-generator, cloned as sibling of IFSSIM)
+      # Random track generator (MITMotorsports/random-track-generator, git submodule at tools/random-track-generator)
       - TRACK_GEN_PATH=/track_gen
       # Auth. If IFSSIM_MC_API_KEY is unset/empty the backend runs
       # unauthenticated (dev default). Set via .env or the shell env
@@ -101,7 +101,7 @@ services:
     volumes:
       - ./Content/tracks:/tracks
       - pipeline_ctrl:/pipeline_ctrl
-      - ../random-track-generator:/track_gen:ro
+      - ./tools/random-track-generator:/track_gen:ro
     ports:
       - "127.0.0.1:8000:8000"
     extra_hosts:
