@@ -239,7 +239,17 @@ def sim_reset():
         _ensure_home_pose_captured()
         try:
             sim.res_activate()
-            sim.teleport(**home_pose)
+            # Position-only teleport. The full sim.teleport(...) variant
+            # round-trips ENU↔UE5 quaternions through FSDSCoord and we
+            # consistently observe a ~90° rotation drift on the way back
+            # — the pawn ends up facing perpendicular to its spawn
+            # heading, which makes Stanley's yaw_error term permanently
+            # wrong and the controller steers off the corridor on the
+            # first tick. Keeping the orientation untouched preserves
+            # whatever yaw the pawn already has from loadTrack /
+            # spawn_at_start_gate, which is the orientation the
+            # autonomy was calibrated against.
+            sim.teleport_pos(home_pose["x"], home_pose["y"], home_pose["z"])
             res_active = False
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

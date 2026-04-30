@@ -344,6 +344,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (IsValid(VehiclePawn)) VehiclePawn->ActivateEbs();
 			});
 		}
+		// Mirror ActivateEbs's effect on the readback cache so
+		// getCarControls reports the actual locked state. Previously
+		// the cache only tracked setCarControls, so any client polling
+		// /api/vehicle/state during EBS saw stale `handbrake=false` even
+		// though the pawn's CurrentControls.bHandbrake was true.
+		CachedControls.Throttle = 0.f;
+		CachedControls.Steering = 0.f;
+		CachedControls.Brake = 0.f;
+		CachedControls.bHandbrake = true;
 		bApiControlEnabled = false;
 		return TEXT("true");
 	}
@@ -357,6 +366,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (IsValid(VehiclePawn)) VehiclePawn->ReleaseEbs();
 			});
 		}
+		// Mirror ReleaseEbs's effect on the readback cache (see
+		// activateEbs comment above). Throttle/steering/brake aren't
+		// touched here because ReleaseEbs only clears bHandbrake +
+		// bEbsLatched; the autonomy is expected to set its own
+		// drive command on the next setCarControls.
+		CachedControls.bHandbrake = false;
 		bApiControlEnabled = true;
 		return TEXT("true");
 	}
