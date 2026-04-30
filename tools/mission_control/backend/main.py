@@ -288,6 +288,41 @@ def event_start(setup: EventSetup):
             # Release RES → enables API control
             sim.res_release()
             res_active = False
+            # ActivateEbs above also disables API control (so keyboard
+            # input takes over); we need it back on before the autonomy
+            # pipeline starts publishing, otherwise UE5's keyboard
+            # axis-input handlers race every setCarControls to 0
+            # ("no key pressed" → CurrentControls.Throttle = 0 every
+            # tick), and the bootstrap throttle below would never
+            # actually drive the EMRAX.
+            try:
+                sim._cmd("enableApiControl 1")
+            except Exception:
+                pass
+            # Pre-seat throttle=1 in UE5's CurrentControls so the
+            # simSetVehiclePose kick fires while the EMRAX is already
+            # commanded for full launch. Without this, the kick gives
+            # 5 cm/s of forward velocity that decays under drag in a
+            # few hundred ms — and the autonomy pipeline doesn't come
+            # online for ~1–2 s, so by the time it's commanding
+            # throttle the chassis is back at v=0 and the wheel solver
+            # is pinned in the rolling-without-slip degenerate state.
+            # The bootstrap throttle is overwritten as soon as the
+            # control node publishes its first /control_command.
+            try:
+                sim._cmd("setCarControls 1.0 0.0 0.0")
+            except Exception:
+                pass
+            # Self-teleport to current pose to fire the simSetVehiclePose
+            # body-forward velocity kick (5 cm/s). With the bootstrap
+            # throttle above, the kick happens against an active EMRAX
+            # so the chassis launches decisively and stays out of the
+            # ω=0 degenerate state once the autonomy takes over.
+            try:
+                pose = sim.get_vehicle_pose()
+                sim.teleport_pos(pose["x"], pose["y"], pose["z"])
+            except Exception:
+                pass
             # Start pipeline
             os.makedirs("/pipeline_ctrl", exist_ok=True)
             open(PIPELINE_CTL_FILE, "w").close()

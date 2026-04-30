@@ -372,13 +372,17 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		FVector PosENU = FSDSCoord::UEToENU(State.Position);
 		FVector VelENU = FSDSCoord::UEVelocityToENU(State.LinearVelocity);
 		FQuat OriENU = FSDSCoord::UEQuatToENU(State.Orientation);
-		return FString::Printf(TEXT("{\"speed\":%.4f,\"gear\":%d,\"rpm\":%.1f,\"maxrpm\":%.1f,\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f,\"regen_torque\":%.3f,\"regen_power\":%.1f,\"regen_avail_torque\":%.3f,\"regen_max_torque\":%.1f,\"regen_max_power\":%.1f}"),
+		// Regen-telemetry fields (regen_torque/regen_power/regen_avail_*
+		// /regen_max_*) were drafted in the RPC server but their backing
+		// FCarState members haven't landed yet. Emit only the stable
+		// kinematic+powertrain fields so the build stays green; restore
+		// the regen block in the same commit that adds the FCarState
+		// members.
+		return FString::Printf(TEXT("{\"speed\":%.4f,\"gear\":%d,\"rpm\":%.1f,\"maxrpm\":%.1f,\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"vx\":%.4f,\"vy\":%.4f,\"vz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
 			State.Speed, State.Gear, State.RPM, State.MaxRPM,
 			PosENU.X, PosENU.Y, PosENU.Z,
 			VelENU.X, VelENU.Y, VelENU.Z,
-			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z,
-			State.RegenTorque, State.RegenPower, State.RegenAvailTorque,
-			State.RegenMaxTorqueLimit, State.RegenMaxPowerLimit);
+			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
 	}
 	else if (Method == TEXT("getGpsData"))
 	{
@@ -782,10 +786,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		AsyncTask(ENamedThreads::GameThread, [this, PosUE, QuatUE, bHasOrientation]() {
 			if (IsValid(VehiclePawn))
 			{
-				// A soft reset releases any latched EBS — matches the
-				// real-car flow where the driver manually clears EBS
-				// before restarting a run.
-				VehiclePawn->ReleaseEbs();
+				// Note: this handler used to call ReleaseEbs() here "as
+				// a soft reset". Removed because /api/sim/reset
+				// activates EBS *immediately before* this teleport so
+				// the parked car can't roll, and the auto-release was
+				// undoing that same call — the user saw the car drift
+				// away and the brake state stay non-zero after every
+				// FE-side reset. Callers that need EBS released (e.g.
+				// /api/event/start) already do it explicitly via the
+				// releaseEbs RPC; everyone else gets to keep the EBS
+				// state they had going in.
 				if (bHasOrientation)
 					VehiclePawn->SetActorLocationAndRotation(PosUE, QuatUE, false, nullptr, ETeleportType::TeleportPhysics);
 				else
@@ -803,7 +813,6 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						FTransform NewXform(QuatUE, PosUE, Mesh->GetComponentScale());
 						Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
 					}
-					Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 					Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 				}
 				// Clear Chaos vehicle wheel angular velocities + raw inputs +
@@ -812,6 +821,27 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (VehiclePawn->VehicleMovement)
 				{
 					VehiclePawn->VehicleMovement->ResetVehicleState();
+				}
+				// Tiny body-forward kick (5 cm/s) — applied LAST, after
+				// ResetVehicleState() above, because Chaos's
+				// StopMovementImmediately() inside ResetVehicleState
+				// zeroes out the chassis velocity that we just set, so
+				// any kick before this line is silently undone. Chaos's
+				// wheel solver enforces a rolling constraint
+				// ω_wheel = v_chassis / r when drive force ≤ available
+				// grip; at the exact (v=0, ω=0) state that constraint
+				// is degenerate and the solver pins both at zero even
+				// under full drive torque from the EMRAX. A real car is
+				// never at perfectly zero v at "release brake" — there's
+				// always a few cm/s of mechanical creep — so kicking the
+				// chassis to 5 cm/s on every teleport is both
+				// physically defensible and what unstuck the wheel
+				// solver in our launch tests. Below the SLAM noise
+				// floor, so it doesn't affect cone graph init.
+				if (Mesh && Mesh->IsSimulatingPhysics())
+				{
+					const FVector FwdCmPerSec = VehiclePawn->GetActorForwardVector() * 5.f;
+					Mesh->SetPhysicsLinearVelocity(FwdCmPerSec);
 				}
 			}
 		});

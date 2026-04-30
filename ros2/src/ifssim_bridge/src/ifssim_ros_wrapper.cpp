@@ -807,7 +807,29 @@ void IFSSIMRosWrapper::extraInfoTimerCb()
         finished_signal_pub_->publish(fin);
         RCLCPP_INFO(node_->get_logger(), "Event finished — published /signal/finished");
     }
+
+    // Detect session restart: finished true → false, OR the lap counter
+    // went backwards (referee was reset by a fresh setEvent call mid-
+    // session, before the previous one ever flipped finished=true).
+    // Either case means the next setCarControls on the wire belongs to a
+    // *new* run, so any latched ebs_triggered_ from the previous run is
+    // stale and must be cleared. This is the bridge-side counterpart to
+    // the control node's publish-on-init of /signal/ebs_reset, which
+    // races DDS discovery after pipeline restarts; with both in place
+    // the latch will reliably clear regardless of which signal lands
+    // first.
+    uint32_t laps_now = (uint32_t)client_->parseDouble(resp, "laps");
+    const bool finished_edge = !finished_now && last_finished_state_;
+    const bool lap_rewind = laps_now < last_laps_state_;
+    if ((finished_edge || lap_rewind) && ebs_triggered_) {
+        ebs_triggered_ = false;
+        RCLCPP_INFO(node_->get_logger(),
+            "Session restart detected (%s) — EBS latch cleared",
+            finished_edge ? "finished true→false" : "lap counter rewound");
+    }
+
     last_finished_state_ = finished_now;
+    last_laps_state_ = laps_now;
 }
 
 void IFSSIMRosWrapper::trackPublishCb()

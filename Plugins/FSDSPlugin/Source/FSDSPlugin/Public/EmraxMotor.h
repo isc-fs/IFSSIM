@@ -109,6 +109,38 @@ struct FEmraxMotorParams
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
 	float CurrentLoopTau = 0.0015f;
 
+	// --- Software "creep" (off-throttle idle torque) ---
+	//
+	// Real EMRAX has no idle — at throttle=0 it produces literally zero
+	// torque. But Chaos's wheel solver gets numerically frozen at the
+	// degenerate state ω_wheel=0, v_chassis=0, T_drive=0: the friction
+	// circle clips the chassis force to AvailableGrip, and `ExcessTorque`
+	// for wheel spin-up is near-zero too, so a parked car can stay
+	// pinned indefinitely even when the controller commands full
+	// throttle. The OLD Chaos engine masked this because EngineIdleRPM
+	// =1200 always fed a few Nm into the system. We replicate that with
+	// a software creep: a small constant shaft torque applied while the
+	// motor is below `IdleCreepRpmThreshold` and the driver is not
+	// braking, identical to the "creep mode" that consumer EVs program
+	// into their inverter for the same drive-feel reason.
+	//
+	// Default 5 Nm shaft × 2.909 gear × 0.92 eff / 2 wheels ≈ 6.7 Nm
+	// per rear wheel, well below static-friction torque (≈242 Nm), so
+	// it can never roll the parked car against locked brakes — it only
+	// keeps ω just off zero so the wheel solver stays out of the
+	// degenerate state.
+
+	/** Off-throttle idle torque (Nm at the shaft). Applied whenever
+	 *  Throttle ≥ 0 and |MechRpm| < IdleCreepRpmThreshold, regardless
+	 *  of envelope/power caps. Set to 0 to disable. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
+	float IdleCreepTorqueNm = 5.f;
+
+	/** Above this MechRpm the idle creep is no longer applied (the
+	 *  wheel solver is already well out of the ω=0 degenerate state). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
+	float IdleCreepRpmThreshold = 100.f;
+
 	// --- I²t thermal model ---
 
 	/** Total I²t budget before thermal_derate hits the floor (J of

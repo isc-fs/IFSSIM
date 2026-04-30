@@ -14,6 +14,13 @@ UFSDSWheelFront::UFSDSWheelFront()
 	WheelWidth = 19.f;        // 7.5 inch = 190mm
 	MaxSteerAngle = 28.f;     // FS typical steering geometry
 
+	// Per-wheel rotating-mass total. See FSDSWheelRear.cpp for the
+	// physical breakdown — same 10 kg per corner, since front and rear
+	// share the same Hoosier 16×7.5-10 / 10″ Mg rim package on the
+	// IFS-08. Default 20 kg is overstated for an FS car and was making
+	// Chaos's wheel solver too sluggish to break out of ω=0 at launch.
+	WheelMass = 10.f;
+
 	// IFS-08: 35mm ride height, 350 lbs/in front springs
 	SuspensionMaxRaise = 3.5f;  // 35mm
 	SuspensionMaxDrop = 3.5f;

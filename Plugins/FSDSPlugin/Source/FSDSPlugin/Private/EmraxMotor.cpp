@@ -79,18 +79,14 @@ float UEmraxMotor::Step(float Throttle, float Dt)
 
 	// === Motoring (drive) cap ===
 	// Peak torque from envelope, capped by the constant-power
-	// boundary above the field-weakening knee.
+	// boundary above the field-weakening knee. Thermal derate
+	// removed — was clamping launch torque below the static
+	// friction lock and blocking autonomous launches; will be
+	// reintroduced once the HV battery class lands and we have a
+	// proper coolant + winding-temp model rather than the I²t proxy.
 	const float TDrivePeakLut = TorqueEnvelope.Eval(Rpm, P.MaxPeakTorqueNm);
 	const float TDrivePeakPwr = P.MaxPeakPowerW / OmegaForPowerCap;
-	const float TDrivePeak = FMath::Min(TDrivePeakLut, TDrivePeakPwr);
-
-	// Continuous torque, capped by the continuous-power boundary.
-	const float TDriveContPwr = P.ContPowerW / OmegaForPowerCap;
-	const float TDriveCont = FMath::Min(P.ContTorqueNm, TDriveContPwr);
-
-	// Effective max drive torque: blends from peak down to continuous
-	// as the I²t budget gets consumed (ThermalDerate falls 1 → 0.3).
-	const float TDriveMax = FMath::Lerp(TDriveCont, TDrivePeak, ThermalDerate);
+	const float TDriveMax = FMath::Min(TDrivePeakLut, TDrivePeakPwr);
 
 	// === Regen (generating) cap ===
 	// Different power limit because charge current is gated by the
@@ -117,21 +113,23 @@ float UEmraxMotor::Step(float Throttle, float Dt)
 	const float Alpha = FMath::Min(Dt / FMath::Max(P.CurrentLoopTau, 1e-4f), 1.f);
 	TorqueNm += (TCommand - TorqueNm) * Alpha;
 
-	// I²t bookkeeping. Kt converts torque ↔ equivalent RMS phase
-	// current; the model penalises time spent above the continuous
-	// current (= continuous torque). OverloadBudgetJ caps the integral
-	// at a value that, at peak overload, takes ~120 s to consume —
-	// matching the datasheet's S2 2-min rating.
-	const float Isq = FMath::Square(TorqueNm / FMath::Max(P.KtNmPerArms, 1e-3f));
-	const float IsqCont = FMath::Square(P.ContTorqueNm / FMath::Max(P.KtNmPerArms, 1e-3f));
-	const float ExcessJ = FMath::Max(0.f, Isq - IsqCont) * Dt;
-	OverloadJ = FMath::Max(0.f, OverloadJ + ExcessJ - P.CoolingRateW * Dt);
+	// Idle creep — see EmraxMotor.h "Software creep" block for the
+	// rationale. Floor the post-current-loop torque at IdleCreepTorqueNm
+	// while we're motoring (Throttle ≥ 0) and below threshold. Skipped
+	// when EBS is latched (TCommand was already forced to 0 upstream
+	// only via the bEbsLatched gate in the pawn, but we re-check here
+	// in case the motor is driven from a different caller — Throttle<0
+	// means regen demand, which must not be overridden by creep).
+	if (Throttle >= 0.f && Rpm < P.IdleCreepRpmThreshold)
+	{
+		TorqueNm = FMath::Max(TorqueNm, P.IdleCreepTorqueNm);
+	}
 
-	// Derate clamps at 0.3 (rather than 0): even fully derated, the
-	// motor still delivers continuous torque. The 0.7 here is "how
-	// far below 1 we'll let derate fall" — i.e. ThermalDerate ∈ [0.3, 1].
-	ThermalDerate = 1.f - FMath::Clamp(
-		OverloadJ / FMath::Max(P.OverloadBudgetJ, 1.f), 0.f, 0.7f);
+	// Thermal derate disabled — see comment above. State variables
+	// kept on the class so future versions can re-enable without
+	// breaking the API; held at no-op values here.
+	OverloadJ = 0.f;
+	ThermalDerate = 1.f;
 
 	return TorqueNm;
 }

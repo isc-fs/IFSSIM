@@ -164,6 +164,13 @@ private:
     // Transient: previous referee.finished value, for edge-triggered publish
     bool last_finished_state_ = false;
 
+    // Transient: previous referee.laps value, used together with
+    // last_finished_state_ to detect a session restart and auto-clear
+    // ebs_triggered_ — the only reliable in-bridge signal that the next
+    // setCarControls belongs to a new run. See extraInfoTimerCb() for
+    // the edge-detection logic.
+    uint32_t last_laps_state_ = 0;
+
     // Monotonic-stamp guards for IMU and LiDAR. GLIM (and any LiDAR-IMU
     // SLAM pipeline) rejects samples whose timestamp ≤ the last accepted
     // sample's timestamp. The bridge's `node_->now()` snapshot in the

@@ -22,13 +22,33 @@ UFSDSWheelRear::UFSDSWheelRear()
 	WheelWidth = 19.f;        // 7.5 inch = 190mm
 	MaxSteerAngle = 0.f;
 
+	// Per-wheel rotating-mass total. Chaos's default 20 kg is roughly an
+	// SUV/sedan figure; the IFS-08 corner is ≈10 kg total (Hoosier R20
+	// 16×7.5-10 ≈ 6 kg + 10″ Mg rim ≈ 3 kg + brake/hub residual ≈ 1 kg
+	// rotating). Halving the wheel mass halves rotational inertia
+	// (Chaos uses I = 0.5·m·r²), which is the right physical number for
+	// our corner *and* doubles the per-tick `ExcessTorque/Inertia` term
+	// in WheelSystem — the wheel's slip-omega moves out of the
+	// numerically-degenerate ω=0 state in half the ticks, which is what
+	// was pinning the Chaos solver at standstill under full launch
+	// torque even though drive force exceeded available grip.
+	WheelMass = 10.f;
+
 	// IFS-08: 35mm ride height, 300 lbs/in rear springs
 	SuspensionMaxRaise = 3.5f;
 	SuspensionMaxDrop = 3.5f;
 	SuspensionDampingRatio = 1.5f;
 
-	// Hoosier R20 slick friction
-	FrictionForceMultiplier = 1.65f;
+	// Hoosier R20 slick friction. Was 1.65 prior to 2026-04-30, but
+	// in combination with the EMRAX 228 motor model it pushed the
+	// effective static friction above the launch torque the powertrain
+	// can deliver — the rear axle locked at standstill regardless of
+	// throttle, blocking autonomous launches. Real Hoosier R20 peak μ
+	// is ~1.45 on warm dry tarmac; 1.4 leaves a small margin against
+	// peak tire friction while still letting the EMRAX (≤ 200 Nm
+	// shaft × 2.909 gear / 0.228 m wheel = ≤ 2553 N/axle force) break
+	// the rear-axle static lock at full throttle.
+	FrictionForceMultiplier = 1.4f;
 
 	// Brake channel = motor regen (EMRAX 228 on rear axle). Per-wheel
 	// peak brake torque is sized to the max motor regen torque referred
