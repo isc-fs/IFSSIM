@@ -540,6 +540,61 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
+	else if (Method.StartsWith(TEXT("getTireLoads")))
+	{
+		// Parse:  getTireLoads truth
+		//         getTireLoads predict ax ay phi theta z
+		// "truth"  → reads Chaos's per-tick spring force (the same Fz
+		//            the wheel solver is using to compute grip).
+		// "predict" with chassis state → runs the closed-form Milliken
+		//            decomposition against the cached settings. Used for
+		//            offline validation and for forward-planning callers
+		//            that need "what-if" Fz at hypothetical accelerations.
+		if (!IsValid(VehiclePawn)) return TEXT("{\"error\":\"no pawn\"}");
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		const FString Mode = (Parts.Num() >= 2) ? Parts[1] : TEXT("truth");
+
+		AFSDSVehiclePawn::FTireLoads Loads;
+		if (Mode == TEXT("predict"))
+		{
+			// predict ax ay phi theta z  (any missing args default to 0)
+			const float AxIn    = (Parts.Num() >= 3) ? FCString::Atof(*Parts[2]) : 0.f;
+			const float AyIn    = (Parts.Num() >= 4) ? FCString::Atof(*Parts[3]) : 0.f;
+			const float PhiIn   = (Parts.Num() >= 5) ? FCString::Atof(*Parts[4]) : 0.f;
+			const float ThetaIn = (Parts.Num() >= 6) ? FCString::Atof(*Parts[5]) : 0.f;
+			const float ZIn     = (Parts.Num() >= 7) ? FCString::Atof(*Parts[6]) : 0.f;
+			// The parametric path is pure-state, no async work. Run
+			// inline on the TCP thread; settings reads are atomic float
+			// reads on the cached shadow.
+			Loads = VehiclePawn->ComputeTireLoadsParametric(
+				AxIn, AyIn, PhiIn, ThetaIn, ZIn);
+		}
+		else if (Mode == TEXT("truth"))
+		{
+			// Truth path needs to bounce to the GameThread to read the
+			// current FWheelStatus safely (the array is mutated each
+			// physics tick on the game thread). 200 ms timeout matches
+			// the rest of the GameThread RPCs.
+			Loads = CallOnGameThread<AFSDSVehiclePawn::FTireLoads>(
+				[this]() {
+					if (!IsValid(VehiclePawn)) return AFSDSVehiclePawn::FTireLoads{};
+					return VehiclePawn->GetTireLoadsTruth();
+				},
+				0.2,
+				AFSDSVehiclePawn::FTireLoads{},
+				TEXT("getTireLoads truth"));
+		}
+		else
+		{
+			return TEXT("{\"error\":\"usage: getTireLoads truth|predict [ax ay phi theta z]\"}");
+		}
+
+		return FString::Printf(
+			TEXT("{\"mode\":\"%s\",\"FL\":%.4f,\"FR\":%.4f,\"RL\":%.4f,\"RR\":%.4f,\"total\":%.4f}"),
+			*Mode, Loads.FL, Loads.FR, Loads.RL, Loads.RR, Loads.Total());
+	}
+
 	else if (Method == TEXT("simGetImage"))
 	{
 		// Parse: simGetImage camera_name image_type

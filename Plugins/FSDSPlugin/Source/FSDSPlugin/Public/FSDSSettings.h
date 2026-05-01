@@ -150,6 +150,22 @@ struct FFSDSVehiclePhysics
 	TArray<float> MotorRPM;          // RPM points
 	TArray<float> MotorTorque;       // Nm at motor for each RPM
 
+	// --- Vehicle dynamics (load transfer) ---
+	// Geometry + stiffness fields consumed by AFSDSVehiclePawn::
+	// ComputeTireLoadsParametric. Defaults are the IFS-08 values; can be
+	// overridden per-car via settings.json. See settings.json for the
+	// JSON keys (Wheelbase, TrackFront, TrackRear, RollCenter*,
+	// RollStiffness*, HeaveStiffness, PitchStiffness).
+	float Wheelbase = 1.627f;            // m
+	float TrackFront = 1.220f;           // m
+	float TrackRear = 1.190f;            // m
+	float RollCenterFront = 0.040f;      // m
+	float RollCenterRear = 0.060f;       // m
+	float RollStiffnessFront = 27000.f;  // Nm/rad
+	float RollStiffnessRear = 22000.f;   // Nm/rad
+	float HeaveStiffness = 227600.f;     // N/m (sum of 4 wheel rates)
+	float PitchStiffness = 155600.f;     // Nm/rad
+
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.
 	// See FSDSPacejkaTireModel.h for coefficient definitions.

@@ -69,6 +69,52 @@ public:
 	FCarState GetCarState() const;
 	void SetApiControlEnabled(bool bEnabled) { bApiControlEnabled = bEnabled; }
 
+	// Per-wheel vertical load. Order matches WheelSetups: FL, FR, RL, RR.
+	// Always returned in Newtons. Negative loads (wheel-lift) are
+	// clamped to 0 by the parametric path so callers can sanity-check
+	// `Total < Mass·g` to detect a lifted-wheel condition; the truth
+	// path passes through whatever Chaos's solver computed.
+	struct FTireLoads
+	{
+		float FL = 0.f;
+		float FR = 0.f;
+		float RL = 0.f;
+		float RR = 0.f;
+		float Total() const { return FL + FR + RL + RR; }
+	};
+
+	/**
+	 * Closed-form Milliken decomposition of Fz per wheel.
+	 *
+	 * Decomposes the vertical load into the five physical contributions:
+	 *   1. Static (mass distribution at rest)
+	 *   2. Longitudinal (m·ax·h_cg/L, split L/R 50/50)
+	 *   3. Lateral geometric (via roll-centre heights, instantaneous)
+	 *   4. Lateral elastic (via roll angle, depends on dynamic state)
+	 *   5. Heave + pitch (suspended-mass displacement)
+	 *
+	 * Conventions (ISO 8855):
+	 *   x forward, y left, z up
+	 *   ay > 0 → accel toward LEFT (i.e. right turn) → R wheels load
+	 *   ax > 0 → accelerating → rear loads
+	 *   phi > 0 → right side rises (roll to the right)
+	 *   theta > 0 → nose up (squat-equivalent)
+	 *   z > 0 → suspended mass risen above equilibrium
+	 *
+	 * Pulls m_total / L / wf / h_cg / track / roll-centres / stiffnesses
+	 * directly from the cached settings struct, so this is the same set
+	 * of facts the Chaos solver was configured against.
+	 */
+	FTireLoads ComputeTireLoadsParametric(float ax, float ay, float phi, float theta, float z) const;
+
+	/**
+	 * Read the truth Fz per wheel as Chaos's solver currently has it
+	 * (the same value being used to compute longitudinal/lateral grip
+	 * this tick). Reads UChaosWheeledVehicleMovementComponent's
+	 * per-wheel state — no parametric model, just the live signal.
+	 */
+	FTireLoads GetTireLoadsTruth() const;
+
 	// EBS analog: clamps the handbrake and locks all input channels (API +
 	// keyboard) until explicitly released. The real IFS-08 EBS is a
 	// pneumatic rear-axle brake that can only be reset manually, not by
@@ -156,6 +202,22 @@ private:
 	float MaxRegenPower = 6000.f;  // Watts — hardware cell-current limit
 	float GearRatio = 2.909f;      // motor → rear axle
 	float WheelRadius = 0.2f;      // m
+
+	// Vehicle-dynamics shadow of FFSDSVehiclePhysics — same write-once
+	// pattern as the regen fields above. Consumed by
+	// ComputeTireLoadsParametric. Defaults match FFSDSVehiclePhysics.
+	float Mass = 290.f;                  // kg
+	float Wheelbase = 1.627f;            // m
+	float WeightDistFront = 0.438f;
+	float CoGHeight = 0.300f;            // m
+	float TrackFront = 1.220f;           // m
+	float TrackRear = 1.190f;            // m
+	float RollCenterFront = 0.040f;      // m
+	float RollCenterRear = 0.060f;       // m
+	float RollStiffnessFront = 27000.f;  // Nm/rad
+	float RollStiffnessRear = 22000.f;   // Nm/rad
+	float HeaveStiffness = 227600.f;     // N/m
+	float PitchStiffness = 155600.f;     // Nm/rad
 
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;

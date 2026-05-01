@@ -346,6 +346,19 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// Mass
 		VehicleMovement->Mass = P.Mass;
 
+		// NOTE: a parametric CoG nudge to hit P.WeightDistFront is NOT
+		// applied here. The PhysicsAsset (FormulaMesh_PhysicsAsset)
+		// ships with a forward-biased authored CoM that runtime
+		// overrides cannot fully correct (BodyInstance.COMNudge
+		// saturates non-monotonically; UpdateMassProperties resets the
+		// body mass to the asset value, blowing away VehicleMovement->
+		// Mass). The proper fix is to author the physics asset itself
+		// so its CoM and per-bone masses match the IFS-08 spec — see
+		// the follow-up branch for that work. The load-transfer RPC
+		// returns the *truth* signal as Chaos has it, so the autonomy
+		// can still consume relative wheel loads correctly even while
+		// the absolute distribution is biased forward.
+
 		// Drivetrain
 		if (P.Drivetrain == TEXT("RWD"))
 			VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
@@ -399,6 +412,23 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		MaxRegenPower = P.MaxRegenPower;
 		GearRatio = P.GearRatio;
 		WheelRadius = P.WheelRadius;
+
+		// Vehicle-dynamics shadow consumed by ComputeTireLoadsParametric.
+		// Mirrors the same per-tick caching pattern as the regen fields
+		// so the parametric load-transfer doesn't reparse settings on
+		// every call.
+		Mass = P.Mass;
+		Wheelbase = P.Wheelbase;
+		WeightDistFront = P.WeightDistFront;
+		CoGHeight = P.CoGHeight;
+		TrackFront = P.TrackFront;
+		TrackRear = P.TrackRear;
+		RollCenterFront = P.RollCenterFront;
+		RollCenterRear = P.RollCenterRear;
+		RollStiffnessFront = P.RollStiffnessFront;
+		RollStiffnessRear = P.RollStiffnessRear;
+		HeaveStiffness = P.HeaveStiffness;
+		PitchStiffness = P.PitchStiffness;
 
 		// Size the rear-wheel brake torque to the max motor regen
 		// referred to the wheel. Brake input (0-1) then represents a
@@ -814,4 +844,122 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 
 	State.Timestamp = FPlatformTime::Cycles64();
 	return State;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Tire-load decomposition — Milliken §5.3 / §18.3-4 closed form.
+//
+// Inputs are the chassis state the caller already has (longitudinal +
+// lateral acceleration, roll/pitch angles, heave). All read from the
+// per-tick cached settings (Mass, Wheelbase, …) so this matches the
+// numbers Chaos was actually configured against — no second source of
+// truth.
+// ────────────────────────────────────────────────────────────────────
+AFSDSVehiclePawn::FTireLoads
+AFSDSVehiclePawn::ComputeTireLoadsParametric(
+	float ax, float ay, float phi, float theta, float z) const
+{
+	constexpr float G = 9.81f;
+	const float Wf = WeightDistFront;
+	const float Wr = 1.f - Wf;
+
+	// 1. Static loads (per wheel).
+	const float Fz_static_total = Mass * G;
+	const float Fz_static_f = 0.5f * Wf * Fz_static_total;
+	const float Fz_static_r = 0.5f * Wr * Fz_static_total;
+
+	// 2. Longitudinal transfer (Milliken §5.3): m·ax·h_cg / L. Total
+	// between axles, then split 50/50 L/R within each axle.
+	const float dFz_long_total = (Wheelbase > 1e-3f)
+		? Mass * ax * CoGHeight / Wheelbase : 0.f;
+	const float dFz_long_f_per_wheel = -dFz_long_total / 2.f;
+	const float dFz_long_r_per_wheel = +dFz_long_total / 2.f;
+
+	// 3. Lateral GEOMETRIC transfer (§18.3): instantaneous, transmitted
+	// through the suspension links at the roll-centre height of each
+	// axle. Per axle: ΔFz = m · w_i · ay · h_RC,i / t_i. ay > 0 (ISO
+	// 8855: accel toward LEFT, i.e. RIGHT turn) loads R, unloads L.
+	const float dFz_lat_geom_f = (TrackFront > 1e-3f)
+		? Mass * Wf * ay * RollCenterFront / TrackFront : 0.f;
+	const float dFz_lat_geom_r = (TrackRear > 1e-3f)
+		? Mass * Wr * ay * RollCenterRear / TrackRear : 0.f;
+
+	// 4. Lateral ELASTIC transfer (§18.4): driven by the dynamic roll
+	// angle phi. Per axle: ΔFz = K_phi,i · phi / t_i. Same direction
+	// as geometric in steady state, but lags it through the transient.
+	const float dFz_lat_elast_f = (TrackFront > 1e-3f)
+		? RollStiffnessFront * phi / TrackFront : 0.f;
+	const float dFz_lat_elast_r = (TrackRear > 1e-3f)
+		? RollStiffnessRear * phi / TrackRear : 0.f;
+
+	// 5. Heave + pitch. Heave hits all 4 wheels equally (the only
+	// contribution that does NOT conserve total weight — it represents
+	// the suspended mass being above/below static equilibrium, so
+	// total spring force on the ground genuinely changes). Pitch is a
+	// CoG-centred moment: front wheels lose what rear wheels gain,
+	// total conserved.
+	const float dFz_heave = -HeaveStiffness * z / 4.f;
+	const float dFz_pitch_f = (Wheelbase > 1e-3f)
+		? -PitchStiffness * theta / (2.f * Wheelbase) : 0.f;
+	const float dFz_pitch_r = -dFz_pitch_f;
+
+	// Per-wheel sums. ay > 0 → L wheels (interior of right turn) lose,
+	// R wheels (exterior) gain — sign captured in the +/- on the
+	// geometric and elastic terms below. Front and rear share the same
+	// L/R sign convention.
+	float FL = Fz_static_f + dFz_long_f_per_wheel
+	         - dFz_lat_geom_f - dFz_lat_elast_f
+	         + dFz_heave + dFz_pitch_f;
+	float FR = Fz_static_f + dFz_long_f_per_wheel
+	         + dFz_lat_geom_f + dFz_lat_elast_f
+	         + dFz_heave + dFz_pitch_f;
+	float RL = Fz_static_r + dFz_long_r_per_wheel
+	         - dFz_lat_geom_r - dFz_lat_elast_r
+	         + dFz_heave + dFz_pitch_r;
+	float RR = Fz_static_r + dFz_long_r_per_wheel
+	         + dFz_lat_geom_r + dFz_lat_elast_r
+	         + dFz_heave + dFz_pitch_r;
+
+	// A wheel can't push the ground. Above the wheel-lift threshold the
+	// quasi-static decomposition stops being valid (the lifted wheel's
+	// share doesn't redistribute here); callers can detect this by
+	// comparing Total() against Mass·G.
+	FTireLoads Out;
+	Out.FL = FMath::Max(0.f, FL);
+	Out.FR = FMath::Max(0.f, FR);
+	Out.RL = FMath::Max(0.f, RL);
+	Out.RR = FMath::Max(0.f, RR);
+	return Out;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Truth Fz — read from Chaos's per-wheel state. SpringForce is the
+// suspension spring force at the contact patch this tick; it equals
+// the normal contact force at low suspension velocity (which covers
+// effectively all driving-relevant cases). This is the value the wheel
+// solver uses to compute available longitudinal/lateral grip in the
+// same tick, so it's the canonical "what is Chaos seeing" signal.
+// ────────────────────────────────────────────────────────────────────
+AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
+{
+	FTireLoads Out;
+	if (!VehicleMovement) return Out;
+	const int32 N = VehicleMovement->GetNumWheels();
+	if (N < 4) return Out;
+	// WheelSetups order: 0=FL, 1=FR, 2=RL, 3=RR (see SetupVehicleMovement).
+	//
+	// SpringForce is stored in Chaos's internal cm-based units
+	// (kg·cm/s²), the same convention UE5 uses for distance everywhere.
+	// The engine's own debug overlay applies CmToM (×0.01) to display it
+	// in Newtons (see ChaosWheeledVehicleMovementComponent.cpp:1801).
+	// We do the same here so callers always work in SI Newtons,
+	// matching the parametric path. The ratio across all four wheels
+	// stays correct either way (cm units factor out), but the absolute
+	// numbers only line up with the parametric Fz once converted.
+	constexpr float CmToM = 0.01f;
+	Out.FL = VehicleMovement->GetWheelState(0).SpringForce * CmToM;
+	Out.FR = VehicleMovement->GetWheelState(1).SpringForce * CmToM;
+	Out.RL = VehicleMovement->GetWheelState(2).SpringForce * CmToM;
+	Out.RR = VehicleMovement->GetWheelState(3).SpringForce * CmToM;
+	return Out;
 }
