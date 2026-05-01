@@ -18,6 +18,7 @@
 #include <fs_msgs/srv/reset.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
 
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
@@ -78,6 +79,7 @@ private:
     void extraInfoTimerCb();
     void trackPublishCb();
     void staticTfCb();
+    void tireLoadsTimerCb();
 
     // Subscriber callbacks
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
@@ -153,6 +155,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr motor_rpm_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr tire_loads_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_pub_;
     std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
@@ -211,6 +214,7 @@ private:
     rclcpp::TimerBase::SharedPtr extra_info_timer_;
     rclcpp::TimerBase::SharedPtr track_publish_timer_;
     rclcpp::TimerBase::SharedPtr static_tf_timer_;
+    rclcpp::TimerBase::SharedPtr tire_loads_timer_;
 
     // Config
     std::string mission_name_ = "trackdrive";

@@ -204,6 +204,13 @@ void IFSSIMRosWrapper::initializePublishers()
     //   v_x = rpm × (2π × WheelRadius / GearRatio) / 60
     // For IFS-08 (WheelRadius=0.228 m, GearRatio=2.909): v ≈ rpm × 0.00821 m/s.
     motor_rpm_pub_ = node_->create_publisher<std_msgs::msg::Float32>("motor_rpm", sensor_qos);
+    // /tire_loads — vertical load Fz at each wheel [N], order [FL, FR, RL, RR].
+    // Sourced from Chaos's per-wheel SpringForce via the plugin RPC, so this
+    // is the same Fz the wheel solver is using to compute grip this tick.
+    // Foxglove visualises Float32MultiArray as a small bar chart out of the
+    // box; the autonomy can read it for grip-aware velocity targets.
+    tire_loads_pub_ = node_->create_publisher<std_msgs::msg::Float32MultiArray>(
+        "tire_loads", sensor_qos);
     // /lidar/Lidar1 uses BEST_EFFORT QoS (rather than the default RELIABLE
     // keep_last(10)) so a slow subscriber — most notably the numba-JIT
     // cone-detection node during its first ~15 s of warmup, but also any
@@ -288,6 +295,12 @@ void IFSSIMRosWrapper::initializeTimers()
     }
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
+    // /tire_loads at 20 Hz — fast enough that the autonomy controller
+    // (40 Hz) sees each Fz update at most one tick stale, slow enough
+    // that we don't flood the bridge's command client (this fetches via
+    // RPC on the same TCP connection as setCarControls / getCarState).
+    tire_loads_timer_ = node_->create_wall_timer(
+        50ms, std::bind(&IFSSIMRosWrapper::tireLoadsTimerCb, this));
 
     if (!competition_mode_) {
         extra_info_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::extraInfoTimerCb, this));
@@ -815,6 +828,31 @@ void IFSSIMRosWrapper::goSignalTimerCb()
     msg.mission = mission_name_;
     msg.track = track_name_;
     go_signal_pub_->publish(msg);
+}
+
+void IFSSIMRosWrapper::tireLoadsTimerCb()
+{
+    // Pulls Chaos's per-wheel SpringForce via the plugin RPC and publishes
+    // it as a 4-element Float32MultiArray on /tire_loads. Layout label is
+    // "wheels" with the documented order [FL, FR, RL, RR]; clients should
+    // index by name not by position, but they should know the order from
+    // the dim label too.
+    if (!client_ || !client_->isConnected()) return;
+    std::string resp = client_->sendCommand("getTireLoads truth");
+    if (resp.empty() || resp.find("\"error\"") != std::string::npos) return;
+
+    std_msgs::msg::Float32MultiArray msg;
+    msg.layout.dim.resize(1);
+    msg.layout.dim[0].label = "wheels";  // FL, FR, RL, RR
+    msg.layout.dim[0].size = 4;
+    msg.layout.dim[0].stride = 4;
+    msg.layout.data_offset = 0;
+    msg.data.resize(4);
+    msg.data[0] = static_cast<float>(client_->parseDouble(resp, "FL"));
+    msg.data[1] = static_cast<float>(client_->parseDouble(resp, "FR"));
+    msg.data[2] = static_cast<float>(client_->parseDouble(resp, "RL"));
+    msg.data[3] = static_cast<float>(client_->parseDouble(resp, "RR"));
+    tire_loads_pub_->publish(msg);
 }
 
 void IFSSIMRosWrapper::extraInfoTimerCb()

@@ -191,6 +191,18 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("CoGHeight"), DblVal)) P.CoGHeight = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("SuspensionDamping"), DblVal)) P.SuspensionDamping = DblVal;
 
+		// Vehicle dynamics fields consumed by ComputeTireLoadsParametric.
+		// All optional — defaults in FFSDSVehiclePhysics are the IFS-08 numbers.
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("Wheelbase"), DblVal)) P.Wheelbase = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("TrackFront"), DblVal)) P.TrackFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("TrackRear"), DblVal)) P.TrackRear = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollCenterFront"), DblVal)) P.RollCenterFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollCenterRear"), DblVal)) P.RollCenterRear = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollStiffnessFront"), DblVal)) P.RollStiffnessFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollStiffnessRear"), DblVal)) P.RollStiffnessRear = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("HeaveStiffness"), DblVal)) P.HeaveStiffness = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("PitchStiffness"), DblVal)) P.PitchStiffness = DblVal;
+
 		// Motor torque curve arrays
 		const TArray<TSharedPtr<FJsonValue>>* RPMArr;
 		const TArray<TSharedPtr<FJsonValue>>* TorqueArr;
