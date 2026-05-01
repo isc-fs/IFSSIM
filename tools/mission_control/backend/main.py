@@ -353,11 +353,18 @@ def event_start(setup: EventSetup):
 def res_activate_endpoint():
     global res_active
     with _state_lock:
-        # Stop pipeline first so control node stops sending throttle commands
-        try:
-            os.remove(PIPELINE_CTL_FILE)
-        except FileNotFoundError:
-            pass
+        # RES = engage emergency brake. Pipeline (SLAM, planner, controller)
+        # KEEPS RUNNING — they still see incoming sensor data, the planner
+        # keeps producing paths, the control node keeps publishing
+        # /control_command. The bridge drops /control_command silently
+        # while ebs_triggered_ is set (ifssim_ros_wrapper.cpp:1023), so no
+        # actuator output reaches UE5 until the user releases RES.
+        #
+        # Deleting the pipeline flag here was a regression: it caused the
+        # autonomy nodes to be killed by the entrypoint loop, requiring a
+        # full SLAM re-init (and another 4.5 s IMU calibration) on
+        # release. Toggling RES mid-session is now reversible — release
+        # the brake and the autonomy resumes from where it was.
         try:
             sim.res_activate()
         except Exception as e:
