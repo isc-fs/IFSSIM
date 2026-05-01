@@ -132,9 +132,21 @@ struct FEmraxMotorParams
 
 	/** Off-throttle idle torque (Nm at the shaft). Applied whenever
 	 *  Throttle ≥ 0 and |MechRpm| < IdleCreepRpmThreshold, regardless
-	 *  of envelope/power caps. Set to 0 to disable. */
+	 *  of envelope/power caps. Set to 0 to disable.
+	 *
+	 *  Default 0: real EMRAX EVs have no idle. The 5 Nm previously
+	 *  defaulted here was a Chaos workaround for the wheel solver
+	 *  being pinned at the ω=0 / v=0 degenerate state. That was fixed
+	 *  upstream by SleepThreshold=0 in SetupVehicleMovement (see
+	 *  FSDSVehiclePawn.cpp). With sleep disabled the solver no longer
+	 *  needs a torque floor, and the idle creep was visible as an
+	 *  unwanted ~0.83 m/s drift whenever EBS was released — including
+	 *  when no autonomy was commanding throttle (e.g. mission_control
+	 *  released RES on a session with no track loaded, the user saw
+	 *  the car creeping forward under nothing).
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Controller")
-	float IdleCreepTorqueNm = 5.f;
+	float IdleCreepTorqueNm = 0.f;
 
 	/** Above this MechRpm the idle creep is no longer applied (the
 	 *  wheel solver is already well out of the ω=0 degenerate state). */

@@ -284,6 +284,23 @@ def event_start(setup: EventSetup):
     global current_event, res_active
     if not sim.is_connected():
         return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
+    # Refuse to start a session if no track is loaded into UE5. Without
+    # cones the autonomy stack starts from a blank world: SLAM sees no
+    # landmarks, the planner gets no /Conos, the controller publishes
+    # zero, and the car creeps forward (via residual EMRAX idle torque
+    # or just gravity) under the impression "everything is fine". The
+    # user's expectation when track-load silently fails is that nothing
+    # happens, not that the car drives.
+    try:
+        ref = sim.get_referee_state()
+        cones = ref.get("cones", 0) if isinstance(ref, dict) else 0
+    except Exception:
+        cones = 0
+    if cones <= 0:
+        return JSONResponse(
+            {"ok": False, "error": "No track loaded — load a track before starting a session"},
+            status_code=400,
+        )
     with _state_lock:
         try:
             # Stop any running pipeline so the launch sequence below starts
