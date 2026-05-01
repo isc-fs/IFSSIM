@@ -28,6 +28,10 @@ UFSDSWheelFront::UFSDSWheelFront()
 	SuspensionMaxDrop = 3.5f;
 	SuspensionDampingRatio = 1.5f;
 
+	// See FSDSWheelRear.cpp for rationale — use real per-wheel Fz, not
+	// Chaos's default 50/50 blend with resting load.
+	WheelLoadRatio = 1.0f;
+
 	// Hoosier R20 slick friction
 	FrictionForceMultiplier = 1.65f;
 

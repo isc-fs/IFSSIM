@@ -36,6 +36,17 @@ UFSDSWheelRear::UFSDSWheelRear()
 	SuspensionMaxDrop = 3.5f;
 	SuspensionDampingRatio = 1.5f;
 
+	// Use the actual per-wheel vertical load (Fz) for grip calculation
+	// instead of Chaos's default 50/50 blend with the resting load.
+	// Chaos's ChaosWheeledVehicleMovementComponent.cpp:653 does:
+	//   ForceMagnitude = WheelLoadRatio * ActualFz + (1-WheelLoadRatio) * RestingForce
+	// At 0.5 (default), each wheel sees half its real Fz averaged with
+	// the static one-quarter-mass restingForce. That's a Chaos arcade-
+	// handling helper — at 1.0 it uses the true dynamic Fz, which is
+	// what we want for a physics-truthful FS simulation. Load transfer
+	// during launch then properly increases rear-axle grip.
+	WheelLoadRatio = 1.0f;
+
 	// Hoosier R20 slick friction — peak μ ≈ 1.45 on dry tarmac, 1.4 is
 	// the conservative default we run against. Reverted from the 1.0
 	// hack we tried during the launch-debug rabbit hole: lowering μ to
