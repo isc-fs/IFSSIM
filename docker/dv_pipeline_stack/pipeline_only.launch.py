@@ -57,13 +57,19 @@ def generate_launch_description():
     ]
 
     if os.environ.get('DV_DISABLE_CONTROL', 'false').lower() != 'true':
+        # No bash-sleep prefix here: the controller fail-safes to zero output
+        # whenever odom or path is missing (see ControlNode._tick), so it can
+        # be launched immediately. mission_control's event_start already waits
+        # ~4.5 s for SLAM IMU calibration before releasing EBS, which is the
+        # only window the autonomy could possibly act on stale state.
+        # GSS / testing_only/odom remaps dropped — the new control node reads
+        # vehicle state from /cone_slam/state Odometry only.
         nodes.append(Node(
             package='control',
             executable='Control',
             name='control',
             output='screen',
-            prefix=["bash -c 'sleep 20; $0 $@' "],
-            remappings=[REMAP_GSS, REMAP_ODOM, REMAP_CMD],
+            remappings=[REMAP_CMD],
         ))
 
     return LaunchDescription(nodes)
