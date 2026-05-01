@@ -316,15 +316,21 @@ def event_start(setup: EventSetup):
             # ONLY moment in event_start where the car is guaranteed to
             # be stationary, so any drift here corrupts the SLAM bias.
             time.sleep(4.5)
-            # SLAM is now SLAM_RUNNING with a clean bias. We DO enable API
-            # control so subsequent /control_command messages will be
-            # honoured, but we deliberately leave EBS engaged. The user
-            # has to click the RES button to release the brake and let
-            # the car drive — matches FS-DV T 14.8.4 (AS_Ready state
-            # before R2D entry via the RES Go signal). Without this
-            # gate the car began moving the instant event_start
-            # returned, before the user could verify the session was set
-            # up correctly. RES is now the explicit "go" signal.
+            # SLAM is now SLAM_RUNNING with a clean bias. Release EBS,
+            # hand control to the autonomy, and let the velocity
+            # controller ramp the EMRAX from rest. The user-requested
+            # flow is: click Start Session → RES activates while SLAM
+            # calibrates → SLAM ready → RES auto-releases → car drives.
+            # Strict FS-DV T 14.8.4 / T 14.8.5 timings (≥5 s in AS_Ready
+            # before R2D, ≥3 s in AS_Driving before motion) are NOT
+            # enforced here — they belong in a proper state-machine
+            # implementation (issue #148) that publishes the AS_state
+            # on a CAN-equivalent topic. fix/59 attempted a stop-gap
+            # by leaving EBS engaged for the user to release manually,
+            # but that broke the simple one-click "start session and
+            # drive" flow without delivering the rest of the spec.
+            sim.res_release()
+            res_active = False
             try:
                 sim._cmd("enableApiControl 1")
             except Exception:
