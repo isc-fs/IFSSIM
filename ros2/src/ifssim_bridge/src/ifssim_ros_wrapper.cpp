@@ -1021,8 +1021,13 @@ void IFSSIMRosWrapper::controlCommandCb(const fs_msgs::msg::ControlCommand::Shar
     // publisher won't slip a post-EBS setCarControls through the client
     // before the disableApiControl call has propagated.
     if (ebs_triggered_) return;
+    // setVehicleCommand is the renamed-for-clarity successor of
+    // setCarControls — same wire format (throttle steering regen). The
+    // 3rd arg has always semantically been regen demand on the IFS-08
+    // (folded into EMRAX motor command, no hydraulic friction brake);
+    // the new name reflects that. ControlCommand.brake → regen.
     std::ostringstream cmd;
-    cmd << "setCarControls " << msg->throttle << " " << msg->steering << " " << msg->brake;
+    cmd << "setVehicleCommand " << msg->throttle << " " << msg->steering << " " << msg->brake;
     client_->sendCommand(cmd.str());
 }
 

@@ -351,7 +351,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// though the pawn's CurrentControls.bHandbrake was true.
 		CachedControls.Throttle = 0.f;
 		CachedControls.Steering = 0.f;
-		CachedControls.Brake = 0.f;
+		CachedControls.Regen = 0.f;
 		CachedControls.bHandbrake = true;
 		bApiControlEnabled = false;
 		return TEXT("true");
@@ -482,9 +482,22 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			State.bFinished ? TEXT("true") : TEXT("false"), *EventName,
 			*LapTimesJson, *ConesJson);
 	}
-	else if (Method.StartsWith(TEXT("setCarControls")))
+	else if (Method.StartsWith(TEXT("setVehicleCommand")) || Method.StartsWith(TEXT("setCarControls")))
 	{
-		// Parse: setCarControls throttle steering brake
+		// Two RPC names, one handler:
+		//   setVehicleCommand <throttle> <steering> <regen>
+		//   setCarControls    <throttle> <steering> <brake>     (legacy)
+		//
+		// Same wire format. The 3rd float has always semantically been
+		// regen demand (folded into the EMRAX motor command in
+		// AFSDSVehiclePawn::Tick); setVehicleCommand renames it to match
+		// the field's actual physical role. setCarControls stays as a
+		// compat alias so unmigrated callers (dashboards, tests) keep
+		// working until they switch over.
+		//
+		// Future channels (e.g. an explicit ebs_request positional arg)
+		// should be appended at higher indices on setVehicleCommand only,
+		// leaving setCarControls's three-arg shape intact.
 		if (IsValid(VehiclePawn) && bApiControlEnabled)
 		{
 			TArray<FString> Parts;
@@ -494,12 +507,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				AFSDSVehiclePawn::FCarControls Controls;
 				Controls.Throttle = FCString::Atof(*Parts[1]);
 				Controls.Steering = FCString::Atof(*Parts[2]);
-				Controls.Brake = FCString::Atof(*Parts[3]);
+				Controls.Regen    = FCString::Atof(*Parts[3]);
 
 				// Cache immediately for getCarControls readback
 				CachedControls.Throttle = Controls.Throttle;
 				CachedControls.Steering = Controls.Steering;
-				CachedControls.Brake = Controls.Brake;
+				CachedControls.Regen    = Controls.Regen;
 
 				AsyncTask(ENamedThreads::GameThread, [this, Controls]() {
 					if (IsValid(VehiclePawn)) VehiclePawn->SetCarControls(Controls);
@@ -508,16 +521,22 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		return TEXT("true");
 	}
-	else if (Method == TEXT("getCarControls"))
+	else if (Method == TEXT("getCarControls") || Method == TEXT("getVehicleCommand"))
 	{
-		// Read from cached controls (set immediately on setCarControls, no game-thread delay).
-		// EBS handbrake comes straight from the pawn so paths that bypass the RPC (e.g. the
-		// pawn's BeginPlay calling ActivateEbs() directly) are still reflected truthfully —
-		// CachedControls.bHandbrake is only updated by the RPC handlers themselves.
+		// Read from cached controls (set immediately on setVehicleCommand /
+		// setCarControls, no game-thread delay). EBS handbrake comes
+		// straight from the pawn so paths that bypass the RPC (e.g. the
+		// pawn's BeginPlay calling ActivateEbs() directly) are still
+		// reflected truthfully — CachedControls.bHandbrake is only updated
+		// by the RPC handlers themselves.
+		//
+		// JSON exposes both `regen` (canonical) and `brake` (deprecated
+		// alias) so dashboards mid-migration see no break. Drop `brake`
+		// once all consumers are off it.
 		const bool bHandbrakeReadback = IsValid(VehiclePawn)
 			? VehiclePawn->IsEbsLatched() : CachedControls.bHandbrake;
-		return FString::Printf(TEXT("{\"throttle\":%.4f,\"steering\":%.4f,\"brake\":%.4f,\"handbrake\":%s,\"is_manual_gear\":%s,\"manual_gear\":%d,\"gear_immediate\":%s}"),
-			CachedControls.Throttle, CachedControls.Steering, CachedControls.Brake,
+		return FString::Printf(TEXT("{\"throttle\":%.4f,\"steering\":%.4f,\"regen\":%.4f,\"brake\":%.4f,\"handbrake\":%s,\"is_manual_gear\":%s,\"manual_gear\":%d,\"gear_immediate\":%s}"),
+			CachedControls.Throttle, CachedControls.Steering, CachedControls.Regen, CachedControls.Regen,
 			bHandbrakeReadback ? TEXT("true") : TEXT("false"),
 			CachedControls.bIsManualGear ? TEXT("true") : TEXT("false"),
 			CachedControls.ManualGear,
@@ -1552,11 +1571,14 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			Frame.LapCount = RefState.Laps.Num();
 		}
 
-		// Controls
+		// Controls. Frame.Brake is the wire-format name kept for back-compat
+		// with downstream sensor-stream consumers; semantically it carries
+		// the regen demand (the only retarding channel folded into the
+		// motor command — see FCarControls in FSDSVehiclePawn.h).
 		auto Controls = VehiclePawn->GetCarControls();
 		Frame.Throttle = Controls.Throttle;
 		Frame.Steering = Controls.Steering;
-		Frame.Brake = Controls.Brake;
+		Frame.Brake = Controls.Regen;
 
 		// Send frame — SendAll retries on transient zero-progress (kernel
 		// buffer momentarily full) instead of treating it as a disconnect.

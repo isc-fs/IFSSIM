@@ -83,11 +83,15 @@ private:
 	FQuat   LastStartGateRot_UE = FQuat::Identity;
 	bool bHasStartGate = false;
 
-	// Cached car controls for immediate readback (set from TCP thread before game thread applies)
+	// Cached car controls for immediate readback (set from TCP thread
+	// before game thread applies). Field names mirror the canonical
+	// FCarControls in FSDSVehiclePawn.h: `Regen` is the rear-axle motor
+	// regen demand (the only retarding channel folded into the EMRAX
+	// motor command — there is no hydraulic friction brake on the IFS-08).
 	struct FCachedControls {
 		float Throttle = 0.f;
 		float Steering = 0.f;
-		float Brake = 0.f;
+		float Regen = 0.f;
 		bool bHandbrake = false;
 		bool bIsManualGear = false;
 		int32 ManualGear = 0;

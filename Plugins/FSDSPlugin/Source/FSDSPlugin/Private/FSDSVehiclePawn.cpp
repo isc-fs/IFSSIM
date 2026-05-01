@@ -658,17 +658,18 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));
 			Motor->SetMechRpm(MotorRpm);
 
-			// Combine throttle + brake into a single signed motor
-			// command in [-1, 1]. Brake feeds regen on the motor side
-			// (negative torque, capped by MaxRegenPowerW inside the
-			// EMRAX class). Simultaneous throttle+brake (e.g. 0.5 +
-			// 0.5) cancels out — physically a driver request for two
-			// opposing forces; we honour the simpler "net demand"
-			// interpretation.
+			// Fold the two motor channels (Throttle + Regen) into a
+			// single signed command in [-1, 1] for Motor->Step(). Regen
+			// flips sign so positive Regen becomes negative motor torque,
+			// which the EMRAX class caps by MaxRegenPowerW (battery
+			// cell-input current limit, not motor envelope). Simultaneous
+			// throttle+regen cancels at the motor — physically the driver
+			// requested two opposing forces, we honour the net demand.
+			// New callers should command only one channel at a time.
 			const float ThrottleCmd = bEbsLatched
 				? 0.f
 				: FMath::Clamp(
-					CurrentControls.Throttle - CurrentControls.Brake,
+					CurrentControls.Throttle - CurrentControls.Regen,
 					-1.f, 1.f);
 			const float ShaftTorqueNm = Motor->Step(ThrottleCmd, DeltaTime);
 
@@ -787,9 +788,14 @@ void AFSDSVehiclePawn::OnSteeringInput(float Value)
 
 void AFSDSVehiclePawn::OnBrakeInput(float Value)
 {
+	// Keyboard "brake" axis routes to the regen channel — the IFS-08 has
+	// no hydraulic service brake; the only operator-commandable retarding
+	// force is motor regen (rear axle). EBS is a separate latched channel
+	// (handbrake binding above), and front-axle deceleration only comes
+	// from aero drag.
 	if (bEbsLatched) return;
 	if (!bApiControlEnabled)
-		CurrentControls.Brake = FMath::Clamp(Value, 0.f, 1.f);
+		CurrentControls.Regen = FMath::Clamp(Value, 0.f, 1.f);
 }
 
 void AFSDSVehiclePawn::OnHandbrakePressed()
@@ -819,7 +825,7 @@ void AFSDSVehiclePawn::ActivateEbs()
 	// pneumatic EBS clamp — full rear-axle brake until manually reset.
 	CurrentControls.Throttle = 0.f;
 	CurrentControls.Steering = 0.f;
-	CurrentControls.Brake = 0.f;
+	CurrentControls.Regen = 0.f;
 	CurrentControls.bHandbrake = true;
 	bEbsLatched = true;
 	bApiControlEnabled = false;
