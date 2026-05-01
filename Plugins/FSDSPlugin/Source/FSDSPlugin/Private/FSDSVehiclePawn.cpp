@@ -647,9 +647,13 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		// 10 m/s phantom motion on a stationary car).
 		if (Motor)
 		{
-			// Vehicle longitudinal speed (cm/s → m/s).
-			const float VFwdMs = FMath::Abs(FVector::DotProduct(
-				GetVelocity(), GetActorForwardVector())) * 0.01f;
+			// Signed body-frame longitudinal speed (cm/s → m/s).
+			// Sign matters: the EMRAX motor model uses it to enforce
+			// single-quadrant regen — refuses braking torque on a
+			// backward-rotating wheel, which would otherwise drive the
+			// chassis further in reverse.
+			const float VFwdMs = FVector::DotProduct(
+				GetVelocity(), GetActorForwardVector()) * 0.01f;
 			// Wheel angular velocity assuming no slip, then geared
 			// up to motor rotor speed. WheelRadius / GearRatio are
 			// captured from settings in ApplyPhysicsSettings.

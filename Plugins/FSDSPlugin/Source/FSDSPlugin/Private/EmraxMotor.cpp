@@ -79,8 +79,12 @@ float UEmraxMotor::Step(float Throttle, float Dt)
 
 	// Speed-clamp the externally-set RPM at the mechanical limit. The
 	// caller may have computed RPM from wheel speed without knowing
-	// the motor limit; we enforce it here.
-	const float Rpm = FMath::Clamp(MechRpm, 0.f, P.MaxMechRpm);
+	// the motor limit; we enforce it here. Envelope and power-cap math
+	// always use the magnitude; the sign is preserved separately so
+	// the single-quadrant regen guard below can refuse braking torque
+	// on a backward-rotating wheel.
+	const float SignedRpm = FMath::Clamp(MechRpm, -P.MaxMechRpm, P.MaxMechRpm);
+	const float Rpm = FMath::Abs(SignedRpm);
 	const float OmegaRadS = Rpm * (2.f * PI / 60.f);
 	const float OmegaForPowerCap = FMath::Max(OmegaRadS, 1e-3f);
 
@@ -109,9 +113,32 @@ float UEmraxMotor::Step(float Throttle, float Dt)
 	// here means a -1 brake demand at speed yields the small regen
 	// torque, not the (10-100×) larger motoring torque it would get
 	// from a symmetric envelope.
-	const float TCommand = (Throttle >= 0.f)
-		? Throttle * TDriveMax
-		: Throttle * TRegenMax;
+	//
+	// Single-quadrant regen: the IFS-08 EMRAX 228 motor controller
+	// only generates negative torque on a *forward-rotating* wheel.
+	// Asking for regen at zero or negative ω would (a) be electrically
+	// unsafe on the real inverter, and (b) here would produce reverse
+	// motor torque on a stationary wheel — driving the car backward
+	// from rest, a behaviour the real car physically cannot exhibit.
+	// Clamp regen to zero when the wheel isn't moving forward.
+	float TCommand;
+	if (Throttle >= 0.f)
+	{
+		TCommand = Throttle * TDriveMax;
+	}
+	else if (SignedRpm > 0.f)
+	{
+		// Wheel rotating forward → regen brake produces decel torque.
+		TCommand = Throttle * TRegenMax;
+	}
+	else
+	{
+		// Wheel stationary or rotating backward → no regen torque.
+		// Generating negative torque on a non-forward wheel would
+		// drive the car in reverse, which the real IFS-08 EMRAX
+		// inverter does not (and physically cannot) do.
+		TCommand = 0.f;
+	}
 
 	// First-order current-loop dynamics. Discrete approximation:
 	//   T_new = T_old + α (T_command - T_old),   α = clamp(dt / τ, 0, 1)

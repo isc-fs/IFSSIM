@@ -208,9 +208,13 @@ public:
 
 	/** Push the current RPM into the model. Caller computes from
 	 *  wheel angular velocity × gear ratio (or vehicle speed × gear
-	 *  ratio / wheel radius). Step() reads this each call. */
+	 *  ratio / wheel radius). Step() reads this each call.
+	 *  Signed: positive = forward rotation, negative = reverse. The
+	 *  envelope/power-cap math internally uses |RPM|; the single-
+	 *  quadrant regen guard reads the sign to refuse braking torque
+	 *  on a backward-rotating or stationary wheel. */
 	UFUNCTION(BlueprintCallable, Category = "Motor")
-	void SetMechRpm(float Rpm) { MechRpm = FMath::Abs(Rpm); }
+	void SetMechRpm(float Rpm) { MechRpm = Rpm; }
 
 	/**
 	 * Compute the shaft torque the motor delivers this step.
