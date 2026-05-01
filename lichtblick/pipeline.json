@@ -50,6 +50,7 @@
         "/Conos_raw": { "visible": false },
         "/Conos_Orange": { "visible": true },
         "/Path": { "visible": true },
+        "/path_planning/delaunay": { "visible": true },
         "/Track_azul": { "visible": false },
         "/Track_amarillo": { "visible": false },
         "/testing_only/track": { "visible": false }
