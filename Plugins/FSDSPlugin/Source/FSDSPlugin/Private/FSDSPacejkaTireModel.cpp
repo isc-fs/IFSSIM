@@ -37,12 +37,28 @@ namespace FSDSPacejka
 		}
 		Curve->SetDefaultValue(EvalLateral(C, 30.f, PeakMu));
 
-		// Longitudinal grip ceiling — flat, Chaos binary has no longitudinal curve hook
-		Wheel->FrictionForceMultiplier = PeakMu;
+		// Longitudinal grip ceiling. Chaos's WheelSystem.cpp:84 computes
+		//   AvailableGrip = ForceIntoSurface * SurfaceFriction * FrictionMultiplier
+		// where SurfaceFriction is sourced from the PhysicalMaterial under
+		// the wheel (HitResult.PhysMaterial->Friction). UE's default
+		// material has friction=0.7, and the IFSSIM track ground meshes
+		// don't override it — so a naive `FrictionForceMultiplier = PeakMu`
+		// gives effective μ = 0.7 × 1.4 = 0.98 instead of the spec 1.4
+		// (Hoosier R20 dry tarmac), capping launch acceleration at ~3.5 m/s²
+		// vs the ~10 m/s² the EMRAX 220 Nm should produce on rear-axle grip.
+		//
+		// Compensate here so effective μ matches PeakMu on the default
+		// ground. When a proper TarmacDry PhysicalMaterial asset lands
+		// (friction=1.0) and is assigned to the track meshes, drop
+		// GroundMuCompensation back to 1.0.
+		constexpr float DefaultGroundMu = 0.7f;
+		constexpr float GroundMuCompensation = 1.0f / DefaultGroundMu;
+		Wheel->FrictionForceMultiplier = PeakMu * GroundMuCompensation;
 
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS Pacejka: baked wheel %s — lat B=%.1f C=%.2f E=%.2f | peak μ=%.2f"),
+			TEXT("FSDS Pacejka: baked wheel %s — lat B=%.1f C=%.2f E=%.2f | peak μ=%.2f → FrictionMultiplier=%.3f (×%.3f ground compensation)"),
 			*Wheel->GetName(),
-			C.LatB, C.LatC, C.LatE, PeakMu);
+			C.LatB, C.LatC, C.LatE, PeakMu,
+			Wheel->FrictionForceMultiplier, GroundMuCompensation);
 	}
 }
