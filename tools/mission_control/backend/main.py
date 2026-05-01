@@ -316,16 +316,15 @@ def event_start(setup: EventSetup):
             # ONLY moment in event_start where the car is guaranteed to
             # be stationary, so any drift here corrupts the SLAM bias.
             time.sleep(4.5)
-            # SLAM should now be in SLAM_RUNNING with a clean bias. Release
-            # EBS, hand control to the autonomy, and let the velocity
-            # controller ramp the EMRAX from rest. No pre-seated throttle
-            # and no velocity-kick teleport: the launch is fully closed-
-            # loop on the autonomy's first /control_command tick after the
-            # rear-axle friction lock is broken by EMRAX shaft torque
-            # alone (rear FrictionForceMultiplier was lowered to 1.0 in
-            # the same change that removed the kick — see FSDSWheelRear.cpp).
-            sim.res_release()
-            res_active = False
+            # SLAM is now SLAM_RUNNING with a clean bias. We DO enable API
+            # control so subsequent /control_command messages will be
+            # honoured, but we deliberately leave EBS engaged. The user
+            # has to click the RES button to release the brake and let
+            # the car drive — matches FS-DV T 14.8.4 (AS_Ready state
+            # before R2D entry via the RES Go signal). Without this
+            # gate the car began moving the instant event_start
+            # returned, before the user could verify the session was set
+            # up correctly. RES is now the explicit "go" signal.
             try:
                 sim._cmd("enableApiControl 1")
             except Exception:
