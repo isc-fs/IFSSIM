@@ -206,11 +206,13 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 		Frame.LapCount = RefState.Laps.Num();
 	}
 
-	// Controls echo
+	// Controls echo. Frame.Brake stays as the wire-format name (binary
+	// struct, breaking it would invalidate downstream consumers); the
+	// payload is the regen demand — see FCarControls in FSDSVehiclePawn.h.
 	auto Controls = VehiclePawn->GetCarControls();
 	Frame.Throttle = Controls.Throttle;
 	Frame.Steering = Controls.Steering;
-	Frame.Brake = Controls.Brake;
+	Frame.Brake = Controls.Regen;
 }
 
 void FFSDSUdpBroadcaster::BroadcastSensorFrame()

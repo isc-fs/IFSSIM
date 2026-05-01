@@ -38,11 +38,32 @@ public:
 
 	// --- Programmatic control ---
 
+	// Vehicle command channels. Each field maps to one physical actuator
+	// path on the IFS-08, deliberately separated so future control work
+	// (steering dynamics #149, brake split #150, traction control #151)
+	// has a clean wedge point between command and actuator.
+	//
+	//   Throttle  [0, 1]   — motor drive demand. Maps to EMRAX shaft
+	//                        torque via the envelope curve. Positive only;
+	//                        regen is a separate channel below.
+	//   Regen     [0, 1]   — motor regen brake demand. Same envelope class
+	//                        but capped by HV battery cell-input current,
+	//                        not by motor power. Rear axle only (RWD).
+	//   Steering  [-1, 1]  — normalized front-wheel steering target.
+	//                        Currently applied instantly via SetSteeringInput;
+	//                        future #149 wedges servo dynamics here.
+	//   bHandbrake bool    — EBS latch request. Operator-only release per
+	//                        FS-DV T 14.8.4. Server enforces latched
+	//                        semantics (ActivateEbs / ReleaseEbs).
+	//
+	// Throttle and Regen can both be > 0 in the same tick (legacy semantics
+	// from the flat CarControls API): Tick folds them as net = Throttle -
+	// Regen at the motor. New callers should command only one at a time.
 	struct FCarControls
 	{
 		float Throttle = 0.f;
 		float Steering = 0.f;
-		float Brake = 0.f;
+		float Regen = 0.f;
 		bool bHandbrake = false;
 		bool bIsManualGear = false;
 		int32 ManualGear = 0;
