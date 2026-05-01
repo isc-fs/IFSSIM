@@ -14,11 +14,13 @@ UFSDSWheelFront::UFSDSWheelFront()
 	WheelWidth = 19.f;        // 7.5 inch = 190mm
 	MaxSteerAngle = 28.f;     // FS typical steering geometry
 
-	// Per-wheel rotating-mass total. See FSDSWheelRear.cpp for the
-	// physical breakdown — same 10 kg per corner, since front and rear
-	// share the same Hoosier 16×7.5-10 / 10″ Mg rim package on the
-	// IFS-08. Default 20 kg is overstated for an FS car and was making
-	// Chaos's wheel solver too sluggish to break out of ω=0 at launch.
+	// Per-wheel total mass. See FSDSWheelRear.cpp for the IFS-08 corner
+	// breakdown — Hoosier R20 16×7.5-10 ≈ 6 kg + 10″ Mg rim ≈ 3 kg +
+	// brake/hub residual ≈ 1 kg. 10 kg matches the spec total per
+	// corner; the earlier 5 kg figure was a numerical workaround to
+	// halve rotational inertia at launch and is no longer used (the
+	// proper fix is in the launch state machine, not in the wheel
+	// physics).
 	WheelMass = 10.f;
 
 	// IFS-08: 35mm ride height, 350 lbs/in front springs

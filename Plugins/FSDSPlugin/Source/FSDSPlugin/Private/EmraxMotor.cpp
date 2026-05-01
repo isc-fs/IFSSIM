@@ -23,33 +23,40 @@
 
 namespace
 {
-	// EMRAX 228 MV peak torque envelope (mech_rpm, max_torque_Nm),
-	// directly transcribed from EMRAX228/emrax228_envelope_curve.csv.
-	// Flat 200 Nm in the constant-torque region, falling above
-	// ~4600 RPM as field-weakening engages. The curve interpolates
-	// linearly between knots; the spacing matches the NX-tech file's
-	// 103-RPM grid.
+	// EMRAX 228 MV peak torque envelope (mech_rpm, max_torque_Nm).
+	// Constant-torque region uses the EMRAX 228 MV S2 (2-minute)
+	// rating of 220 Nm — the official datasheet number for short-
+	// duration peak. The previous 200 Nm cap mirrored the NX-tech
+	// LUT's conservative ceiling, but launch-from-rest at the IFS-08
+	// mass + Hoosier R20 μ leaves only a 4.8 % margin over static-
+	// friction at 200 Nm, below Chaos's wheel-solver stick-threshold.
+	// The datasheet 220 Nm gives ~15 % margin and matches the real
+	// motor's actual S2 capability — what a real-car launch ECU
+	// commands. Field-weakening rolloff above ~4600 RPM is unchanged
+	// (constant-power region was already correct).
+	// Linear interpolation between knots; spacing matches the
+	// NX-tech file's 103-RPM grid.
 	constexpr struct FEnvelopeKnot
 	{
 		float Rpm;
 		float TorqueNm;
 	} GTorqueEnvelopeKnots[] = {
-		{0.f,    200.f}, {103.f,  200.f}, {206.f,  200.f}, {309.f,  200.f},
-		{412.f,  200.f}, {515.f,  200.f}, {618.f,  200.f}, {721.f,  200.f},
-		{824.f,  200.f}, {927.f,  200.f}, {1030.f, 200.f}, {1133.f, 200.f},
-		{1236.f, 200.f}, {1339.f, 200.f}, {1442.f, 200.f}, {1545.f, 200.f},
-		{1648.f, 200.f}, {1751.f, 200.f}, {1854.f, 200.f}, {1957.f, 200.f},
-		{2060.f, 200.f}, {2163.f, 200.f}, {2266.f, 200.f}, {2369.f, 200.f},
-		{2472.f, 200.f}, {2575.f, 200.f}, {2678.f, 200.f}, {2781.f, 200.f},
-		{2884.f, 200.f}, {2987.f, 200.f}, {3090.f, 200.f}, {3193.f, 200.f},
-		{3296.f, 200.f}, {3399.f, 200.f}, {3502.f, 200.f}, {3605.f, 200.f},
-		{3708.f, 200.f}, {3811.f, 200.f}, {3914.f, 200.f}, {4017.f, 200.f},
-		{4120.f, 200.f}, {4223.f, 200.f}, {4326.f, 200.f}, {4429.f, 200.f},
-		{4532.f, 200.f}, {4635.f, 199.f}, {4738.f, 196.f}, {4841.f, 193.f},
-		{4944.f, 190.f}, {5047.f, 188.f}, {5150.f, 185.f}, {5253.f, 181.f},
-		{5356.f, 177.f}, {5459.f, 174.f}, {5562.f, 170.f}, {5665.f, 167.f},
-		{5768.f, 164.f}, {5871.f, 161.f}, {5974.f, 157.f}, {6077.f, 153.f},
-		{6180.f, 149.f}, {6283.f, 145.f}, {6386.f, 142.f}, {6489.f, 140.f},
+		{0.f,    220.f}, {103.f,  220.f}, {206.f,  220.f}, {309.f,  220.f},
+		{412.f,  220.f}, {515.f,  220.f}, {618.f,  220.f}, {721.f,  220.f},
+		{824.f,  220.f}, {927.f,  220.f}, {1030.f, 220.f}, {1133.f, 220.f},
+		{1236.f, 220.f}, {1339.f, 220.f}, {1442.f, 220.f}, {1545.f, 220.f},
+		{1648.f, 220.f}, {1751.f, 220.f}, {1854.f, 220.f}, {1957.f, 220.f},
+		{2060.f, 220.f}, {2163.f, 220.f}, {2266.f, 220.f}, {2369.f, 220.f},
+		{2472.f, 220.f}, {2575.f, 220.f}, {2678.f, 220.f}, {2781.f, 220.f},
+		{2884.f, 220.f}, {2987.f, 220.f}, {3090.f, 220.f}, {3193.f, 220.f},
+		{3296.f, 220.f}, {3399.f, 220.f}, {3502.f, 220.f}, {3605.f, 220.f},
+		{3708.f, 220.f}, {3811.f, 220.f}, {3914.f, 220.f}, {4017.f, 220.f},
+		{4120.f, 220.f}, {4223.f, 220.f}, {4326.f, 220.f}, {4429.f, 220.f},
+		{4532.f, 220.f}, {4635.f, 219.f}, {4738.f, 216.f}, {4841.f, 213.f},
+		{4944.f, 209.f}, {5047.f, 207.f}, {5150.f, 204.f}, {5253.f, 199.f},
+		{5356.f, 195.f}, {5459.f, 191.f}, {5562.f, 187.f}, {5665.f, 184.f},
+		{5768.f, 180.f}, {5871.f, 177.f}, {5974.f, 173.f}, {6077.f, 168.f},
+		{6180.f, 164.f}, {6283.f, 160.f}, {6386.f, 156.f}, {6489.f, 154.f},
 	};
 }
 

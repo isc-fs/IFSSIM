@@ -14,6 +14,7 @@ import base64
 import asyncio
 import shutil
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -285,57 +286,50 @@ def event_start(setup: EventSetup):
         return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
     with _state_lock:
         try:
-            # Stop any running pipeline
+            # Stop any running pipeline so the launch sequence below starts
+            # the autonomy from a clean slate (cone_graph_slam, control,
+            # path_planning all relaunched → SLAM re-runs INIT_CALIBRATING).
             try:
                 os.remove(PIPELINE_CTL_FILE)
             except FileNotFoundError:
                 pass
-            # Activate RES (hard brake) then configure event
+            # Park the car under EBS while the pipeline boots. cone_graph_slam
+            # requires 3 s of stationary IMU samples to estimate accel/gyro
+            # bias correctly; if the car moves during that window the bias
+            # estimate locks in the body-frame launch acceleration and every
+            # subsequent LiDAR scan trips DA-failure spikes. EBS holds the
+            # handbrake on all four wheels until we explicitly release it
+            # below, after SLAM has reported SLAM_RUNNING.
             sim.res_activate()
             res_active = True
             sim.set_event(setup.event_type, setup.num_laps)
             sim.resume()
-            # Release RES → enables API control
+            # Start the pipeline now (still EBS-locked). The control node
+            # publishes /signal/ebs_reset on init which clears the bridge's
+            # ebs_triggered_ flag from any prior session.
+            os.makedirs("/pipeline_ctrl", exist_ok=True)
+            open(PIPELINE_CTL_FILE, "w").close()
+            # Wait for cone_graph_slam to clear INIT_CALIBRATING. We don't
+            # have a status topic yet, so we wait the worst-case timing:
+            # ~1 s for the launch process to fork all nodes + 3 s for the
+            # IMU calibration window itself + 0.5 s margin. This is the
+            # ONLY moment in event_start where the car is guaranteed to
+            # be stationary, so any drift here corrupts the SLAM bias.
+            time.sleep(4.5)
+            # SLAM should now be in SLAM_RUNNING with a clean bias. Release
+            # EBS, hand control to the autonomy, and let the velocity
+            # controller ramp the EMRAX from rest. No pre-seated throttle
+            # and no velocity-kick teleport: the launch is fully closed-
+            # loop on the autonomy's first /control_command tick after the
+            # rear-axle friction lock is broken by EMRAX shaft torque
+            # alone (rear FrictionForceMultiplier was lowered to 1.0 in
+            # the same change that removed the kick — see FSDSWheelRear.cpp).
             sim.res_release()
             res_active = False
-            # ActivateEbs above also disables API control (so keyboard
-            # input takes over); we need it back on before the autonomy
-            # pipeline starts publishing, otherwise UE5's keyboard
-            # axis-input handlers race every setCarControls to 0
-            # ("no key pressed" → CurrentControls.Throttle = 0 every
-            # tick), and the bootstrap throttle below would never
-            # actually drive the EMRAX.
             try:
                 sim._cmd("enableApiControl 1")
             except Exception:
                 pass
-            # Pre-seat throttle=1 in UE5's CurrentControls so the
-            # simSetVehiclePose kick fires while the EMRAX is already
-            # commanded for full launch. Without this, the kick gives
-            # 5 cm/s of forward velocity that decays under drag in a
-            # few hundred ms — and the autonomy pipeline doesn't come
-            # online for ~1–2 s, so by the time it's commanding
-            # throttle the chassis is back at v=0 and the wheel solver
-            # is pinned in the rolling-without-slip degenerate state.
-            # The bootstrap throttle is overwritten as soon as the
-            # control node publishes its first /control_command.
-            try:
-                sim._cmd("setCarControls 1.0 0.0 0.0")
-            except Exception:
-                pass
-            # Self-teleport to current pose to fire the simSetVehiclePose
-            # body-forward velocity kick (5 cm/s). With the bootstrap
-            # throttle above, the kick happens against an active EMRAX
-            # so the chassis launches decisively and stays out of the
-            # ω=0 degenerate state once the autonomy takes over.
-            try:
-                pose = sim.get_vehicle_pose()
-                sim.teleport_pos(pose["x"], pose["y"], pose["z"])
-            except Exception:
-                pass
-            # Start pipeline
-            os.makedirs("/pipeline_ctrl", exist_ok=True)
-            open(PIPELINE_CTL_FILE, "w").close()
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
         current_event = setup.event_type

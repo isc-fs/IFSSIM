@@ -218,6 +218,25 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
 	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
+
+	// Disable Chaos's vehicle-specific aggressive sleep. Chaos's
+	// ProcessSleeping() (ChaosVehicleMovementComponent.cpp:1252) puts
+	// the chassis to sleep whenever throttle/brake/steering input is
+	// below ControlInputWakeTolerance — but our plugin DELIBERATELY
+	// keeps SetThrottleInput at 0 because EMRAX torque is injected via
+	// SetDriveTorque() with Additive combine instead of through the
+	// engine. From Chaos's perspective there's no input pressed, so
+	// it sleeps the chassis at standstill, which freezes the wheel
+	// solver, which means SetDriveTorque() lands on a sleeping body
+	// and ω never moves off zero — the launch-from-rest bug we
+	// chased for two days. The header comment on this property
+	// (ChaosVehicleMovementComponent.h:791) says "0 disables", which
+	// is what we want. Real-car analog: a real EMRAX is always
+	// producing motor vibrations + rotor inertia interacting with
+	// bearings, which means the chassis never goes to sleep in the
+	// way Chaos models. Setting threshold to 0 reflects that physical
+	// reality.
+	VehicleMovement->SleepThreshold = 0.f;
 }
 
 UFSDSCameraSensor* AFSDSVehiclePawn::GetCamera(const FString& Name) const
@@ -460,6 +479,17 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 void AFSDSVehiclePawn::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Boot in EBS-engaged state, mirroring the FS-DV AS_Off state from
+	// the rules (T 14.8 flowchart): the chassis is parked with brakes
+	// applied until the autonomous mission flow explicitly releases
+	// them. Without this, with SleepThreshold=0 (Chaos vehicle-sleep
+	// optimisation disabled, see SetupVehicleMovement), even a tiny
+	// gravity-on-tilt at the spawn location keeps the chassis drifting
+	// because nothing else is opposing the resulting acceleration.
+	// Real cars don't have this problem because the EBS is armed at
+	// power-on; we replicate that here.
+	ActivateEbs();
 
 	// Load settings and create cameras
 	FFSDSSettings::Get().AutoLoad();

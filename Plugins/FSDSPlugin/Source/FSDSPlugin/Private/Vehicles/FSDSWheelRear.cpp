@@ -22,16 +22,13 @@ UFSDSWheelRear::UFSDSWheelRear()
 	WheelWidth = 19.f;        // 7.5 inch = 190mm
 	MaxSteerAngle = 0.f;
 
-	// Per-wheel rotating-mass total. Chaos's default 20 kg is roughly an
-	// SUV/sedan figure; the IFS-08 corner is ≈10 kg total (Hoosier R20
-	// 16×7.5-10 ≈ 6 kg + 10″ Mg rim ≈ 3 kg + brake/hub residual ≈ 1 kg
-	// rotating). Halving the wheel mass halves rotational inertia
-	// (Chaos uses I = 0.5·m·r²), which is the right physical number for
-	// our corner *and* doubles the per-tick `ExcessTorque/Inertia` term
-	// in WheelSystem — the wheel's slip-omega moves out of the
-	// numerically-degenerate ω=0 state in half the ticks, which is what
-	// was pinning the Chaos solver at standstill under full launch
-	// torque even though drive force exceeded available grip.
+	// Per-wheel total mass — IFS-08 corner is ≈10 kg total (Hoosier R20
+	// 16×7.5-10 ≈ 6 kg + 10″ Mg rim ≈ 3 kg + brake/hub residual ≈ 1 kg).
+	// Halving the wheel mass to 5 kg was a numerical workaround to halve
+	// rotational inertia at launch — reverted because the proper fix
+	// for launch-from-rest belongs in the autonomy's launch state
+	// machine (open-loop full throttle until v_launch_done), not in
+	// fudged wheel physics that the real car would inherit.
 	WheelMass = 10.f;
 
 	// IFS-08: 35mm ride height, 300 lbs/in rear springs
@@ -39,15 +36,13 @@ UFSDSWheelRear::UFSDSWheelRear()
 	SuspensionMaxDrop = 3.5f;
 	SuspensionDampingRatio = 1.5f;
 
-	// Hoosier R20 slick friction. Was 1.65 prior to 2026-04-30, but
-	// in combination with the EMRAX 228 motor model it pushed the
-	// effective static friction above the launch torque the powertrain
-	// can deliver — the rear axle locked at standstill regardless of
-	// throttle, blocking autonomous launches. Real Hoosier R20 peak μ
-	// is ~1.45 on warm dry tarmac; 1.4 leaves a small margin against
-	// peak tire friction while still letting the EMRAX (≤ 200 Nm
-	// shaft × 2.909 gear / 0.228 m wheel = ≤ 2553 N/axle force) break
-	// the rear-axle static lock at full throttle.
+	// Hoosier R20 slick friction — peak μ ≈ 1.45 on dry tarmac, 1.4 is
+	// the conservative default we run against. Reverted from the 1.0
+	// hack we tried during the launch-debug rabbit hole: lowering μ to
+	// give the EMRAX margin past static friction was a sim-only trick
+	// that the real car does not benefit from. The truthful answer to
+	// launch-from-rest is the autonomy's launch state machine (open-
+	// loop full throttle), not detuned tire grip.
 	FrictionForceMultiplier = 1.4f;
 
 	// Brake channel = motor regen (EMRAX 228 on rear axle). Per-wheel

@@ -510,10 +510,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getCarControls"))
 	{
-		// Read from cached controls (set immediately on setCarControls, no game-thread delay)
+		// Read from cached controls (set immediately on setCarControls, no game-thread delay).
+		// EBS handbrake comes straight from the pawn so paths that bypass the RPC (e.g. the
+		// pawn's BeginPlay calling ActivateEbs() directly) are still reflected truthfully —
+		// CachedControls.bHandbrake is only updated by the RPC handlers themselves.
+		const bool bHandbrakeReadback = IsValid(VehiclePawn)
+			? VehiclePawn->IsEbsLatched() : CachedControls.bHandbrake;
 		return FString::Printf(TEXT("{\"throttle\":%.4f,\"steering\":%.4f,\"brake\":%.4f,\"handbrake\":%s,\"is_manual_gear\":%s,\"manual_gear\":%d,\"gear_immediate\":%s}"),
 			CachedControls.Throttle, CachedControls.Steering, CachedControls.Brake,
-			CachedControls.bHandbrake ? TEXT("true") : TEXT("false"),
+			bHandbrakeReadback ? TEXT("true") : TEXT("false"),
 			CachedControls.bIsManualGear ? TEXT("true") : TEXT("false"),
 			CachedControls.ManualGear,
 			CachedControls.bGearImmediate ? TEXT("true") : TEXT("false"));
@@ -907,6 +912,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
 					}
 					Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+					// Also zero linear velocity. Without this, residual
+					// momentum (or gravity-on-tilt drift accumulated
+					// since the previous tick) survives the teleport,
+					// and the chassis arrives at the new pose still
+					// moving — broke our "spawn at start gate then
+					// arm EBS" sequence with v ≈ 0.4 m/s after every
+					// /reset and loadTrack call. A teleport semantically
+					// resets pose, which on a vehicle includes its
+					// momentum.
+					Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 				}
 				// Clear Chaos vehicle wheel angular velocities + raw inputs +
 				// shift to neutral gear. See loadTrack handler for the long
@@ -924,27 +939,18 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					Mesh->BodyInstance.SetBodyTransform(RestoredXform, ETeleportType::TeleportPhysics);
 				}
 				VehiclePawn->SetActorRotation(HeadingToRestore, ETeleportType::TeleportPhysics);
-				// Tiny body-forward kick (5 cm/s) — applied LAST, after
-				// ResetVehicleState() above, because Chaos's
-				// StopMovementImmediately() inside ResetVehicleState
-				// zeroes out the chassis velocity that we just set, so
-				// any kick before this line is silently undone. Chaos's
-				// wheel solver enforces a rolling constraint
-				// ω_wheel = v_chassis / r when drive force ≤ available
-				// grip; at the exact (v=0, ω=0) state that constraint
-				// is degenerate and the solver pins both at zero even
-				// under full drive torque from the EMRAX. A real car is
-				// never at perfectly zero v at "release brake" — there's
-				// always a few cm/s of mechanical creep — so kicking the
-				// chassis to 5 cm/s on every teleport is both
-				// physically defensible and what unstuck the wheel
-				// solver in our launch tests. Below the SLAM noise
-				// floor, so it doesn't affect cone graph init.
-				if (Mesh && Mesh->IsSimulatingPhysics())
-				{
-					const FVector FwdCmPerSec = VehiclePawn->GetActorForwardVector() * 5.f;
-					Mesh->SetPhysicsLinearVelocity(FwdCmPerSec);
-				}
+				// No velocity kick. The previous 5 cm/s body-forward push was
+				// a workaround for Chaos pinning at the (v=0, ω=0) degenerate
+				// state. It was firing during the SLAM's INIT_CALIBRATING
+				// window (3 s stationary requirement) and corrupting the IMU
+				// bias estimate, which cascaded into permanent DA-failure
+				// rejection of every LiDAR scan. The proper fix lives in
+				// the wheel config: rear FrictionForceMultiplier was lowered
+				// (1.4 → 1.0) and WheelMass halved (10 → 5 kg) so the EMRAX
+				// shaft torque alone can break the rear axle's static-
+				// friction lock at standstill. Launch is now closed-loop:
+				// the autonomy commands throttle when SLAM is ready and the
+				// chassis accelerates from rest under real drive torque.
 			}
 		});
 		return TEXT("true");
@@ -1244,13 +1250,17 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (Spawner->ComputeStartGatePose(StartLoc, StartRot, 300.f) && IsValid(VehiclePawn))
 				{
 					// Mirrors simSetVehiclePose's teleport-with-velocity-reset
-					// path. EBS gets cleared as a soft reset (matches the
-					// real-car flow where the driver must release EBS before
-					// each run). The skeletal mesh BodyInstance has to be
-					// snapped explicitly because Chaos vehicles otherwise
-					// keep their old physics-body rotation and snap the
-					// actor transform back on the next tick.
-					VehiclePawn->ReleaseEbs();
+					// path. EBS is intentionally NOT released here — the
+					// previous "soft reset" pattern was wrong: in the
+					// real FS-DV flow the driver releases EBS via the
+					// RES Go signal (T 14.8.4), not as a side-effect of
+					// loading a track. Track load only spawns the car at
+					// the start gate; the autonomous mission state
+					// machine owns EBS transitions. The skeletal mesh
+					// BodyInstance has to be snapped explicitly because
+					// Chaos vehicles otherwise keep their old physics-
+					// body rotation and snap the actor transform back on
+					// the next tick.
 					VehiclePawn->SetActorLocationAndRotation(StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
 					USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
 					if (Mesh && Mesh->IsSimulatingPhysics())
