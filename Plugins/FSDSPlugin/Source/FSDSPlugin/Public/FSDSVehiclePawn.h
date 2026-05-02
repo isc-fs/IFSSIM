@@ -14,6 +14,7 @@
 #include "Sensors/FSDSDistanceSensor.h"
 #include "Sensors/FSDSBarometerSensor.h"
 #include "Sensors/FSDSMagnetometerSensor.h"
+#include "Sensors/FSDSLidarGPUSpike.h"
 #include "Vehicles/FSDSWheelFront.h"
 #include "Vehicles/FSDSWheelRear.h"
 #include "EmraxMotor.h"
@@ -191,6 +192,11 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
 	UFSDSMagnetometerSensor* MagnetometerSensor;
+
+	// #223 Phase-0 throwaway diagnostic. Always instantiated; only does
+	// work when CVar fsds.LidarGPUSpike.Enable=1. Removed in Phase 1.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
+	UFSDSLidarGPUSpike* LidarGPUSpike;
 
 	/** Create sensors from settings.json config (call in BeginPlay) */
 	void SetupSensorsFromSettings();

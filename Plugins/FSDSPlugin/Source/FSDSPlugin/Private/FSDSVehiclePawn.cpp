@@ -496,6 +496,21 @@ void AFSDSVehiclePawn::BeginPlay()
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
 
+	// #223 Phase-0 GPU LiDAR viability spike. Stand up the depth-only
+	// SceneCapture *after* SetupSensorsFromSettings has populated
+	// LidarSensor (we read its FOV / mount offset / scan rate). The
+	// spike no-ops itself when the CVar is off, so this is free in
+	// the default config.
+	if (!LidarGPUSpike)
+	{
+		LidarGPUSpike = NewObject<UFSDSLidarGPUSpike>(this, TEXT("LidarGPUSpike"));
+		if (LidarGPUSpike)
+		{
+			LidarGPUSpike->RegisterComponent();
+			LidarGPUSpike->Initialize(LidarSensor);
+		}
+	}
+
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
 	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup
 	// (MaxTorque=0, EngineIdleRPM=0) and Tick below feeds per-wheel
