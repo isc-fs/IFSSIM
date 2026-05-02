@@ -272,6 +272,15 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("MaxRange"), DblVal)) Sensor.MaxRange = DblVal;
 	SensorObj->TryGetBoolField(TEXT("DrawDebugPoints"), Sensor.bDrawDebugPoints);
 
+	// LidarPath: "cpu" (default) or "gpu" — see #223. Only honoured when
+	// SensorType==6 (LiDAR); read by FSDSLidarSensor::BeginPlay. We
+	// store it on every sensor's settings struct uniformly because
+	// ParseSensor is shared across types; non-LiDAR sensors ignore it.
+	{
+		FString PathVal;
+		if (SensorObj->TryGetStringField(TEXT("LidarPath"), PathVal)) Sensor.LidarPath = PathVal;
+	}
+
 	// Noise parameters (all sensor types)
 	if (SensorObj->TryGetNumberField(TEXT("GpsPositionNoiseStd"), DblVal)) Sensor.GpsPositionNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("GpsVelocityNoiseStd"), DblVal)) Sensor.GpsVelocityNoiseStd = DblVal;

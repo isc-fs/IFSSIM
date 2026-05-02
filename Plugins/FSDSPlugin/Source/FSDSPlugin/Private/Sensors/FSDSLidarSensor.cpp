@@ -5,6 +5,12 @@
 #include "Async/ParallelFor.h"
 #include "FSDSSensorNoise.h"
 
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "GameFramework/Actor.h"
+#include "Misc/Paths.h"
+
 using FSDSNoise::RandStandardNormal;
 
 UFSDSLidarSensor::UFSDSLidarSensor()
@@ -20,14 +26,34 @@ void UFSDSLidarSensor::BeginPlay()
 	float VFov = VerticalFOVUpper - VerticalFOVLower;
 	int32 PointsPerScan = PointsPerSecond / FMath::Max(1.f, RotationsPerSecond);
 
-	UE_LOG(LogTemp, Log, TEXT("FSDS LiDAR: %d channels, %d pts/sec, %d pts/scan, H-FOV=%.0f° V-FOV=%.0f°, range=%.0fm"),
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS LiDAR: backend=%s  %d channels, %d pts/sec, %d pts/scan, H-FOV=%.0f° V-FOV=%.0f°, range=%.0fm"),
+		LidarPath == EFSDSLidarPath::GPU ? TEXT("GPU") : TEXT("CPU"),
 		NumberOfChannels, PointsPerSecond, PointsPerScan,
 		HFov, VFov, MaxRange / 100.f);
+
+	if (LidarPath == EFSDSLidarPath::GPU)
+	{
+		InitializeGPUPath();
+	}
 }
 
 void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// GPU backend (#223): rate-limited depth capture; no point-cloud
+	// production yet (Phase 1 milestone is "depth render set up at the
+	// LiDAR's geometry"). Phase 2 adds GPU→CPU readback, Phase 3 the
+	// decode shader. Under GPU mode the CPU path is fully short-
+	// circuited; broadcaster sees an empty cloud until Phase 3 lands.
+	if (LidarPath == EFSDSLidarPath::GPU)
+	{
+		TickGPUPath(DeltaTime);
+		return;
+	}
+
+	// --- CPU path below. Unchanged from dev. ---
 
 	// Rate-limit: only scan at RotationsPerSecond Hz (default 10 Hz), not every frame.
 	// This keeps the game thread free — the actual raycasts run on a background thread.
@@ -233,4 +259,128 @@ int32 UFSDSLidarSensor::GetPointCount() const
 {
 	FScopeLock Lock(&const_cast<UFSDSLidarSensor*>(this)->PointCloudLock);
 	return CachedPointCount;
+}
+
+// ===================================================================
+// GPU path (#223) — Phase 1
+// ===================================================================
+//
+// What's here in Phase 1 (this file):
+//   - SceneCapture set up at the LiDAR mount pose with the LiDAR's
+//     scan grid as the RT size (PointsPerScan / NumberOfChannels
+//     horizontal × NumberOfChannels vertical).
+//   - Captures fire on the rate limiter at RotationsPerSecond Hz.
+//   - Diagnostic logging mirrors the Phase-0 spike (avg
+//     CaptureScene() GT cost reported every 5 s; one-shot RT EXR
+//     dump after 5 captures for visual sanity).
+//
+// What's NOT here yet (deliberately):
+//   - Asymmetric V-FOV via custom projection matrix. Stage-1.3 work
+//     in #223; current symmetric setup over-renders ~26 % of texels
+//     for the Hesai's asymmetric -12.4°..+5.9° V-FOV but that's
+//     functionally fine for the rendering wiring — the decode
+//     shader (Phase 3) will read only the rows matching real
+//     channels.
+//   - Async readback. Phase 2.
+//   - Decode shader → 3D points. Phase 3. Until then,
+//     PointCloudBuffer is left empty when LidarPath==GPU.
+
+void UFSDSLidarSensor::InitializeGPUPath()
+{
+	AActor* Owner = GetOwner();
+	if (!Owner) return;
+
+	// Match the LiDAR scan grid one-to-one. PointsPerScan = the
+	// CPU path's per-scan ray count; we render exactly that many
+	// texels so the Phase-3 decode shader can sample at integer
+	// texel coords without interpolation.
+	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
+		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
+	const int32 RTH = FMath::Max(1, NumberOfChannels);
+	const int32 RTW = FMath::Max(64, PointsPerScan / RTH);
+
+	const float HFov = HorizontalFOVEnd - HorizontalFOVStart;
+
+	GPUDepthRT = NewObject<UTextureRenderTarget2D>(this);
+	GPUDepthRT->RenderTargetFormat = ETextureRenderTargetFormat::RTF_R32f;
+	GPUDepthRT->ClearColor          = FLinearColor::Black;
+	GPUDepthRT->bAutoGenerateMips   = false;
+	GPUDepthRT->InitAutoFormat(RTW, RTH);
+	GPUDepthRT->UpdateResourceImmediate(true);
+
+	GPUDepthCapture = NewObject<USceneCaptureComponent2D>(Owner);
+	GPUDepthCapture->SetupAttachment(Owner->GetRootComponent());
+	GPUDepthCapture->RegisterComponent();
+	GPUDepthCapture->SetRelativeLocation(SensorOffset);
+	GPUDepthCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	GPUDepthCapture->TextureTarget         = GPUDepthRT;
+	GPUDepthCapture->CaptureSource         = ESceneCaptureSource::SCS_SceneDepth;
+	GPUDepthCapture->bCaptureEveryFrame    = false;
+	GPUDepthCapture->bCaptureOnMovement    = false;
+	GPUDepthCapture->bAlwaysPersistRenderingState = true;
+
+	// Symmetric H-FOV; V-FOV implicit via aspect. Asymmetric V via
+	// tilt+custom-matrix lands in stage 1.3.
+	GPUDepthCapture->FOVAngle = HFov;
+
+	// Same show-flag stripping as the Phase-0 spike: depth-only,
+	// no AA / post / SSR / AO. AA-off in particular avoids fake
+	// intermediate-depth hits at cone silhouettes (#223 risk #3).
+	GPUDepthCapture->ShowFlags.SetAntiAliasing(false);
+	GPUDepthCapture->ShowFlags.SetTemporalAA(false);
+	GPUDepthCapture->ShowFlags.SetMotionBlur(false);
+	GPUDepthCapture->ShowFlags.SetBloom(false);
+	GPUDepthCapture->ShowFlags.SetTonemapper(false);
+	GPUDepthCapture->ShowFlags.SetEyeAdaptation(false);
+	GPUDepthCapture->ShowFlags.SetVignette(false);
+	GPUDepthCapture->ShowFlags.SetGrain(false);
+	GPUDepthCapture->ShowFlags.SetLensFlares(false);
+	GPUDepthCapture->ShowFlags.SetScreenSpaceReflections(false);
+	GPUDepthCapture->ShowFlags.SetReflectionEnvironment(false);
+	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS LiDAR GPU: depth RT %dx%d (R32f), H-FOV=%.1f°, scan=%.1f Hz"),
+		RTW, RTH, HFov, RotationsPerSecond);
+}
+
+bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
+{
+	if (!GPUDepthCapture) return false;
+
+	const float ScanInterval = 1.f / FMath::Max(1.f, RotationsPerSecond);
+	GPUScanAccumulator += DeltaTime;
+	if (GPUScanAccumulator < ScanInterval) return false;
+	GPUScanAccumulator -= ScanInterval;
+
+	const double T0 = FPlatformTime::Seconds();
+	GPUDepthCapture->CaptureScene();
+	const double T1 = FPlatformTime::Seconds();
+
+	GPUCapAccumulatorMs += (T1 - T0) * 1000.0;
+	GPUCapSampleCount++;
+	GPUCaptureCount++;
+
+	if (T1 - GPULastReportTime > 5.0)
+	{
+		const double AvgMs = GPUCapAccumulatorMs / FMath::Max(1, GPUCapSampleCount);
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS LiDAR GPU: avg CaptureScene() game-thread = %.3f ms over %d samples"),
+			AvgMs, GPUCapSampleCount);
+		GPUCapAccumulatorMs = 0.0;
+		GPUCapSampleCount   = 0;
+		GPULastReportTime   = T1;
+	}
+
+	if (!bGPUDumpedRT && GPUCaptureCount >= 5 && GPUDepthRT)
+	{
+		const FString OutDir  = FPaths::ProjectSavedDir() / TEXT("LidarGPU");
+		UKismetRenderingLibrary::ExportRenderTarget(GetWorld(), GPUDepthRT, OutDir, TEXT("DepthRT.exr"));
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS LiDAR GPU: dumped depth RT after capture #%d → %s/DepthRT.exr"),
+			GPUCaptureCount, *OutDir);
+		bGPUDumpedRT = true;
+	}
+
+	return true;
 }

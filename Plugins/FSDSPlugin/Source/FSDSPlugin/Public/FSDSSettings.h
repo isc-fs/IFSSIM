@@ -97,6 +97,12 @@ struct FFSDSSensorSettings
 	float MaxRange = 100.f; // meters
 	bool bDrawDebugPoints = false;
 
+	// LiDAR path: "cpu" (default, ParallelFor + Chaos line traces) or
+	// "gpu" (depth-render + compute decode, #223). Read by
+	// FSDSLidarSensor::BeginPlay; switching at runtime requires a PIE
+	// stop/start. Unknown values fall back to "cpu" with a warning log.
+	FString LidarPath = TEXT("cpu");
+
 	// Noise parameters (apply to all sensor types, 0 = no noise).
 	// All values are SI: m, m/s, m/s², rad/s. The plugin converts to its
 	// internal cm/s²-based accel signal when applying AccelNoiseStd /

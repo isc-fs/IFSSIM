@@ -310,6 +310,26 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
 				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
+
+				// #223: select CPU (legacy ParallelFor + Chaos line traces)
+				// vs GPU (depth render + compute decode). Unknown values
+				// fall back to CPU with a warning so a typo in settings.json
+				// can't silently disable the LiDAR.
+				const FString PathLower = SensorPair.Value.LidarPath.ToLower();
+				if (PathLower == TEXT("gpu"))
+				{
+					LidarSensor->LidarPath = EFSDSLidarPath::GPU;
+				}
+				else
+				{
+					if (!PathLower.IsEmpty() && PathLower != TEXT("cpu"))
+					{
+						UE_LOG(LogTemp, Warning,
+							TEXT("FSDS LiDAR: unknown LidarPath '%s' in settings.json, falling back to 'cpu'"),
+							*SensorPair.Value.LidarPath);
+					}
+					LidarSensor->LidarPath = EFSDSLidarPath::CPU;
+				}
 				break;
 			}
 		}
@@ -496,20 +516,6 @@ void AFSDSVehiclePawn::BeginPlay()
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
 
-	// #223 Phase-0 GPU LiDAR viability spike. Stand up the depth-only
-	// SceneCapture *after* SetupSensorsFromSettings has populated
-	// LidarSensor (we read its FOV / mount offset / scan rate). The
-	// spike no-ops itself when the CVar is off, so this is free in
-	// the default config.
-	if (!LidarGPUSpike)
-	{
-		LidarGPUSpike = NewObject<UFSDSLidarGPUSpike>(this, TEXT("LidarGPUSpike"));
-		if (LidarGPUSpike)
-		{
-			LidarGPUSpike->RegisterComponent();
-			LidarGPUSpike->Initialize(LidarSensor);
-		}
-	}
 
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
 	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup

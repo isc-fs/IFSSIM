@@ -4,6 +4,24 @@
 #include "Components/ActorComponent.h"
 #include "FSDSLidarSensor.generated.h"
 
+class USceneCaptureComponent2D;
+class UTextureRenderTarget2D;
+
+UENUM()
+enum class EFSDSLidarPath : uint8
+{
+	// Legacy CPU path: ParallelFor across horizontal steps issuing
+	// LineTraceSingleByChannel against the Chaos physics scene.
+	// ~250 % CPU at 1.74 M pts/s (audit on dev, see #223).
+	CPU,
+
+	// GPU path (#223): depth-only render at the LiDAR's exact ray
+	// grid, decoded into 3D points by a compute shader, async-readback
+	// to game thread. Phase 1 only sets up the depth render; full
+	// point production lands in Phases 2-3.
+	GPU,
+};
+
 /**
  * LiDAR sensor — performs batch raycasts to generate 3D point clouds.
  *
@@ -93,7 +111,41 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
 
+	/** Ray-cast backend selection. Driven by settings.json LidarPath
+	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
+	 *  stop/start because BeginPlay sets up backend-specific resources. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	EFSDSLidarPath LidarPath = EFSDSLidarPath::CPU;
+
 private:
+	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
+
+	UPROPERTY() USceneCaptureComponent2D* GPUDepthCapture = nullptr;
+	UPROPERTY() UTextureRenderTarget2D*   GPUDepthRT      = nullptr;
+
+	// Stand up the depth-only SceneCapture for the GPU path. Called
+	// from BeginPlay when LidarPath==GPU. Phase-1 wiring; the depth
+	// data is rendered but not yet consumed (Phase 2 adds readback,
+	// Phase 3 the decode shader).
+	void InitializeGPUPath();
+
+	// Drive the GPU capture from the rate-limited tick. Returns true
+	// if a capture was issued this tick.
+	bool TickGPUPath(float DeltaTime);
+
+	// Phase-1 stage 2 still uses the spike-style symmetric setup. The
+	// asymmetric V-FOV via custom projection lands in stage 3 of phase
+	// 1 alongside the projection round-trip test.
+	float GPUScanAccumulator = 0.f;
+
+	// Diagnostic counters mirrored from the Phase-0 spike: rolling avg
+	// of CaptureScene() game-thread cost, reported every 5 s. Will be
+	// kept through Phase 4 cross-validation, removed at Phase 5.
+	double GPUCapAccumulatorMs = 0.0;
+	int32  GPUCapSampleCount   = 0;
+	double GPULastReportTime   = 0.0;
+	int32  GPUCaptureCount     = 0;
+	bool   bGPUDumpedRT        = false;
 	void PerformScan(UWorld* InWorld, AActor* InOwner, FTransform OwnerTransform);
 
 	// Rate limiter — scan fires at RotationsPerSecond Hz, not every frame
