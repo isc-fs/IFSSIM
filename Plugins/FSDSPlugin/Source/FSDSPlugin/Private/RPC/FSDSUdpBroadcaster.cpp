@@ -286,17 +286,25 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	const int32 PointsPerChunk = 700;
 	int32 TotalChunks = (TotalPoints + PointsPerChunk - 1) / PointsPerChunk;
 
+	// One scratch buffer reused across all chunks of the scan. Sized for
+	// the full PointsPerChunk worth of points; the last chunk simply uses
+	// fewer bytes from the same allocation (adjusted via PacketSize).
+	// Replaces a per-iteration TArray<uint8> alloc/free pair (~250 calls
+	// per scan × 10 scans/s = 2.5 k allocs/s on the broadcaster's
+	// background thread) with one allocation per scan, which the
+	// allocator can also keep warm across consecutive scans.
+	const int32 MaxPacketSize = sizeof(FFSDSLidarChunkHeader)
+	                          + PointsPerChunk * 3 * sizeof(float);
+	TArray<uint8> Packet;
+	Packet.SetNumUninitialized(MaxPacketSize);
+
 	for (int32 ChunkIdx = 0; ChunkIdx < TotalChunks; ChunkIdx++)
 	{
 		int32 StartPoint = ChunkIdx * PointsPerChunk;
 		int32 ChunkPoints = FMath::Min(PointsPerChunk, TotalPoints - StartPoint);
 
-		// Build chunk: header + point data
 		int32 DataSize = ChunkPoints * 3 * sizeof(float);
 		int32 PacketSize = sizeof(FFSDSLidarChunkHeader) + DataSize;
-
-		TArray<uint8> Packet;
-		Packet.SetNumUninitialized(PacketSize);
 
 		// Fill header
 		FFSDSLidarChunkHeader* Header = (FFSDSLidarChunkHeader*)Packet.GetData();
