@@ -116,6 +116,17 @@ private:
 	TSharedPtr<FInternetAddr> LidarAddr;
 
 	std::atomic<bool> bRunning{false};
+	// Count of LiDAR send AsyncTasks dispatched but not yet finished.
+	// BroadcastLidarFrame moves the per-chunk send loop onto a background
+	// worker thread; the lambda captures LidarSocket by raw pointer. If
+	// Stop() races ahead and destroys the socket while a task is still
+	// running, the lambda dereferences a dangling pointer (silent failure
+	// at best, freed-memory access at worst — and on the next session the
+	// new broadcaster's first dispatches can land in a worker pool that
+	// hasn't fully drained, producing the "LiDAR goes silent after PIE
+	// Stop+Play" symptom we kept hitting). Stop() spins on this counter
+	// before tearing the sockets down.
+	std::atomic<int32> LidarSendInFlight{0};
 	uint32 FrameCounter = 0;
 
 	// LiDAR rate limiting (broadcast every N ticks to achieve ~10Hz)
