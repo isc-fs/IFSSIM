@@ -116,6 +116,13 @@ private:
 
 	int32 TotalSpawned = 0;
 
+	// Per-spawn-pass ground-snap counters. SpawnStaticMeshCone increments
+	// one of these every call; SpawnFromCSV/SpawnTestTrack reset both on
+	// entry and log the totals on exit so the per-track-load summary
+	// makes it visible whether the floor was found under every cone.
+	int32 GroundSnapHits = 0;
+	int32 GroundSnapMisses = 0;
+
 	// Cone-position bookkeeping populated by SpawnFromCSV, consumed by
 	// ComputeStartGatePose. UE world-space cm. Cleared at the start of
 	// each spawn pass so a track reload always sees only the current
