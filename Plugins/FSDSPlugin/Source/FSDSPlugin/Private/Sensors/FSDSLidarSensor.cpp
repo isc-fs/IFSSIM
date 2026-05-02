@@ -21,10 +21,18 @@ UFSDSLidarSensor::UFSDSLidarSensor()
 void UFSDSLidarSensor::BeginPlay()
 {
 	Super::BeginPlay();
+	// Real config + GPU init is in OnSettingsApplied(), which the
+	// pawn calls after SetupSensorsFromSettings() has populated the
+	// LiDAR's UPROPERTYs. At BeginPlay time the values are still the
+	// header defaults, so logging or initialising backends here would
+	// describe a state that's about to be overwritten.
+}
 
-	float HFov = HorizontalFOVEnd - HorizontalFOVStart;
-	float VFov = VerticalFOVUpper - VerticalFOVLower;
-	int32 PointsPerScan = PointsPerSecond / FMath::Max(1.f, RotationsPerSecond);
+void UFSDSLidarSensor::OnSettingsApplied()
+{
+	const float HFov = HorizontalFOVEnd - HorizontalFOVStart;
+	const float VFov = VerticalFOVUpper - VerticalFOVLower;
+	const int32 PointsPerScan = PointsPerSecond / FMath::Max(1.f, RotationsPerSecond);
 
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS LiDAR: backend=%s  %d channels, %d pts/sec, %d pts/scan, H-FOV=%.0f° V-FOV=%.0f°, range=%.0fm"),

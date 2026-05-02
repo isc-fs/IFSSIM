@@ -330,6 +330,13 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 					}
 					LidarSensor->LidarPath = EFSDSLidarPath::CPU;
 				}
+				// Settings now in place — let the sensor finalize its
+				// backend (logs the configured values and stands up
+				// the depth-render path when LidarPath==GPU). Component
+				// BeginPlay runs *before* this point with header
+				// defaults still in place, so backend setup has to
+				// happen here.
+				LidarSensor->OnSettingsApplied();
 				break;
 			}
 		}

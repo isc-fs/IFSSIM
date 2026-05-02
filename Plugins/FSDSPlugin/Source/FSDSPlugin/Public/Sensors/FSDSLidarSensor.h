@@ -117,6 +117,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	EFSDSLidarPath LidarPath = EFSDSLidarPath::CPU;
 
+	// Pawn callback after settings.json values have been written to
+	// the UPROPERTYs above. Must be called from AFSDSVehiclePawn after
+	// SetupSensorsFromSettings — component BeginPlay runs *before*
+	// the pawn's BeginPlay finishes its config pass, so the GPU path
+	// setup has to be deferred until the real config is in place.
+	void OnSettingsApplied();
+
 private:
 	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
 
