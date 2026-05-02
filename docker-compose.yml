@@ -26,6 +26,12 @@ services:
       # Skip the autonomous control node — useful for SLAM-only validation
       # or when keyboard-driving for motion sanity checks.
       - DV_DISABLE_CONTROL=${DV_DISABLE_CONTROL:-false}
+      # Re-run `colcon build --symlink-install` at container startup. Default
+      # off — Python edits to existing files go live via --symlink-install
+      # without any rebuild. Set to "true" only when you've changed setup.py,
+      # added a new package, edited a .msg, or touched C++ source. See #176
+      # for the bind-mount story this flag completes.
+      - DV_REBUILD_ON_STARTUP=${DV_REBUILD_ON_STARTUP:-false}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed
@@ -64,6 +70,29 @@ services:
       - numba_cache:/numba_cache
       # Shared pipeline control flag — backend writes here to start/stop the pipeline
       - pipeline_ctrl:/pipeline_ctrl
+      # Bind-mount each ROS package over the image's COPY'd baseline so host
+      # source is the source of truth at runtime. Image-time `colcon build
+      # --symlink-install` produced an install/ tree whose Python entries are
+      # symlinks back to /dv_pipeline_stack_ws/src/<pkg>/...; with these
+      # bind-mounts those symlinks now resolve to live host code. Edit a
+      # Python file, restart the pipeline (toggle the pipeline_ctrl flag),
+      # and the change is in effect — no `docker cp`, no image rebuild.
+      #
+      # Caveats (set DV_REBUILD_ON_STARTUP=true or run colcon build via
+      # `docker compose exec dv_pipeline_stack` for these):
+      #   - C++ source changes (ifssim_bridge): need recompile.
+      #   - .msg file changes (fs_msgs): need regeneration.
+      #   - setup.py changes (new entry_points, new packages): need re-link.
+      #
+      # Mounted per-package, not as a single tree, because ros2/src/ and
+      # pipeline/ collapse into one src/ inside the container — a single
+      # bind-mount of either parent would hide the other.
+      - ./pipeline/cone_slam:/dv_pipeline_stack_ws/src/cone_slam
+      - ./pipeline/control:/dv_pipeline_stack_ws/src/control
+      - ./pipeline/path_planning:/dv_pipeline_stack_ws/src/path_planning
+      - ./pipeline/slam:/dv_pipeline_stack_ws/src/slam
+      - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
+      - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
     memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
     shm_size: 1gb         # Default 64 MB is too small for Fast DDS SHM —
