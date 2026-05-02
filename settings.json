@@ -64,8 +64,8 @@
         },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond at 1 M (5× the previous 200 k baseline; ~57% of the datasheet rate). Trade-off: at 1 M each scan has ~5× more cones (CONE_FILTER fit/centroid jumps from ~13.7 to ~28.6, by-side L from 7.8 to 19.6) but /lidar/Lidar1 publish rate drops from ~10 Hz to ~3.5 Hz. The bottleneck is FSDSLidarSensor::LineTraceLoop's single-threaded ray tracing — 100 k traces/scan + UE5's GameThread budget caps the achievable rate. Bridge-side fixes (#197 Numba, #199 RCVBUF + memcpy) are headroom-safe at any pts/s, so going back to 200 k stays at 10 Hz with no regression. Higher pts/s requires parallelising the line-trace loop in the FSDS plugin (filed separately).",
-          "NumberOfChannels": 116, "PointsPerSecond": 1000000,
+          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond at 500 k — 2.5× the previous 200 k baseline, holds a clean 9.7 Hz on test hardware (M-series Mac), comfortably below the ray-tracing budget so PerformScan never times out and the scan never gets skipped. Higher pts/s starts losing the 10 Hz target: 1 M lands ~6 Hz, 1.74 M ~4 Hz. The remaining cap is FSDSLidarSensor::PerformScan — line traces against Chaos serialise at the physics scene's read lock so ParallelFor's wins are bounded. Future work to push toward the full datasheet rate is UDS for the LiDAR stream (transport-side) and/or a Chaos-bypassing fast-path raytracer (CPU-side).",
+          "NumberOfChannels": 116, "PointsPerSecond": 500000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,

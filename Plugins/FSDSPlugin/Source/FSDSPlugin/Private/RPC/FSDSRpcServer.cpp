@@ -45,12 +45,24 @@ namespace
 			if (!bOk) return false;                 // hard error — peer gone
 			if (ChunkSent <= 0)
 			{
-				// Kernel send buffer momentarily full. Sleep briefly and
-				// try again; bound the total wait so a genuinely dead
-				// peer still returns false within ~MaxIdleMs.
+				// Kernel send buffer momentarily full. Wait for it to
+				// drain via FSocket::Wait (kernel wakes us as soon as the
+				// peer has consumed enough bytes for another chunk).
+				// Previously this slept a fixed 5 ms per partial-send,
+				// which over loopback added up to most of the per-scan
+				// budget at high pts/s — a 1.2 MB scan that needed even
+				// 10 partial sends ate 50 ms of pure sleep. Wait() returns
+				// in <1 ms over loopback for the common case.
+				//
+				// IdleMs still bounds the total wait so a genuinely dead
+				// peer returns false within ~MaxIdleMs; we step it by the
+				// timeout slice rather than the actual sleep duration to
+				// preserve the previous semantics.
 				if (IdleMs >= MaxIdleMs) return false;
-				FPlatformProcess::Sleep(0.005f);
-				IdleMs += 5;
+				const int32 WaitSliceMs = 50;
+				Socket->Wait(ESocketWaitConditions::WaitForWrite,
+				             FTimespan::FromMilliseconds(WaitSliceMs));
+				IdleMs += WaitSliceMs;
 				continue;
 			}
 			IdleMs = 0;                              // progress — reset idle counter
@@ -201,16 +213,34 @@ void FFSDSRpcServer::ServerThreadFunc()
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
 
-				// Bump the kernel send buffer well above the default (~64 KB
-				// on Linux/Win). LiDAR frames can hit ~150 KB at higher
-				// resolutions, and the bridge's downstream consumers (numba
-				// cone detection + multiple foxglove subscribers) drain
-				// unevenly. With a small buffer, the kernel is full after a
-				// single frame and the next Send returns ChunkSent=0 — the
-				// failure mode SendAll has to time out on. 1 MB gives ~20
-				// LiDAR frames of headroom, smoothing over consumer hiccups.
+				// Kernel send buffer. Sized to hold an entire LiDAR scan
+				// at the Hesai ATX_S01 datasheet rate (1.74 M pts/s ⇒
+				// 174 k pts × 12 B = ~2 MB body), with headroom for
+				// downstream consumer drain hiccups. Without this, large
+				// scans don't fit in the buffer and Send returns partial
+				// writes — SendAll then has to wait on Socket->Wait
+				// repeatedly for the peer to drain, which was the
+				// dominant per-scan cost at higher rates.
+				//
+				// SO_SNDBUF gets clamped at kern.ipc.maxsockbuf (8 MB on
+				// stock macOS, often higher on Linux). 8 MB is plenty —
+				// holds 4× the largest scan we send — so we don't need
+				// to ask the operator to bump host sysctls. The kernel
+				// returns the actual granted size in `ActualSize`; we
+				// log if it falls below the per-scan body size, since
+				// that's the threshold below which partial-sends start
+				// hurting throughput again.
 				int32 ActualSize = 0;
-				ClientSocket->SetSendBufferSize(1024 * 1024, ActualSize);
+				const int32 RequestedSendBuf = 32 * 1024 * 1024;
+				ClientSocket->SetSendBufferSize(RequestedSendBuf, ActualSize);
+				const int32 OneScanMaxBytes = 174000 * 3 * sizeof(float);  // ~2 MB at datasheet rate
+				if (ActualSize < OneScanMaxBytes)
+				{
+					UE_LOG(LogTemp, Warning,
+					       TEXT("FSDS RPC: SO_SNDBUF granted %d B (< one-scan max %d B). ")
+					       TEXT("LiDAR throughput will partial-send; consider raising kern.ipc.maxsockbuf."),
+					       ActualSize, OneScanMaxBytes);
+				}
 
 				// Handle each client in its own thread. Store it so Stop()
 				// can join the full set before the server is destroyed —
