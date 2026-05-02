@@ -145,6 +145,7 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 			const FBoxSphereBounds MeshBounds = Mesh->GetBounds();
 			const float ScaledLocalMinZ = (MeshBounds.Origin.Z - MeshBounds.BoxExtent.Z) * ConeScale;
 			AdjustedLocation.Z = Hit.ImpactPoint.Z - ScaledLocalMinZ + HeightOffset;
+			GroundSnapHits++;
 		}
 		else
 		{
@@ -153,6 +154,7 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 				     "spawning at HeightOffset=%.1f. Cone may fall through if floor "
 				     "is below the trace start; check level layout."),
 				Location.X, Location.Y, HeightOffset);
+			GroundSnapMisses++;
 		}
 	}
 
@@ -226,6 +228,9 @@ void AFSDSConeSpawner::SpawnConeBP(UClass* BPClass, FVector Location, FRotator R
 
 void AFSDSConeSpawner::SpawnTestTrack()
 {
+	GroundSnapHits = 0;
+	GroundSnapMisses = 0;
+
 	// Load cone meshes — fallback to engine Cone shape
 	UStaticMesh* BlueMesh = LoadObject<UStaticMesh>(nullptr, *BlueConeAssetPath);
 	UStaticMesh* YellowMesh = LoadObject<UStaticMesh>(nullptr, *YellowConeAssetPath);
@@ -272,6 +277,9 @@ void AFSDSConeSpawner::SpawnTestTrack()
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS ConeSpawner: Test track spawned at (%.0f, %.0f) r=%.0f"),
 		TrackCenter.X, TrackCenter.Y, TrackRadius);
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS ConeSpawner: ground-snap %d hit / %d missed across %d cones"),
+		GroundSnapHits, GroundSnapMisses, GroundSnapHits + GroundSnapMisses);
 }
 
 void AFSDSConeSpawner::SpawnFromCSV()
@@ -329,6 +337,8 @@ void AFSDSConeSpawner::SpawnFromCSV()
 	// spawn also gets a clean slate.
 	BigOrangePositions.Reset();
 	BlueYellowPositions.Reset();
+	GroundSnapHits = 0;
+	GroundSnapMisses = 0;
 
 	for (const FString& Line : Lines)
 	{
@@ -368,6 +378,10 @@ void AFSDSConeSpawner::SpawnFromCSV()
 			BlueYellowPositions.Add(Location);
 		}
 	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS ConeSpawner: ground-snap %d hit / %d missed across %d cones"),
+		GroundSnapHits, GroundSnapMisses, GroundSnapHits + GroundSnapMisses);
 }
 
 bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm) const
