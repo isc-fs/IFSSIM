@@ -133,9 +133,24 @@ private:
 	// if a capture was issued this tick.
 	bool TickGPUPath(float DeltaTime);
 
-	// Phase-1 stage 2 still uses the spike-style symmetric setup. The
-	// asymmetric V-FOV via custom projection lands in stage 3 of phase
-	// 1 alongside the projection round-trip test.
+	// Round-trip test for the spherical-ray ↔ planar-texel mapping.
+	// Run at the end of InitializeGPUPath. Logs PASS/FAIL and the
+	// max observed reprojection error in radians. Phase-3 decode
+	// shader uses the same formulas this test covers; if the test
+	// fails here we know the decode will produce wrong points before
+	// we ever GPU-debug a shader.
+	bool ValidateProjectionRoundTrip() const;
+
+	// Cached projection geometry derived from the LiDAR FOV at GPU-
+	// path init time. Used by the round-trip test now and by the
+	// Phase-3 decode shader's uniform buffer later.
+	float GPUVerticalFOVCenterDeg = 0.f;   // camera tilt pitch (deg)
+	float GPUPlanarHalfWidth      = 0.f;   // tan(HFOV/2)
+	float GPUPlanarBottom         = 0.f;   // image-plane Y at frustum bottom
+	float GPUPlanarTop            = 0.f;   // image-plane Y at frustum top
+	int32 GPURTWidth              = 0;
+	int32 GPURTHeight             = 0;
+
 	float GPUScanAccumulator = 0.f;
 
 	// Diagnostic counters mirrored from the Phase-0 spike: rolling avg

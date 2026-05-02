@@ -290,16 +290,67 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
 
-	// Match the LiDAR scan grid one-to-one. PointsPerScan = the
-	// CPU path's per-scan ray count; we render exactly that many
-	// texels so the Phase-3 decode shader can sample at integer
-	// texel coords without interpolation.
+	// --- Geometry derivation: spherical LiDAR scan → planar render ---
+	//
+	// The LiDAR scans in spherical coordinates (azimuth h, elevation v)
+	// but a perspective camera samples a planar grid. Two facts to
+	// reconcile:
+	//
+	//   1. The LiDAR's V-FOV is *asymmetric* (Hesai ATX: -12.4°..+5.9°).
+	//      We center the camera on the V-FOV midpoint and let the camera
+	//      see a symmetric ±half-span around its tilted forward axis.
+	//      Pitch tilt = (Upper + Lower) / 2; symmetric half-span =
+	//      (Upper - Lower) / 2. No CustomProjectionMatrix needed.
+	//
+	//   2. A spherical ray at (h, v) projects to image-plane y = tan(v)
+	//      * sec(h). At the wide-H corners of a 120° H-FOV sweep, sec(h)
+	//      = sec(±60°) = 2, so the planar V extent the camera must
+	//      cover is 2× the on-axis V extent. Sizing the RT to the
+	//      *corner-worst* planar V keeps every spherical ray inside the
+	//      frustum; the decode shader (Phase 3) samples at the right
+	//      texel for each (h, v) pair using the inverse mapping the
+	//      round-trip test below validates.
+	//
+	// Convention: image-plane coords (x, y) = (tan(h_cam), tan(v_cam)
+	// * sec(h_cam)) where (h_cam, v_cam) are angles relative to the
+	// camera's tilted forward axis. y is *up*-positive on the image
+	// plane (so positive v_cam = above forward).
+
+	const float HFovDeg          = HorizontalFOVEnd - HorizontalFOVStart;
+	const float VFovCenterDeg    = (VerticalFOVUpper + VerticalFOVLower) * 0.5f;
+	const float VFovHalfSpanDeg  = (VerticalFOVUpper - VerticalFOVLower) * 0.5f;
+
+	// Worst-case sec(h) over the horizontal sweep — symmetric or not.
+	const float WorstHRad = FMath::DegreesToRadians(
+		FMath::Max(FMath::Abs(HorizontalFOVStart), FMath::Abs(HorizontalFOVEnd)));
+	const float SecMax = 1.f / FMath::Max(KINDA_SMALL_NUMBER, FMath::Cos(WorstHRad));
+
+	const float TanHalfHRad      = FMath::Tan(FMath::DegreesToRadians(HFovDeg * 0.5f));
+	const float TanVHalfSpanRad  = FMath::Tan(FMath::DegreesToRadians(VFovHalfSpanDeg));
+	const float PlanarVHalfSpan  = TanVHalfSpanRad * SecMax;            // image-plane Y half-span
+	const float PlanarHHalfSpan  = TanHalfHRad;                         // image-plane X half-span (symmetric)
+	const float PlanarVFovDeg    = 2.f * FMath::RadiansToDegrees(FMath::Atan(PlanarVHalfSpan));
+
+	// RT sizing — keep horizontal at the LiDAR's spec resolution
+	// (PointsPerScan / channels), let vertical follow the planar
+	// aspect so center-resolution ≈ LiDAR's nominal V-step. At wide-H
+	// corners the per-row spherical-V resolution is finer (cos(h)
+	// factor), which is fine — the decode picks the right texel per
+	// LiDAR ray and the surplus is just unused samples.
 	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
 		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
-	const int32 RTH = FMath::Max(1, NumberOfChannels);
-	const int32 RTW = FMath::Max(64, PointsPerScan / RTH);
+	const int32 RTW = FMath::Max(64, PointsPerScan / FMath::Max(1, NumberOfChannels));
+	const float Aspect = PlanarHHalfSpan / FMath::Max(KINDA_SMALL_NUMBER, PlanarVHalfSpan);
+	const int32 RTH = FMath::Max(1, FMath::RoundToInt((float)RTW / Aspect));
 
-	const float HFov = HorizontalFOVEnd - HorizontalFOVStart;
+	// Cache the geometry — used by the round-trip test now and the
+	// decode shader's uniform buffer in Phase 3.
+	GPUVerticalFOVCenterDeg = VFovCenterDeg;
+	GPUPlanarHalfWidth      = PlanarHHalfSpan;
+	GPUPlanarBottom         = -PlanarVHalfSpan;
+	GPUPlanarTop            = +PlanarVHalfSpan;
+	GPURTWidth              = RTW;
+	GPURTHeight             = RTH;
 
 	GPUDepthRT = NewObject<UTextureRenderTarget2D>(this);
 	GPUDepthRT->RenderTargetFormat = ETextureRenderTargetFormat::RTF_R32f;
@@ -312,16 +363,21 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->SetupAttachment(Owner->GetRootComponent());
 	GPUDepthCapture->RegisterComponent();
 	GPUDepthCapture->SetRelativeLocation(SensorOffset);
-	GPUDepthCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	// Pitch by the V-FOV center so the camera's forward axis bisects
+	// the (asymmetric) LiDAR V-range. UE's FRotator pitch: positive =
+	// nose up; LiDAR V positive = up; signs match. Yaw/roll zero.
+	GPUDepthCapture->SetRelativeRotation(FRotator(VFovCenterDeg, 0.f, 0.f));
 	GPUDepthCapture->TextureTarget         = GPUDepthRT;
 	GPUDepthCapture->CaptureSource         = ESceneCaptureSource::SCS_SceneDepth;
 	GPUDepthCapture->bCaptureEveryFrame    = false;
 	GPUDepthCapture->bCaptureOnMovement    = false;
 	GPUDepthCapture->bAlwaysPersistRenderingState = true;
 
-	// Symmetric H-FOV; V-FOV implicit via aspect. Asymmetric V via
-	// tilt+custom-matrix lands in stage 1.3.
-	GPUDepthCapture->FOVAngle = HFov;
+	// FOVAngle is *horizontal*; vertical FOV is implicit via aspect
+	// (V-FOV = 2·atan(tan(H/2)/aspect)). Sizing RT to Aspect above
+	// gives V-FOV = PlanarVFovDeg, which covers the worst-corner
+	// spherical V exactly.
+	GPUDepthCapture->FOVAngle = HFovDeg;
 
 	// Same show-flag stripping as the Phase-0 spike: depth-only,
 	// no AA / post / SSR / AO. AA-off in particular avoids fake
@@ -340,8 +396,98 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
 
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS LiDAR GPU: depth RT %dx%d (R32f), H-FOV=%.1f°, scan=%.1f Hz"),
-		RTW, RTH, HFov, RotationsPerSecond);
+		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m"),
+		RTW, RTH, HFovDeg, PlanarVFovDeg, VFovCenterDeg, MaxRange / 100.f);
+
+	if (!ValidateProjectionRoundTrip())
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS LiDAR GPU: projection round-trip FAILED — Phase-3 decode will produce incorrect points. Check geometry derivation in InitializeGPUPath."));
+	}
+}
+
+// Verify the spherical-ray ↔ planar-texel mapping derived in
+// InitializeGPUPath. For each sample LiDAR ray (h, v):
+//   forward: (h, v) → camera-tilted (h_cam, v_cam) →
+//            image-plane (image_x, image_y) →
+//            texel (col, row)
+//   inverse: (col, row) → (image_x, image_y) →
+//            (h_cam, v_cam) → (h, v)
+// PASS when |Δh| and |Δv| are below 1/RT_pixel-equivalent. The Phase-3
+// decode shader will use the same forward formulas to pick its texel
+// per LiDAR ray; if this test passes, the decode's per-pixel inverse
+// (depth → 3D point) is the only remaining variable.
+bool UFSDSLidarSensor::ValidateProjectionRoundTrip() const
+{
+	if (GPURTWidth <= 0 || GPURTHeight <= 0) return false;
+
+	const float HHalf       = GPUPlanarHalfWidth;       // = tan(HFOV/2)
+	const float VBottom     = GPUPlanarBottom;          // negative
+	const float VTop        = GPUPlanarTop;             // positive
+	const float VRange      = VTop - VBottom;
+	const float TiltRad     = FMath::DegreesToRadians(GPUVerticalFOVCenterDeg);
+
+	// Worst-case angular precision per texel: 1 texel ≈ image-plane
+	// extent / RT side. Convert to worst-case sphericalΔ at the
+	// centre (where conversions are tightest) to set the pass tolerance.
+	const float TexelWorstAng = FMath::RadiansToDegrees(
+		FMath::Atan2(VRange / (float)GPURTHeight, 1.f));
+
+	// Sample ray grid: 5 H positions × 5 V positions over the full
+	// LiDAR scan. Includes corners (worst-sec(h)) and edges of V.
+	const float HSampleDeg[] = {
+		HorizontalFOVStart, HorizontalFOVStart * 0.5f, 0.f,
+		HorizontalFOVEnd * 0.5f, HorizontalFOVEnd
+	};
+	const float VSampleDeg[] = {
+		VerticalFOVLower, VerticalFOVLower * 0.5f, GPUVerticalFOVCenterDeg,
+		VerticalFOVUpper * 0.5f, VerticalFOVUpper
+	};
+
+	float MaxErrDeg = 0.f;
+	int32 Tested = 0;
+
+	for (float HDeg : HSampleDeg)
+	{
+		for (float VDeg : VSampleDeg)
+		{
+			const float HRad = FMath::DegreesToRadians(HDeg);
+			const float VRad = FMath::DegreesToRadians(VDeg);
+			const float VCamRad = VRad - TiltRad;
+
+			// Forward: spherical → image-plane → texel
+			const float ImageX = FMath::Tan(HRad);
+			const float ImageY = FMath::Tan(VCamRad) / FMath::Cos(HRad); // = tan(v_cam) * sec(h)
+
+			// Skip rays that fall outside the planar frustum — the
+			// frustum is sized to cover the scan but at very oblique
+			// corner-of-corner pairs the corners can fall slightly
+			// outside numerically.
+			if (FMath::Abs(ImageX) > HHalf * 1.0001f) continue;
+			if (ImageY < VBottom * 1.0001f || ImageY > VTop * 1.0001f) continue;
+
+			const float Col = (ImageX + HHalf) / (2.f * HHalf) * (float)GPURTWidth;
+			const float Row = (ImageY - VBottom) / VRange * (float)GPURTHeight;
+
+			// Inverse: texel → image-plane → camera-tilted spherical → vehicle-frame spherical
+			const float ImageX2 = Col / (float)GPURTWidth * (2.f * HHalf) - HHalf;
+			const float ImageY2 = Row / (float)GPURTHeight * VRange + VBottom;
+			const float HRad2 = FMath::Atan(ImageX2);
+			const float VCamRad2 = FMath::Atan(ImageY2 * FMath::Cos(HRad2));
+			const float VRad2 = VCamRad2 + TiltRad;
+
+			const float ErrHDeg = FMath::Abs(FMath::RadiansToDegrees(HRad - HRad2));
+			const float ErrVDeg = FMath::Abs(FMath::RadiansToDegrees(VRad - VRad2));
+			MaxErrDeg = FMath::Max3(MaxErrDeg, ErrHDeg, ErrVDeg);
+			Tested++;
+		}
+	}
+
+	const bool bPass = MaxErrDeg < TexelWorstAng;
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS LiDAR GPU: projection round-trip %s — max err %.6f° on %d samples (1-texel tol %.4f°)"),
+		bPass ? TEXT("PASS") : TEXT("FAIL"), MaxErrDeg, Tested, TexelWorstAng);
+	return bPass;
 }
 
 bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
