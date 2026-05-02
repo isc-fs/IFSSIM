@@ -4,6 +4,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Blueprint.h"
+#include "Engine/World.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
 
@@ -114,12 +115,53 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 {
 	if (!Mesh || !GetWorld()) return nullptr;
 
+	// Ground-snap the spawn point. Cones are spawned with physics enabled
+	// downstream by the Referee, so any mesh that pokes into the floor at
+	// spawn time gets ejected by the Chaos solver — and on a floor whose
+	// collision is QueryOnly (vs QueryAndPhysics) the eject has nothing to
+	// resist it and the cone phases through. We can't fix the floor's
+	// collision profile from C++ (editor-side asset fix), but we can stop
+	// spawning cones below it.
+	//
+	// Line-trace down from a generous height to find the floor under (X, Y),
+	// then place the cone's mesh-base on the surface plus a small clearance.
+	// Falls back to the configured HeightOffset if no floor is detected
+	// (level edge / hole) — same behaviour as before for that case.
+	FVector AdjustedLocation = Location;
+	{
+		const FVector TraceStart(Location.X, Location.Y, Location.Z + 1000.f);
+		const FVector TraceEnd  (Location.X, Location.Y, Location.Z - 1000.f);
+		FCollisionQueryParams QueryParams;
+		QueryParams.bTraceComplex = true;
+		QueryParams.AddIgnoredActor(this);
+		FHitResult Hit;
+		if (GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
+		{
+			// Mesh local-space min-Z, scaled, gives the offset from the
+			// cone's pivot to the lowest point of its mesh. We want the
+			// lowest point at Hit.ImpactPoint.Z + HeightOffset (small
+			// clearance to absorb sub-cm penetration jitter when physics
+			// turns on).
+			const FBoxSphereBounds MeshBounds = Mesh->GetBounds();
+			const float ScaledLocalMinZ = (MeshBounds.Origin.Z - MeshBounds.BoxExtent.Z) * ConeScale;
+			AdjustedLocation.Z = Hit.ImpactPoint.Z - ScaledLocalMinZ + HeightOffset;
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS ConeSpawner: ground line-trace missed at (%.1f, %.1f) — "
+				     "spawning at HeightOffset=%.1f. Cone may fall through if floor "
+				     "is below the trace start; check level layout."),
+				Location.X, Location.Y, HeightOffset);
+		}
+	}
+
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
 	AStaticMeshActor* ConeActor = GetWorld()->SpawnActor<AStaticMeshActor>(
 		AStaticMeshActor::StaticClass(),
-		FTransform(Rotation, Location),
+		FTransform(Rotation, AdjustedLocation),
 		Params);
 
 	if (ConeActor)
