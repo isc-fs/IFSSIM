@@ -82,6 +82,27 @@ int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
     int flag = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
+    // Bump SO_RCVBUF to 16 MB on stream sockets. Kernel default is
+    // ~256 KB on most platforms, which only holds ~1/8 of a single
+    // LiDAR scan at the Hesai ATX_S01 datasheet rate (174 k pts × 12
+    // bytes = ~2 MB/scan). When the recv buffer fills, the TCP window
+    // closes and the plugin's send blocks; if the publish thread on
+    // either side momentarily stalls (foxglove fan-out, downstream
+    // backpressure, GC pause), the buffer-stuck timeout in
+    // FFSDSRpcServer::SendAll fires and the plugin tears down the
+    // stream. Larger RCVBUF gives ~8 scans of headroom — enough to
+    // soak up a 100–200 ms publish-thread hiccup without disconnect.
+    // Linux may need `sysctl net.core.rmem_max` raised above 16 MB
+    // to accept the request; the kernel silently caps to rmem_max.
+    int rcvbuf = 16 * 1024 * 1024;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) != 0) {
+        // Best-effort; the kernel may cap below the request. Not fatal.
+        // The original 256 KB default is what we had before — log so the
+        // operator notices if rmem_max is the limit.
+        RCLCPP_WARN(node_->get_logger(),
+                    "openStreamSocket: SO_RCVBUF setsockopt failed; using kernel default");
+    }
+
     // Send the stream command
     std::string msg = command + "\n";
     send(sock, msg.c_str(), msg.size(), 0);
@@ -735,60 +756,41 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     msg.is_dense = true;
     msg.is_bigendian = false;
 
-    // x/y/z + per-point absolute timestamp (FLOAT64, seconds). fast_LIMO's
-    // HESAI handler hard-requires the timestamp field; without it the
-    // node throws "FATAL ERROR: invalid pointcloud structure" on the
-    // first scan.
+    // XYZ-only PointCloud2. The previous layout included a per-point
+    // FLOAT64 timestamp field — it was added for fast_LIMO's HESAI
+    // handler which hard-required it. fast_LIMO has since been ripped
+    // out (replaced by cone_graph_slam, which doesn't subscribe to
+    // /lidar/Lidar1 at all); the only current consumer is Cone_Detection,
+    // which only reads x/y/z and ignores everything else.
     //
-    // The IFSSIM LiDAR sensor (FSDSLidarSensor.cpp) is INSTANTANEOUS —
-    // it snapshots the car transform ONCE per scan and ray-traces all
-    // ~20000 points from that single pose. No physical sweep, no
-    // motion-during-scan. The real Hesai ATX (which we model) is a
-    // hybrid solid-state LiDAR: 128 vertical lasers fire simultaneously,
-    // and a MEMS mirror sweeps horizontally over the 100 ms scan
-    // period, so the real hardware DOES have per-azimuth time
-    // variation. The simulator collapses that sweep into a single tick.
+    // Per-point construction with PointCloud2Iterator turned out to be
+    // the dominant cost on this thread at the datasheet pts/s rate:
+    // at 100 k pts/scan (1 M pts/s) the iterator loop ran 400 k times
+    // per scan and pushed the publish thread to ~225 ms/scan, so /lidar
+    // throttled to 4–5 Hz instead of 10 Hz. Source data is already a
+    // packed (x,y,z) float32 array; setting up an XYZ-only point step
+    // makes the full point payload a single memcpy of total_points × 12
+    // bytes — typically <1 ms for a 1 M pts/s scan.
     //
-    // We therefore set every point's timestamp to the scan stamp.
-    // fast_LIMO's deskew uses per-point time to interpolate IMU pose at
-    // each point's capture instant; with all-equal times the
-    // interpolation collapses to identity and no fake motion
-    // compensation is applied. This matches the simulator's actual
-    // behavior.
-    //
-    // History:
-    //   - Initial (linear-by-index): t = scan_start + (i/N) * 0.1
-    //   - Tried (azimuthal, fetty31 #13): t = scan_start + (pi - atan2(y,x))/(2*pi) * 0.1
-    // Both assumed a real spinning sweep and applied wrong deskew on the
-    // sim's instantaneous data. The 2026-04-27 audit confirmed FSDS is
-    // single-tick by reading FSDSLidarSensor.cpp:52 (single
-    // GetActorTransform() before the ray trace loop).
+    // (Behavioural note kept for completeness: FSDSLidarSensor.cpp
+    // snapshots the car transform once per scan and ray-traces all
+    // points from that single pose, so per-point timestamps would all
+    // be equal anyway. fast_LIMO's deskew was a no-op on the sim's
+    // instantaneous data — the timestamp field never carried real
+    // information.)
     sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(4,
-        "x",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "y",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "z",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "timestamp", 1, sensor_msgs::msg::PointField::FLOAT64);
+    modifier.setPointCloud2Fields(3,
+        "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+        "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+        "z", 1, sensor_msgs::msg::PointField::FLOAT32);
     modifier.resize(total_points);
-
-    sensor_msgs::PointCloud2Iterator<float>  iter_x(msg, "x");
-    sensor_msgs::PointCloud2Iterator<float>  iter_y(msg, "y");
-    sensor_msgs::PointCloud2Iterator<float>  iter_z(msg, "z");
-    sensor_msgs::PointCloud2Iterator<double> iter_t(msg, "timestamp");
-
-    const double scan_stamp_sec = lidar_stamp.seconds();
 
     // NOTE: points are passed through verbatim — the downstream pipeline
     // (cone detection / SLAM) was written against UE's left-handed axis
     // convention, so "correcting" to REP-103 by negating Y here breaks
     // cone clustering. Leave as-is for compatibility.
-    for (int i = 0; i < total_points; i++) {
-        *iter_x = points[i * 3];
-        *iter_y = points[i * 3 + 1];
-        *iter_z = points[i * 3 + 2];
-        *iter_t = scan_stamp_sec;
-        ++iter_x; ++iter_y; ++iter_z; ++iter_t;
-    }
+    std::memcpy(msg.data.data(), points,
+                static_cast<size_t>(total_points) * 3 * sizeof(float));
 
     lidar_pub_->publish(msg);
 }
