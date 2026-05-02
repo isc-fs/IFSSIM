@@ -96,6 +96,16 @@ public:
 private:
 	void PerformScan(UWorld* InWorld, AActor* InOwner, FTransform OwnerTransform);
 
+	// Walk the world at BeginPlay and opt-in static-world actors (ground,
+	// landscape, walls) to the custom LiDAR collision channel
+	// (ECC_GameTraceChannel1 in DefaultEngine.ini). The channel's default
+	// response is Ignore so the broadphase doesn't waste cycles on
+	// irrelevant actors; we promote anything that already blocks
+	// ECC_WorldStatic, since that's a reliable proxy for "things real
+	// LiDAR rays would hit". Cones are opted-in by FSDSConeSpawner at
+	// spawn time. See #206 for the full optimisation rationale.
+	void InitialiseLidarChannelOptIns();
+
 	// Rate limiter — scan fires at RotationsPerSecond Hz, not every frame
 	float ScanAccumulator = 0.f;
 

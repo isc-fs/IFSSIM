@@ -1,6 +1,7 @@
 #include "FSDSConeSpawner.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Blueprint.h"
@@ -172,6 +173,13 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 		MeshComp->SetMobility(EComponentMobility::Movable);
 		MeshComp->SetStaticMesh(Mesh);
 		MeshComp->SetRelativeScale3D(FVector(ConeScale));
+		// Opt-in to the dedicated LiDAR collision channel
+		// (ECC_GameTraceChannel1, defined in DefaultEngine.ini). The
+		// channel defaults to Ignore so cones would otherwise be
+		// invisible to FSDSLidarSensor::PerformScan, which now traces
+		// against the LiDAR channel instead of ECC_Visibility for the
+		// broadphase shrink described in #206.
+		MeshComp->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Block);
 		TotalSpawned++;
 
 		SpawnedCones.Add(ConeActor);
@@ -221,6 +229,14 @@ void AFSDSConeSpawner::SpawnConeBP(UClass* BPClass, FVector Location, FRotator R
 	if (ConeActor)
 	{
 		ConeActor->SetActorScale3D(FVector(ConeScale));
+		// Opt every primitive component on the cone Blueprint into the
+		// dedicated LiDAR collision channel — same rationale as in
+		// SpawnStaticMeshCone above. Iterating components handles
+		// Blueprints with multiple meshes (e.g. a base + tape ring).
+		ConeActor->ForEachComponent<UPrimitiveComponent>(false,
+			[](UPrimitiveComponent* P) {
+				if (P) P->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Block);
+			});
 		TotalSpawned++;
 		SpawnedCones.Add(ConeActor);
 	}

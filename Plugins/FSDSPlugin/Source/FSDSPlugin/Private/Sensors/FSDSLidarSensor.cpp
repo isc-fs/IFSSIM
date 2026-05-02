@@ -3,6 +3,8 @@
 #include "DrawDebugHelpers.h"
 #include "Async/Async.h"
 #include "Async/ParallelFor.h"
+#include "EngineUtils.h"   // TActorIterator
+#include "Components/PrimitiveComponent.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -23,6 +25,73 @@ void UFSDSLidarSensor::BeginPlay()
 	UE_LOG(LogTemp, Log, TEXT("FSDS LiDAR: %d channels, %d pts/sec, %d pts/scan, H-FOV=%.0f° V-FOV=%.0f°, range=%.0fm"),
 		NumberOfChannels, PointsPerSecond, PointsPerScan,
 		HFov, VFov, MaxRange / 100.f);
+
+	InitialiseLidarChannelOptIns();
+}
+
+void UFSDSLidarSensor::InitialiseLidarChannelOptIns()
+{
+	// PerformScan now traces against ECC_GameTraceChannel1 (the "Lidar"
+	// channel defined in DefaultEngine.ini) instead of ECC_Visibility.
+	// The new channel defaults to Ignore for everything, so we have to
+	// explicitly opt-in the actors LiDAR rays should hit:
+	//   - Cones — opted-in by FSDSConeSpawner at spawn time.
+	//   - Ground / landscape / static walls — opted-in here by walking
+	//     the world for any actor that already blocks ECC_WorldStatic
+	//     and isn't the vehicle pawn (we want to avoid double-counting
+	//     the chassis, which the per-ray TraceParams.AddIgnoredActor
+	//     handles separately).
+	//
+	// Doing the opt-in programmatically (vs requiring per-asset
+	// editor-side configuration) keeps existing maps working without
+	// any manual setup. New maps automatically inherit the behaviour.
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	AActor* OwnerActor = GetOwner();
+	int32 OptedIn = 0;
+
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* A = *It;
+		if (!A || A == OwnerActor) continue;
+
+		// Cone spawner sets Block on the new channel itself; skip
+		// re-scanning here (cheap to re-set, but cleaner to leave
+		// programmatic opt-ins alone and only auto-promote actors
+		// we'd otherwise miss).
+		bool bAlreadyOptedIn = false;
+		A->ForEachComponent<UPrimitiveComponent>(false,
+			[&bAlreadyOptedIn](const UPrimitiveComponent* P) {
+				if (P && P->GetCollisionResponseToChannel(ECC_GameTraceChannel1) == ECR_Block) {
+					bAlreadyOptedIn = true;
+				}
+			});
+		if (bAlreadyOptedIn) continue;
+
+		// Promote actors that currently block WorldStatic to also
+		// block the LiDAR channel — that captures the ground plane,
+		// landscape, walls, and any static-mesh-actor scenery the
+		// map happens to use.
+		bool bBlocksStatic = false;
+		A->ForEachComponent<UPrimitiveComponent>(false,
+			[&bBlocksStatic](const UPrimitiveComponent* P) {
+				if (P && P->GetCollisionResponseToChannel(ECC_WorldStatic) == ECR_Block) {
+					bBlocksStatic = true;
+				}
+			});
+		if (!bBlocksStatic) continue;
+
+		A->ForEachComponent<UPrimitiveComponent>(false,
+			[](UPrimitiveComponent* P) {
+				if (P) P->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Block);
+			});
+		OptedIn++;
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS LiDAR: opted-in %d static-world actors to the LiDAR collision channel (ECC_GameTraceChannel1)"),
+		OptedIn);
 }
 
 void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -162,7 +231,15 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			FVector RayEnd = SensorWorldPos + RayDir * MaxRange;
 
 			FHitResult Hit;
-			if (!InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
+			// ECC_GameTraceChannel1 = "Lidar" (defined in
+			// Config/DefaultEngine.ini). Defaults to Ignore for all
+			// actors; cones opt-in via the cone spawner and ground
+			// opts-in via the LidarSensor's BeginPlay world-walk
+			// (see InitialiseLidarChannelOptIns). Drastically smaller
+			// broadphase than ECC_Visibility, which would walk every
+			// visible actor in the level. See #206 for the full
+			// rationale.
+			if (!InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_GameTraceChannel1, TraceParams))
 				continue;
 
 			// Dropout/noise use FMath::FRand and RandStandardNormal which
