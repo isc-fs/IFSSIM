@@ -395,9 +395,15 @@ def test_pie_capture_tick_recovers() -> None:
         f"rej={debug.rejections}"
     )
     n_sel = len(debug.selected_midpoints)
-    assert n_sel >= 4, (
+    # MIN_MIDPOINTS is 3 (seed + 2 committed midpoints minimum for a
+    # spline). Same-colour-tail truncation (#189) trims this tick from
+    # 10 picks down to 3 — the cross-colour pair near the car plus
+    # the seed. That's enough to produce a non-empty path that stays
+    # inside the corridor; further out, only same-colour edges exist
+    # and the path would have run *through* the blue cone arc.
+    assert n_sel >= MIN_MIDPOINTS, (
         f"Captured PIE failure tick: only {n_sel} midpoints selected. "
-        f"Expected ≥ 4 (post-fix produced 10). rej={debug.rejections}"
+        f"Expected ≥ {MIN_MIDPOINTS}. rej={debug.rejections}"
     )
 
 

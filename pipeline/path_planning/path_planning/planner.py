@@ -304,8 +304,20 @@ def _search_path_body(
     If `rejections` is provided, increments per-gate counters
     every time a candidate edge is filtered out. Useful for
     diagnosing why a path is shorter than expected.
+
+    Same-colour-tail truncation: same-colour edge midpoints don't
+    represent real centerline crossings (the centerline is *between*
+    blue and yellow). The walker may still pick them as fallback —
+    they're useful for keeping a chain alive in tight corners where
+    one side of the corridor is briefly unobserved (#180). But if
+    the chain *ends* with a run of same-colour picks, that run is
+    extending the path through a region where only one cone-row has
+    been observed, and the spline ends up going *along* that row
+    instead of between two rows (issue #189: car drove into the cone
+    arc this produced). Drop the same-colour tail before returning.
     """
     pts: List[np.ndarray] = [np.zeros(2)]    # car anchor at body origin
+    same_color_pick: List[bool] = [False]    # per-pts: was this pick from a same-colour edge?
     used: Set[int] = set()                   # edge indices already on path
     prev_heading = 0.0                       # last segment heading (rad)
     prev_tw = 0.0                            # last edge's track width
@@ -389,10 +401,30 @@ def _search_path_body(
         e = edges[best_idx]
         used.add(best_idx)
         pts.append(e.midpoint.copy())
+        same_color_pick.append(e.same_color)
         prev_heading = float(np.arctan2(
             e.midpoint[1] - leaf[1], e.midpoint[0] - leaf[0]))
         prev_tw = e.length
 
+    # Trim the same-colour tail: walk back from the end until we hit
+    # a cross-colour pick (or the seed at index 0). Anything past the
+    # last cross-colour midpoint is path projected through a region
+    # where only one cone-row has been observed — see #189.
+    #
+    # Soft trim: only apply the truncation if the result still has
+    # ≥ MIN_MIDPOINTS picks. If the chain is mostly same-colour from
+    # the start (e.g. tight curve where one side ran out early),
+    # truncation would cause an empty path — that's actively worse
+    # than a partly-one-sided path because the controller has no
+    # reference to track at all. Better to ship a degraded path and
+    # let the next tick recover when more cones come into view.
+    last_cross = 0
+    for i in range(len(pts) - 1, 0, -1):
+        if not same_color_pick[i]:
+            last_cross = i
+            break
+    if last_cross + 1 >= MIN_MIDPOINTS:
+        return np.array(pts[: last_cross + 1])
     return np.array(pts)
 
 
