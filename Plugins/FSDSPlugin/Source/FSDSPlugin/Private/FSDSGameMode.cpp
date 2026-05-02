@@ -6,6 +6,8 @@
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
+#include "HAL/PlatformFileManager.h"
+#include "GenericPlatform/GenericPlatformFile.h"
 
 AFSDSGameMode::AFSDSGameMode()
 {
@@ -79,10 +81,43 @@ void AFSDSGameMode::StartPlay()
 	RpcServer.SetUdpBroadcaster(&UdpBroadcaster);
 	RpcServer.Start(41451);
 
-	// UDP broadcaster available but not started by default
-	// (TCP streaming via streamSensors/streamLidar is the primary data path)
+	// Optional AF_UNIX (UDS) listener for LiDAR streaming. Localhost-only,
+	// bypasses the macOS TCP loopback throughput cap. Path lives under
+	// /tmp/ifssim_streams/ which the docker-compose.yml bind-mounts into
+	// the bridge container at the same path. Best-effort: if mkdir fails
+	// (read-only fs / permissions), we log and continue with TCP only.
+	{
+		const FString StreamsDir = TEXT("/tmp/ifssim_streams");
+		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+		if (!PlatformFile.DirectoryExists(*StreamsDir))
+		{
+			PlatformFile.CreateDirectoryTree(*StreamsDir);
+		}
+		if (PlatformFile.DirectoryExists(*StreamsDir))
+		{
+			RpcServer.StartUds(StreamsDir + TEXT("/lidar.sock"));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+			       TEXT("FSDS: could not create %s for UDS streams; bridge will fall back to TCP"),
+			       *StreamsDir);
+		}
+	}
+
+	// UDP broadcaster — pushes sensor + LiDAR frames over UDP to the bridge.
+	// Started here unconditionally; the bridge can choose to consume the
+	// LiDAR UDP stream (via lidar_transport=udp) or stay on TCP. Sensor UDP
+	// is benign-but-unused when the bridge consumes sensors via TCP.
+	//
+	// Targeting 127.0.0.1: on macOS Docker Desktop the bridge sits inside
+	// the Linux VM; the docker-compose.yml UDP port forwards (41452/41453)
+	// route host-loopback datagrams into the container's listener. On
+	// Linux hosts the same port forward works natively. Broadcast/multicast
+	// would force the host to multicast across interfaces unnecessarily.
 	UdpBroadcaster.SetVehiclePawn(VehiclePawn);
 	UdpBroadcaster.SetReferee(RefereeActor);
+	UdpBroadcaster.Start(TEXT("127.0.0.1"), 41452, 51453);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -91,6 +126,7 @@ void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	RpcServer.SetVehiclePawn(nullptr);
 	UdpBroadcaster.SetVehiclePawn(nullptr);
 	UdpBroadcaster.Stop();
+	RpcServer.StopUds();
 	RpcServer.Stop();
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Simulator shutting down"));
 	Super::EndPlay(EndPlayReason);

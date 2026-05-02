@@ -8,6 +8,16 @@
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
 #include "Kismet/GameplayStatics.h"
+
+// POSIX includes for the UDS path. UE5's FSocket framework doesn't
+// expose AF_UNIX, so the UDS listener uses raw POSIX sockets.
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include "EngineUtils.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -45,12 +55,24 @@ namespace
 			if (!bOk) return false;                 // hard error — peer gone
 			if (ChunkSent <= 0)
 			{
-				// Kernel send buffer momentarily full. Sleep briefly and
-				// try again; bound the total wait so a genuinely dead
-				// peer still returns false within ~MaxIdleMs.
+				// Kernel send buffer momentarily full. Wait for it to
+				// drain via FSocket::Wait (kernel wakes us as soon as the
+				// peer has consumed enough bytes for another chunk).
+				// Previously this slept a fixed 5 ms per partial-send,
+				// which over loopback added up to most of the per-scan
+				// budget at high pts/s — a 1.2 MB scan that needed even
+				// 10 partial sends ate 50 ms of pure sleep. Wait() returns
+				// in <1 ms over loopback for the common case.
+				//
+				// IdleMs still bounds the total wait so a genuinely dead
+				// peer returns false within ~MaxIdleMs; we step it by the
+				// timeout slice rather than the actual sleep duration to
+				// preserve the previous semantics.
 				if (IdleMs >= MaxIdleMs) return false;
-				FPlatformProcess::Sleep(0.005f);
-				IdleMs += 5;
+				const int32 WaitSliceMs = 50;
+				Socket->Wait(ESocketWaitConditions::WaitForWrite,
+				             FTimespan::FromMilliseconds(WaitSliceMs));
+				IdleMs += WaitSliceMs;
 				continue;
 			}
 			IdleMs = 0;                              // progress — reset idle counter
@@ -201,16 +223,34 @@ void FFSDSRpcServer::ServerThreadFunc()
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
 
-				// Bump the kernel send buffer well above the default (~64 KB
-				// on Linux/Win). LiDAR frames can hit ~150 KB at higher
-				// resolutions, and the bridge's downstream consumers (numba
-				// cone detection + multiple foxglove subscribers) drain
-				// unevenly. With a small buffer, the kernel is full after a
-				// single frame and the next Send returns ChunkSent=0 — the
-				// failure mode SendAll has to time out on. 1 MB gives ~20
-				// LiDAR frames of headroom, smoothing over consumer hiccups.
+				// Kernel send buffer. Sized to hold an entire LiDAR scan
+				// at the Hesai ATX_S01 datasheet rate (1.74 M pts/s ⇒
+				// 174 k pts × 12 B = ~2 MB body), with headroom for
+				// downstream consumer drain hiccups. Without this, large
+				// scans don't fit in the buffer and Send returns partial
+				// writes — SendAll then has to wait on Socket->Wait
+				// repeatedly for the peer to drain, which was the
+				// dominant per-scan cost at higher rates.
+				//
+				// SO_SNDBUF gets clamped at kern.ipc.maxsockbuf (8 MB on
+				// stock macOS, often higher on Linux). 8 MB is plenty —
+				// holds 4× the largest scan we send — so we don't need
+				// to ask the operator to bump host sysctls. The kernel
+				// returns the actual granted size in `ActualSize`; we
+				// log if it falls below the per-scan body size, since
+				// that's the threshold below which partial-sends start
+				// hurting throughput again.
 				int32 ActualSize = 0;
-				ClientSocket->SetSendBufferSize(1024 * 1024, ActualSize);
+				const int32 RequestedSendBuf = 32 * 1024 * 1024;
+				ClientSocket->SetSendBufferSize(RequestedSendBuf, ActualSize);
+				const int32 OneScanMaxBytes = 174000 * 3 * sizeof(float);  // ~2 MB at datasheet rate
+				if (ActualSize < OneScanMaxBytes)
+				{
+					UE_LOG(LogTemp, Warning,
+					       TEXT("FSDS RPC: SO_SNDBUF granted %d B (< one-scan max %d B). ")
+					       TEXT("LiDAR throughput will partial-send; consider raising kern.ipc.maxsockbuf."),
+					       ActualSize, OneScanMaxBytes);
+				}
 
 				// Handle each client in its own thread. Store it so Stop()
 				// can join the full set before the server is destroyed —
@@ -1649,4 +1689,279 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		// 10Hz LiDAR
 		FPlatformProcess::Sleep(0.1f);
 	}
+}
+
+// =============================================================================
+// AF_UNIX (UDS) listener — opt-in high-throughput streaming for localhost
+// =============================================================================
+//
+// Background: macOS TCP loopback throughput plateaus at ~7 MB/s on the test
+// hardware, capping the LiDAR rate at the Hesai datasheet 1.74 M pts/s
+// (~21 MB/s sustained) well before kernel buffer limits or the bridge's
+// recv loop become the bottleneck. UDS sockets bypass the TCP stack
+// entirely (no checksumming, no congestion control, no protocol header
+// per byte) and routinely sustain GB/s on the same kernel.
+//
+// The TCP listener (Start) stays up regardless — UDS is opt-in and
+// localhost-only. Cross-host deployments (real-car ECU split, dev
+// laptop talking to a remote sim) keep using TCP.
+
+namespace
+{
+	// POSIX-side analogue of SendAll. Writes Length bytes from Buffer to fd,
+	// retrying on EAGAIN/EWOULDBLOCK with a short poll() wait so we don't
+	// burn CPU when the kernel pipe is momentarily full. EINTR retries
+	// transparently. A genuine peer-gone (EPIPE/ECONNRESET) returns false.
+	bool SendAllPosix(int fd, const uint8_t* Buffer, size_t Length, int MaxIdleMs = 5000)
+	{
+		size_t Sent = 0;
+		int IdleMs = 0;
+		while (Sent < Length)
+		{
+			ssize_t n = ::send(fd, Buffer + Sent, Length - Sent, 0);
+			if (n > 0)
+			{
+				Sent += static_cast<size_t>(n);
+				IdleMs = 0;
+				continue;
+			}
+			if (n < 0 && (errno == EINTR))
+			{
+				continue;
+			}
+			if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			{
+				if (IdleMs >= MaxIdleMs) return false;
+				// Wait for the socket to be writable (kernel pipe drained).
+				struct pollfd p{fd, POLLOUT, 0};
+				const int WaitSliceMs = 50;
+				::poll(&p, 1, WaitSliceMs);
+				IdleMs += WaitSliceMs;
+				continue;
+			}
+			// 0 (peer closed) or other errno: hard failure
+			return false;
+		}
+		return true;
+	}
+
+	bool RecvLinePosix(int fd, std::string& OutLine, size_t MaxLen = 256)
+	{
+		OutLine.clear();
+		while (OutLine.size() < MaxLen)
+		{
+			char c;
+			ssize_t n = ::recv(fd, &c, 1, 0);
+			if (n == 1)
+			{
+				if (c == '\n') return true;
+				OutLine.push_back(c);
+				continue;
+			}
+			if (n < 0 && errno == EINTR) continue;
+			return false;
+		}
+		return false; // line too long
+	}
+} // namespace
+
+void FFSDSRpcServer::StartUds(const FString& SocketPath)
+{
+	if (bUdsRunning) return;
+	UdsSocketPath = SocketPath;
+
+	const std::string Path = std::string(TCHAR_TO_UTF8(*SocketPath));
+
+	// Stale socket from a previous crash would block bind(). Best-effort
+	// cleanup; ignore "doesn't exist" errors.
+	::unlink(Path.c_str());
+
+	int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS UDS: socket() failed: %s"),
+		       UTF8_TO_TCHAR(strerror(errno)));
+		return;
+	}
+
+	struct sockaddr_un addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	if (Path.size() >= sizeof(addr.sun_path))
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS UDS: socket path too long (>%d): %s"),
+		       (int)sizeof(addr.sun_path), *SocketPath);
+		::close(fd);
+		return;
+	}
+	std::strncpy(addr.sun_path, Path.c_str(), sizeof(addr.sun_path) - 1);
+
+	if (::bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS UDS: bind(%s) failed: %s"),
+		       *SocketPath, UTF8_TO_TCHAR(strerror(errno)));
+		::close(fd);
+		return;
+	}
+
+	// World-writable so the bridge (running as a different uid in Docker)
+	// can connect. Path is in a private directory; this is fine for a sim.
+	::chmod(Path.c_str(), 0666);
+
+	if (::listen(fd, 8) < 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS UDS: listen() failed: %s"),
+		       UTF8_TO_TCHAR(strerror(errno)));
+		::close(fd);
+		::unlink(Path.c_str());
+		return;
+	}
+
+	UdsListenFd.store(fd);
+	bUdsRunning.store(true);
+	UE_LOG(LogTemp, Log, TEXT("FSDS UDS: listening on %s"), *SocketPath);
+
+	UdsServerThread = std::make_unique<std::thread>(&FFSDSRpcServer::UdsServerThreadFunc, this);
+}
+
+void FFSDSRpcServer::StopUds()
+{
+	if (!bUdsRunning.exchange(false)) return;
+
+	int fd = UdsListenFd.exchange(-1);
+	if (fd >= 0) ::close(fd);
+
+	if (UdsServerThread && UdsServerThread->joinable())
+	{
+		UdsServerThread->join();
+	}
+	UdsServerThread.reset();
+
+	{
+		std::lock_guard<std::mutex> Lock(UdsClientThreadsMutex);
+		for (auto& t : UdsClientThreads) if (t.joinable()) t.join();
+		UdsClientThreads.clear();
+	}
+
+	if (!UdsSocketPath.IsEmpty())
+	{
+		::unlink(TCHAR_TO_UTF8(*UdsSocketPath));
+	}
+}
+
+void FFSDSRpcServer::UdsServerThreadFunc()
+{
+	while (bUdsRunning.load())
+	{
+		int listen_fd = UdsListenFd.load();
+		if (listen_fd < 0) break;
+
+		struct sockaddr_un peer;
+		socklen_t peer_len = sizeof(peer);
+		int client_fd = ::accept(listen_fd, (struct sockaddr*)&peer, &peer_len);
+		if (client_fd < 0)
+		{
+			if (errno == EINTR) continue;
+			if (!bUdsRunning.load()) break;
+			FPlatformProcess::Sleep(0.01f);
+			continue;
+		}
+
+		// SO_SNDBUF — match the TCP path's 32 MB request. UDS doesn't have
+		// the same kernel cap as TCP so we usually get the whole thing.
+		int snd = 32 * 1024 * 1024;
+		::setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &snd, sizeof(snd));
+
+		std::lock_guard<std::mutex> Lock(UdsClientThreadsMutex);
+		UdsClientThreads.emplace_back([this, client_fd]() {
+			HandleUdsClient(client_fd);
+			::close(client_fd);
+		});
+	}
+}
+
+void FFSDSRpcServer::HandleUdsClient(int ClientFd)
+{
+	// First line is the stream command, identical to TCP protocol.
+	std::string Cmd;
+	if (!RecvLinePosix(ClientFd, Cmd))
+	{
+		return;
+	}
+	// Trim CR if any.
+	if (!Cmd.empty() && Cmd.back() == '\r') Cmd.pop_back();
+
+	// Acknowledge.
+	const char* Ack = "OK\n";
+	if (!SendAllPosix(ClientFd, (const uint8_t*)Ack, 3))
+	{
+		return;
+	}
+
+	if (Cmd == "streamLidar")
+	{
+		StreamLidarUds(ClientFd);
+	}
+	else if (Cmd == "streamSensors")
+	{
+		StreamSensorsUds(ClientFd);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FSDS UDS: unknown command '%s' (UDS only supports streamLidar/streamSensors)"),
+		       UTF8_TO_TCHAR(Cmd.c_str()));
+	}
+}
+
+void FFSDSRpcServer::StreamLidarUds(int ClientFd)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR streaming started"));
+
+	while (bUdsRunning.load())
+	{
+		if (!VehiclePawn || !VehiclePawn->LidarSensor)
+		{
+			FPlatformProcess::Sleep(0.1f);
+			continue;
+		}
+
+		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
+		const int32 TotalPoints = Points.Num() / 3;
+
+		if (TotalPoints > 0)
+		{
+			FFSDSLidarChunkHeader Header;
+			Header.Magic = 0x4C494452;
+			Header.ChunkIndex = 0;
+			Header.TotalChunks = 1;
+			Header.FrameID = StreamFrameCounter++;
+			Header.PointsInChunk = TotalPoints;
+			Header.TotalPoints = TotalPoints;
+			Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
+
+			if (!SendAllPosix(ClientFd, (const uint8_t*)&Header, sizeof(Header)))
+			{
+				UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR stream disconnected (header)"));
+				return;
+			}
+
+			const int32 DataSize = TotalPoints * 3 * sizeof(float);
+			if (!SendAllPosix(ClientFd, (const uint8_t*)Points.GetData(), DataSize))
+			{
+				UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR stream disconnected (body, %d bytes)"), DataSize);
+				return;
+			}
+		}
+
+		FPlatformProcess::Sleep(0.1f);
+	}
+}
+
+void FFSDSRpcServer::StreamSensorsUds(int ClientFd)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS UDS: Sensor streaming started — not yet implemented over UDS, closing"));
+	(void)ClientFd;
+	// Sensor stream is small (~100 B/sample at 400 Hz = 40 KB/s) so it's
+	// not bandwidth-bound — TCP works fine. Leaving UDS sensors unimpl
+	// keeps the surface area minimal for the LiDAR-throughput goal.
 }

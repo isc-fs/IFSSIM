@@ -220,7 +220,25 @@ private:
     std::string mission_name_ = "trackdrive";
     std::string track_name_ = "A";
     bool competition_mode_ = false;
+    // Filesystem path to the plugin's AF_UNIX LiDAR socket. Empty when
+    // unavailable (plugin not started, /tmp/ifssim_streams/ not mounted
+    // into the bridge container) — openStreamSocket then uses TCP.
+    std::string lidar_uds_path_;
+    // LiDAR transport: "tcp" (default; honours lidar_uds_path_ on Linux
+    // hosts) or "udp" (consume the plugin's UdpBroadcaster stream on
+    // port 41453, with chunk-reassembly). UDP bypasses macOS Docker
+    // Desktop's TCP loopback throughput cap entirely — that cap is the
+    // remaining bottleneck on the host once SO_SNDBUF/SO_RCVBUF are
+    // tuned and PointCloud2 is built via memcpy. Set via the
+    // `lidar_transport` ROS parameter (mapped from the LIDAR_TRANSPORT
+    // env in docker-compose.yml).
+    std::string lidar_transport_ = "tcp";
     std::vector<std::string> camera_names_;
+    // UDP receiver — owns the sensor + LiDAR UDP listener threads.
+    // start() called from initializeConnection when lidar_transport_ ==
+    // "udp"; the LiDAR callback synthesises a LidarChunkHeader and calls
+    // onLidarFrame so the publish path is identical to the TCP one.
+    UdpReceiver udp_receiver_;
 
     // Sensor mount offsets (ROS body frame, metres). Queried once at
     // connection time via `getSensorOffset <name>` so the static TFs the

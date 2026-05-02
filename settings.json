@@ -64,8 +64,8 @@
         },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. NumberOfChannels matches the datasheet. PointsPerSecond stays at 200 k for now: with the Numba contiguous-array fix (ransac.py / two_phase_cone_detection.py, same commit) Cone_Detection itself can keep up with 1.74 M (we measured 48 cones/scan at the spawn pose vs 13.7 at 200 k). The new bottleneck is the bridge's UDP transport — at 1.74 M pts/s = ~2 MB per scan, the UDP datagrams fragment heavily and the bridge enters a 'LiDAR stream data incomplete → reconnect' loop. Bumping pts/s requires either bigger UDP receive buffers, switching to TCP for the LiDAR stream, or a fragmentation strategy in the FSDS plugin's UDP sender. Tracked separately.",
-          "NumberOfChannels": 116, "PointsPerSecond": 200000,
+          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond bumped from 500 k → 1.74 M (datasheet rate) once the LiDAR stream moved off TCP onto the new UDP transport (LIDAR_TRANSPORT=udp in docker-compose.yml). On TCP at 1.74 M pts/s the bridge dropped to ~3 Hz on macOS Docker Desktop because of its TCP loopback throughput cap; the UDP path (chunked, paced, with a Fast DDS-friendly bridge reassembly) holds ~7-8 Hz at the full datasheet rate. The remaining gap to the nominal 10 Hz is now in the DDS layer (1.4 MB BEST_EFFORT messages fragment-loss between publisher and subscriber) — tracked as a follow-up. Sensor packs only emit *hits*, so the wire rate is roughly 65 % of attempted rays (e.g. 1.14 M pts/s of valid range returns at 1.74 M attempted).",
+          "NumberOfChannels": 116, "PointsPerSecond": 1740000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,

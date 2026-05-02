@@ -98,6 +98,7 @@ private:
         int32_t channels = 0;
         int32_t total_chunks = 0;
         int32_t chunks_received = 0;
+        bool delivered = false;
         std::vector<float> points;
     };
     LidarFrame pending_lidar_;

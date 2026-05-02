@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -32,6 +33,27 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     mission_name_ = node_->declare_parameter<std::string>("mission_name", "trackdrive");
     track_name_ = node_->declare_parameter<std::string>("track_name", "A");
     competition_mode_ = node_->declare_parameter<bool>("competition_mode", false);
+    // Path to the plugin's AF_UNIX LiDAR socket. Empty disables the UDS
+    // path entirely (TCP only). When set, openStreamSocket tries connect()
+    // on each attempt and falls back to TCP on failure — so the bridge
+    // can start before the plugin (PIE not yet pressed) without losing
+    // the UDS path once the socket appears.
+    lidar_uds_path_ = node_->declare_parameter<std::string>(
+        "lidar_uds_path", "/tmp/ifssim_streams/lidar.sock");
+    // LiDAR transport selection: "tcp" (default) or "udp". UDP avoids the
+    // macOS Docker Desktop loopback throughput cap on TCP — at 1.74 M pts/s
+    // the TCP path tops out at ~3 Hz on Mac while the same datagram stream
+    // over UDP forwards through gvisor without window-based throttling.
+    // On Linux hosts both transports work and TCP is preferred (reliable
+    // delivery, no fragmentation accounting).
+    lidar_transport_ = node_->declare_parameter<std::string>(
+        "lidar_transport", "tcp");
+    if (lidar_transport_ != "tcp" && lidar_transport_ != "udp") {
+        RCLCPP_WARN(node_->get_logger(),
+            "Unknown lidar_transport '%s' — defaulting to tcp",
+            lidar_transport_.c_str());
+        lidar_transport_ = "tcp";
+    }
 
     initializeConnection();
     initializePublishers();
@@ -60,6 +82,56 @@ IFSSIMRosWrapper::~IFSSIMRosWrapper()
 
 int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
 {
+    // For LiDAR specifically, prefer AF_UNIX (UDS) when a socket path is
+    // configured and exists. macOS TCP loopback caps at ~7 MB/s on the
+    // tested hardware, which throttled the LiDAR rate; UDS bypasses the
+    // TCP stack entirely. Plugin opens the socket at startup if the
+    // /tmp/ifssim_streams/ directory exists. Sensors stay on TCP — the
+    // ~40 KB/s sensor stream isn't bandwidth-bound and UDS would
+    // duplicate the streaming code on the plugin side for no payoff.
+    const bool bUdsCandidate = (command == "streamLidar")
+        && !lidar_uds_path_.empty();
+    if (bUdsCandidate) {
+        int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sock < 0) return -1;
+        struct sockaddr_un uaddr;
+        memset(&uaddr, 0, sizeof(uaddr));
+        uaddr.sun_family = AF_UNIX;
+        if (lidar_uds_path_.size() >= sizeof(uaddr.sun_path)) {
+            RCLCPP_ERROR(node_->get_logger(),
+                "UDS path too long: %s — falling back to TCP",
+                lidar_uds_path_.c_str());
+            close(sock);
+        } else {
+            std::strncpy(uaddr.sun_path, lidar_uds_path_.c_str(),
+                         sizeof(uaddr.sun_path) - 1);
+            if (::connect(sock, (struct sockaddr*)&uaddr, sizeof(uaddr)) == 0) {
+                // Send command + read OK exactly like the TCP path.
+                std::string msg = command + "\n";
+                send(sock, msg.c_str(), msg.size(), 0);
+                char buf[4];
+                size_t total = 0;
+                bool ok = true;
+                while (total < 3) {
+                    ssize_t n = recv(sock, buf + total, 3 - total, 0);
+                    if (n <= 0) { ok = false; break; }
+                    total += n;
+                }
+                if (ok) {
+                    RCLCPP_INFO(node_->get_logger(),
+                        "Stream '%s' opened over AF_UNIX at %s",
+                        command.c_str(), lidar_uds_path_.c_str());
+                    return sock;
+                }
+            }
+            close(sock);
+            RCLCPP_WARN(node_->get_logger(),
+                "AF_UNIX connect to %s failed (%s) — falling back to TCP",
+                lidar_uds_path_.c_str(), strerror(errno));
+        }
+        // Fall through to TCP.
+    }
+
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
 
@@ -81,6 +153,27 @@ int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
     // Disable Nagle for low latency
     int flag = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+
+    // Bump SO_RCVBUF to 16 MB on stream sockets. Kernel default is
+    // ~256 KB on most platforms, which only holds ~1/8 of a single
+    // LiDAR scan at the Hesai ATX_S01 datasheet rate (174 k pts × 12
+    // bytes = ~2 MB/scan). When the recv buffer fills, the TCP window
+    // closes and the plugin's send blocks; if the publish thread on
+    // either side momentarily stalls (foxglove fan-out, downstream
+    // backpressure, GC pause), the buffer-stuck timeout in
+    // FFSDSRpcServer::SendAll fires and the plugin tears down the
+    // stream. Larger RCVBUF gives ~8 scans of headroom — enough to
+    // soak up a 100–200 ms publish-thread hiccup without disconnect.
+    // Linux may need `sysctl net.core.rmem_max` raised above 16 MB
+    // to accept the request; the kernel silently caps to rmem_max.
+    int rcvbuf = 16 * 1024 * 1024;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) != 0) {
+        // Best-effort; the kernel may cap below the request. Not fatal.
+        // The original 256 KB default is what we had before — log so the
+        // operator notices if rmem_max is the limit.
+        RCLCPP_WARN(node_->get_logger(),
+                    "openStreamSocket: SO_RCVBUF setsockopt failed; using kernel default");
+    }
 
     // Send the stream command
     std::string msg = command + "\n";
@@ -223,7 +316,7 @@ void IFSSIMRosWrapper::initializePublishers()
     // a real autocross run: LiDAR drops from 10 Hz to ~1 Hz the moment
     // pipeline subscribers come online. Sensor data is fundamentally a
     // best-effort stream — drops are fine, backpressure is not.
-    auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(5)).best_effort();
+    auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(50)).best_effort();
     lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", lidar_qos);
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
     // Published edge-triggered when the referee's bFinished flips false->true;
@@ -318,22 +411,61 @@ void IFSSIMRosWrapper::startStreaming()
         RCLCPP_ERROR(node_->get_logger(), "Failed to open sensor stream");
     }
 
-    lidar_stream_fd_ = openStreamSocket("streamLidar");
-    if (lidar_stream_fd_ >= 0) {
-        RCLCPP_INFO(node_->get_logger(), "LiDAR stream connected");
+    if (lidar_transport_ == "udp") {
+        // UDP mode: bridge listens on 41453 for chunked LiDAR datagrams
+        // from the plugin's UdpBroadcaster. The reassembled frame is
+        // synthesised back into a LidarChunkHeader and pushed through the
+        // same single-slot pending_ buffer the TCP path uses, so the
+        // publish thread is unchanged.
+        udp_receiver_.setLidarCallback(
+            [this](int32_t total_points, int32_t channels,
+                   const std::vector<float>& points) {
+                LidarChunkHeader hdr{};
+                hdr.magic = LIDAR_MAGIC;
+                hdr.chunk_index = 0;
+                hdr.total_chunks = 1;
+                hdr.frame_id = 0;
+                hdr.points_in_chunk = total_points;
+                hdr.total_points = total_points;
+                hdr.channels = channels;
+                {
+                    std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
+                    lidar_pending_ = PendingLidarFrame{hdr, points};
+                }
+                lidar_pub_cv_.notify_one();
+            });
+        // sensor_port=0 disables the sensor listener thread (sensors stay
+        // on TCP — the ~40 KB/s sensor stream isn't bandwidth-bound).
+        // Port 51453 is intentionally non-adjacent to the sensor stream
+        // port (41452) — Docker Desktop on macOS sometimes only proxies
+        // one port of a contiguous UDP range. See docker-compose.yml.
+        udp_receiver_.start(0, 51453);
+        RCLCPP_INFO(node_->get_logger(),
+            "LiDAR transport: UDP (listening on 51453)");
     } else {
-        RCLCPP_ERROR(node_->get_logger(), "Failed to open LiDAR stream");
+        lidar_stream_fd_ = openStreamSocket("streamLidar");
+        if (lidar_stream_fd_ >= 0) {
+            RCLCPP_INFO(node_->get_logger(), "LiDAR stream connected");
+        } else {
+            RCLCPP_ERROR(node_->get_logger(), "Failed to open LiDAR stream");
+        }
     }
 
     streaming_ = true;
 
     sensor_thread_     = std::thread(&IFSSIMRosWrapper::sensorStreamThread,  this);
     sensor_pub_thread_ = std::thread(&IFSSIMRosWrapper::sensorPublishThread, this);
-    lidar_thread_      = std::thread(&IFSSIMRosWrapper::lidarStreamThread,   this);
+    if (lidar_transport_ == "tcp") {
+        lidar_thread_  = std::thread(&IFSSIMRosWrapper::lidarStreamThread,  this);
+    }
     lidar_pub_thread_  = std::thread(&IFSSIMRosWrapper::lidarPublishThread,  this);
 
-    // If initial connection failed (UE5 not in Play mode yet), kick off reconnect
-    if (sensor_stream_fd_ < 0 || lidar_stream_fd_ < 0) {
+    // If initial connection failed (UE5 not in Play mode yet), kick off reconnect.
+    // UDP mode doesn't gate on lidar_stream_fd_ — the receiver listens
+    // independently and accepts the first datagram once the plugin sends one.
+    const bool tcp_lidar_failed = (lidar_transport_ == "tcp")
+        && (lidar_stream_fd_ < 0);
+    if (sensor_stream_fd_ < 0 || tcp_lidar_failed) {
         std::thread(&IFSSIMRosWrapper::triggerReconnect, this).detach();
     }
 }
@@ -563,14 +695,19 @@ void IFSSIMRosWrapper::triggerReconnect()
         }
     }
 
-    // Reconnect LiDAR stream
-    while (streaming_ && lidar_stream_fd_ < 0) {
-        int fd = openStreamSocket("streamLidar");
-        if (fd >= 0) {
-            lidar_stream_fd_.store(fd);
-            RCLCPP_INFO(node_->get_logger(), "LiDAR stream reconnected");
-        } else {
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+    // Reconnect LiDAR stream — TCP transport only. In UDP mode the
+    // receiver listens independently and accepts the next datagram once
+    // the plugin's UdpBroadcaster restarts; there is no per-connection
+    // handshake to re-establish.
+    if (lidar_transport_ == "tcp") {
+        while (streaming_ && lidar_stream_fd_ < 0) {
+            int fd = openStreamSocket("streamLidar");
+            if (fd >= 0) {
+                lidar_stream_fd_.store(fd);
+                RCLCPP_INFO(node_->get_logger(), "LiDAR stream reconnected");
+            } else {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
         }
     }
 }
@@ -735,60 +872,41 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     msg.is_dense = true;
     msg.is_bigendian = false;
 
-    // x/y/z + per-point absolute timestamp (FLOAT64, seconds). fast_LIMO's
-    // HESAI handler hard-requires the timestamp field; without it the
-    // node throws "FATAL ERROR: invalid pointcloud structure" on the
-    // first scan.
+    // XYZ-only PointCloud2. The previous layout included a per-point
+    // FLOAT64 timestamp field — it was added for fast_LIMO's HESAI
+    // handler which hard-required it. fast_LIMO has since been ripped
+    // out (replaced by cone_graph_slam, which doesn't subscribe to
+    // /lidar/Lidar1 at all); the only current consumer is Cone_Detection,
+    // which only reads x/y/z and ignores everything else.
     //
-    // The IFSSIM LiDAR sensor (FSDSLidarSensor.cpp) is INSTANTANEOUS —
-    // it snapshots the car transform ONCE per scan and ray-traces all
-    // ~20000 points from that single pose. No physical sweep, no
-    // motion-during-scan. The real Hesai ATX (which we model) is a
-    // hybrid solid-state LiDAR: 128 vertical lasers fire simultaneously,
-    // and a MEMS mirror sweeps horizontally over the 100 ms scan
-    // period, so the real hardware DOES have per-azimuth time
-    // variation. The simulator collapses that sweep into a single tick.
+    // Per-point construction with PointCloud2Iterator turned out to be
+    // the dominant cost on this thread at the datasheet pts/s rate:
+    // at 100 k pts/scan (1 M pts/s) the iterator loop ran 400 k times
+    // per scan and pushed the publish thread to ~225 ms/scan, so /lidar
+    // throttled to 4–5 Hz instead of 10 Hz. Source data is already a
+    // packed (x,y,z) float32 array; setting up an XYZ-only point step
+    // makes the full point payload a single memcpy of total_points × 12
+    // bytes — typically <1 ms for a 1 M pts/s scan.
     //
-    // We therefore set every point's timestamp to the scan stamp.
-    // fast_LIMO's deskew uses per-point time to interpolate IMU pose at
-    // each point's capture instant; with all-equal times the
-    // interpolation collapses to identity and no fake motion
-    // compensation is applied. This matches the simulator's actual
-    // behavior.
-    //
-    // History:
-    //   - Initial (linear-by-index): t = scan_start + (i/N) * 0.1
-    //   - Tried (azimuthal, fetty31 #13): t = scan_start + (pi - atan2(y,x))/(2*pi) * 0.1
-    // Both assumed a real spinning sweep and applied wrong deskew on the
-    // sim's instantaneous data. The 2026-04-27 audit confirmed FSDS is
-    // single-tick by reading FSDSLidarSensor.cpp:52 (single
-    // GetActorTransform() before the ray trace loop).
+    // (Behavioural note kept for completeness: FSDSLidarSensor.cpp
+    // snapshots the car transform once per scan and ray-traces all
+    // points from that single pose, so per-point timestamps would all
+    // be equal anyway. fast_LIMO's deskew was a no-op on the sim's
+    // instantaneous data — the timestamp field never carried real
+    // information.)
     sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(4,
-        "x",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "y",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "z",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "timestamp", 1, sensor_msgs::msg::PointField::FLOAT64);
+    modifier.setPointCloud2Fields(3,
+        "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+        "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+        "z", 1, sensor_msgs::msg::PointField::FLOAT32);
     modifier.resize(total_points);
-
-    sensor_msgs::PointCloud2Iterator<float>  iter_x(msg, "x");
-    sensor_msgs::PointCloud2Iterator<float>  iter_y(msg, "y");
-    sensor_msgs::PointCloud2Iterator<float>  iter_z(msg, "z");
-    sensor_msgs::PointCloud2Iterator<double> iter_t(msg, "timestamp");
-
-    const double scan_stamp_sec = lidar_stamp.seconds();
 
     // NOTE: points are passed through verbatim — the downstream pipeline
     // (cone detection / SLAM) was written against UE's left-handed axis
     // convention, so "correcting" to REP-103 by negating Y here breaks
     // cone clustering. Leave as-is for compatibility.
-    for (int i = 0; i < total_points; i++) {
-        *iter_x = points[i * 3];
-        *iter_y = points[i * 3 + 1];
-        *iter_z = points[i * 3 + 2];
-        *iter_t = scan_stamp_sec;
-        ++iter_x; ++iter_y; ++iter_z; ++iter_t;
-    }
+    std::memcpy(msg.data.data(), points,
+                static_cast<size_t>(total_points) * 3 * sizeof(float));
 
     lidar_pub_->publish(msg);
 }

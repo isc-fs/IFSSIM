@@ -3,6 +3,8 @@ Bridge-only launch — starts ifssim_bridge without the autonomous pipeline.
 Use this to verify connectivity and topic flow, or for manual/keyboard driving.
 """
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -10,6 +12,11 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    # LIDAR_TRANSPORT — "tcp" (default) or "udp". UDP bypasses macOS Docker
+    # Desktop's TCP loopback throughput cap (~7 MB/s), at the cost of
+    # accepting per-datagram packet loss for the LiDAR stream.
+    lidar_transport = os.environ.get("LIDAR_TRANSPORT", "tcp").lower()
+
     return LaunchDescription([
         DeclareLaunchArgument('host',         default_value='host.docker.internal'),
         DeclareLaunchArgument('port',         default_value='41451'),
@@ -27,6 +34,7 @@ def generate_launch_description():
                 'mission_name':     LaunchConfiguration('mission_name'),
                 'track_name':       LaunchConfiguration('track_name'),
                 'competition_mode': False,
+                'lidar_transport':  lidar_transport,
             }],
         ),
 

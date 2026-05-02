@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Tickable.h"
 #include <atomic>
 #include <thread>
 
@@ -70,11 +71,11 @@ struct FFSDSLidarChunkHeader
  * Broadcasts sensor frame at engine tick rate (~120Hz) on port 41452.
  * Broadcasts LiDAR point cloud at 10Hz on port 41453.
  */
-class FSDSPLUGIN_API FFSDSUdpBroadcaster
+class FSDSPLUGIN_API FFSDSUdpBroadcaster : public FTickableGameObject
 {
 public:
 	FFSDSUdpBroadcaster();
-	~FFSDSUdpBroadcaster();
+	virtual ~FFSDSUdpBroadcaster();
 
 	void Start(const FString& TargetIP = TEXT("255.255.255.255"),
 		uint16 SensorPort = 41452, uint16 LidarPort = 41453);
@@ -86,8 +87,17 @@ public:
 	/** Update target IP at runtime (called when bridge registers via TCP) */
 	void SetTargetIP(const FString& IP);
 
-	/** Called each game tick to broadcast sensor data */
-	void Tick(float DeltaTime);
+	// FTickableGameObject — engine ticks us automatically while bRunning.
+	// Editor-only ticking is disabled (the broadcaster only does anything
+	// useful when a vehicle pawn is possessed, which only happens in PIE).
+	virtual void Tick(float DeltaTime) override;
+	virtual bool IsTickable() const override { return bRunning && VehiclePawn != nullptr; }
+	virtual bool IsTickableInEditor() const override { return false; }
+	virtual bool IsTickableWhenPaused() const override { return false; }
+	virtual TStatId GetStatId() const override
+	{
+		RETURN_QUICK_DECLARE_CYCLE_STAT(FFSDSUdpBroadcaster, STATGROUP_Tickables);
+	}
 
 	bool IsRunning() const { return bRunning; }
 

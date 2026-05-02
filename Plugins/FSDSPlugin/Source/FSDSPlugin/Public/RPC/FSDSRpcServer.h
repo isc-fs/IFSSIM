@@ -31,6 +31,20 @@ public:
 	void Start(uint16 Port = 41451);
 	void Stop();
 
+	/**
+	 * Optional AF_UNIX (UDS) listener for high-throughput LiDAR / sensor
+	 * streaming. The TCP listener (Start) stays up regardless — UDS is
+	 * opt-in for localhost consumers that want to bypass the macOS TCP
+	 * loopback throughput cap (~7 MB/s) and get the full kernel pipe
+	 * bandwidth (typically 5+ GB/s).
+	 *
+	 * Path is the filesystem socket path; create the parent directory
+	 * if it doesn't exist (and ensure it's mountable into the bridge's
+	 * Docker container if the bridge runs containerised).
+	 */
+	void StartUds(const FString& SocketPath);
+	void StopUds();
+
 	void SetVehiclePawn(AFSDSVehiclePawn* Pawn) { VehiclePawn = Pawn; }
 	void SetReferee(AFSDSReferee* Ref) { Referee = Ref; }
 	void SetSettingsString(const FString& Settings) { SettingsString = Settings; }
@@ -55,6 +69,19 @@ private:
 	TArray<uint8> CachedImageData;
 	TArray<float> CachedLidarData;
 	FCriticalSection BinaryDataLock;
+
+	// UDS support (opt-in via StartUds). Mirrors the TCP path but using
+	// raw POSIX sockets — UE5's FSocket framework doesn't expose AF_UNIX.
+	void UdsServerThreadFunc();
+	void HandleUdsClient(int ClientFd);
+	void StreamLidarUds(int ClientFd);
+	void StreamSensorsUds(int ClientFd);
+	std::unique_ptr<std::thread> UdsServerThread;
+	std::vector<std::thread> UdsClientThreads;
+	std::mutex UdsClientThreadsMutex;
+	std::atomic<int> UdsListenFd{-1};
+	FString UdsSocketPath;
+	std::atomic<bool> bUdsRunning{false};
 
 	std::unique_ptr<std::thread> ServerThread;
 	// Active per-connection worker threads. HandleClient runs in one of
