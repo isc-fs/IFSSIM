@@ -117,6 +117,20 @@ void FFSDSUdpBroadcaster::Stop()
 {
 	bRunning = false;
 
+	// Wait for any in-flight LiDAR send AsyncTask to finish before
+	// destroying the sockets they captured by raw pointer. The lambda
+	// also checks RunningRef and bails on its own, so this is normally
+	// a sub-millisecond wait — but with macOS scheduler granularity at
+	// ~1 ms we cap at 200 spins (~200 ms) to avoid pegging EndPlay.
+	// 200 ms is well above the typical scan-burst length (~25 ms with
+	// 100 µs inter-chunk pacing × 250 chunks).
+	for (int32 spins = 0;
+	     LidarSendInFlight.load(std::memory_order_relaxed) > 0 && spins < 200;
+	     ++spins)
+	{
+		FPlatformProcess::SleepNoStats(0.001f);
+	}
+
 	if (SensorSocket)
 	{
 		SensorSocket->Close();
@@ -264,10 +278,25 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	FSocket* SocketRef = LidarSocket;
 	TSharedPtr<FInternetAddr> AddrRef = LidarAddr;
 
+	// Mark a task in-flight before dispatch; Stop() waits on this counter
+	// before destroying the socket the lambda captured by raw pointer.
+	LidarSendInFlight.fetch_add(1, std::memory_order_relaxed);
+	std::atomic<bool>* RunningRef = &bRunning;
+	std::atomic<int32>* InFlightRef = &LidarSendInFlight;
+
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
-	    [SocketRef, AddrRef, LocalFrameID, Channels, PointsCopy = MoveTemp(PointsCopy), TotalPoints]()
+	    [SocketRef, AddrRef, LocalFrameID, Channels, PointsCopy = MoveTemp(PointsCopy), TotalPoints, RunningRef, InFlightRef]()
 	{
+		// Always decrement the in-flight counter on any exit path.
+		struct FInFlightGuard {
+			std::atomic<int32>* C;
+			~FInFlightGuard() { C->fetch_sub(1, std::memory_order_relaxed); }
+		} Guard{InFlightRef};
+
 		if (!SocketRef || !AddrRef.IsValid()) return;
+		// Bail if Stop() was called between dispatch and now — sockets
+		// may have already been destroyed.
+		if (!RunningRef->load(std::memory_order_relaxed)) return;
 
 	// Chunk size MUST stay under macOS's default `net.inet.udp.maxdgram`
 	// of 9216 bytes — datagrams above that limit are silently dropped by
@@ -300,6 +329,11 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 
 	for (int32 ChunkIdx = 0; ChunkIdx < TotalChunks; ChunkIdx++)
 	{
+		// Cheap mid-burst escape hatch — if Stop() flipped bRunning, the
+		// captured SocketRef is about to become invalid. Better to drop
+		// the rest of this scan than to send into a destroyed socket.
+		if (!RunningRef->load(std::memory_order_relaxed)) return;
+
 		int32 StartPoint = ChunkIdx * PointsPerChunk;
 		int32 ChunkPoints = FMath::Min(PointsPerChunk, TotalPoints - StartPoint);
 

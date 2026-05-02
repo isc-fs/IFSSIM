@@ -3,6 +3,25 @@ set -e
 
 source /opt/ros/humble/setup.bash
 
+# Wipe Fast DDS' shared-memory droppings before anything else touches
+# /dev/shm. `docker compose restart` keeps the tmpfs intact, and Fast
+# DDS doesn't reliably reap its own segments when participants are
+# stopped abruptly — every ros2 CLI invocation, foxglove restart, and
+# rclpy script run leaves a fresh pair of segments behind. After a
+# couple of dev iterations we'd see 10–20 stale files, and Fast DDS
+# Participants in the new bridge would discover the ghosts and fail
+# to negotiate large-message endpoints with the live publisher (the
+# /lidar/Lidar1 PointCloud2 firehose specifically — small topics like
+# /imu kept working). Symptom we chased: bridge publishing healthily
+# at 10.7 Hz internally but external subscribers seeing 0 msgs;
+# `docker compose down + up` was the only fix because it wiped the
+# tmpfs as a side effect.
+#
+# Safe to nuke unconditionally: the bridge is the first DDS
+# participant in this container; nothing legitimate could be using
+# these files yet.
+rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
+
 # Optional rebuild step. With docker-compose bind-mounting the host's
 # pipeline/ and ros2/src/ packages over the image's COPY'd baseline,
 # Python edits go live via --symlink-install without any rebuild. But
