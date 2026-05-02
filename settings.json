@@ -64,8 +64,8 @@
         },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond at 500 k — 2.5× the previous 200 k baseline, holds a clean 9.7 Hz on test hardware (M-series Mac), comfortably below the ray-tracing budget so PerformScan never times out and the scan never gets skipped. Higher pts/s starts losing the 10 Hz target: 1 M lands ~6 Hz, 1.74 M ~4 Hz. The remaining cap is FSDSLidarSensor::PerformScan — line traces against Chaos serialise at the physics scene's read lock so ParallelFor's wins are bounded. Future work to push toward the full datasheet rate is UDS for the LiDAR stream (transport-side) and/or a Chaos-bypassing fast-path raytracer (CPU-side).",
-          "NumberOfChannels": 116, "PointsPerSecond": 500000,
+          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond bumped from 500 k → 1.74 M (datasheet rate) once the LiDAR stream moved off TCP onto the new UDP transport (LIDAR_TRANSPORT=udp in docker-compose.yml). On TCP at 1.74 M pts/s the bridge dropped to ~3 Hz on macOS Docker Desktop because of its TCP loopback throughput cap; the UDP path (chunked, paced, with a Fast DDS-friendly bridge reassembly) holds ~7-8 Hz at the full datasheet rate. The remaining gap to the nominal 10 Hz is now in the DDS layer (1.4 MB BEST_EFFORT messages fragment-loss between publisher and subscriber) — tracked as a follow-up. Sensor packs only emit *hits*, so the wire rate is roughly 65 % of attempted rays (e.g. 1.14 M pts/s of valid range returns at 1.74 M attempted).",
+          "NumberOfChannels": 116, "PointsPerSecond": 1740000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,

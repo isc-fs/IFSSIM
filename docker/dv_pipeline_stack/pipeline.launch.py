@@ -23,6 +23,8 @@ REMAP_GSS    = ('/fsds/gss',                 '/gss')
 REMAP_CMD    = ('/fsds/control_command',     '/control_command')
 
 PIPELINE_ENABLED = os.environ.get("PIPELINE_ENABLED", "false").lower() == "true"
+# LIDAR_TRANSPORT — "tcp" (default) or "udp"; see bridge.launch.py for rationale.
+LIDAR_TRANSPORT = os.environ.get("LIDAR_TRANSPORT", "tcp").lower()
 
 
 def generate_launch_description():
@@ -47,6 +49,7 @@ def generate_launch_description():
                 'mission_name': LaunchConfiguration('mission_name'),
                 'track_name':   LaunchConfiguration('track_name'),
                 'competition_mode': False,
+                'lidar_transport': LIDAR_TRANSPORT,
             }],
         ),
 

@@ -26,6 +26,13 @@ services:
       # Skip the autonomous control node — useful for SLAM-only validation
       # or when keyboard-driving for motion sanity checks.
       - DV_DISABLE_CONTROL=${DV_DISABLE_CONTROL:-false}
+      # LiDAR transport — "tcp" (default) or "udp". On macOS Docker
+      # Desktop the host's TCP loopback caps loopback writes at ~7 MB/s,
+      # so 1.74 M pts/s only sustains ~3 Hz on TCP. UDP fragments the
+      # scan into 64 KB datagrams forwarded through gvisor without
+      # window-based throttling — typically holds 10 Hz, at the cost of
+      # accepting per-datagram packet loss. Linux hosts can keep TCP.
+      - LIDAR_TRANSPORT=${LIDAR_TRANSPORT:-tcp}
       # Re-run `colcon build --symlink-install` at container startup. Default
       # off — Python edits to existing files go live via --symlink-install
       # without any rebuild. Set to "true" only when you've changed setup.py,
@@ -66,9 +73,14 @@ services:
       # any host-external traffic — UE5 plugin still uses raw TCP/UDP
       # on its own sockets).
     ports:
-      # UE5 pushes sensor data to these ports — must be mapped so host→container works
+      # UE5 pushes sensor data to these ports — must be mapped so host→container works.
+      # LiDAR uses 51453 (not the adjacent-to-sensor 41453): Docker Desktop on
+      # macOS sometimes only binds the first port of a contiguous UDP range
+      # via its userspace proxy (`com.docker.backend`), even though `docker
+      # port` reports both. Using a well-separated port forces a distinct
+      # proxy binding and avoids the silent half-broken range-mapping.
       - "127.0.0.1:41452:41452/udp"
-      - "127.0.0.1:41453:41453/udp"
+      - "127.0.0.1:51453:51453/udp"
       # Foxglove WebSocket bridge — connect Lichtblick at ws://localhost:8765
       - "127.0.0.1:8765:8765"
     extra_hosts:
@@ -104,6 +116,13 @@ services:
       - ./pipeline/slam:/dv_pipeline_stack_ws/src/slam
       - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
       - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
+      # AF_UNIX socket directory shared with the FSDS plugin running on
+      # the host. The plugin creates /tmp/ifssim_streams/lidar.sock at
+      # PIE start and the bridge connects to it (bypasses macOS TCP
+      # loopback throughput cap of ~7 MB/s; UDS sustains GB/s). If this
+      # mount isn't viable on a given host (path-permission issues,
+      # non-Mac/Linux), the bridge silently falls back to TCP.
+      - /tmp/ifssim_streams:/tmp/ifssim_streams
     mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
     memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
     shm_size: 1gb         # Default 64 MB is too small for Fast DDS SHM —
