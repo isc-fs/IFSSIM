@@ -57,7 +57,7 @@ services:
       # re-JIT on every container boot and get SIGKILL'd mid-compile when the
       # pipeline was restarted.
       - NUMBA_CACHE_DIR=/numba_cache
-      # Fast DDS transport: SHM + UDP fallback (the default). SHM is
+      # Fast DDS transport: SHM-preferred + UDP fallback. SHM is
       # ~order-of-magnitude cheaper than UDP for same-container pub/sub
       # and is the dominant cost on the bridge's 400 Hz sensor publish
       # thread under pipeline load (sensor topics dropped from ~95 % of
@@ -65,13 +65,19 @@ services:
       # not because of subscriber backpressure but because per-publish
       # DDS UDP serialisation + send was wall-clock-bound).
       #
-      # Previously forced to UDPv4 because Docker's default /dev/shm
-      # (64 MB) caused "RTPS_TRANSPORT_SHM Error: Failed init_port"
-      # stalls. shm_size below is now 1 GB (see below), so SHM has
-      # plenty of room and the original failure mode no longer applies.
-      # Let Fast DDS pick its default (SHM-preferred, UDP fallback for
-      # any host-external traffic — UE5 plugin still uses raw TCP/UDP
-      # on its own sockets).
+      # The XML profile below pins ASYNCHRONOUS publish mode + a 64 MB
+      # SHM segment + preallocated reader/writer histories — the
+      # standard recipe for the 1.4 MB BEST_EFFORT /lidar/Lidar1
+      # samples. Default Fast DDS settings caused ~30 % loss between
+      # publish() and subscriber receive() at 1.74 M pts/s, even with
+      # the publisher comfortably hitting 10.7 Hz internally (synch
+      # publish blocks the calling thread mid-fragment + small SHM
+      # segment cycles 3x per send).
+      #
+      # XML is bind-mounted (not COPY'd into the image) so iterating
+      # doesn't require an image rebuild — restart the container after
+      # an edit.
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/dv_pipeline_stack_ws/fastdds_profile.xml
     ports:
       # UE5 pushes sensor data to these ports — must be mapped so host→container works.
       # LiDAR uses 51453 (not the adjacent-to-sensor 41453): Docker Desktop on
@@ -110,6 +116,8 @@ services:
       # Mounted per-package, not as a single tree, because ros2/src/ and
       # pipeline/ collapse into one src/ inside the container — a single
       # bind-mount of either parent would hide the other.
+      # Fast DDS profile — see FASTRTPS_DEFAULT_PROFILES_FILE in `environment:`.
+      - ./docker/dv_pipeline_stack/fastdds_profile.xml:/dv_pipeline_stack_ws/fastdds_profile.xml:ro
       - ./pipeline/cone_slam:/dv_pipeline_stack_ws/src/cone_slam
       - ./pipeline/control:/dv_pipeline_stack_ws/src/control
       - ./pipeline/path_planning:/dv_pipeline_stack_ws/src/path_planning
