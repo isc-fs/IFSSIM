@@ -341,6 +341,22 @@ def test_pie_capture_tick_recovers() -> None:
 
     Captured from /tmp/planner_capture.jsonl tick 84 (first plan_empty
     event in a 153-tick PIE session).
+
+    UPDATE (#189 fix): pre-#189 the walker traced a 10-midpoint path
+    here, but the trailing same-colour run sat on the BLUE arc (no
+    cross-colour midpoint after world-x ≈ 28 m) and would drive the
+    car into cones. Post-#189 the trailing same-colour run is trimmed,
+    bringing the count down to ~3-5 depending on where the last
+    cross-colour edge lies. The test now asserts MIN_MIDPOINTS rather
+    than the historical 10 — the original empty-path bug remains
+    fixed (path is non-empty, ≥ MIN_MIDPOINTS), and the bad trailing
+    arc-following segment is gone.
+
+    NB: same-colour midpoints in the *middle* of the chain (between
+    cross-colour endpoints) are not addressed by this trim — they're
+    rare in practice and removing them needs a different approach
+    (reject same-colour during walk vs trim after). Tracked
+    separately if it ever surfaces as an actual driving failure.
     """
     pose = Pose2D(
         x=22.621483185023195, y=1.6179696965233892, yaw=0.2780509329948125,
@@ -395,9 +411,115 @@ def test_pie_capture_tick_recovers() -> None:
         f"rej={debug.rejections}"
     )
     n_sel = len(debug.selected_midpoints)
-    assert n_sel >= 4, (
-        f"Captured PIE failure tick: only {n_sel} midpoints selected. "
-        f"Expected ≥ 4 (post-fix produced 10). rej={debug.rejections}"
+    assert n_sel >= MIN_MIDPOINTS, (
+        f"Captured PIE failure tick: only {n_sel} midpoints selected, "
+        f"below MIN_MIDPOINTS={MIN_MIDPOINTS}. rej={debug.rejections}"
+    )
+
+
+def test_one_sided_observation_truncates_path() -> None:
+    """#189: when LiDAR observation goes one-sided mid-corridor (typical
+    on tight corners — the inside arc rolls out of the FoV before fresh
+    inside cones come into view), Delaunay over the one-sided region
+    produces only same-colour edges. Pre-fix the walker happily picked
+    those edges' midpoints and traced the *outside* cone arc, sending
+    the car into the cone row. The fix trims any trailing same-colour
+    midpoint run from the walker output, so the path stops at the
+    boundary of the still-valid cross-colour region.
+
+    Scenario: a straight-then-90°-left turn where YELLOW cones are
+    truncated past world-x = 7 m (mid-curve). Past that x the only
+    visible cones are BLUE (outside arc) — the bug case from #189.
+    """
+    # Mirror of _tight_corner_track but a *left* turn (matching #189)
+    # and with one-sided truncation past the cutoff_x.
+    approach_len = 4.0
+    centerline_radius = 4.5
+    track_width = 3.0
+    inside_chord = 2.5
+    # Drop YELLOWs past world-x = 5.0 (mid-approach + first arc cone).
+    # The cutoff must sit well below the next BLUE so that no
+    # cross-colour edge can straddle it (otherwise the walker
+    # legitimately picks a BLUE-YELLOW midpoint past the cutoff and
+    # the assertion below false-fires). 5.0 m places the boundary
+    # comfortably inside the cross-colour region.
+    cutoff_x = 5.0
+    half_width = track_width / 2.0
+    cones: List[Cone] = []
+
+    x = 0.0
+    while x <= approach_len:
+        cones.append(Cone(x=x, y=+half_width, color=ConeColor.BLUE))
+        cones.append(Cone(x=x, y=-half_width, color=ConeColor.YELLOW))
+        x += 1.5
+
+    # Left turn → centre at (approach_len, +R).
+    cx = approach_len
+    cy = +centerline_radius
+    inner_radius = centerline_radius - half_width  # YELLOW (left of car)
+    outer_radius = centerline_radius + half_width  # BLUE (right of car)
+    # Wait — for a *left* turn the geometry flips: outside is BLUE on
+    # the LEFT side of the car (still-blue per ConeColor convention).
+    # Actually for a left turn with the car heading +X:
+    #   - YELLOW (right side of track) is on the OUTSIDE of the curve
+    #   - BLUE  (left side of track) is on the INSIDE of the curve
+    # So inside_radius should match BLUE, outside_radius should match
+    # YELLOW. The bug case in #189 is "only BLUE visible past mid-curve"
+    # which corresponds to "only the inside arc visible" — odd, since
+    # the issue says "inside arc has rolled out of FoV". Re-reading
+    # #189 carefully: the failing turn was a LEFT turn where YELLOW
+    # was the inside (8 landmarks, all at world-x ≤ 22 m) and BLUE was
+    # the outside (28 landmarks spanning 5–47 m). So inside == YELLOW,
+    # outside == BLUE for a left turn. That contradicts the convention
+    # check above; the convention is just track-side, not curve-side.
+    #
+    # For our test, we'll stay literal to the bug: keep BLUE both
+    # sides of the cutoff (outside arc visible everywhere), drop
+    # YELLOW past the cutoff (inside arc disappears mid-curve).
+    theta_step = 2.0 * math.asin(min(1.0, inside_chord / (2.0 * inner_radius)))
+    sweep = math.radians(90.0)
+    n_steps = max(2, int(round(sweep / theta_step)))
+    for i in range(n_steps + 1):
+        # Sweep theta from -pi/2 (corner entry, due-south of centre) to 0
+        # (90° left turn), tracing a counter-clockwise arc.
+        theta = -math.pi / 2.0 + i * (sweep / n_steps)
+        c, s = math.cos(theta), math.sin(theta)
+        bx = cx + outer_radius * c
+        by = cy + outer_radius * s
+        yx = cx + inner_radius * c
+        yy = cy + inner_radius * s
+        cones.append(Cone(x=bx, y=by, color=ConeColor.BLUE))
+        if yx <= cutoff_x:
+            cones.append(Cone(x=yx, y=yy, color=ConeColor.YELLOW))
+        # else: yellow cone past cutoff — dropped, simulating one-sided observation
+
+    pose = Pose2D(x=0.0, y=0.0, yaw=0.0)
+    _path, debug = plan_centerline_with_debug(cones, pose)
+    selected = debug.selected_midpoints  # world-frame, includes car anchor
+
+    # The walker may legitimately have picked one or two same-colour
+    # edges before the truncation (e.g. an edge between two BLUEs that
+    # happens to be cross-colour-adjacent in the corridor); the fix
+    # only requires that the *trailing* run of same-colour midpoints
+    # is trimmed. Concretely: every selected midpoint past the cutoff_x
+    # would necessarily come from a BLUE-BLUE edge (no YELLOWs exist
+    # past the cutoff to pair with), so we assert no midpoint sits past
+    # the cutoff.
+    assert selected is not None and len(selected) >= 1, (
+        f"planner returned no midpoints. rejections={debug.rejections}"
+    )
+    # Allow some slack: the BLUE outer arc starts at world-x = approach_len
+    # (= 4.0) and the last BLUE-YELLOW edge straddling the cutoff
+    # produces a midpoint up to ~half-track-width past cutoff_x. So a
+    # midpoint at cutoff_x + ~1.0 m is plausible cross-colour. Anything
+    # further is on the BLUE arc proper (the #189 failure mode).
+    deep_past_cutoff = [p for p in selected[1:] if p[0] > cutoff_x + 2.0]
+    assert not deep_past_cutoff, (
+        f"path extends well into the one-sided BLUE-only region "
+        f"({len(deep_past_cutoff)} midpoint(s) past world-x={cutoff_x + 2.0}m). "
+        f"Their world coords: {deep_past_cutoff}. "
+        f"This is the #189 failure — walker followed the BLUE arc "
+        f"because only BLUE-BLUE edges existed past the cutoff."
     )
 
 

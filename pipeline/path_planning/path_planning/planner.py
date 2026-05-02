@@ -309,6 +309,13 @@ def _search_path_body(
     used: Set[int] = set()                   # edge indices already on path
     prev_heading = 0.0                       # last segment heading (rad)
     prev_tw = 0.0                            # last edge's track width
+    # Index in `pts` of the last midpoint added from a cross-colour edge.
+    # The car anchor (pts[0]) doesn't come from any edge but counts as
+    # a "valid" terminal — without it, a path consisting solely of
+    # same-colour midpoints would collapse to an empty array. See the
+    # truncation block at the bottom of this function for the reason
+    # we need this tracker. Issue #189.
+    last_cross_idx = 0
 
     def _bump(reason: str) -> None:
         if rejections is not None:
@@ -389,11 +396,24 @@ def _search_path_body(
         e = edges[best_idx]
         used.add(best_idx)
         pts.append(e.midpoint.copy())
+        if not e.same_color:
+            last_cross_idx = len(pts) - 1
         prev_heading = float(np.arctan2(
             e.midpoint[1] - leaf[1], e.midpoint[0] - leaf[0]))
         prev_tw = e.length
 
-    return np.array(pts)
+    # Truncate any trailing same-colour run. When the path enters a
+    # one-sided observation region (typical at tight corner exits where
+    # the inside arc has rolled out of LiDAR FoV before fresh inside
+    # cones come into view), only same-colour Delaunay edges exist and
+    # the walker still picks them — but their midpoints sit on the
+    # outside cone arc, not at the corridor centerline, so following
+    # the path would clip cones. Trimming back to the last cross-colour
+    # midpoint stops the path at the boundary of the still-valid
+    # cross-colour region; the controller's MIN_MIDPOINTS gate then
+    # decides whether the truncated path is long enough to drive on,
+    # and falls back to slowing/braking when it isn't. Issue #189.
+    return np.array(pts[: last_cross_idx + 1])
 
 
 def _segment_crosses_any(
