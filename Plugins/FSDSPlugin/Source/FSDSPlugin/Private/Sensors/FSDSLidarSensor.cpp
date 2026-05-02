@@ -2,6 +2,7 @@
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "Async/Async.h"
+#include "Async/ParallelFor.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -109,63 +110,91 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	TraceParams.bTraceComplex = false;
 	TraceParams.bReturnPhysicalMaterial = false;
 
-	int32 HitCount = 0;
+	// Parallelise the line traces across all horizontal steps. Previously
+	// this was a single-threaded loop of HorizontalSteps × NumberOfChannels
+	// LineTraceSingleByChannel calls — at 1 M pts/s ≈ 100 k traces/scan
+	// the GameThread budget capped /lidar at ~3.5 Hz instead of the 10 Hz
+	// the sensor is configured for. Line traces against UWorld are
+	// thread-safe (the physics scene takes its own lock per call), so
+	// each horizontal step can run on its own worker thread.
+	//
+	// CurrentHorizontalAngle was a per-iteration accumulator; replaced
+	// with direct h-index → HAngle math so iterations are independent.
+	// The resulting state at end-of-scan is identical (one HFov sweep).
+	struct FRayResult { float X, Y, Z; bool bHit; };
+	TArray<FRayResult> SlotResults;
+	const int32 TotalSlots = HorizontalSteps * NumberOfChannels;
+	SlotResults.SetNumUninitialized(TotalSlots);
 
-	for (int32 h = 0; h < HorizontalSteps; h++)
+	ParallelFor(HorizontalSteps, [&](int32 h)
 	{
-		float HAngle = HorizontalFOVStart + CurrentHorizontalAngle;
+		const float HAngle = HorizontalFOVStart + h * HStep;
 
 		for (int32 v = 0; v < NumberOfChannels; v++)
 		{
-			float VAngle = VerticalFOVLower + v * VStep;
+			const int32 SlotIdx = h * NumberOfChannels + v;
+			SlotResults[SlotIdx].bHit = false;
 
+			const float VAngle = VerticalFOVLower + v * VStep;
 			FRotator RayRotation(VAngle, HAngle, 0.f);
 			FVector RayDir = OwnerRotation.RotateVector(RayRotation.Vector());
 			FVector RayEnd = SensorWorldPos + RayDir * MaxRange;
 
 			FHitResult Hit;
-			if (InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
-			{
-				if (DropoutRate > 0.f && FMath::FRand() < DropoutRate)
-					continue;
+			if (!InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
+				continue;
 
-				float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
+			// Dropout/noise use FMath::FRand and RandStandardNormal which
+			// share global state across threads — for sim noise the racy
+			// reads are acceptable (every consumer just sees jitter on
+			// jitter), and UE5's FMath PRNG won't crash.
+			if (DropoutRate > 0.f && FMath::FRand() < DropoutRate)
+				continue;
 
-				// Gaussian range jitter (cm — see header comment on
-				// RangeNoiseStd; FSDSVehiclePawn converts m → cm at the
-				// wire site). FRandRange(-1, 1) was uniform, emitting
-				// ~0.58× the declared stddev.
-				if (RangeNoiseStd > 0.f)
-					Dist += RangeNoiseStd * RandStandardNormal();
+			float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
+			if (RangeNoiseStd > 0.f)
+				Dist += RangeNoiseStd * RandStandardNormal();
 
-				if (Dist >= MinRange)
-				{
-					FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
-					FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
-					// UE5 vehicle local frame is left-handed (X-fwd, Y-RIGHT, Z-up).
-					// ROS REP-103 vehicle frame is right-handed (X-fwd, Y-LEFT, Z-up).
-					// Without the Y flip, every cone shows up mirrored across the
-					// vehicle's longitudinal axis in /lidar/Lidar1, which then
-					// mirrors the cones detected, the SLAM map, and the planned
-					// path. On a straight track the mirror is self-symmetric so
-					// the car drives fine; at the first curve the mirrored path
-					// diverges from physical geometry and the controller turns
-					// the wrong way (DIAG showed +25° yaw_err step in 200 ms).
-					NewPoints.Add(LocalHit.X / 100.f);
-					NewPoints.Add(-LocalHit.Y / 100.f);
-					NewPoints.Add(LocalHit.Z / 100.f);
-					HitCount++;
+			if (Dist < MinRange)
+				continue;
 
-					if (bDrawDebugPoints)
-						DrawDebugPoint(InWorld, Hit.ImpactPoint, 3.f, FColor::Green, false, 0.1f);
-				}
-			}
+			const FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
+			const FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
+			// UE5 vehicle local frame is left-handed (X-fwd, Y-RIGHT, Z-up).
+			// ROS REP-103 vehicle frame is right-handed (X-fwd, Y-LEFT, Z-up).
+			// Without the Y flip, every cone shows up mirrored across the
+			// vehicle's longitudinal axis in /lidar/Lidar1, which then
+			// mirrors the cones detected, the SLAM map, and the planned
+			// path. On a straight track the mirror is self-symmetric so
+			// the car drives fine; at the first curve the mirrored path
+			// diverges from physical geometry and the controller turns
+			// the wrong way.
+			SlotResults[SlotIdx] = {
+				LocalHit.X / 100.f,
+				-LocalHit.Y / 100.f,
+				LocalHit.Z / 100.f,
+				true
+			};
 		}
+	});
 
-		CurrentHorizontalAngle += HStep;
-		if (CurrentHorizontalAngle >= HFov)
-			CurrentHorizontalAngle = 0.f;
+	// Pack hits into NewPoints. Single-threaded — DrawDebug calls are
+	// game-thread-only, so debug visualisation has been dropped from the
+	// parallel path; if we ever need it back we can store the world-space
+	// hit points in SlotResults and draw them here.
+	int32 HitCount = 0;
+	for (int32 i = 0; i < TotalSlots; i++)
+	{
+		const FRayResult& R = SlotResults[i];
+		if (!R.bHit) continue;
+		NewPoints.Add(R.X);
+		NewPoints.Add(R.Y);
+		NewPoints.Add(R.Z);
+		HitCount++;
 	}
+
+	// Match the previous behaviour: one HFov sweep per scan, state wraps.
+	CurrentHorizontalAngle = 0.f;
 
 	FScopeLock Lock(&PointCloudLock);
 	PointCloudBuffer = MoveTemp(NewPoints);
