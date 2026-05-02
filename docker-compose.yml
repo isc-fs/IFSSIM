@@ -32,6 +32,11 @@ services:
       # added a new package, edited a .msg, or touched C++ source. See #176
       # for the bind-mount story this flag completes.
       - DV_REBUILD_ON_STARTUP=${DV_REBUILD_ON_STARTUP:-false}
+      # When set to a writable file path, the path_planning node dumps
+      # one JSON line per planner callback (cones, pose, n_path,
+      # rejections). Used for offline replay against real failing
+      # scenes; default empty disables capture.
+      - DV_PLANNER_CAPTURE=${DV_PLANNER_CAPTURE:-}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed
