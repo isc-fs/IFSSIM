@@ -69,6 +69,8 @@
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
+          "_comment_maxrange": "MaxRange in metres. Real Hesai ATX_S01 spec is 200 m. Set to 30 m for the sim because cones past 30 m don't matter for FS detection (max-corridor-width is well under that), and shrinking the per-ray broadphase distance is the cheapest UE5 CPU optimisation we have — Chaos walks the spatial hash for every actor along the ray's path, so a 7× shorter ray cuts the per-ray work by roughly that factor. Bump back to 200 for benchmarks against real-car captures or non-FS scenarios.",
+          "MaxRange": 30,
           "_comment_mount": "Mount aligned with the IFS-08's actual LiDAR position: X=0 (CoG-aligned, just beneath the main hoop), Y=0 (centered), Z=1.10 m (main hoop crossbar height). Previously X=0.5 m / Z=0.9 m was a hood-mount approximation; correcting it shifts the sensor back ~50 cm and up ~20 cm, which changes both the cone-detection range envelope (cones at the rear become visible) and the time-to-first-detection for cones immediately ahead. Verify cone_detection still classifies cluster heights correctly after re-baselining.",
           "X": 0.0, "Y": 0, "Z": 1.10,
           "RangeNoiseStd": 0.03,
