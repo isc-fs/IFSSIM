@@ -21,6 +21,7 @@ This document is a comprehensive technical reference for all systems, components
 11. [Mission Control](#11-mission-control)
 12. [Configuration (settings.json)](#12-configuration-settingsjson)
 13. [Coordinate System](#13-coordinate-system)
+14. [Autonomy Pipeline](#14-autonomy-pipeline)
 
 ---
 
@@ -430,7 +431,7 @@ The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack t
 | `testing_only/track` | `fs_msgs/Track` (latched) | 0.2 Hz | All cone positions *(hidden in competition mode)* |
 | `testing_only/extra_info` | `fs_msgs/ExtraInfo` | 1 Hz | DOO counter, lap count *(hidden in competition mode)* |
 
-TF frames published: `fsds/map` → `fsds/FSCar` (dynamic), `fsds/FSCar` → `fsds/FSCar/Lidar1`, `fsds/FSCar/<cam_name>` (static, 1 Hz).
+**Bridge TF behavior:** the bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — pipeline nodes consume the sensors directly without TF lookups. The live TF tree (`map → odom → base_link`) is published by the autonomy pipeline; see [`autonomy_pipeline.md`](autonomy_pipeline.md) for details. `/fsds/testing_only/odom` (frame `odom`, child `fsds/FSCar`) is a ground-truth odometry feed for debugging only — the autonomy must not consume it.
 
 ### Subscribed Topics
 
@@ -707,13 +708,15 @@ The frontend stores the key in `localStorage` under `mc_api_key`; on the first 4
 |---|---|---|
 | `/api/event/state` | GET | Full referee state |
 | `/api/event/set` | POST | Set event type and lap count |
-| `/api/event/start` | POST | Set event and resume in one call |
+| `/api/event/start` | POST | Staged session start — refuses with HTTP 400 if no track loaded (cones=0) |
+
+The `/api/event/start` sequence is the staged stand-in for a real FS-DV state machine ([#173](https://github.com/isc-fs/IFSSIM/issues/173)): stop the autonomy pipeline → activate RES → set the event mode → resume the sim → start the pipeline → wait ~4.5 s for SLAM to calibrate → auto-release the EBS.
 
 **RES (Remote Emergency Stop):**
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/res/activate` | POST | Emergency stop — pause sim + lock controls |
+| `/api/res/activate` | POST | Pulse RES line (pause sim + lock controls). Does not kill the autonomy pipeline |
 | `/api/res/release` | POST | Release RES |
 | `/api/res/status` | GET | Current RES state |
 
@@ -874,6 +877,20 @@ FVector UEPos = FVector(ENUPos.Y * 100.f, ENUPos.X * 100.f, ENUPos.Z * 100.f);
 Orientation quaternions are converted such that heading 0 = North (ENU Y-axis). All angular velocity and linear acceleration vectors undergo the same X↔Y swap.
 
 All coordinates in the TCP API, UDP streams, ROS 2 topics, Python client, and Mission Control are in ENU metres. The only exception is the raw UE5 scene object API (`listSceneObjects`, `getObjectPose`, `setObjectPose`), which uses ENU metres as well after internal conversion.
+
+---
+
+## 14. Autonomy Pipeline
+
+The ROS 2 autonomy stack — cone detection, SLAM, path planning, control — is documented separately in [`autonomy_pipeline.md`](autonomy_pipeline.md). That doc covers:
+
+- The end-to-end topic graph from raw LiDAR through `ControlCommand`.
+- The live TF tree (`map → odom → base_link`) and which node owns which frame.
+- Per-package responsibilities for `pipeline/slam`, `pipeline/cone_slam`, `pipeline/path_planning`, `pipeline/control`.
+- Mission Control's role in the autonomy lifecycle (Start Session → SLAM cal → EBS release).
+- A debugging order for "the car won't drive."
+
+For the simulator-side topics that *feed* the autonomy stack (sensors, vehicle physics, RPC, Mission Control surface), see the sections above.
 
 ---
 
