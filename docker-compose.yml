@@ -37,6 +37,12 @@ services:
       # rejections). Used for offline replay against real failing
       # scenes; default empty disables capture.
       - DV_PLANNER_CAPTURE=${DV_PLANNER_CAPTURE:-}
+      # Same idea for cone_graph_slam: dumps one JSON line per new
+      # landmark creation (id, body_x/y, range, bearing, classified
+      # colour, current pose yaw). Used to verify whether colour lock-
+      # on-first-observation is triggering wrong-side classifications
+      # in tight corners (#188).
+      - DV_SLAM_LANDMARK_CAPTURE=${DV_SLAM_LANDMARK_CAPTURE:-}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed
