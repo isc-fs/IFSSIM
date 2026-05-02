@@ -2,6 +2,21 @@
 set -e
 
 source /opt/ros/humble/setup.bash
+
+# Optional rebuild step. With docker-compose bind-mounting the host's
+# pipeline/ and ros2/src/ packages over the image's COPY'd baseline,
+# Python edits go live via --symlink-install without any rebuild. But
+# changes that need re-running colcon — new packages, setup.py edits,
+# .msg regeneration, C++ source changes — require this. Off by default
+# because it adds ~3–10s to startup; opt in via DV_REBUILD_ON_STARTUP=true
+# in compose / shell env.
+if [ "${DV_REBUILD_ON_STARTUP:-false}" = "true" ]; then
+    echo "DV_REBUILD_ON_STARTUP=true — running colcon build before startup..."
+    cd /dv_pipeline_stack_ws
+    colcon build --symlink-install
+    cd - >/dev/null
+fi
+
 source /dv_pipeline_stack_ws/install/setup.bash
 
 # ament_cmake packages (fs_msgs, ifssim_bridge) are not added to AMENT_PREFIX_PATH

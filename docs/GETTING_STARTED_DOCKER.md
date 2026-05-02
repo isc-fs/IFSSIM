@@ -129,7 +129,44 @@ UE5 can be closed normally from the editor. Pressing **Stop** (ending Play mode)
 
 ## Rebuilding after code changes
 
-Backend or frontend Python/TypeScript changes require a rebuild before they take effect in the containers:
+### Pipeline Python edits (slam, cone_slam, path_planning, control)
+
+**No rebuild needed.** `pipeline/` and `ros2/src/` are bind-mounted into `dv_pipeline_stack` over the image's baseline, and `colcon build --symlink-install` (run at image build time) made the install tree's Python entries symlinks back to the source. So host edits are live the moment you toggle the pipeline:
+
+```bash
+# Edit pipeline/path_planning/path_planning/planner.py on the host, then:
+curl -X POST http://localhost:8000/api/event/start  # restarts the pipeline
+# new code is in effect — no docker cp, no rebuild
+```
+
+If the pipeline is already running, the simplest way to pick up an edit is to flip the pipeline-control flag:
+
+```bash
+docker compose exec dv_pipeline_stack bash -c 'rm /pipeline_ctrl/enable; sleep 2; touch /pipeline_ctrl/enable'
+```
+
+### Pipeline changes that *do* need a rebuild
+
+- **C++ source** (`ros2/src/ifssim_bridge/`) — recompile.
+- **`.msg` files** (`ros2/src/fs_msgs/msg/`) — regenerate bindings.
+- **`setup.py` changes** in any pipeline package — re-link entry points.
+- Adding a new package.
+
+Two ways to rebuild:
+
+```bash
+# 1. Rebuild on the next container restart (clean — uses the regular entrypoint)
+DV_REBUILD_ON_STARTUP=true docker compose up -d --force-recreate dv_pipeline_stack
+
+# 2. Build inside the running container without restart (faster for iteration)
+docker compose exec dv_pipeline_stack bash -c \
+  "cd /dv_pipeline_stack_ws && colcon build --symlink-install --packages-select <pkg>"
+# then restart the pipeline (toggle /pipeline_ctrl/enable as above)
+```
+
+### Mission Control rebuild
+
+Backend or frontend Python/TypeScript changes still require an image rebuild (no bind-mount on those services yet):
 
 ```bash
 # Backend only
@@ -143,6 +180,8 @@ docker compose up -d --no-deps mission_control_frontend
 # All
 docker compose build && docker compose up -d
 ```
+
+### UE5 plugin
 
 C++ plugin changes (files under `Plugins/`) take effect automatically the next time UE5 launches — no Docker rebuild needed.
 
