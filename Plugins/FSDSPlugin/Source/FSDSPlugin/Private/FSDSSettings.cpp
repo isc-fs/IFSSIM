@@ -269,6 +269,7 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("VerticalFOVLower"), DblVal)) Sensor.VerticalFOVLower = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("HorizontalFOVStart"), DblVal)) Sensor.HorizontalFOVStart = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("HorizontalFOVEnd"), DblVal)) Sensor.HorizontalFOVEnd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("MaxRange"), DblVal)) Sensor.MaxRange = DblVal;
 	SensorObj->TryGetBoolField(TEXT("DrawDebugPoints"), Sensor.bDrawDebugPoints);
 
 	// Noise parameters (all sensor types)

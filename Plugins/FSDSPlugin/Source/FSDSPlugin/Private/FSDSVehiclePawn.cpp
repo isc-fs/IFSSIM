@@ -306,6 +306,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->VerticalFOVLower = SensorPair.Value.VerticalFOVLower;
 				LidarSensor->HorizontalFOVStart = SensorPair.Value.HorizontalFOVStart;
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
+				LidarSensor->MaxRange = SensorPair.Value.MaxRange * 100.f;     // meters → cm
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
 				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
