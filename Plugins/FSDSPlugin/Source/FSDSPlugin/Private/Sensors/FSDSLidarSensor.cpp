@@ -126,18 +126,39 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	const int32 TotalSlots = HorizontalSteps * NumberOfChannels;
 	SlotResults.SetNumUninitialized(TotalSlots);
 
+	// Pre-compute per-channel base direction (pre-yaw, in sensor-local frame).
+	// At 174 k rays/scan the per-ray FRotator(VAngle, HAngle, 0).Vector() was
+	// 174 k sin/cos pairs per scan; pre-computing the V-channel components
+	// once and reducing the per-ray work to a single Z-yaw rotation cuts the
+	// trig cost to NumberOfChannels + HorizontalSteps sin/cos calls per scan
+	// (=~1616 instead of ~348 000). The line trace itself is the dominant
+	// cost so this is a few-percent saving, but it's free correctness-wise.
+	struct FChannelDir { float CosV; float SinV; };
+	TArray<FChannelDir> ChannelDir;
+	ChannelDir.SetNumUninitialized(NumberOfChannels);
+	for (int32 v = 0; v < NumberOfChannels; v++)
+	{
+		const float VAngleRad = FMath::DegreesToRadians(VerticalFOVLower + v * VStep);
+		ChannelDir[v] = { FMath::Cos(VAngleRad), FMath::Sin(VAngleRad) };
+	}
+
 	ParallelFor(HorizontalSteps, [&](int32 h)
 	{
-		const float HAngle = HorizontalFOVStart + h * HStep;
+		const float HAngleRad = FMath::DegreesToRadians(HorizontalFOVStart + h * HStep);
+		const float CosH = FMath::Cos(HAngleRad);
+		const float SinH = FMath::Sin(HAngleRad);
 
 		for (int32 v = 0; v < NumberOfChannels; v++)
 		{
 			const int32 SlotIdx = h * NumberOfChannels + v;
 			SlotResults[SlotIdx].bHit = false;
 
-			const float VAngle = VerticalFOVLower + v * VStep;
-			FRotator RayRotation(VAngle, HAngle, 0.f);
-			FVector RayDir = OwnerRotation.RotateVector(RayRotation.Vector());
+			// Sensor-local ray dir from the (V, H) angle pair: a unit vector
+			// pitched up by VAngle then yawed by HAngle (matches the original
+			// FRotator(VAngle, HAngle, 0).Vector() Tait-Bryan order).
+			const FChannelDir& C = ChannelDir[v];
+			const FVector RayDirLocal(C.CosV * CosH, C.CosV * SinH, C.SinV);
+			FVector RayDir = OwnerRotation.RotateVector(RayDirLocal);
 			FVector RayEnd = SensorWorldPos + RayDir * MaxRange;
 
 			FHitResult Hit;
