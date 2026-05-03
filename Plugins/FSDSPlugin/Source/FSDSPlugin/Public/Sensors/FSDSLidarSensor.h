@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "RHIGPUReadback.h"
 #include "FSDSLidarSensor.generated.h"
 
 class USceneCaptureComponent2D;
@@ -41,6 +42,7 @@ public:
 	UFSDSLidarSensor();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	/** Get the latest point cloud as flat [x,y,z,...] array (meters, sensor-local) */
@@ -139,6 +141,46 @@ private:
 	// Drive the GPU capture from the rate-limited tick. Returns true
 	// if a capture was issued this tick.
 	bool TickGPUPath(float DeltaTime);
+
+	// Phase-2 (#223) — async GPU→CPU readback. Game-thread enqueues a
+	// render command that issues the GPU→CPU copy on the render thread;
+	// the result is polled next frame via IsReady() and copied into
+	// GPUDepthPixels. Same dispatch/collect pattern that #206 tier-3
+	// taught us, but here the work is genuinely off-CPU.
+	void EnqueueGPUReadback();
+	void PollGPUReadback();
+	// Game-thread sink for the render-thread lock+memcpy result.
+	// Called via AsyncTask once the render thread has finished the
+	// FRHIGPUTextureReadback::Lock/Unlock dance. We can't touch
+	// UObject state on the render thread directly, so this is the
+	// canonical "bounce back to game thread" UE5 pattern.
+	void ConsumeReadbackResult(TArray<float>&& Pixels, int32 RowPitch);
+
+	TUniquePtr<FRHIGPUTextureReadback> GPUDepthReadback;
+	bool  bGPUReadbackInFlight = false;  // EnqueueCopy has been issued, IsReady not yet observed
+	bool  bGPULockDispatched   = false;  // render-thread Lock command has been queued; awaiting ConsumeReadbackResult
+
+	// CPU mirror of the depth RT after a successful readback.
+	// GPUDepthRowPitch is in *pixels* (≥ GPURTWidth — RHI may pad rows
+	// for alignment); decode shader / Phase 3 reads row-by-row using
+	// this stride.
+	TArray<float> GPUDepthPixels;
+	int32 GPUDepthRowPitch = 0;
+
+	// Pose snapshot at the moment the capture was issued. The readback
+	// arrives ≥1 frame later when the actor has moved on; Phase 3
+	// expresses decoded points relative to this captured pose so the
+	// cloud matches the geometry of when the rays were cast.
+	FTransform GPUPendingOwnerTransform;
+	FVector    GPUPendingSensorWorldPos = FVector::ZeroVector;
+	FQuat      GPUPendingOwnerRotation  = FQuat::Identity;
+
+	// Diagnostic latency tracking — emitted on first successful
+	// readback and every 50th thereafter.
+	double GPUReadbackEnqueueTime    = 0.0;
+	double GPUReadbackLastLatencyMs  = 0.0;
+	int32  GPUReadbackCount          = 0;
+	bool   bGPULoggedFirstReadback   = false;
 
 	// Round-trip test for the spherical-ray ↔ planar-texel mapping.
 	// Run at the end of InitializeGPUPath. Logs PASS/FAIL and the
