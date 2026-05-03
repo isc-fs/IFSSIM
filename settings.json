@@ -77,7 +77,24 @@
           "DropoutRate": 0.01,
           "_comment_lidarpath": "GPU path active (#223 Phase 1). Renders depth at the LiDAR's spherical scan envelope; produces NO point cloud yet — Phases 2-3 add async readback + decode shader. The /lidar/Lidar1 topic will be empty under this setting until Phase 3 lands. Switch back to 'cpu' to restore live point clouds.",
           "LidarPath": "gpu",
-          "_comment_perchannelmaxrange": "Optional per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle, last = highest). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams, so the sim shouldn't see uniform 30 m on every channel. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this. Example shape: [28, 28.5, ..., 30 (centre), ..., 28.5, 28]. Leave commented-out / empty to use uniform MaxRange (current default — no fidelity change vs pre-tune)."
+          "_comment_perchannelmaxrange": "Per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle = -12.4°, 115 = highest = +5.9°). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams: 60 m bottom rings, 198 m centre, 90 m top. The array below is derived from the datasheet (App. A.1.2 Sorted by Ring IDs) and linearly remapped [60-198 m] → [25-30 m] so it fits under the sim's MaxRange=30 m perf budget while preserving the relative shape. Regenerate with `python3 tools/gen_per_channel_range.py --pretty`. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this.",
+          "PerChannelMaxRangeM": [
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.01, 25.88, 26.09, 26.09, 26.30, 27.16,
+            27.17, 27.81, 28.26, 28.26, 28.26, 29.59, 30.00, 30.00,
+            30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00,
+            30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00,
+            30.00, 30.00, 30.00, 30.00, 29.97, 28.59, 28.26, 27.84,
+            27.17, 27.17, 27.17, 27.17, 26.99, 26.56, 26.13, 26.09,
+            26.09, 26.09, 26.09, 26.09
+          ]
         },
         "GSS": {
           "SensorType": 7, "Enabled": true,
