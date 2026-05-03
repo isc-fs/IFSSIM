@@ -17,6 +17,7 @@ public class FSDSPlugin : ModuleRules
 			"PhysicsCore",
 			"RHI",
 			"RenderCore",
+			"Projects",        // IPluginManager — needed to register Shaders/ path (#223 Phase 3)
 			"ImageWrapper",
 			"Networking",
 			"Sockets",

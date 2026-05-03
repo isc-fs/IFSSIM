@@ -320,43 +320,51 @@ void UFSDSLidarSensor::InitializeGPUPath()
 
 	// --- Geometry derivation: spherical LiDAR scan → planar render ---
 	//
-	// The LiDAR scans in spherical coordinates (azimuth h, elevation v)
-	// but a perspective camera samples a planar grid. Two facts to
-	// reconcile:
+	// The LiDAR scans in spherical coordinates (h, v). A perspective
+	// camera samples a planar grid; the inverse projection from
+	// spherical to image-plane is the cleanest when the camera looks
+	// *straight ahead* (zero tilt) — at non-zero tilt the perspective
+	// projection introduces H/V coupling (image_x depends on v, image_y
+	// on h via the full P_cam.x/P_cam.z, P_cam.y/P_cam.z formulas).
 	//
-	//   1. The LiDAR's V-FOV is *asymmetric* (Hesai ATX: -12.4°..+5.9°).
-	//      We center the camera on the V-FOV midpoint and let the camera
-	//      see a symmetric ±half-span around its tilted forward axis.
-	//      Pitch tilt = (Upper + Lower) / 2; symmetric half-span =
-	//      (Upper - Lower) / 2. No CustomProjectionMatrix needed.
+	// Phase-1 used a tilted-camera-with-symmetric-V-FOV approximation
+	// that was internally consistent (round-trip test passed with
+	// 0.000007° error) but did NOT match the actual renderer's
+	// perspective projection at corners — only the tilt=0 special
+	// case is exact. We're correcting that here for Phase 3 so the
+	// decode shader and the C++ uniform setup speak the same language
+	// as the renderer.
 	//
-	//   2. A spherical ray at (h, v) projects to image-plane y = tan(v)
-	//      * sec(h). At the wide-H corners of a 120° H-FOV sweep, sec(h)
-	//      = sec(±60°) = 2, so the planar V extent the camera must
-	//      cover is 2× the on-axis V extent. Sizing the RT to the
-	//      *corner-worst* planar V keeps every spherical ray inside the
-	//      frustum; the decode shader (Phase 3) samples at the right
-	//      texel for each (h, v) pair using the inverse mapping the
-	//      round-trip test below validates.
+	// With tilt=0 the formulas decouple:
+	//   image_x = tan(h)
+	//   image_y = tan(v) / cos(h) = tan(v) · sec(h)
+	// Frustum bounds are:
+	//   H: ±tan(HFOV/2)                    (symmetric for symmetric H scan)
+	//   V: [tan(VLower)·sec(maxH), tan(VUpper)·sec(maxH)]   (asymmetric)
+	// UE5 perspective is symmetric, so we pad V-half to max(|low|,|hi|).
 	//
-	// Convention: image-plane coords (x, y) = (tan(h_cam), tan(v_cam)
-	// * sec(h_cam)) where (h_cam, v_cam) are angles relative to the
-	// camera's tilted forward axis. y is *up*-positive on the image
-	// plane (so positive v_cam = above forward).
+	// Cost: RT_H grows from 279 → ~380 rows for the Hesai (V-FOV planar
+	// 47.4° vs Phase-1's nominal 35.7°). The ~100 extra rows render
+	// rays that fall outside the LiDAR's V-FOV — wasted texels but
+	// trivially cheap; the decode samples only at the correct texel
+	// per LiDAR ray.
 
 	const float HFovDeg          = HorizontalFOVEnd - HorizontalFOVStart;
-	const float VFovCenterDeg    = (VerticalFOVUpper + VerticalFOVLower) * 0.5f;
-	const float VFovHalfSpanDeg  = (VerticalFOVUpper - VerticalFOVLower) * 0.5f;
+	const float VFovCenterDeg    = 0.f;  // tilt=0 — see comment above
 
-	// Worst-case sec(h) over the horizontal sweep — symmetric or not.
+	// Worst-case sec(h) over the horizontal sweep.
 	const float WorstHRad = FMath::DegreesToRadians(
 		FMath::Max(FMath::Abs(HorizontalFOVStart), FMath::Abs(HorizontalFOVEnd)));
 	const float SecMax = 1.f / FMath::Max(KINDA_SMALL_NUMBER, FMath::Cos(WorstHRad));
 
-	const float TanHalfHRad      = FMath::Tan(FMath::DegreesToRadians(HFovDeg * 0.5f));
-	const float TanVHalfSpanRad  = FMath::Tan(FMath::DegreesToRadians(VFovHalfSpanDeg));
-	const float PlanarVHalfSpan  = TanVHalfSpanRad * SecMax;            // image-plane Y half-span
-	const float PlanarHHalfSpan  = TanHalfHRad;                         // image-plane X half-span (symmetric)
+	const float TanHalfHRad   = FMath::Tan(FMath::DegreesToRadians(HFovDeg * 0.5f));
+	const float TanVUpperRad  = FMath::Tan(FMath::DegreesToRadians(VerticalFOVUpper));
+	const float TanVLowerRad  = FMath::Tan(FMath::DegreesToRadians(VerticalFOVLower));
+	const float PlanarHHalfSpan  = TanHalfHRad;                                 // image-plane X half-span
+	const float PlanarVTrueLow   = TanVLowerRad * SecMax;                       // negative for downward-FOV
+	const float PlanarVTrueHigh  = TanVUpperRad * SecMax;
+	const float PlanarVHalfSpan  = FMath::Max(FMath::Abs(PlanarVTrueLow),
+	                                          FMath::Abs(PlanarVTrueHigh));     // symmetric padding
 	const float PlanarVFovDeg    = 2.f * FMath::RadiansToDegrees(FMath::Atan(PlanarVHalfSpan));
 
 	// RT sizing — keep horizontal at the LiDAR's spec resolution
@@ -391,10 +399,8 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->SetupAttachment(Owner->GetRootComponent());
 	GPUDepthCapture->RegisterComponent();
 	GPUDepthCapture->SetRelativeLocation(SensorOffset);
-	// Pitch by the V-FOV center so the camera's forward axis bisects
-	// the (asymmetric) LiDAR V-range. UE's FRotator pitch: positive =
-	// nose up; LiDAR V positive = up; signs match. Yaw/roll zero.
-	GPUDepthCapture->SetRelativeRotation(FRotator(VFovCenterDeg, 0.f, 0.f));
+	// tilt=0 — see comment in geometry-derivation block above.
+	GPUDepthCapture->SetRelativeRotation(FRotator::ZeroRotator);
 	GPUDepthCapture->TextureTarget         = GPUDepthRT;
 	GPUDepthCapture->CaptureSource         = ESceneCaptureSource::SCS_SceneDepth;
 	GPUDepthCapture->bCaptureEveryFrame    = false;
@@ -468,8 +474,11 @@ bool UFSDSLidarSensor::ValidateProjectionRoundTrip() const
 		HorizontalFOVEnd * 0.5f, HorizontalFOVEnd
 	};
 	const float VSampleDeg[] = {
-		VerticalFOVLower, VerticalFOVLower * 0.5f, GPUVerticalFOVCenterDeg,
-		VerticalFOVUpper * 0.5f, VerticalFOVUpper
+		VerticalFOVLower,
+		VerticalFOVLower * 0.5f,
+		(VerticalFOVUpper + VerticalFOVLower) * 0.5f,  // V midpoint sample
+		VerticalFOVUpper * 0.5f,
+		VerticalFOVUpper
 	};
 
 	float MaxErrDeg = 0.f;
