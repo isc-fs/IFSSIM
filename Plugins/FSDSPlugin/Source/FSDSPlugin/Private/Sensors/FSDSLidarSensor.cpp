@@ -31,9 +31,11 @@ using FSDSNoise::RandStandardNormal;
 // (so a runtime change requires PIE stop/start to re-init the RT).
 static TAutoConsoleVariable<float> CVarLidarGPUExtraOversample(
 	TEXT("fsds.LidarGPU.ExtraOversample"),
-	2.0f,
-	TEXT("Multiplier on top of the analytic-min H oversample (#223). 2.0 = current Phase-4 default. ")
-	TEXT("3.0 / 4.0 sweep experiments quadruple/sixteen-x the RT pixel count — measure NN-diff against CPU."),
+	4.0f,
+	TEXT("Multiplier on top of the analytic-min H oversample (#223). Default 4.0 — measured ")
+	TEXT("on the tune branch (commit a4907be sweep): cone-body 95th-pct drops 13.5→7.0 cm, ")
+	TEXT("<5cm rate climbs 90→97 %. 2.0 (Phase-4 baseline) is a fallback for thermal-constrained ")
+	TEXT("Mac runs; 3.0 is a flat plateau (no measurable gain over 2.0)."),
 	ECVF_Default);
 
 UFSDSLidarSensor::UFSDSLidarSensor()
