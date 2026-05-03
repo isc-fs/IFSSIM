@@ -38,18 +38,32 @@ void UFSDSLidarSensor::BeginPlay()
 
 void UFSDSLidarSensor::EndPlay(const EEndPlayReason::Type Reason)
 {
-	// If a GPU readback is mid-flight (either the GPU copy or the
-	// render-thread Lock), wait for the render thread to drain before
-	// destroying the readback object. Without this the destructor
-	// races a still-pending GPU→CPU copy *and* the AsyncTask back to
-	// the game thread might fire on a destroyed component.
-	if (LidarPath == EFSDSLidarPath::GPU && (bGPUReadbackInFlight || bGPULockDispatched))
+	// If any readback slot is mid-flight (GPU copy or render-thread
+	// Lock), wait for the render thread to drain before destroying
+	// the readback objects. Without this the destructor races a
+	// still-pending GPU→CPU copy *and* the AsyncTask back to the
+	// game thread might fire on a destroyed component.
+	if (LidarPath == EFSDSLidarPath::GPU)
 	{
-		FlushRenderingCommands();
-		bGPUReadbackInFlight = false;
-		bGPULockDispatched   = false;
+		bool bAnyInFlight = false;
+		for (const FReadbackSlot& Slot : ReadbackSlots)
+		{
+			if (Slot.bInFlight || Slot.bLockDispatched) { bAnyInFlight = true; break; }
+		}
+		if (bAnyInFlight)
+		{
+			FlushRenderingCommands();
+			for (FReadbackSlot& Slot : ReadbackSlots)
+			{
+				Slot.bInFlight       = false;
+				Slot.bLockDispatched = false;
+			}
+		}
+		for (FReadbackSlot& Slot : ReadbackSlots)
+		{
+			Slot.Readback.Reset();
+		}
 	}
-	GPUPointsReadback.Reset();
 	Super::EndPlay(Reason);
 }
 
@@ -618,20 +632,21 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 	if (GPUScanAccumulator < ScanInterval) return false;
 	GPUScanAccumulator -= ScanInterval;
 
-	// Skip if a previous readback hasn't completed — under heavy GPU
-	// load (or a stutter) the per-frame poll above couldn't drain it
-	// in time, so we drop this scan rather than overlap two readback
-	// copies on the same destination buffer. A small log keeps this
-	// from being silent if it ever becomes systematic. The same gate
-	// also covers the lock-dispatched-but-not-consumed window, which
-	// can happen when an AsyncTask back to the game thread is still
-	// pending.
-	if (bGPUReadbackInFlight || bGPULockDispatched)
+	// Skip if the next-dispatch slot is still occupied — at queue-depth
+	// 2 this only happens under sustained slow readback (Apple Metal
+	// occasional 2-3-frame readback hiccup on contention). Dropping
+	// the scan is safer than overlapping two dispatches on the same
+	// readback object. The Verbose log keeps this from being silent
+	// if it becomes systematic.
 	{
-		UE_LOG(LogTemp, Verbose,
-			TEXT("FSDS LiDAR GPU: dropping scan #%d — previous readback still in flight"),
-			GPUCaptureCount + 1);
-		return false;
+		const FReadbackSlot& Slot = ReadbackSlots[NextDispatchSlot];
+		if (Slot.bInFlight || Slot.bLockDispatched)
+		{
+			UE_LOG(LogTemp, Verbose,
+				TEXT("FSDS LiDAR GPU: dropping scan #%d — slot %d still in flight (queue-depth=%d saturated)"),
+				GPUCaptureCount + 1, NextDispatchSlot, ReadbackQueueDepth);
+			return false;
+		}
 	}
 
 	// Snapshot the dispatch-time pose. Used by Phase 3 to express the
@@ -754,15 +769,23 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
 	U.SensorOffsetZm     = SensorOffset.Z / 100.f;
 
-	if (!GPUPointsReadback.IsValid())
+	const int32 SlotIdx = NextDispatchSlot;
+	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
+	if (!Slot.Readback.IsValid())
 	{
-		GPUPointsReadback = MakeUnique<FRHIGPUBufferReadback>(TEXT("FSDSLidarPointsReadback"));
+		// Each slot owns its own FRHIGPUBufferReadback. Naming them per
+		// slot makes RDG event traces / debug captures distinguish the
+		// in-flight scans.
+		Slot.Readback = MakeUnique<FRHIGPUBufferReadback>(
+			*FString::Printf(TEXT("FSDSLidarPointsReadback#%d"), SlotIdx));
 	}
 
-	GPUReadbackEnqueueTime = FPlatformTime::Seconds();
-	bGPUReadbackInFlight   = true;
+	Slot.EnqueueTimeSec  = FPlatformTime::Seconds();
+	Slot.bInFlight       = true;
+	Slot.bLockDispatched = false;
+	NextDispatchSlot     = (NextDispatchSlot + 1) % ReadbackQueueDepth;
 
-	FRHIGPUBufferReadback* Readback = GPUPointsReadback.Get();
+	FRHIGPUBufferReadback* Readback = Slot.Readback.Get();
 
 	// Snapshot per-channel max-range so the render thread doesn't read
 	// from the game-thread-owned UPROPERTY array. The render command
@@ -841,17 +864,12 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 
 void UFSDSLidarSensor::PollGPUReadback()
 {
-	// Two state-machine guards: bGPUReadbackInFlight is set by
-	// EnqueueDecodePass; bGPULockDispatched is set when the
-	// render-thread Lock command has been queued and not yet returned.
-	if (!bGPUReadbackInFlight || bGPULockDispatched) return;
-	if (!GPUPointsReadback.IsValid()) return;
-	if (!GPUPointsReadback->IsReady()) return;
-
-	// FRHIGPUBufferReadback::Lock asserts IsInRenderingThread(), so
-	// the lock+memcpy lives in a render command and the result bounces
-	// back via AsyncTask(GameThread) to ConsumeReadbackResult.
-	FRHIGPUBufferReadback* Readback = GPUPointsReadback.Get();
+	// Iterate every readback slot so multiple in-flight scans can
+	// drain in a single tick (queue-depth=2 — see header). For each
+	// slot: if EnqueueCopy has been issued (bInFlight) and the lock
+	// hasn't been queued yet (!bLockDispatched) and the GPU copy is
+	// ready, dispatch a render-thread Lock + AsyncTask back to game
+	// thread. ConsumeReadbackResult clears the slot.
 	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
 		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
 	const int32 NumPoints = (NumberOfChannels > 0)
@@ -861,45 +879,61 @@ void UFSDSLidarSensor::PollGPUReadback()
 
 	TWeakObjectPtr<UFSDSLidarSensor> WeakSelf(this);
 
-	bGPULockDispatched = true;
+	for (int32 SlotIdx = 0; SlotIdx < ReadbackQueueDepth; ++SlotIdx)
+	{
+		FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
+		if (!Slot.bInFlight || Slot.bLockDispatched) continue;
+		if (!Slot.Readback.IsValid()) continue;
+		if (!Slot.Readback->IsReady()) continue;
 
-	ENQUEUE_RENDER_COMMAND(FSDSLidarReadbackLock)(
-		[Readback, NumPoints, WeakSelf](FRHICommandListImmediate& /*RHICmdList*/)
-		{
-			const uint32 NumBytes = NumPoints * sizeof(FVector4f);
-			const FVector4f* Src = (const FVector4f*)Readback->Lock(NumBytes);
+		// FRHIGPUBufferReadback::Lock asserts IsInRenderingThread(), so
+		// the lock+memcpy lives in a render command and the result
+		// bounces back via AsyncTask(GameThread) to
+		// ConsumeReadbackResult, tagged with SlotIdx so we know which
+		// slot to clear.
+		FRHIGPUBufferReadback* Readback = Slot.Readback.Get();
+		Slot.bLockDispatched = true;
 
-			TArray<FVector4f> LocalCopy;
-			if (Src)
+		ENQUEUE_RENDER_COMMAND(FSDSLidarReadbackLock)(
+			[Readback, NumPoints, WeakSelf, SlotIdx](FRHICommandListImmediate& /*RHICmdList*/)
 			{
-				LocalCopy.SetNumUninitialized(NumPoints);
-				FMemory::Memcpy(LocalCopy.GetData(), Src, NumBytes);
-			}
-			Readback->Unlock();
+				const uint32 NumBytes = NumPoints * sizeof(FVector4f);
+				const FVector4f* Src = (const FVector4f*)Readback->Lock(NumBytes);
 
-			AsyncTask(ENamedThreads::GameThread,
-				[WeakSelf, Points = MoveTemp(LocalCopy)]() mutable
+				TArray<FVector4f> LocalCopy;
+				if (Src)
 				{
-					if (UFSDSLidarSensor* Self = WeakSelf.Get())
+					LocalCopy.SetNumUninitialized(NumPoints);
+					FMemory::Memcpy(LocalCopy.GetData(), Src, NumBytes);
+				}
+				Readback->Unlock();
+
+				AsyncTask(ENamedThreads::GameThread,
+					[WeakSelf, Points = MoveTemp(LocalCopy), SlotIdx]() mutable
 					{
-						Self->ConsumeReadbackResult(MoveTemp(Points));
-					}
-				});
-		});
+						if (UFSDSLidarSensor* Self = WeakSelf.Get())
+						{
+							Self->ConsumeReadbackResult(SlotIdx, MoveTemp(Points));
+						}
+					});
+			});
+	}
 }
 
-void UFSDSLidarSensor::ConsumeReadbackResult(TArray<FVector4f>&& Points)
+void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& Points)
 {
 	// Game-thread consumer of the GPU decode pass. Walks the float4[]
 	// output of FSDSLidarDecode.usf and packs valid hits (w == 1) into
 	// PointCloudBuffer in the flat-float [x,y,z, x,y,z, ...] format
 	// FSDSUdpBroadcaster + GetPointCloud() consumers expect. Skips
 	// invalid entries (w == 0: dropped, far-plane, out-of-range, etc.).
-	bGPULockDispatched   = false;
-	bGPUReadbackInFlight = false;
+	if (SlotIdx < 0 || SlotIdx >= ReadbackQueueDepth) return;
+	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
+	Slot.bLockDispatched = false;
+	Slot.bInFlight       = false;
 
 	const double NowS = FPlatformTime::Seconds();
-	GPUReadbackLastLatencyMs = (NowS - GPUReadbackEnqueueTime) * 1000.0;
+	GPUReadbackLastLatencyMs = (NowS - Slot.EnqueueTimeSec) * 1000.0;
 	GPUReadbackCount++;
 
 	TArray<float> NewBuffer;

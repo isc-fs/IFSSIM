@@ -168,11 +168,26 @@ private:
 	//      FSDSUdpBroadcaster + GetPointCloud() consumers expect.
 	void EnqueueDecodePass();
 	void PollGPUReadback();
-	void ConsumeReadbackResult(TArray<FVector4f>&& Points);
+	void ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& Points);
 
-	TUniquePtr<FRHIGPUBufferReadback> GPUPointsReadback;
-	bool  bGPUReadbackInFlight = false;  // RDG dispatch issued; readback IsReady not yet observed
-	bool  bGPULockDispatched   = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
+	// Queue-depth-2 readback ring. At 10 Hz scan + ~70-100 ms readback
+	// latency on Apple Metal, a single in-flight readback meant the
+	// scan-N result landed right as scan-N+1 fired (no headroom under
+	// any render stutter). Pipelining 2 keeps the effective end-to-end
+	// latency close to one frame instead of one full scan period —
+	// /lidar/Lidar1 always carries a result that's at most ~50 ms old
+	// instead of ~100 ms. Cost: 2 × (NumPoints × float4) of staging
+	// memory ≈ 5.6 MB at 174 k pts/scan; trivial.
+	struct FReadbackSlot
+	{
+		TUniquePtr<FRHIGPUBufferReadback> Readback;
+		bool   bInFlight       = false;  // EnqueueCopy issued; IsReady not yet observed
+		bool   bLockDispatched = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
+		double EnqueueTimeSec  = 0.0;
+	};
+	static constexpr int32 ReadbackQueueDepth = 2;
+	FReadbackSlot ReadbackSlots[ReadbackQueueDepth];
+	int32 NextDispatchSlot = 0;
 
 	// Pose snapshot at the moment the capture was issued. The readback
 	// arrives ≥1 frame later when the actor has moved on; Phase 3
@@ -183,8 +198,9 @@ private:
 	FQuat      GPUPendingOwnerRotation  = FQuat::Identity;
 
 	// Diagnostic latency tracking — emitted on first successful
-	// readback and every 50th thereafter.
-	double GPUReadbackEnqueueTime    = 0.0;
+	// readback and every 50th thereafter. Per-slot enqueue time lives
+	// in FReadbackSlot::EnqueueTimeSec; LastLatencyMs is the most
+	// recent slot's measured GPU→CPU round-trip.
 	double GPUReadbackLastLatencyMs  = 0.0;
 	int32  GPUReadbackCount          = 0;
 	bool   bGPULoggedFirstReadback   = false;
