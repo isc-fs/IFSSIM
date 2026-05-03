@@ -21,6 +21,21 @@
 
 using FSDSNoise::RandStandardNormal;
 
+// CVar for sweeping H oversample factor without rebuilds. The
+// "ExtraOversample" multiplier inside InitializeGPUPath sits on top
+// of the analytic 1.65× minimum that handles the perspective non-
+// linearity at h=0; this CVar replaces the hardcoded 2× for sweep
+// experiments. Phase-4 baseline = 2×; we want to know if 3× or 4×
+// drops cone-body 95th-pct meaningfully, given the rasterization-vs-
+// trace floor at silhouette edges. Read at OnSettingsApplied time
+// (so a runtime change requires PIE stop/start to re-init the RT).
+static TAutoConsoleVariable<float> CVarLidarGPUExtraOversample(
+	TEXT("fsds.LidarGPU.ExtraOversample"),
+	2.0f,
+	TEXT("Multiplier on top of the analytic-min H oversample (#223). 2.0 = current Phase-4 default. ")
+	TEXT("3.0 / 4.0 sweep experiments quadruple/sixteen-x the RT pixel count — measure NN-diff against CPU."),
+	ECVF_Default);
+
 UFSDSLidarSensor::UFSDSLidarSensor()
 {
 	PrimaryComponentTick.bCanEverTick = true;
@@ -463,7 +478,7 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// ~12.5 M R32f = 50 MB on Apple Silicon — well within budget at 10 Hz.
 	const float HFovRad             = FMath::DegreesToRadians(HFovDeg);
 	const float HOversampleAnalytic = (2.f * TanHalfHRad) / FMath::Max(KINDA_SMALL_NUMBER, HFovRad);
-	const float ExtraOversample     = 2.f;
+	const float ExtraOversample     = FMath::Max(1.f, CVarLidarGPUExtraOversample.GetValueOnGameThread());
 	const float HOversample         = FMath::Max(1.f, HOversampleAnalytic) * ExtraOversample;
 	const int32 RTW                 = FMath::Max(64, FMath::CeilToInt((float)NominalH * HOversample));
 	const float Aspect              = PlanarHHalfSpan / FMath::Max(KINDA_SMALL_NUMBER, PlanarVHalfSpan);
@@ -520,8 +535,8 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
 
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m"),
-		RTW, RTH, HFovDeg, PlanarVFovDeg, VFovCenterDeg, MaxRange / 100.f);
+		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m | ExtraOversample=%.2f×"),
+		RTW, RTH, HFovDeg, PlanarVFovDeg, VFovCenterDeg, MaxRange / 100.f, ExtraOversample);
 
 	if (!ValidateProjectionRoundTrip())
 	{
