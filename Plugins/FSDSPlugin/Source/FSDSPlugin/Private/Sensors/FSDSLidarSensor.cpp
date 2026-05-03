@@ -392,16 +392,26 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// compressed), cols-per-LiDAR-H-step =
 	//     NominalH · HStepRad / (2·tan(HFOV/2))
 	//   = HFovRad / (2·tan(HFOV/2))                         (NominalH cancels)
-	// For a 120° H-FOV that's 0.605 — so adjacent LiDAR rays read
-	// the same RT column at centre, which is what surfaced as the
-	// 95th-pct=26 cm angular-aliasing artifact in the Phase-4 NN
-	// diff. Oversampling RTW by the inverse pushes to ≥1 col/step.
-	const float HFovRad     = FMath::DegreesToRadians(HFovDeg);
-	const float Oversample  = FMath::Max(1.f, (2.f * TanHalfHRad)
-		/ FMath::Max(KINDA_SMALL_NUMBER, HFovRad));
-	const int32 RTW         = FMath::Max(64, FMath::CeilToInt((float)NominalH * Oversample));
-	const float Aspect      = PlanarHHalfSpan / FMath::Max(KINDA_SMALL_NUMBER, PlanarVHalfSpan);
-	const int32 RTH         = FMath::Max(1, FMath::RoundToInt((float)RTW / Aspect));
+	// For a 120° H-FOV that's 0.605 — so the analytic minimum
+	// oversample to push to ≥1 col/step at h=0 is 1.65×. ExtraOversample
+	// pushes further to:
+	//   (1) cleanly absorb int-truncation rounding in TexelColF
+	//       (otherwise neighbour LiDAR rays at TexelColF=N.4 and N.6
+	//        both round to N and read identical depth);
+	//   (2) halve the V-row-offset depth error — at far distance the
+	//       depth function is steep in image_y, so half-row-y offset
+	//       turns into ~28 cm radial error at v=-3° on flat ground.
+	//       Phase-4 95th-pct grew linearly with distance because of
+	//       this. Doubling RT_H halves it.
+	// Cost: RT pixel count grows as ExtraOversample². At 2× this is
+	// ~12.5 M R32f = 50 MB on Apple Silicon — well within budget at 10 Hz.
+	const float HFovRad             = FMath::DegreesToRadians(HFovDeg);
+	const float HOversampleAnalytic = (2.f * TanHalfHRad) / FMath::Max(KINDA_SMALL_NUMBER, HFovRad);
+	const float ExtraOversample     = 2.f;
+	const float HOversample         = FMath::Max(1.f, HOversampleAnalytic) * ExtraOversample;
+	const int32 RTW                 = FMath::Max(64, FMath::CeilToInt((float)NominalH * HOversample));
+	const float Aspect              = PlanarHHalfSpan / FMath::Max(KINDA_SMALL_NUMBER, PlanarVHalfSpan);
+	const int32 RTH                 = FMath::Max(1, FMath::RoundToInt((float)RTW / Aspect));
 
 	// Cache the geometry — used by the round-trip test now and the
 	// decode shader's uniform buffer in Phase 3.
