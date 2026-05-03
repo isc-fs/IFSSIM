@@ -45,6 +45,14 @@ float DropoutRate;            // [0, 1]; 0 = no dropout
 
 uint  RNGSeed;                // re-seeded each scan from CPU side
 
+// Sensor mount offset in vehicle-frame METRES. The compute reconstructs
+// the hit point relative to the sensor mount; adding this offset puts
+// the output in vehicle-local frame, matching the CPU path which gets
+// it implicitly via OwnerTransform.InverseTransformPosition.
+float SensorOffsetXm;
+float SensorOffsetYm;
+float SensorOffsetZm;
+
 
 // Single-step PCG hash. Cheap, decent statistical quality, and
 // trivially deterministic per-ray-per-scan via (RayIdx ^ Seed).
@@ -72,8 +80,13 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	// Default to invalid; bail-outs below leave this in place.
 	OutPoints[RayIdx] = float4(0.0, 0.0, 0.0, 0.0);
 
-	const uint VIdx = RayIdx / NumHorizontalSteps;
-	const uint HIdx = RayIdx % NumHorizontalSteps;
+	// Buffer ordering: match the CPU path's flat-index convention so
+	// that PointCloud2 consumers receive points in the same memory
+	// order under both backends. CPU uses SlotIdx = h*NumChannels + v
+	// (h slow, v fast), so adjacent buffer entries trace a radial
+	// line of increasing v at the same h.
+	const uint HIdx = RayIdx / NumChannels;
+	const uint VIdx = RayIdx % NumChannels;
 
 	// Spherical (h, v) for this LiDAR ray. Uniform spacing in radians,
 	// matching the CPU path's per-channel/per-step grid.
@@ -167,8 +180,17 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float DirY = CosV * SinH;
 	const float DirZ = SinV;
 
-	// cm → m, plus ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The
-	// w channel is the validity flag; w=1 means "real hit".
+	// Reconstruct in vehicle-local frame: sensor-relative endpoint
+	// plus the sensor mount offset (in metres). The CPU path gets
+	// this for free via OwnerTransform.InverseTransformPosition;
+	// here we have to add it explicitly because the shader works in
+	// the sensor's local frame.
 	const float ScaleM = RayDistCm / 100.0;
-	OutPoints[RayIdx] = float4(DirX * ScaleM, -DirY * ScaleM, DirZ * ScaleM, 1.0);
+	const float Px = DirX * ScaleM + SensorOffsetXm;
+	const float Py = DirY * ScaleM + SensorOffsetYm;
+	const float Pz = DirZ * ScaleM + SensorOffsetZm;
+
+	// cm → m + ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The w
+	// channel is the validity flag; w=1 means "real hit".
+	OutPoints[RayIdx] = float4(Px, -Py, Pz, 1.0);
 }

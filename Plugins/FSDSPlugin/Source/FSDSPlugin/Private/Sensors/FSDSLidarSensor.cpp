@@ -655,6 +655,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
 		uint32 RNGSeed;
+		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 	} U;
 	U.NumChannels        = (uint32)NumChannels_LCL;
 	U.NumHorizontalSteps = (uint32)NumHorizontalSteps;
@@ -677,6 +678,10 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// the simulation (matches the CPU path's FMath::FRand-driven
 	// randomness in spirit).
 	U.RNGSeed            = (uint32)FPlatformTime::Cycles();
+	// SensorOffset is stored in cm; shader takes metres.
+	U.SensorOffsetXm     = SensorOffset.X / 100.f;
+	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
+	U.SensorOffsetZm     = SensorOffset.Z / 100.f;
 
 	if (!GPUPointsReadback.IsValid())
 	{
@@ -722,6 +727,9 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
 			Params->DropoutRate           = U.DropoutRate;
 			Params->RNGSeed               = U.RNGSeed;
+			Params->SensorOffsetXm        = U.SensorOffsetXm;
+			Params->SensorOffsetYm        = U.SensorOffsetYm;
+			Params->SensorOffsetZm        = U.SensorOffsetZm;
 
 			TShaderMapRef<FFSDSLidarDecodeCS> Shader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 			const int32 ThreadGroups = FMath::DivideAndRoundUp(NumPoints, FFSDSLidarDecodeCS::ThreadGroupSize);

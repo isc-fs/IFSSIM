@@ -43,6 +43,10 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(float, DropoutRate)
 
 		SHADER_PARAMETER(uint32, RNGSeed)
+
+		SHADER_PARAMETER(float, SensorOffsetXm)
+		SHADER_PARAMETER(float, SensorOffsetYm)
+		SHADER_PARAMETER(float, SensorOffsetZm)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
