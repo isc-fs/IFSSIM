@@ -372,17 +372,36 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	                                          FMath::Abs(PlanarVTrueHigh));     // symmetric padding
 	const float PlanarVFovDeg    = 2.f * FMath::RadiansToDegrees(FMath::Atan(PlanarVHalfSpan));
 
-	// RT sizing — keep horizontal at the LiDAR's spec resolution
-	// (PointsPerScan / channels), let vertical follow the planar
-	// aspect so center-resolution ≈ LiDAR's nominal V-step. At wide-H
-	// corners the per-row spherical-V resolution is finer (cos(h)
-	// factor), which is fine — the decode picks the right texel per
-	// LiDAR ray and the surplus is just unused samples.
+	// RT sizing.
+	//
+	// Naively setting RTW = PointsPerScan/channels gives a column count
+	// equal to the LiDAR's H sample count, but image_x = tan(h) is
+	// *non-linear*: at h=0 each RT column covers ~0.13° while LiDAR's
+	// H step is 0.08°, so 1.66 adjacent LiDAR rays share a column and
+	// read identical depth — producing the texel-quantization artifacts
+	// that Phase-4 NN-distance diff caught (95th pct 26 cm at 10-20 m).
+	// To get ≤1 LiDAR ray per RT column at the worst case (h=0),
+	// oversample H by sec²(0)/sec²(±60°) ratio = 1/(1/4) = the H-FOV's
+	// peak vs avg sec². Empirically a 1.66× oversample is enough; we
+	// use the analytic per-step-at-h=0 ratio so it tracks any FOV
+	// reconfiguration. RT_H is then derived from the planar aspect.
 	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
 		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
-	const int32 RTW = FMath::Max(64, PointsPerScan / FMath::Max(1, NumberOfChannels));
-	const float Aspect = PlanarHHalfSpan / FMath::Max(KINDA_SMALL_NUMBER, PlanarVHalfSpan);
-	const int32 RTH = FMath::Max(1, FMath::RoundToInt((float)RTW / Aspect));
+	const int32 NominalH = FMath::Max(64, PointsPerScan / FMath::Max(1, NumberOfChannels));
+	// At h=0 (centre of the FOV, where image_x = tan(h) is most
+	// compressed), cols-per-LiDAR-H-step =
+	//     NominalH · HStepRad / (2·tan(HFOV/2))
+	//   = HFovRad / (2·tan(HFOV/2))                         (NominalH cancels)
+	// For a 120° H-FOV that's 0.605 — so adjacent LiDAR rays read
+	// the same RT column at centre, which is what surfaced as the
+	// 95th-pct=26 cm angular-aliasing artifact in the Phase-4 NN
+	// diff. Oversampling RTW by the inverse pushes to ≥1 col/step.
+	const float HFovRad     = FMath::DegreesToRadians(HFovDeg);
+	const float Oversample  = FMath::Max(1.f, (2.f * TanHalfHRad)
+		/ FMath::Max(KINDA_SMALL_NUMBER, HFovRad));
+	const int32 RTW         = FMath::Max(64, FMath::CeilToInt((float)NominalH * Oversample));
+	const float Aspect      = PlanarHHalfSpan / FMath::Max(KINDA_SMALL_NUMBER, PlanarVHalfSpan);
+	const int32 RTH         = FMath::Max(1, FMath::RoundToInt((float)RTW / Aspect));
 
 	// Cache the geometry — used by the round-trip test now and the
 	// decode shader's uniform buffer in Phase 3.
