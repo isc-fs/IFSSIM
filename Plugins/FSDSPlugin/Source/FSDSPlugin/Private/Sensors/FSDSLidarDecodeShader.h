@@ -37,7 +37,15 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(float, VTopPlanar)
 
 		SHADER_PARAMETER(float, MinRangeCm)
+		// Kept as a fallback / sentinel for clipmap rejection inside the
+		// shader (depths >= MaxRangeCm * 0.99 = "no hit"). Per-LiDAR
+		// channel max range cull is in ChannelMaxRangeCm below.
 		SHADER_PARAMETER(float, MaxRangeCm)
+		// Per-channel max range, NumberOfChannels entries. Indexed by
+		// VIdx in the shader. Always populated (fallback to MaxRangeCm
+		// when settings.json doesn't provide overrides — see
+		// UFSDSLidarSensor::OnSettingsApplied).
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, ChannelMaxRangeCm)
 
 		SHADER_PARAMETER(float, RangeNoiseStdCm)
 		SHADER_PARAMETER(float, DropoutRate)

@@ -97,6 +97,19 @@ struct FFSDSSensorSettings
 	float MaxRange = 100.f; // meters
 	bool bDrawDebugPoints = false;
 
+	// Per-channel max-range overrides (meters). Real LiDARs (e.g. Hesai
+	// ATX_S01 datasheet Appendix A.1.1) have per-beam laser-power
+	// variance — outer/edge channels typically reach shorter than the
+	// central beams. When this array is populated and its length
+	// matches NumberOfChannels, the LiDAR sensor uses ChannelMaxRange
+	// per-channel instead of the global MaxRange above. When empty
+	// (default), all channels fall back to MaxRange — preserves
+	// existing settings.json behaviour bit-for-bit.
+	//
+	// Length validation happens in FSDSLidarSensor::OnSettingsApplied:
+	// any mismatch logs a warning and falls back to the global value.
+	TArray<float> PerChannelMaxRangeM;
+
 	// LiDAR path: "cpu" (default, ParallelFor + Chaos line traces) or
 	// "gpu" (depth-render + compute decode, #223). Read by
 	// FSDSLidarSensor::BeginPlay; switching at runtime requires a PIE

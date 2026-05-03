@@ -311,6 +311,16 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 
+				// Per-channel max-range (#223 tune): convert metres → cm
+				// to match the global MaxRange units the sensor stores.
+				// Validation (length == NumberOfChannels) lives in
+				// LidarSensor::OnSettingsApplied.
+				LidarSensor->PerChannelMaxRangeCm.Reset(SensorPair.Value.PerChannelMaxRangeM.Num());
+				for (float Rm : SensorPair.Value.PerChannelMaxRangeM)
+				{
+					LidarSensor->PerChannelMaxRangeCm.Add(Rm * 100.f);
+				}
+
 				// #223: select CPU (legacy ParallelFor + Chaos line traces)
 				// vs GPU (depth render + compute decode). Unknown values
 				// fall back to CPU with a warning so a typo in settings.json
