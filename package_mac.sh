@@ -34,9 +34,16 @@ mkdir -p "$TRACKS_DST"
 cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
 echo "  Tracks staged: $(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') files"
 
-# 3b. Copy settings.json next to the .app (AdditionalNonUFSFiles misses it on Mac)
-cp "$SCRIPT_DIR/settings.json" "$SCRIPT_DIR/Saved/StagedBuilds/Mac/settings.json"
-echo "  settings.json staged"
+# 3b. Copy settings.json to the UE5 UserSettingsDir for this game.
+# On macOS FPlatformProcess::UserSettingsDir() = ~/Library/Application Support/Epic/
+# and FSDSSettings::AutoLoad() appends "IFSSIM" making the full search path:
+#   ~/Library/Application Support/Epic/IFSSIM/settings.json
+# LaunchDir resolves to empty and ProjectDir is relative in shipping builds,
+# so this is the only search path that reliably resolves on macOS.
+USER_SETTINGS_DIR="$HOME/Library/Application Support/Epic/IFSSIM"
+mkdir -p "$USER_SETTINGS_DIR"
+cp "$SCRIPT_DIR/settings.json" "$USER_SETTINGS_DIR/settings.json"
+echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 
 # 4. Force windowed mode in UECommandLine.txt (BuildCookRun overwrites this file)
 CMDLINE="$SCRIPT_DIR/Saved/StagedBuilds/Mac/UECommandLine.txt"
