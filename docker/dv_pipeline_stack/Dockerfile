@@ -29,6 +29,40 @@ RUN pip install --no-cache-dir \
     icecream \
     typing_extensions
 
+# FaSTTUBe Formula Student Driverless path planner (PR #243).
+# Installed --no-deps because the package declares numpy>=1.25 while
+# cv_bridge in ros:humble is ABI-locked to numpy 1.x — all of papalotis's
+# real runtime deps (numba, scipy, scikit-learn, icecream, typing_extensions,
+# numpy) are already satisfied by the block above. Pinned to a specific
+# commit SHA: the only git tags upstream ships are "summer-23" and
+# "color-dependent" (legacy), which don't track v0.4.x.
+#
+# pip clones the repo shallow, which breaks setuptools-scm's git-tag
+# version derivation. setuptools-scm is listed in build-system.requires
+# but the project has explicit `name`/`version` in [project] — the
+# combination causes setuptools 64+ to auto-invoke setuptools-scm and
+# override the static metadata, producing project name "unknown" and
+# pip rejecting the install. SETUPTOOLS_SCM_PRETEND_VERSION env var
+# alone doesn't fix it. Workaround: clone, sed out the setuptools-scm
+# line from build-system.requires so setuptools doesn't auto-invoke it,
+# then pip install from the local path.
+# Install the FaSTTUBe planner. The upstream pyproject.toml is unhappy
+# under our build environment in multiple ways (setuptools-scm in
+# build-requires overriding the static [project] version, and `packages
+# = ["fsd_path_planning"]` discovering nothing under PEP 621). Rather
+# than fight pip's build isolation, clone the repo and write our own
+# minimal setup.py that uses find_packages() to pick up the whole
+# fsd_path_planning/ tree, then install with the system pip — no
+# setuptools-scm, no PEP 621 corner cases.
+RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /tmp/fsd && \
+    cd /tmp/fsd && \
+    git fetch --depth 1 origin 0283c83125d1ad5d008d80b62f8750dad5f28fb3 && \
+    git checkout 0283c83125d1ad5d008d80b62f8750dad5f28fb3 && \
+    rm -f pyproject.toml && \
+    printf 'from setuptools import find_namespace_packages, setup\nsetup(name="fsd_path_planning", version="0.4.3.2", packages=find_namespace_packages(include=["fsd_path_planning", "fsd_path_planning.*"]), include_package_data=True)\n' > setup.py && \
+    pip install --no-cache-dir --no-deps . && \
+    rm -rf /tmp/fsd
+
 # GTSAM Python bindings — backbone of the cone-graph SLAM (PR A+).
 # Pinned to 4.3a0. The previous "4.2.0" pin was a phantom (never
 # released; only 4.2a1–4.2a9 and 4.3a0 actually shipped to PyPI), so
