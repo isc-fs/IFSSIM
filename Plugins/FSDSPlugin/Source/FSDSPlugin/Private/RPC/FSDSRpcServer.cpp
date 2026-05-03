@@ -347,6 +347,19 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		return SettingsString;
 	}
+	else if (Method == TEXT("getSettingsPaths"))
+	{
+		// Diagnostic: returns the three paths AutoLoad() searches so we can
+		// tell which one the shipping build can actually see.
+		const FString P1 = FPaths::Combine(FPaths::LaunchDir(),    TEXT("settings.json"));
+		const FString P2 = FPaths::Combine(FPaths::ProjectDir(),   TEXT("settings.json"));
+		const FString P3 = FPaths::Combine(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM")), TEXT("settings.json"));
+		return FString::Printf(
+			TEXT("{\"launch\":\"%s\",\"launch_exists\":%s,\"project\":\"%s\",\"project_exists\":%s,\"user\":\"%s\",\"user_exists\":%s}"),
+			*P1, FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
+			*P2, FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
+			*P3, FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
+	}
 	else if (Method == TEXT("enableApiControl"))
 	{
 		bApiControlEnabled = true;
