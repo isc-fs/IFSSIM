@@ -183,7 +183,14 @@ private:
 		TUniquePtr<FRHIGPUBufferReadback> Readback;
 		bool   bInFlight       = false;  // EnqueueCopy issued; IsReady not yet observed
 		bool   bLockDispatched = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
-		double EnqueueTimeSec  = 0.0;
+		double EnqueueTimeSec  = 0.0;    // wallclock for latency telemetry
+		// Cycles64 stamp captured at dispatch (when the depth render fires);
+		// becomes LastTimestamp when this slot's readback is consumed, so
+		// downstream consumers see the *physical capture* time of the cloud
+		// rather than the consume time (which lands ≥1 frame later via the
+		// readback ring). Mirrors the CPU path where LastTimestamp is set
+		// at scan time. See issue #232.
+		uint64 CaptureCycles64 = 0;
 	};
 	static constexpr int32 ReadbackQueueDepth = 2;
 	FReadbackSlot ReadbackSlots[ReadbackQueueDepth];
