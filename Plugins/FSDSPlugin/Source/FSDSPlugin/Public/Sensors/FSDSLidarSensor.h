@@ -2,7 +2,27 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "RHIGPUReadback.h"
+#include "Math/Vector4.h"
 #include "FSDSLidarSensor.generated.h"
+
+class USceneCaptureComponent2D;
+class UTextureRenderTarget2D;
+
+UENUM()
+enum class EFSDSLidarPath : uint8
+{
+	// Legacy CPU path: ParallelFor across horizontal steps issuing
+	// LineTraceSingleByChannel against the Chaos physics scene.
+	// ~250 % CPU at 1.74 M pts/s (audit on dev, see #223).
+	CPU,
+
+	// GPU path (#223): depth-only render at the LiDAR's exact ray
+	// grid, decoded into 3D points by a compute shader, async-readback
+	// to game thread. Phase 1 only sets up the depth render; full
+	// point production lands in Phases 2-3.
+	GPU,
+};
 
 /**
  * LiDAR sensor — performs batch raycasts to generate 3D point clouds.
@@ -23,6 +43,7 @@ public:
 	UFSDSLidarSensor();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	/** Get the latest point cloud as flat [x,y,z,...] array (meters, sensor-local) */
@@ -93,7 +114,97 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
 
+	/** Ray-cast backend selection. Driven by settings.json LidarPath
+	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
+	 *  stop/start because BeginPlay sets up backend-specific resources. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	EFSDSLidarPath LidarPath = EFSDSLidarPath::CPU;
+
+	// Pawn callback after settings.json values have been written to
+	// the UPROPERTYs above. Must be called from AFSDSVehiclePawn after
+	// SetupSensorsFromSettings — component BeginPlay runs *before*
+	// the pawn's BeginPlay finishes its config pass, so the GPU path
+	// setup has to be deferred until the real config is in place.
+	void OnSettingsApplied();
+
 private:
+	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
+
+	UPROPERTY() USceneCaptureComponent2D* GPUDepthCapture = nullptr;
+	UPROPERTY() UTextureRenderTarget2D*   GPUDepthRT      = nullptr;
+
+	// Stand up the depth-only SceneCapture for the GPU path. Called
+	// from BeginPlay when LidarPath==GPU. Phase-1 wiring; the depth
+	// data is rendered but not yet consumed (Phase 2 adds readback,
+	// Phase 3 the decode shader).
+	void InitializeGPUPath();
+
+	// Drive the GPU capture from the rate-limited tick. Returns true
+	// if a capture was issued this tick.
+	bool TickGPUPath(float DeltaTime);
+
+	// Phase-3 (#223) — RDG decode pass + async buffer readback.
+	//   1. EnqueueDecodePass: render command that builds an FRDGBuilder,
+	//      runs the FSDSLidarDecode compute shader against the depth RT
+	//      to produce a structured buffer of float4 points, then issues
+	//      AddEnqueueCopyPass into a persistent FRHIGPUBufferReadback.
+	//   2. PollGPUReadback: game-thread checks IsReady, dispatches a
+	//      second render command to do Lock(NumBytes)/memcpy/Unlock and
+	//      AsyncTask the result back to the game thread.
+	//   3. ConsumeReadbackResult: unpacks the float4 array into the
+	//      flat-float [x,y,z, x,y,z, ...] PointCloudBuffer that
+	//      FSDSUdpBroadcaster + GetPointCloud() consumers expect.
+	void EnqueueDecodePass();
+	void PollGPUReadback();
+	void ConsumeReadbackResult(TArray<FVector4f>&& Points);
+
+	TUniquePtr<FRHIGPUBufferReadback> GPUPointsReadback;
+	bool  bGPUReadbackInFlight = false;  // RDG dispatch issued; readback IsReady not yet observed
+	bool  bGPULockDispatched   = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
+
+	// Pose snapshot at the moment the capture was issued. The readback
+	// arrives ≥1 frame later when the actor has moved on; Phase 3
+	// expresses decoded points relative to this captured pose so the
+	// cloud matches the geometry of when the rays were cast.
+	FTransform GPUPendingOwnerTransform;
+	FVector    GPUPendingSensorWorldPos = FVector::ZeroVector;
+	FQuat      GPUPendingOwnerRotation  = FQuat::Identity;
+
+	// Diagnostic latency tracking — emitted on first successful
+	// readback and every 50th thereafter.
+	double GPUReadbackEnqueueTime    = 0.0;
+	double GPUReadbackLastLatencyMs  = 0.0;
+	int32  GPUReadbackCount          = 0;
+	bool   bGPULoggedFirstReadback   = false;
+
+	// Round-trip test for the spherical-ray ↔ planar-texel mapping.
+	// Run at the end of InitializeGPUPath. Logs PASS/FAIL and the
+	// max observed reprojection error in radians. Phase-3 decode
+	// shader uses the same formulas this test covers; if the test
+	// fails here we know the decode will produce wrong points before
+	// we ever GPU-debug a shader.
+	bool ValidateProjectionRoundTrip() const;
+
+	// Cached projection geometry derived from the LiDAR FOV at GPU-
+	// path init time. Used by the round-trip test now and by the
+	// Phase-3 decode shader's uniform buffer later.
+	float GPUVerticalFOVCenterDeg = 0.f;   // camera tilt pitch (deg)
+	float GPUPlanarHalfWidth      = 0.f;   // tan(HFOV/2)
+	float GPUPlanarBottom         = 0.f;   // image-plane Y at frustum bottom
+	float GPUPlanarTop            = 0.f;   // image-plane Y at frustum top
+	int32 GPURTWidth              = 0;
+	int32 GPURTHeight             = 0;
+
+	float GPUScanAccumulator = 0.f;
+
+	// Diagnostic counters mirrored from the Phase-0 spike: rolling avg
+	// of CaptureScene() game-thread cost, reported every 5 s. Will be
+	// kept through Phase 4 cross-validation, removed at Phase 5.
+	double GPUCapAccumulatorMs = 0.0;
+	int32  GPUCapSampleCount   = 0;
+	double GPULastReportTime   = 0.0;
+	int32  GPUCaptureCount     = 0;
+	bool   bGPUDumpedRT        = false;
 	void PerformScan(UWorld* InWorld, AActor* InOwner, FTransform OwnerTransform);
 
 	// Rate limiter — scan fires at RotationsPerSecond Hz, not every frame

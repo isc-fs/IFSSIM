@@ -15,7 +15,7 @@
 		{
 			"Name": "FSDSPlugin",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "PostConfigInit"
 		}
 	],
 	"Plugins": [

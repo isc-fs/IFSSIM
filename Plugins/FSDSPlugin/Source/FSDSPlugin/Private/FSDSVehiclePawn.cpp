@@ -310,6 +310,33 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
 				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
+
+				// #223: select CPU (legacy ParallelFor + Chaos line traces)
+				// vs GPU (depth render + compute decode). Unknown values
+				// fall back to CPU with a warning so a typo in settings.json
+				// can't silently disable the LiDAR.
+				const FString PathLower = SensorPair.Value.LidarPath.ToLower();
+				if (PathLower == TEXT("gpu"))
+				{
+					LidarSensor->LidarPath = EFSDSLidarPath::GPU;
+				}
+				else
+				{
+					if (!PathLower.IsEmpty() && PathLower != TEXT("cpu"))
+					{
+						UE_LOG(LogTemp, Warning,
+							TEXT("FSDS LiDAR: unknown LidarPath '%s' in settings.json, falling back to 'cpu'"),
+							*SensorPair.Value.LidarPath);
+					}
+					LidarSensor->LidarPath = EFSDSLidarPath::CPU;
+				}
+				// Settings now in place — let the sensor finalize its
+				// backend (logs the configured values and stands up
+				// the depth-render path when LidarPath==GPU). Component
+				// BeginPlay runs *before* this point with header
+				// defaults still in place, so backend setup has to
+				// happen here.
+				LidarSensor->OnSettingsApplied();
 				break;
 			}
 		}
@@ -495,6 +522,7 @@ void AFSDSVehiclePawn::BeginPlay()
 	// Load settings and create cameras
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
+
 
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
 	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup

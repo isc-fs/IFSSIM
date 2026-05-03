@@ -74,7 +74,9 @@
           "_comment_mount": "Mount aligned with the IFS-08's actual LiDAR position: X=0 (CoG-aligned, just beneath the main hoop), Y=0 (centered), Z=1.10 m (main hoop crossbar height). Previously X=0.5 m / Z=0.9 m was a hood-mount approximation; correcting it shifts the sensor back ~50 cm and up ~20 cm, which changes both the cone-detection range envelope (cones at the rear become visible) and the time-to-first-detection for cones immediately ahead. Verify cone_detection still classifies cluster heights correctly after re-baselining.",
           "X": 0.0, "Y": 0, "Z": 1.10,
           "RangeNoiseStd": 0.03,
-          "DropoutRate": 0.01
+          "DropoutRate": 0.01,
+          "_comment_lidarpath": "GPU path active (#223 Phase 1). Renders depth at the LiDAR's spherical scan envelope; produces NO point cloud yet — Phases 2-3 add async readback + decode shader. The /lidar/Lidar1 topic will be empty under this setting until Phase 3 lands. Switch back to 'cpu' to restore live point clouds.",
+          "LidarPath": "gpu"
         },
         "GSS": {
           "SensorType": 7, "Enabled": true,
