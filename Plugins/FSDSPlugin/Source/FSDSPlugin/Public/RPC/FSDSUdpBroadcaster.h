@@ -61,6 +61,14 @@ struct FFSDSLidarChunkHeader
 	int32 PointsInChunk = 0;
 	int32 TotalPoints = 0;
 	int32 Channels = 0;
+	// Capture-to-send lag in nanoseconds (how long ago this scan was
+	// captured, computed at packing time as `now_cycles - LidarSensor->
+	// LastTimestamp` × SecondsPerCycle × 1e9). Bridge stamps the message
+	// at `node_->now() - LagNs` so the ROS header.stamp reflects the
+	// physical capture moment of the scan, regardless of GPU readback
+	// latency or transport jitter. Self-correcting (no anchor needed).
+	// Issue #238.
+	int64 LagNs = 0;
 	// Followed by PointsInChunk * 3 * sizeof(float) bytes of point data
 };
 

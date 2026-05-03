@@ -419,6 +419,7 @@ void IFSSIMRosWrapper::startStreaming()
         // publish thread is unchanged.
         udp_receiver_.setLidarCallback(
             [this](int32_t total_points, int32_t channels,
+                   int64_t lag_ns,
                    const std::vector<float>& points) {
                 LidarChunkHeader hdr{};
                 hdr.magic = LIDAR_MAGIC;
@@ -428,6 +429,7 @@ void IFSSIMRosWrapper::startStreaming()
                 hdr.points_in_chunk = total_points;
                 hdr.total_points = total_points;
                 hdr.channels = channels;
+                hdr.lag_ns = lag_ns;
                 {
                     std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
                     lidar_pending_ = PendingLidarFrame{hdr, points};
@@ -856,9 +858,20 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     int total_points = header.total_points;
     if (total_points <= 0) return;
 
+    // Capture-time stamping (#238). The plugin tags each chunk with the
+    // capture-to-send lag in ns (LidarChunkHeader::lag_ns) — i.e. how
+    // long ago this scan was physically captured at the moment the
+    // publisher packed the wire frame. Subtract from the bridge's clock
+    // at receive time to recover the capture-time stamp. Self-correcting
+    // and clock-sync-free (the lag is a duration, not an absolute time).
+    // Fallback to node_->now() when lag_ns == 0 (old plugin build, or a
+    // chunk that landed before the LiDAR's first scan completed).
+    rclcpp::Time lidar_stamp = node_->now();
+    if (header.lag_ns > 0) {
+        lidar_stamp = lidar_stamp - rclcpp::Duration::from_nanoseconds(header.lag_ns);
+    }
     // Monotonic guard — same rationale as the IMU clamp in onSensorFrame.
     // GLIM expects strictly increasing timestamps on /lidar/Lidar1.
-    rclcpp::Time lidar_stamp = node_->now();
     if (last_lidar_stamp_.nanoseconds() > 0 && lidar_stamp <= last_lidar_stamp_) {
         lidar_stamp = last_lidar_stamp_ + rclcpp::Duration::from_nanoseconds(1);
     }

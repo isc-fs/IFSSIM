@@ -274,6 +274,22 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	// at the LiDAR's native rate.
 	uint32 LocalFrameID = FrameCounter;
 	int32  Channels = VehiclePawn->LidarSensor->NumberOfChannels;
+	// Capture-to-send lag in ns (#238). LidarSensor->LastTimestamp was
+	// stamped at depth-render dispatch by #232; the cycles between then
+	// and now (the moment we pack the wire frame) is the readback +
+	// queue + post-process delay — i.e. "how long ago was this scan
+	// physically captured". Bridge subtracts this from its own
+	// node_->now() to recover the ROS-time of capture. Sending a lag
+	// (a duration) instead of an absolute timestamp avoids the cross-
+	// host clock-sync trap.
+	const uint64 NowCycles = FPlatformTime::Cycles64();
+	const uint64 CaptureCycles = VehiclePawn->LidarSensor->GetTimestamp();
+	int64 LagNs = 0;
+	if (CaptureCycles > 0 && NowCycles >= CaptureCycles)
+	{
+		const double LagSeconds = (double)(NowCycles - CaptureCycles) * FPlatformTime::GetSecondsPerCycle64();
+		LagNs = (int64)(LagSeconds * 1e9);
+	}
 	TArray<float> PointsCopy = MoveTemp(Points);
 	FSocket* SocketRef = LidarSocket;
 	TSharedPtr<FInternetAddr> AddrRef = LidarAddr;
@@ -285,7 +301,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	std::atomic<int32>* InFlightRef = &LidarSendInFlight;
 
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
-	    [SocketRef, AddrRef, LocalFrameID, Channels, PointsCopy = MoveTemp(PointsCopy), TotalPoints, RunningRef, InFlightRef]()
+	    [SocketRef, AddrRef, LocalFrameID, Channels, LagNs, PointsCopy = MoveTemp(PointsCopy), TotalPoints, RunningRef, InFlightRef]()
 	{
 		// Always decrement the in-flight counter on any exit path.
 		struct FInFlightGuard {
@@ -349,6 +365,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 		Header->PointsInChunk = ChunkPoints;
 		Header->TotalPoints = TotalPoints;
 		Header->Channels = Channels;
+		Header->LagNs = LagNs;
 
 		// Copy point data (UE5 local frame: X=forward, Y=right — SLAM uses this convention)
 		FMemory::Memcpy(

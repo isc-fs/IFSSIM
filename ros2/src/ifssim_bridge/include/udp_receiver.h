@@ -51,6 +51,15 @@ struct LidarChunkHeader
     int32_t points_in_chunk;
     int32_t total_points;
     int32_t channels;
+    // Capture-to-send lag in nanoseconds — how long ago this scan was
+    // physically captured, measured by the publisher at packing time
+    // as (now_cycles - LidarSensor->LastTimestamp). Bridge stamps the
+    // ROS message at `node_->now() - lag_ns` so the header.stamp
+    // reflects the real capture moment of the scan, regardless of
+    // GPU readback latency. Issue #238 — closes the gap left by #232
+    // (publisher LastTimestamp was capture-time but the wire format
+    // dropped it on the floor).
+    int64_t lag_ns;
 };
 
 #pragma pack(pop)
@@ -67,6 +76,7 @@ class UdpReceiver
 public:
     using SensorCallback = std::function<void(const SensorFrame&)>;
     using LidarCallback = std::function<void(int32_t total_points, int32_t channels,
+                                              int64_t lag_ns,
                                               const std::vector<float>& points)>;
 
     UdpReceiver();
@@ -99,6 +109,11 @@ private:
         int32_t total_chunks = 0;
         int32_t chunks_received = 0;
         bool delivered = false;
+        // Capture-to-send lag in ns (#238) — preserved from the first
+        // chunk of the frame; subsequent chunks of the same frame carry
+        // (essentially) the same value. Wrapper subtracts this from
+        // node_->now() at publish time to recover the capture-time stamp.
+        int64_t lag_ns = 0;
         std::vector<float> points;
     };
     LidarFrame pending_lidar_;
