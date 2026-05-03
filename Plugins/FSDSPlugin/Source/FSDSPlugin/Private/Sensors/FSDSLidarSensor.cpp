@@ -13,6 +13,11 @@
 #include "RenderingThread.h"
 #include "TextureResource.h"
 #include "RHICommandList.h"
+#include "RenderGraphBuilder.h"
+#include "RenderGraphUtils.h"  // FComputeShaderUtils, RegisterExternalTexture, AddEnqueueCopyPass
+#include "GlobalShader.h"
+#include "ShaderParameterMacros.h"
+#include "Sensors/FSDSLidarDecodeShader.h"
 
 using FSDSNoise::RandStandardNormal;
 
@@ -44,7 +49,7 @@ void UFSDSLidarSensor::EndPlay(const EEndPlayReason::Type Reason)
 		bGPUReadbackInFlight = false;
 		bGPULockDispatched   = false;
 	}
-	GPUDepthReadback.Reset();
+	GPUPointsReadback.Reset();
 	Super::EndPlay(Reason);
 }
 
@@ -572,7 +577,7 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 
 	const double T0 = FPlatformTime::Seconds();
 	GPUDepthCapture->CaptureScene();
-	EnqueueGPUReadback();
+	EnqueueDecodePass();
 	const double T1 = FPlatformTime::Seconds();
 
 	GPUCapAccumulatorMs += (T1 - T0) * 1000.0;
@@ -603,112 +608,191 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 	return true;
 }
 
-// Phase 2 — async GPU→CPU readback.
+// Phase 3 — RDG decode pass + async buffer readback.
 //
-// EnqueueGPUReadback runs on the game thread immediately after
-// CaptureScene. It enqueues a render command that, when the renderer
-// processes it on the render thread, asks the RHI to copy the depth
-// RT into a CPU-readable buffer attached to the FRHIGPUTextureReadback
-// object. The actual GPU→CPU transfer happens whenever the GPU finishes
-// — typically the next frame.
+// EnqueueDecodePass runs on the game thread immediately after
+// CaptureScene. It dispatches a render command which:
+//   1. Builds an FRDGBuilder.
+//   2. Registers the depth RT as an external texture (the camera has
+//      already filled it via the SceneCapture run before this command
+//      was queued — UE's render-thread queue is FIFO).
+//   3. Allocates a transient structured buffer of float4 sized to the
+//      LiDAR's ray count.
+//   4. Adds a compute pass running FFSDSLidarDecodeCS — one thread per
+//      ray, sampling depth at the spherical-to-planar texel and
+//      producing a 3D point in vehicle frame (cm→m, ROS REP-103).
+//   5. Adds an enqueue-copy pass from the structured buffer into the
+//      persistent FRHIGPUBufferReadback so we can pull it back to CPU
+//      next frame.
 //
-// PollGPUReadback runs on the game thread each TickGPUPath call. If
-// the readback's buffer is ready, we lock it, memcpy the bytes into
-// GPUDepthPixels, and unlock. The Lock returns the row pitch (in
-// pixels) which can be ≥ GPURTWidth because the RHI may pad rows for
-// alignment — Phase 3 reads row-by-row using GPUDepthRowPitch as
-// stride.
-void UFSDSLidarSensor::EnqueueGPUReadback()
+// PollGPUReadback runs on the game thread; when the readback IsReady,
+// it dispatches a second render command to Lock(NumBytes)/memcpy/Unlock
+// the buffer, then AsyncTask-bounces the points back to the game
+// thread for ConsumeReadbackResult to unpack.
+void UFSDSLidarSensor::EnqueueDecodePass()
 {
 	if (!GPUDepthRT) return;
 	FTextureRenderTargetResource* RTResource = GPUDepthRT->GameThread_GetRenderTargetResource();
 	if (!RTResource) return;
 
-	if (!GPUDepthReadback.IsValid())
+	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
+		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
+	const int32 NumChannels_LCL    = NumberOfChannels;
+	const int32 NumHorizontalSteps = FMath::Max(1, PointsPerScan / FMath::Max(1, NumChannels_LCL));
+	const int32 NumPoints          = NumChannels_LCL * NumHorizontalSteps;
+	const uint32 PointsBytes       = NumPoints * sizeof(FVector4f);
+
+	// Snapshot uniform values on the game thread for capture by the
+	// render-thread lambda. Avoids touching `this` on the render
+	// thread (UObject access from there is unsafe).
+	struct FUniforms
 	{
-		GPUDepthReadback = MakeUnique<FRHIGPUTextureReadback>(TEXT("FSDSLidarDepthReadback"));
+		uint32 NumChannels;
+		uint32 NumHorizontalSteps;
+		uint32 RTWidth;
+		uint32 RTHeight;
+		float HStartRad, HEndRad, VUpperRad, VLowerRad, TiltRad;
+		float HHalfPlanar, VBottomPlanar, VTopPlanar;
+		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
+		uint32 RNGSeed;
+	} U;
+	U.NumChannels        = (uint32)NumChannels_LCL;
+	U.NumHorizontalSteps = (uint32)NumHorizontalSteps;
+	U.RTWidth            = (uint32)GPURTWidth;
+	U.RTHeight           = (uint32)GPURTHeight;
+	U.HStartRad          = FMath::DegreesToRadians(HorizontalFOVStart);
+	U.HEndRad            = FMath::DegreesToRadians(HorizontalFOVEnd);
+	U.VUpperRad          = FMath::DegreesToRadians(VerticalFOVUpper);
+	U.VLowerRad          = FMath::DegreesToRadians(VerticalFOVLower);
+	U.TiltRad            = FMath::DegreesToRadians(GPUVerticalFOVCenterDeg);
+	U.HHalfPlanar        = GPUPlanarHalfWidth;
+	U.VBottomPlanar      = GPUPlanarBottom;
+	U.VTopPlanar         = GPUPlanarTop;
+	U.MinRangeCm         = MinRange;
+	U.MaxRangeCm         = MaxRange;
+	U.RangeNoiseStdCm    = RangeNoiseStd;
+	U.DropoutRate        = DropoutRate;
+	// Re-seed each scan from the current cycle counter so dropouts and
+	// range-noise patterns aren't deterministic across the lifetime of
+	// the simulation (matches the CPU path's FMath::FRand-driven
+	// randomness in spirit).
+	U.RNGSeed            = (uint32)FPlatformTime::Cycles();
+
+	if (!GPUPointsReadback.IsValid())
+	{
+		GPUPointsReadback = MakeUnique<FRHIGPUBufferReadback>(TEXT("FSDSLidarPointsReadback"));
 	}
 
 	GPUReadbackEnqueueTime = FPlatformTime::Seconds();
 	bGPUReadbackInFlight   = true;
 
-	FRHIGPUTextureReadback* Readback = GPUDepthReadback.Get();
+	FRHIGPUBufferReadback* Readback = GPUPointsReadback.Get();
 
-	// We can pass `Readback` and `RTResource` raw because the
-	// FSDSLidarSensor outlives any in-flight readback (EndPlay flushes
-	// rendering before destroying GPUDepthReadback) and the RT
-	// resource lives for the lifetime of GPUDepthRT (UPROPERTY-pinned
-	// for the component's lifetime).
-	ENQUEUE_RENDER_COMMAND(FSDSLidarReadback)(
-		[Readback, RTResource](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(FSDSLidarDecode)(
+		[Readback, RTResource, U, NumPoints, PointsBytes](FRHICommandListImmediate& RHICmdList)
 		{
-			if (FRHITexture* SrcTex = RTResource->GetRenderTargetTexture())
-			{
-				Readback->EnqueueCopy(RHICmdList, SrcTex);
-			}
+			FRHITexture* DepthRHI = RTResource->GetRenderTargetTexture();
+			if (!DepthRHI) return;
+
+			FRDGBuilder GraphBuilder(RHICmdList);
+
+			FRDGTextureRef DepthRDG = RegisterExternalTexture(
+				GraphBuilder, DepthRHI, TEXT("FSDSLidarDepthRT"));
+
+			const FRDGBufferDesc BufDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), NumPoints);
+			FRDGBufferRef OutBuf = GraphBuilder.CreateBuffer(BufDesc, TEXT("FSDSLidarPoints"));
+
+			auto* Params = GraphBuilder.AllocParameters<FFSDSLidarDecodeCS::FParameters>();
+			Params->DepthTexture          = DepthRDG;
+			Params->OutPoints             = GraphBuilder.CreateUAV(OutBuf);
+			Params->NumChannels           = U.NumChannels;
+			Params->NumHorizontalSteps    = U.NumHorizontalSteps;
+			Params->RTWidth               = U.RTWidth;
+			Params->RTHeight              = U.RTHeight;
+			Params->HorizontalFOVStartRad = U.HStartRad;
+			Params->HorizontalFOVEndRad   = U.HEndRad;
+			Params->VerticalFOVUpperRad   = U.VUpperRad;
+			Params->VerticalFOVLowerRad   = U.VLowerRad;
+			Params->TiltRad               = U.TiltRad;
+			Params->HHalfPlanar           = U.HHalfPlanar;
+			Params->VBottomPlanar         = U.VBottomPlanar;
+			Params->VTopPlanar            = U.VTopPlanar;
+			Params->MinRangeCm            = U.MinRangeCm;
+			Params->MaxRangeCm            = U.MaxRangeCm;
+			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
+			Params->DropoutRate           = U.DropoutRate;
+			Params->RNGSeed               = U.RNGSeed;
+
+			TShaderMapRef<FFSDSLidarDecodeCS> Shader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+			const int32 ThreadGroups = FMath::DivideAndRoundUp(NumPoints, FFSDSLidarDecodeCS::ThreadGroupSize);
+			FComputeShaderUtils::AddPass(
+				GraphBuilder,
+				RDG_EVENT_NAME("FSDSLidarDecode"),
+				Shader, Params,
+				FIntVector(ThreadGroups, 1, 1));
+
+			AddEnqueueCopyPass(GraphBuilder, Readback, OutBuf, PointsBytes);
+
+			GraphBuilder.Execute();
 		});
 }
 
 void UFSDSLidarSensor::PollGPUReadback()
 {
 	// Two state-machine guards: bGPUReadbackInFlight is set by
-	// EnqueueGPUReadback; bGPULockDispatched is set when the
+	// EnqueueDecodePass; bGPULockDispatched is set when the
 	// render-thread Lock command has been queued and not yet returned.
-	// Skip if neither phase applies, or if the Lock is already in
-	// flight (it will land via ConsumeReadbackResult).
 	if (!bGPUReadbackInFlight || bGPULockDispatched) return;
-	if (!GPUDepthReadback.IsValid()) return;
-	if (!GPUDepthReadback->IsReady()) return;
+	if (!GPUPointsReadback.IsValid()) return;
+	if (!GPUPointsReadback->IsReady()) return;
 
-	// FRHIGPUTextureReadback::Lock asserts IsInRenderingThread(), so
-	// we hand the lock+memcpy off to the render thread, then bounce
-	// the result back to the game thread via AsyncTask.
-	FRHIGPUTextureReadback* Readback = GPUDepthReadback.Get();
-	const int32 ExpectedRTH = GPURTHeight;
+	// FRHIGPUBufferReadback::Lock asserts IsInRenderingThread(), so
+	// the lock+memcpy lives in a render command and the result bounces
+	// back via AsyncTask(GameThread) to ConsumeReadbackResult.
+	FRHIGPUBufferReadback* Readback = GPUPointsReadback.Get();
+	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
+		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
+	const int32 NumPoints = (NumberOfChannels > 0)
+		? NumberOfChannels * (PointsPerScan / NumberOfChannels)
+		: 0;
+	if (NumPoints <= 0) return;
+
 	TWeakObjectPtr<UFSDSLidarSensor> WeakSelf(this);
 
 	bGPULockDispatched = true;
 
 	ENQUEUE_RENDER_COMMAND(FSDSLidarReadbackLock)(
-		[Readback, ExpectedRTH, WeakSelf](FRHICommandListImmediate& /*RHICmdList*/)
+		[Readback, NumPoints, WeakSelf](FRHICommandListImmediate& /*RHICmdList*/)
 		{
-			int32 RowPitch     = 0;
-			int32 BufferHeight = 0;
-			void* Buffer = Readback->Lock(RowPitch, &BufferHeight);
+			const uint32 NumBytes = NumPoints * sizeof(FVector4f);
+			const FVector4f* Src = (const FVector4f*)Readback->Lock(NumBytes);
 
-			TArray<float> LocalCopy;
-			if (Buffer && RowPitch > 0)
+			TArray<FVector4f> LocalCopy;
+			if (Src)
 			{
-				// BufferHeight is the RHI-mapped height; falls back to
-				// our expected RTH when the RHI didn't fill it.
-				const int32 H = (BufferHeight > 0) ? BufferHeight : ExpectedRTH;
-				LocalCopy.SetNumUninitialized(RowPitch * H);
-				FMemory::Memcpy(LocalCopy.GetData(), Buffer, LocalCopy.Num() * sizeof(float));
+				LocalCopy.SetNumUninitialized(NumPoints);
+				FMemory::Memcpy(LocalCopy.GetData(), Src, NumBytes);
 			}
 			Readback->Unlock();
 
-			// Game-thread consumer — TWeakObjectPtr is only safe to
-			// dereference on the game thread, which AsyncTask
-			// guarantees here.
-			const int32 CapturedRowPitch = RowPitch;
 			AsyncTask(ENamedThreads::GameThread,
-				[WeakSelf, Pixels = MoveTemp(LocalCopy), CapturedRowPitch]() mutable
+				[WeakSelf, Points = MoveTemp(LocalCopy)]() mutable
 				{
 					if (UFSDSLidarSensor* Self = WeakSelf.Get())
 					{
-						Self->ConsumeReadbackResult(MoveTemp(Pixels), CapturedRowPitch);
+						Self->ConsumeReadbackResult(MoveTemp(Points));
 					}
 				});
 		});
 }
 
-void UFSDSLidarSensor::ConsumeReadbackResult(TArray<float>&& Pixels, int32 RowPitch)
+void UFSDSLidarSensor::ConsumeReadbackResult(TArray<FVector4f>&& Points)
 {
-	// This runs on the game thread (AsyncTask target = GameThread),
-	// so we can touch UObject state directly. Resets the state
-	// machine flags so the next scan can dispatch a new readback.
-	GPUDepthPixels   = MoveTemp(Pixels);
-	GPUDepthRowPitch = RowPitch;
+	// Game-thread consumer of the GPU decode pass. Walks the float4[]
+	// output of FSDSLidarDecode.usf and packs valid hits (w == 1) into
+	// PointCloudBuffer in the flat-float [x,y,z, x,y,z, ...] format
+	// FSDSUdpBroadcaster + GetPointCloud() consumers expect. Skips
+	// invalid entries (w == 0: dropped, far-plane, out-of-range, etc.).
 	bGPULockDispatched   = false;
 	bGPUReadbackInFlight = false;
 
@@ -716,38 +800,37 @@ void UFSDSLidarSensor::ConsumeReadbackResult(TArray<float>&& Pixels, int32 RowPi
 	GPUReadbackLastLatencyMs = (NowS - GPUReadbackEnqueueTime) * 1000.0;
 	GPUReadbackCount++;
 
-	// First-readback sanity check: scan the depth buffer and report
-	// min/mean/max/center. If we got real depth back, min should be
-	// >> 0 (closest geometry) and max should be near MaxRange (far
-	// plane). If we got zeros, the RT format / EnqueueCopy chain is
-	// broken and we'll know before Phase 3 chases ghosts.
-	if (!bGPULoggedFirstReadback && GPUDepthRowPitch > 0 && GPUDepthPixels.Num() > 0)
+	TArray<float> NewBuffer;
+	NewBuffer.Reserve(Points.Num() * 3);
+	int32 HitCount = 0;
+	for (const FVector4f& P : Points)
 	{
-		float MinD = TNumericLimits<float>::Max();
-		float MaxD = -TNumericLimits<float>::Max();
-		double SumD = 0.0;
-		int64  N = 0;
-		const int32 SafeH = FMath::Min(GPURTHeight, GPUDepthPixels.Num() / GPUDepthRowPitch);
-		for (int32 r = 0; r < SafeH; r++)
-		{
-			for (int32 c = 0; c < GPURTWidth; c++)
-			{
-				const float D = GPUDepthPixels[r * GPUDepthRowPitch + c];
-				if (D > 0.f && D < 1e9f) { MinD = FMath::Min(MinD, D); MaxD = FMath::Max(MaxD, D); SumD += D; N++; }
-			}
-		}
-		const float MeanD   = N > 0 ? (float)(SumD / (double)N) : 0.f;
-		const float CenterD = GPUDepthPixels[(SafeH / 2) * GPUDepthRowPitch + (GPURTWidth / 2)];
+		if (P.W < 0.5f) continue;  // not a valid hit
+		NewBuffer.Add(P.X);
+		NewBuffer.Add(P.Y);
+		NewBuffer.Add(P.Z);
+		HitCount++;
+	}
+
+	{
+		FScopeLock Lock(&PointCloudLock);
+		PointCloudBuffer = MoveTemp(NewBuffer);
+		CachedPointCount = HitCount;
+		LastTimestamp    = FPlatformTime::Cycles64();
+	}
+
+	if (!bGPULoggedFirstReadback)
+	{
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS LiDAR GPU: first readback OK | %dx%d (stride=%d px) | depth cm: min=%.0f mean=%.0f max=%.0f centerTexel=%.0f | latency=%.2f ms"),
-			GPURTWidth, GPURTHeight, GPUDepthRowPitch, MinD, MeanD, MaxD, CenterD, GPUReadbackLastLatencyMs);
+			TEXT("FSDS LiDAR GPU: first readback OK | %d valid hits / %d rays | latency=%.2f ms"),
+			HitCount, Points.Num(), GPUReadbackLastLatencyMs);
 		bGPULoggedFirstReadback = true;
 	}
 
 	if (GPUReadbackCount > 0 && (GPUReadbackCount % 50) == 0)
 	{
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS LiDAR GPU: readback #%d, latency=%.2f ms"),
-			GPUReadbackCount, GPUReadbackLastLatencyMs);
+			TEXT("FSDS LiDAR GPU: readback #%d, %d hits, latency=%.2f ms"),
+			GPUReadbackCount, HitCount, GPUReadbackLastLatencyMs);
 	}
 }

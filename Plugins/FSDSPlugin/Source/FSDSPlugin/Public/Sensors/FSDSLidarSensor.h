@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "RHIGPUReadback.h"
+#include "Math/Vector4.h"
 #include "FSDSLidarSensor.generated.h"
 
 class USceneCaptureComponent2D;
@@ -142,30 +143,24 @@ private:
 	// if a capture was issued this tick.
 	bool TickGPUPath(float DeltaTime);
 
-	// Phase-2 (#223) — async GPU→CPU readback. Game-thread enqueues a
-	// render command that issues the GPU→CPU copy on the render thread;
-	// the result is polled next frame via IsReady() and copied into
-	// GPUDepthPixels. Same dispatch/collect pattern that #206 tier-3
-	// taught us, but here the work is genuinely off-CPU.
-	void EnqueueGPUReadback();
+	// Phase-3 (#223) — RDG decode pass + async buffer readback.
+	//   1. EnqueueDecodePass: render command that builds an FRDGBuilder,
+	//      runs the FSDSLidarDecode compute shader against the depth RT
+	//      to produce a structured buffer of float4 points, then issues
+	//      AddEnqueueCopyPass into a persistent FRHIGPUBufferReadback.
+	//   2. PollGPUReadback: game-thread checks IsReady, dispatches a
+	//      second render command to do Lock(NumBytes)/memcpy/Unlock and
+	//      AsyncTask the result back to the game thread.
+	//   3. ConsumeReadbackResult: unpacks the float4 array into the
+	//      flat-float [x,y,z, x,y,z, ...] PointCloudBuffer that
+	//      FSDSUdpBroadcaster + GetPointCloud() consumers expect.
+	void EnqueueDecodePass();
 	void PollGPUReadback();
-	// Game-thread sink for the render-thread lock+memcpy result.
-	// Called via AsyncTask once the render thread has finished the
-	// FRHIGPUTextureReadback::Lock/Unlock dance. We can't touch
-	// UObject state on the render thread directly, so this is the
-	// canonical "bounce back to game thread" UE5 pattern.
-	void ConsumeReadbackResult(TArray<float>&& Pixels, int32 RowPitch);
+	void ConsumeReadbackResult(TArray<FVector4f>&& Points);
 
-	TUniquePtr<FRHIGPUTextureReadback> GPUDepthReadback;
-	bool  bGPUReadbackInFlight = false;  // EnqueueCopy has been issued, IsReady not yet observed
-	bool  bGPULockDispatched   = false;  // render-thread Lock command has been queued; awaiting ConsumeReadbackResult
-
-	// CPU mirror of the depth RT after a successful readback.
-	// GPUDepthRowPitch is in *pixels* (≥ GPURTWidth — RHI may pad rows
-	// for alignment); decode shader / Phase 3 reads row-by-row using
-	// this stride.
-	TArray<float> GPUDepthPixels;
-	int32 GPUDepthRowPitch = 0;
+	TUniquePtr<FRHIGPUBufferReadback> GPUPointsReadback;
+	bool  bGPUReadbackInFlight = false;  // RDG dispatch issued; readback IsReady not yet observed
+	bool  bGPULockDispatched   = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
 
 	// Pose snapshot at the moment the capture was issued. The readback
 	// arrives ≥1 frame later when the actor has moved on; Phase 3

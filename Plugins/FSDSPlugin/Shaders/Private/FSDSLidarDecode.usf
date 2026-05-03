@@ -75,7 +75,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const uint VIdx = RayIdx / NumHorizontalSteps;
 	const uint HIdx = RayIdx % NumHorizontalSteps;
 
-	// Spherical (h, v) for this LiDAR ray. Uniform spacing in degrees,
+	// Spherical (h, v) for this LiDAR ray. Uniform spacing in radians,
 	// matching the CPU path's per-channel/per-step grid.
 	const float HStepRad = (NumHorizontalSteps > 1)
 		? (HorizontalFOVEndRad - HorizontalFOVStartRad) / float(NumHorizontalSteps)
@@ -86,33 +86,52 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 
 	const float HRad = HorizontalFOVStartRad + float(HIdx) * HStepRad;
 	const float VRad = VerticalFOVLowerRad   + float(VIdx) * VStepRad;
-	const float VCamRad = VRad - TiltRad;     // angle relative to tilted camera forward
 
-	// Image-plane projection (matches Phase-1 forward formula).
-	const float ImageX = tan(HRad);
-	const float ImageY = tan(VCamRad) / max(cos(HRad), 1e-6);  // = tan(VCam) * sec(H)
+	const float CosV = cos(VRad);
+	const float SinV = sin(VRad);
+	const float CosH = cos(HRad);
+	const float SinH = sin(HRad);
+
+	// Image-plane projection. With tilt=0 (camera looks straight
+	// ahead in vehicle frame) the formulas decouple to the standard
+	// rectified-camera form. TiltRad is kept in the uniform buffer
+	// for forward compatibility with a future asymmetric-projection
+	// configuration; the C++ side currently always sets it to zero.
+	const float ImageX = SinH / max(CosH, 1e-6);                          // = tan(h)
+	const float ImageY = SinV / max(CosV * CosH, 1e-6);                   // = tan(v) · sec(h)
 
 	// Bail if the ray's image-plane coords fall outside the rendered
-	// frustum (numerical edge case at exact corners).
+	// frustum (asymmetric V padded to symmetric per the C++ setup).
 	if (ImageX < -HHalfPlanar || ImageX > HHalfPlanar) return;
 	if (ImageY < VBottomPlanar || ImageY > VTopPlanar) return;
 
 	const float TexelColF = (ImageX + HHalfPlanar) / (2.0 * HHalfPlanar) * float(RTWidth);
-	const float TexelRowF = (ImageY - VBottomPlanar) / (VTopPlanar - VBottomPlanar) * float(RTHeight);
+	// UE5 screen-space Y is *down*-positive; image_y in camera-up
+	// convention is up-positive. Flip Y so a positive v-angle maps to
+	// the *top* of the RT.
+	const float TexelRowF = (VTopPlanar - ImageY) / (VTopPlanar - VBottomPlanar) * float(RTHeight);
 
 	const int Col = clamp(int(TexelColF), 0, int(RTWidth)  - 1);
 	const int Row = clamp(int(TexelRowF), 0, int(RTHeight) - 1);
 
-	float DepthCm = DepthTexture.Load(int3(Col, Row, 0));
+	const float DepthZCm = DepthTexture.Load(int3(Col, Row, 0));
 
-	// Far-plane sentinel — UE5 SCS_SceneDepth writes a large number
-	// (effectively infinity for sky / nothing-hit). Anything >= 99 %
-	// of MaxRange we treat as no-hit so the LiDAR doesn't "see"
-	// invented points at the horizon.
-	if (DepthCm >= MaxRangeCm * 0.99) return;
+	// SCS_SceneDepth gives the perpendicular distance from the camera
+	// plane (z-axis depth in view space). To get the radial distance
+	// along the LiDAR ray, divide by cos(angle between ray and camera
+	// forward). With tilt=0 and forward = (1, 0, 0) in vehicle frame:
+	//   cos(α) = d · (1,0,0) = cos(v) · cos(h)
+	const float CosAlpha = max(CosV * CosH, 1e-6);
+	float RayDistCm = DepthZCm / CosAlpha;
 
-	// Per-ray RNG. Seed combines the global per-scan seed with the ray
-	// index so each ray has a different deterministic stream.
+	// Far-plane / out-of-range cull. SceneCapture's far plane is much
+	// larger than the LiDAR's MaxRange, so anything beyond the LiDAR's
+	// configured range we treat as no-hit (matches CPU's
+	// LineTrace-with-MaxRange behaviour).
+	if (RayDistCm > MaxRangeCm) return;
+
+	// Per-ray RNG seed combines a per-scan seed (CPU side) with the
+	// ray index so each ray gets a distinct deterministic stream.
 	uint RNGState = pcg_hash(RayIdx ^ RNGSeed);
 
 	// Dropout — reject this hit with probability DropoutRate.
@@ -123,7 +142,10 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		if (r < DropoutRate) return;
 	}
 
-	// Box-Muller Gaussian range noise (σ = RangeNoiseStdCm).
+	// Box-Muller Gaussian range noise (σ = RangeNoiseStdCm). Same
+	// statistical model as FSDSSensorNoise::RandStandardNormal on the
+	// CPU path, so dual-path validation in Phase 4 compares like-for-
+	// like distributions.
 	if (RangeNoiseStdCm > 0.0)
 	{
 		RNGState = pcg_hash(RNGState);
@@ -131,23 +153,22 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		RNGState = pcg_hash(RNGState);
 		const float u2 = u32_to_unit_float(RNGState);
 		const float Gauss = sqrt(-2.0 * log(u1)) * cos(6.2831853 * u2);
-		DepthCm += RangeNoiseStdCm * Gauss;
+		RayDistCm += RangeNoiseStdCm * Gauss;
 	}
 
-	if (DepthCm < MinRangeCm) return;
+	if (RayDistCm < MinRangeCm) return;
 
 	// Reconstruct 3D point along the spherical ray. Direction from
-	// (h, v) in vehicle frame using the same Tait-Bryan ordering as the
-	// CPU path's FRotator(VAngle, HAngle, 0).Vector():
+	// (h, v) in vehicle frame using the same Tait-Bryan ordering as
+	// the CPU path's FRotator(VAngle, HAngle, 0).Vector():
 	//   forward = +X, right = +Y, up = +Z
-	//   pitch by V about Y, then yaw by H about Z
 	//   → (cos(v)·cos(h), cos(v)·sin(h), sin(v))
-	const float CosV = cos(VRad);
-	const float DirX = CosV * cos(HRad);
-	const float DirY = CosV * sin(HRad);
-	const float DirZ = sin(VRad);
+	const float DirX = CosV * CosH;
+	const float DirY = CosV * SinH;
+	const float DirZ = SinV;
 
-	// cm → m, plus ROS REP-103 Y-flip (UE Y-right → ROS Y-left).
-	const float ScaleM = DepthCm / 100.0;
+	// cm → m, plus ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The
+	// w channel is the validity flag; w=1 means "real hit".
+	const float ScaleM = RayDistCm / 100.0;
 	OutPoints[RayIdx] = float4(DirX * ScaleM, -DirY * ScaleM, DirZ * ScaleM, 1.0);
 }
