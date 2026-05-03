@@ -138,12 +138,18 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float CosAlpha = max(CosV * CosH, 1e-6);
 	float RayDistCm = DepthZCm / CosAlpha;
 
-	// Far-plane / out-of-range cull. Real LiDARs (Hesai datasheet App.
-	// A.1.1) have per-channel range variance — outer beams have lower
-	// laser power and reach less far than the central ones. Read the
-	// channel's max range from the per-channel uniform; the C++ side
-	// guarantees this buffer is always NumChannels long (falls back to
-	// the global MaxRange when no per-channel override is configured).
+	// Per-channel range envelope. Real LiDARs (Hesai datasheet App.
+	// A.1.1) have per-beam laser-power variance — outer beams reach
+	// less far than the central ones. Read the channel's max range
+	// from the per-channel uniform; the C++ side guarantees this
+	// buffer is always NumChannels long (falls back to the global
+	// MaxRange when no per-channel override is configured).
+	//
+	// First cull is pre-noise — equivalent to the CPU path's trace
+	// endpoint being clipped at ChannelMaxR before the LineTrace.
+	// Without it the depth RT (rendered out to the global MaxRange)
+	// would feed in hits that are physically out of the beam's reach
+	// and waste a dropout/noise RNG sample on them.
 	const float ChannelMaxR = ChannelMaxRangeCm[VIdx];
 	if (RayDistCm > ChannelMaxR) return;
 
@@ -173,7 +179,13 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		RayDistCm += RangeNoiseStdCm * Gauss;
 	}
 
-	if (RayDistCm < MinRangeCm) return;
+	// Re-check both bounds *after* noise — mirrors the CPU path's
+	// post-noise `if (Dist < MinRange || Dist > ChannelMaxR) continue;`
+	// (FSDSLidarSensor.cpp PerformScan). Without the upper re-check, a
+	// hit that lands just under ChannelMaxR pre-noise but gets pushed
+	// past it by +noise would survive on GPU and be dropped on CPU —
+	// the boundary divergence flagged by audit issue #231.
+	if (RayDistCm < MinRangeCm || RayDistCm > ChannelMaxR) return;
 
 	// Reconstruct 3D point along the spherical ray. Direction from
 	// (h, v) in vehicle frame using the same Tait-Bryan ordering as
