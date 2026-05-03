@@ -798,6 +798,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	}
 
 	Slot.EnqueueTimeSec  = FPlatformTime::Seconds();
+	// Capture-time timestamp (#232). Stamped here so the readback's
+	// LastTimestamp reflects when the rays were physically cast, not
+	// when the GPU→CPU copy finished ~50-100 ms later. Mirrors the CPU
+	// path's `LastTimestamp = Cycles64()` at scan time.
+	Slot.CaptureCycles64 = FPlatformTime::Cycles64();
 	Slot.bInFlight       = true;
 	Slot.bLockDispatched = false;
 	NextDispatchSlot     = (NextDispatchSlot + 1) % ReadbackQueueDepth;
@@ -969,7 +974,13 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 		FScopeLock Lock(&PointCloudLock);
 		PointCloudBuffer = MoveTemp(NewBuffer);
 		CachedPointCount = HitCount;
-		LastTimestamp    = FPlatformTime::Cycles64();
+		// Capture-time timestamp (#232) — use the cycles stamped when the
+		// depth render dispatched, not now. The readback ring delays
+		// consume by ~50-100 ms after capture, so stamping at consume time
+		// would shift downstream pose/cloud temporal alignment by ~1 scan
+		// period. CPU path's LastTimestamp is set at scan time, so this
+		// matches its semantics.
+		LastTimestamp    = Slot.CaptureCycles64;
 	}
 
 	if (!bGPULoggedFirstReadback)
