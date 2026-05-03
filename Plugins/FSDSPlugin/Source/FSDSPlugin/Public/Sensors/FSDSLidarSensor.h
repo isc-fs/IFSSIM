@@ -114,6 +114,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
 
+	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
+	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
+	 *  = highest). When this array's length matches NumberOfChannels,
+	 *  the LiDAR uses ChannelMaxRange[VIdx] instead of the global
+	 *  MaxRange — models the per-beam laser-power variance real LiDARs
+	 *  exhibit (Hesai ATX_S01 datasheet App. A.1.1 style). When empty,
+	 *  all channels fall back to MaxRange (preserves existing
+	 *  settings.json behaviour). settings.json declares this in METRES;
+	 *  FSDSVehiclePawn does the m→cm conversion when wiring through. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	TArray<float> PerChannelMaxRangeCm;
+
 	/** Ray-cast backend selection. Driven by settings.json LidarPath
 	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
 	 *  stop/start because BeginPlay sets up backend-specific resources. */

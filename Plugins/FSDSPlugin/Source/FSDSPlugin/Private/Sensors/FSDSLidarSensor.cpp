@@ -59,11 +59,44 @@ void UFSDSLidarSensor::OnSettingsApplied()
 	const float VFov = VerticalFOVUpper - VerticalFOVLower;
 	const int32 PointsPerScan = PointsPerSecond / FMath::Max(1.f, RotationsPerSecond);
 
+	// Normalise PerChannelMaxRangeCm to length == NumberOfChannels.
+	// Empty (default) → fill with global MaxRange. Length mismatch →
+	// warn + fall back to global MaxRange. Both paths (GPU shader,
+	// CPU PerformScan) read from this normalised array directly.
+	if (PerChannelMaxRangeCm.Num() == 0)
+	{
+		PerChannelMaxRangeCm.Init(MaxRange, NumberOfChannels);
+	}
+	else if (PerChannelMaxRangeCm.Num() != NumberOfChannels)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS LiDAR: PerChannelMaxRangeM has %d entries but NumberOfChannels=%d — falling back to global MaxRange for all channels."),
+			PerChannelMaxRangeCm.Num(), NumberOfChannels);
+		PerChannelMaxRangeCm.Reset();
+		PerChannelMaxRangeCm.Init(MaxRange, NumberOfChannels);
+	}
+
+	// Per-channel range stats for the log line — useful when validating
+	// that the override actually got applied (e.g. populated from the
+	// Hesai datasheet) vs. silently falling back to the global value.
+	float MinPerCh = MaxRange, MaxPerCh = MaxRange;
+	if (PerChannelMaxRangeCm.Num() > 0)
+	{
+		MinPerCh = PerChannelMaxRangeCm[0];
+		MaxPerCh = PerChannelMaxRangeCm[0];
+		for (float V : PerChannelMaxRangeCm) { MinPerCh = FMath::Min(MinPerCh, V); MaxPerCh = FMath::Max(MaxPerCh, V); }
+	}
+	const bool bUniformRange = (MinPerCh == MaxPerCh);
+
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS LiDAR: backend=%s  %d channels, %d pts/sec, %d pts/scan, H-FOV=%.0f° V-FOV=%.0f°, range=%.0fm"),
+		TEXT("FSDS LiDAR: backend=%s  %d channels, %d pts/sec, %d pts/scan, H-FOV=%.0f° V-FOV=%.0f°, "
+			"range=%s"),
 		LidarPath == EFSDSLidarPath::GPU ? TEXT("GPU") : TEXT("CPU"),
 		NumberOfChannels, PointsPerSecond, PointsPerScan,
-		HFov, VFov, MaxRange / 100.f);
+		HFov, VFov,
+		bUniformRange
+			? *FString::Printf(TEXT("%.0fm (uniform)"), MaxRange / 100.f)
+			: *FString::Printf(TEXT("%.1f-%.1fm (per-channel from settings.json)"), MinPerCh / 100.f, MaxPerCh / 100.f));
 
 	if (LidarPath == EFSDSLidarPath::GPU)
 	{
@@ -218,7 +251,13 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			const FChannelDir& C = ChannelDir[v];
 			const FVector RayDirLocal(C.CosV * CosH, C.CosV * SinH, C.SinV);
 			FVector RayDir = OwnerRotation.RotateVector(RayDirLocal);
-			FVector RayEnd = SensorWorldPos + RayDir * MaxRange;
+			// Per-channel max range (Hesai datasheet App. A.1.1 style).
+			// PerChannelMaxRangeCm is normalised to NumberOfChannels in
+			// OnSettingsApplied; index by V like the GPU shader does.
+			const float ChannelMaxR = PerChannelMaxRangeCm.IsValidIndex(v)
+				? PerChannelMaxRangeCm[v]
+				: MaxRange;
+			FVector RayEnd = SensorWorldPos + RayDir * ChannelMaxR;
 
 			FHitResult Hit;
 			if (!InWorld->LineTraceSingleByChannel(Hit, SensorWorldPos, RayEnd, ECC_Visibility, TraceParams))
@@ -235,7 +274,10 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			if (RangeNoiseStd > 0.f)
 				Dist += RangeNoiseStd * RandStandardNormal();
 
-			if (Dist < MinRange)
+			// Re-cull after noise — a +noise sample can push Dist past
+			// the channel's max range. Match the GPU path which checks
+			// ChannelMaxR after Box-Muller.
+			if (Dist < MinRange || Dist > ChannelMaxR)
 				continue;
 
 			const FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
@@ -722,8 +764,14 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 
 	FRHIGPUBufferReadback* Readback = GPUPointsReadback.Get();
 
+	// Snapshot per-channel max-range so the render thread doesn't read
+	// from the game-thread-owned UPROPERTY array. The render command
+	// uploads this into a structured buffer SRV bound as the shader's
+	// ChannelMaxRangeCm parameter.
+	const TArray<float> ChannelMaxRangeCmCopy = PerChannelMaxRangeCm;
+
 	ENQUEUE_RENDER_COMMAND(FSDSLidarDecode)(
-		[Readback, RTResource, U, NumPoints, PointsBytes](FRHICommandListImmediate& RHICmdList)
+		[Readback, RTResource, U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHITexture* DepthRHI = RTResource->GetRenderTargetTexture();
 			if (!DepthRHI) return;
@@ -736,9 +784,26 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			const FRDGBufferDesc BufDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), NumPoints);
 			FRDGBufferRef OutBuf = GraphBuilder.CreateBuffer(BufDesc, TEXT("FSDSLidarPoints"));
 
+			// Per-channel max-range structured buffer. ~464 B for a 116-ch
+			// LiDAR, allocated transient so it dies at end of graph.
+			// CreateUploadBuffer's helper return doesn't carry the
+			// "structured" type tag through to CreateSRV (it tries to
+			// build a typed-buffer SRV → "Format cannot be unknown for
+			// typed buffers" assert). Build the structured buffer
+			// explicitly instead.
+			const int32 ChannelCount = FMath::Max(1, ChannelMaxRangeCmCopy.Num());
+			FRDGBufferRef ChannelRangeBuf = GraphBuilder.CreateBuffer(
+				FRDGBufferDesc::CreateStructuredDesc(sizeof(float), ChannelCount),
+				TEXT("FSDSLidarChannelMaxRange"));
+			GraphBuilder.QueueBufferUpload(
+				ChannelRangeBuf,
+				ChannelMaxRangeCmCopy.GetData(),
+				ChannelMaxRangeCmCopy.Num() * sizeof(float));
+
 			auto* Params = GraphBuilder.AllocParameters<FFSDSLidarDecodeCS::FParameters>();
 			Params->DepthTexture          = DepthRDG;
 			Params->OutPoints             = GraphBuilder.CreateUAV(OutBuf);
+			Params->ChannelMaxRangeCm     = GraphBuilder.CreateSRV(ChannelRangeBuf);
 			Params->NumChannels           = U.NumChannels;
 			Params->NumHorizontalSteps    = U.NumHorizontalSteps;
 			Params->RTWidth               = U.RTWidth;

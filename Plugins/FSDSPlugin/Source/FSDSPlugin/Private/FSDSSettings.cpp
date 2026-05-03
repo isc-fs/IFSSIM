@@ -272,6 +272,27 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("MaxRange"), DblVal)) Sensor.MaxRange = DblVal;
 	SensorObj->TryGetBoolField(TEXT("DrawDebugPoints"), Sensor.bDrawDebugPoints);
 
+	// Per-channel max-range override (Hesai datasheet App. A.1.1 style).
+	// Format: "PerChannelMaxRangeM": [r0, r1, ..., r{NumChannels-1}]
+	// in metres. Length must equal NumberOfChannels — validation lives
+	// in FSDSLidarSensor::OnSettingsApplied; mismatches log a warning
+	// and the global MaxRange is used instead.
+	{
+		const TArray<TSharedPtr<FJsonValue>>* RangeArr = nullptr;
+		if (SensorObj->TryGetArrayField(TEXT("PerChannelMaxRangeM"), RangeArr) && RangeArr)
+		{
+			Sensor.PerChannelMaxRangeM.Reset(RangeArr->Num());
+			for (const TSharedPtr<FJsonValue>& Entry : *RangeArr)
+			{
+				double V = 0.0;
+				if (Entry->TryGetNumber(V))
+				{
+					Sensor.PerChannelMaxRangeM.Add((float)V);
+				}
+			}
+		}
+	}
+
 	// LidarPath: "cpu" (default) or "gpu" — see #223. Only honoured when
 	// SensorType==6 (LiDAR); read by FSDSLidarSensor::BeginPlay. We
 	// store it on every sensor's settings struct uniformly because

@@ -76,7 +76,8 @@
           "RangeNoiseStd": 0.03,
           "DropoutRate": 0.01,
           "_comment_lidarpath": "GPU path active (#223 Phase 1). Renders depth at the LiDAR's spherical scan envelope; produces NO point cloud yet — Phases 2-3 add async readback + decode shader. The /lidar/Lidar1 topic will be empty under this setting until Phase 3 lands. Switch back to 'cpu' to restore live point clouds.",
-          "LidarPath": "gpu"
+          "LidarPath": "gpu",
+          "_comment_perchannelmaxrange": "Optional per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle, last = highest). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams, so the sim shouldn't see uniform 30 m on every channel. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this. Example shape: [28, 28.5, ..., 30 (centre), ..., 28.5, 28]. Leave commented-out / empty to use uniform MaxRange (current default — no fidelity change vs pre-tune)."
         },
         "GSS": {
           "SensorType": 7, "Enabled": true,
