@@ -26,7 +26,7 @@
       },
       "transforms": {},
       "topics": {
-        "/fast_limo/pointcloud": {
+        "/lidar/Lidar1": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -37,39 +37,20 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/fast_limo/deskewed": {
-          "visible": false,
-          "colorField": "z",
-          "colorMode": "flat",
-          "flatColor": { "r": 0.2, "g": 0.9, "b": 1, "a": 1 },
-          "pointSize": 3,
-          "pointShape": "circle",
-          "decayTime": 0
-        },
-        "/lidar/Lidar1": {
-          "visible": false,
-          "colorField": "z",
-          "colorMode": "colormap",
-          "colorMap": "turbo",
-          "pointSize": 2,
-          "pointShape": "circle",
-          "decayTime": 0
-        },
         "/Conos_raw": { "visible": true },
         "/Conos": { "visible": true },
         "/Conos_Orange": { "visible": true },
         "/Path": { "visible": true },
-        "/Track_azul": { "visible": false },
-        "/Track_amarillo": { "visible": false },
+        "/path_planning/debug": { "visible": true },
         "/testing_only/track": { "visible": false },
         "/testing_only/odom": { "visible": true },
-        "/fast_limo/state": { "visible": true }
+        "/cone_slam/state": { "visible": true }
       },
       "layers": []
     },
 
     "Plot!pose_drift": {
-      "title": "Position drift (LIMO vs GT)",
+      "title": "Position drift (SLAM vs GT)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -79,18 +60,18 @@
       "xAxisVal": "timestamp",
       "paths": [
         {
-          "value": "/fast_limo/state.pose.pose.position.x",
+          "value": "/cone_slam/state.pose.pose.position.x",
           "enabled": true,
-          "label": "LIMO x",
+          "label": "SLAM x",
           "color": "#4488ff",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true
         },
         {
-          "value": "/fast_limo/state.pose.pose.position.y",
+          "value": "/cone_slam/state.pose.pose.position.y",
           "enabled": true,
-          "label": "LIMO y",
+          "label": "SLAM y",
           "color": "#88ff44",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
@@ -175,7 +156,7 @@
     },
 
     "RawMessages!state": {
-      "topicPath": "/fast_limo/state"
+      "topicPath": "/cone_slam/state"
     }
   },
 
