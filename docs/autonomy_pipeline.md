@@ -14,7 +14,7 @@ flowchart TB
     classDef ctrl fill:#52382a,stroke:#d6925f,color:#ffe8d8
     classDef viz fill:#3a3a3a,stroke:#a8a8a8,color:#e8e8e8,stroke-dasharray:4 4
 
-    subgraph UE5["🎮 UE5 sim — IFSSIM-Mac-Shipping.app (host)"]
+    subgraph UE5["IFSSIM (host)"]
         plugin["<b>FSDSPlugin</b><br/><i>C++</i><br/>RPC server :41451<br/>UDP sensor push"]
     end
     class UE5 sim
