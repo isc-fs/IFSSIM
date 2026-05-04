@@ -340,12 +340,14 @@ class ConeGraphSlamNode(Node):
         self._graph.initialize_anchor(initial_pose=gtsam.Pose3())
 
         # Seed the decoupled bias EKF from the same calibration means.
-        # `t_calib_end` is the timestamp of the latest IMU sample folded
-        # into the static-window estimate.
+        # The init time is the timestamp of the latest IMU sample folded
+        # into the static-window estimate; using a stale 0.0 here would
+        # let the next predict_through() balloon covariance by the full
+        # ROS-time gap on the first IMU callback.
         self._bias_ekf.init_from_calibration(
             accel_bias=accel_bias,
             gyro_bias=gyro_bias,
-            t=self._preint._last_integration_t or 0.0,
+            t=self._preint.latest_integration_time(),
         )
 
         # Assemble the first ScanResult — pose anchored at origin,
@@ -444,80 +446,15 @@ class ConeGraphSlamNode(Node):
         pred_y = predicted_pose.y()
         pred_yaw = predicted_pose.rotation().yaw()
 
-        # Mahalanobis DA stays disabled. Three variants tested on
-        # 2026-04-29:
-        # (1) full pose-aware Mahalanobis (4×/16× covariance inflation
-        #     + 0.49 m² floor): cascaded at t≈75s. iSAM2 marginal is
-        #     internal certainty not actual error; even with inflation
-        #     the gate is wrong during empty-scan-driven pose drift.
-        # (2) Mahalanobis gate + Euclidean Hungarian cost: same.
-        # (3) Landmark-cov-only Mahalanobis (no pose Jacobian): same.
-        # In every variant, mid-drive tracking was comparable to
-        # Euclidean (60 s ≈ 0.8 m) but the cascade still triggered
-        # at the same lap position because the cascade root cause is
-        # pose drift > gate during empty-scan windows — no DA
-        # strategy can fix this because there's nothing to associate.
-        # Real fix needs lost-track detection / scan rejection during
-        # pose-prediction-confidence collapse, not gate widening.
-        # APIs in factor_graph (pose_covariance, landmark_covariance)
-        # and data_association (inflation constants) stay in place
-        # for future revisits.
-        # Pass current_step so associate() can expand per-landmark
-        # gates for landmarks that haven't been associated recently —
-        # the recovery mechanism for the rejection bursts triggered
-        # by improvement A.
+        # Mahalanobis DA disabled — variants tested 2026-04-29 (full
+        # pose-aware with 4×/16× covariance inflation, gate-only +
+        # Euclidean cost, landmark-cov-only) all degraded under empty-
+        # scan pose drift. APIs in factor_graph.pose_covariance /
+        # landmark_covariance and data_association inflation constants
+        # stay in place for future revisits.
         matches = associate(
             observations, pred_x, pred_y, pred_yaw, self._db,
             current_step=self._graph.step)
-
-        # Pre-stage cascade-trigger detection. The cascade signature
-        # observed on trackA_manual_001602 around t≈80 s is: a single
-        # scan flips DA from "steady, mostly-associated" to "mostly
-        # new" (e.g., obs=8 new=6 assoc=2). The optimizer then jumps
-        # pose to accommodate the falsely-new landmarks and the graph
-        # never recovers. Detection: if the new-rate suddenly spikes
-        # when (a) we have ≥5 observations to be statistically
-        # meaningful, (b) we're past the early-discovery phase
-        # (step > 30, so most cones in the local map are mature),
-        # (c) >60 % of obs are flagged new — the predicted pose is
-        # likely wrong and committing the cone factors would corrupt
-        # the graph.
-        #
-        # Recovery (#273): commit the IMU factor only, skip the cone
-        # factors. Earlier behaviour discarded EVERYTHING (the IMU
-        # factor too) and returned, freezing the graph at the prev
-        # committed pose. While the car physically moved during the
-        # skipped scans, the predicted pose for the next scan stayed
-        # stale — so when DA recovered, observed cones were all far
-        # from their landmarks (even further apart than the real drift
-        # the IMU would have indicated), producing yet more "all-new"
-        # scans, more skips, more drift. By committing the IMU we keep
-        # pose dead-reckoning during the skipped window; drift over a
-        # few hundred ms of IMU-only update is much smaller than over
-        # the same window of pose-freeze.
-        n_new_pre  = sum(1 for m in matches if m.landmark_id == -1)
-        total_pre  = len(matches)
-        if (total_pre >= 5
-                and self._graph.step > 30
-                and n_new_pre > int(0.60 * total_pre)):
-            self.get_logger().warn(
-                f"skip cone factors: DA-failure spike "
-                f"(obs={total_pre} new={n_new_pre} "
-                f"assoc={total_pre - n_new_pre}) — IMU-only update")
-            # Commit the BetweenFactorPose3 only (cone factors haven't
-            # been staged yet at this point). iSAM2 advances pose by
-            # IMU prediction; no cone constraints applied this scan.
-            new_pose = self._graph.commit()
-            result = self._assemble_scan_result(
-                new_pose, prev_pose=self._latest_result.pose, dt=dt_scan)
-            self._latest_result = result
-            self._db.update_from_estimate(self._graph.landmark_position)
-            self._publish_tf(stamp, result)
-            self._publish_state(stamp, result)
-            self._publish_cone_map(stamp)
-            per_scan["skipped"] = 1
-            self._accumulate_obs_diag(per_scan)
-            return
 
         # For each matched obs → factor between current pose and the
         # known landmark. For unmatched → allocate a new landmark and
@@ -575,18 +512,20 @@ class ConeGraphSlamNode(Node):
         self._latest_result = result
 
         # Feed the bias EKF an RPM-vs-IMU velocity disagreement
-        # observation (if RPM is fresh). The IMU-integrated body-x
-        # velocity comes from the predicted nav state we computed for
-        # this scan; the RPM-derived value comes from /motor_rpm.
+        # observation (if RPM is fresh). v_imu and predicted_pose
+        # are both from the same predicted_nav (one IMU integration
+        # window), so we project using predicted_pose's yaw, NOT the
+        # iSAM2-corrected new_pose's yaw — mixing the two would inject
+        # the optimizer's per-scan correction into a measurement that
+        # only exists to constrain bias drift, not pose.
         if (self._latest_rpm is not None
                 and self._latest_rpm_t is not None):
             age = self._time.monotonic() - self._latest_rpm_t
             if age <= RPM_STALE_S:
                 v_imu_world = predicted_nav.velocity()
-                # Project world-frame IMU velocity into prev-pose body
-                # frame to get body-x for comparison with RPM.
-                cos_y = np.cos(self._latest_result.pose.rotation().yaw())
-                sin_y = np.sin(self._latest_result.pose.rotation().yaw())
+                pred_yaw_imu = predicted_pose.rotation().yaw()
+                cos_y = np.cos(pred_yaw_imu)
+                sin_y = np.sin(pred_yaw_imu)
                 v_imu_body_x = (cos_y * v_imu_world[0]
                                 + sin_y * v_imu_world[1])
                 self._bias_ekf.update_from_rpm_velocity(
@@ -679,8 +618,7 @@ class ConeGraphSlamNode(Node):
             f"SLAM_OBS (avg/scan over {n}): "
             f"obs={_avg('obs_total'):4.1f} "
             f"assoc={_avg('assoc'):4.1f} "
-            f"new={_avg('new'):3.1f} "
-            f"skip={_avg('skipped'):.1f}"
+            f"new={_avg('new'):3.1f}"
         )
         self._obs_diag = {}
         self._obs_n_scans = 0

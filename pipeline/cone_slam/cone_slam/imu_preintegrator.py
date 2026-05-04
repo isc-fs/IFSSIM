@@ -261,6 +261,19 @@ class ImuPreintegrator:
     def params(self) -> Optional[gtsam.PreintegrationParams]:
         return self._params
 
+    def latest_integration_time(self) -> float:
+        """Timestamp of the most recently folded IMU sample (seconds).
+
+        Set by `estimate_bias()` to the calibration end and advanced by
+        every `integrate_to()` call. Calling this before
+        `estimate_bias()` is a programming error.
+        """
+        with self._lock:
+            if self._last_integration_t is None:
+                raise RuntimeError(
+                    "latest_integration_time() before estimate_bias()")
+            return self._last_integration_t
+
     def update_bias(self, new_bias: gtsam.imuBias.ConstantBias) -> None:
         """Replace the working bias (called after each iSAM2 update so
         the next preintegration uses the most recent estimate)."""

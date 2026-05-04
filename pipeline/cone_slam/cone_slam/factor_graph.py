@@ -43,11 +43,14 @@ PRIOR_POSE_SIGMAS = np.array([0.001, 0.001, 0.001,  # roll/pitch/yaw rad
                               0.001, 0.001, 0.001])  # x/y/z m
 
 # Default per-scan BetweenFactorPose3 sigmas. Loose enough to absorb
-# IMU integration noise over 100 ms, tight enough to constrain the
-# cone factors against runaway pose drift.
+# IMU integration noise over 100 ms; not so tight that the linearized
+# Hessian becomes ill-conditioned when cone-factor residuals are large.
+# Earlier values (0.005 rad on roll/pitch, 0.02 m on z) inherited the
+# old in-graph IMU-factor regime and triggered IndeterminantLinearSystem
+# under residual stress on the position-only graph (2026-05-04 run).
 DEFAULT_BETWEEN_POSE_SIGMAS = np.array([
-    0.005, 0.005, 0.02,   # roll/pitch/yaw rad — yaw looser, ground vehicle
-    0.10, 0.10, 0.02,     # x/y/z m — z tight (flat ground)
+    0.02, 0.02, 0.02,     # roll/pitch/yaw rad — uniform; ground vehicle
+    0.10, 0.10, 0.05,     # x/y/z m
 ])
 
 
@@ -194,16 +197,6 @@ class FactorGraph:
         velocity derived from the pose delta over the scan period.
         """
         return self._flush_update()
-
-    def discard_staged(self) -> None:
-        """Drop everything staged since the last commit and rewind
-        self._k. Used for the cascade detector's "skip this scan"
-        path. The caller is responsible for not having mutated the
-        landmark DB yet.
-        """
-        self._new_factors.resize(0)
-        self._new_values.clear()
-        self._k -= 1
 
     def landmark_position(self, landmark_id: int) -> Optional[np.ndarray]:
         """Return the latest world-frame Point3 estimate for a
