@@ -109,3 +109,21 @@ class LandmarkDb:
         lm = self._landmarks[lid]
         lm.n_observations += 1
         lm.last_seen_step = step
+
+    def update_color(self, lid: int, color: ConeColor) -> bool:
+        """Override a landmark's colour. Returns True iff the landmark
+        existed and the colour was changed.
+
+        Used by the planner-feedback path (#269 option b): FaSTTUBe's
+        geometric sort assigns left/right based on corridor topology,
+        and the SLAM landmark colour is reset to match. This sidesteps
+        the body_y heuristic in `color_classifier`, which mis-tags a
+        big fraction of cones once the car starts yawing.
+        """
+        lm = self._landmarks.get(lid)
+        if lm is None:
+            return False
+        if lm.color == color:
+            return False
+        lm.color = color
+        return True

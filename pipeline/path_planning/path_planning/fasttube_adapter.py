@@ -101,11 +101,21 @@ class PlanDebug:
     arrays when the planner failed; arrays may be different lengths
     per side (left vs right) since each side's sort is independent
     and one side may include virtually-matched cones the other doesn't.
+
+    `left_landmark_ids` / `right_landmark_ids` are the SLAM landmark
+    IDs of the cones FaSTTUBe sorted to each side (from the input
+    `Cone.id` field; only set when the input cones carried valid IDs).
+    These exclude virtual cones because virtual cones don't correspond
+    to any SLAM landmark. Used by the planner-feedback path
+    (#269 option b) to tell cone_slam which side each landmark belongs
+    to, sidestepping the body_y classifier.
     """
     left_sorted: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
     right_sorted: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
     left_with_virtual: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
     right_with_virtual: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    left_landmark_ids: List[int] = field(default_factory=list)
+    right_landmark_ids: List[int] = field(default_factory=list)
 
 # FaSTTUBe expects exactly 5 cone arrays indexed 0..4 (one per ConeTypes).
 # Slot 0 is UNKNOWN (cones with no colour info) — we don't currently
@@ -194,13 +204,34 @@ class FasttubeAdapter:
                 self._last_error_log_time = now
             return [], PlanDebug()
 
-        # Tuple unpack: (path, left_sorted, right_sorted,
-        #                left_with_virtual, right_with_virtual,
-        #                left_indices, right_indices).
+        # Tuple unpack from `calculate_path_in_global_frame` with
+        # `return_intermediate_results=True`:
+        #   (final_path,
+        #    sorted_left, sorted_right,
+        #    left_with_virtual, right_with_virtual,
+        #    left_to_right_match, right_to_left_match)
+        # `sorted_*` are (N, 2) world-frame xy arrays — just positions,
+        # no landmark index info. `*_match` are cross-side matches, not
+        # input-array indices either. The library doesn't expose a
+        # "which input cone went to which side" mapping directly.
         path, l_sorted, r_sorted, l_virt, r_virt, _, _ = result
+
+        # Recover per-side landmark IDs by matching positions back to
+        # the input cone list (#269 option b). Cones in `cones` carry
+        # their SLAM landmark `id`; FaSTTUBe doesn't perturb positions
+        # within the sort, so a nearest-neighbour match within a small
+        # gate (centroid noise + iSAM2 marginal jitter is < 0.5 m at
+        # FS ranges) recovers the assignment uniquely.
+        cones_xy = np.array([[c.x, c.y] for c in cones], dtype=np.float64) \
+            if cones else np.zeros((0, 2))
+        left_ids = _match_positions_to_landmark_ids(l_sorted, cones_xy, cones)
+        right_ids = _match_positions_to_landmark_ids(r_sorted, cones_xy, cones)
+
         debug = PlanDebug(
             left_sorted=l_sorted, right_sorted=r_sorted,
             left_with_virtual=l_virt, right_with_virtual=r_virt,
+            left_landmark_ids=left_ids,
+            right_landmark_ids=right_ids,
         )
 
         if path is None or path.size == 0:
@@ -249,6 +280,46 @@ class FasttubeAdapter:
             np.asarray(b, dtype=np.float64).reshape(-1, 2)
             for b in buckets
         ]
+
+
+def _match_positions_to_landmark_ids(
+    sorted_xy: np.ndarray,
+    input_xy: np.ndarray,
+    input_cones: "List[Cone]",
+    max_match_dist_m: float = 0.5,
+) -> "List[int]":
+    """For each row of `sorted_xy`, find the closest cone in
+    `input_xy` (within `max_match_dist_m`) and emit its id. Used to
+    recover per-side landmark IDs from FaSTTUBe's sorted arrays
+    (#269 option b).
+
+    Each input cone matches at most once; a sorted-side row that has
+    no input cone within the gate (typically because FaSTTUBe inserted
+    a virtual cone, though virtual cones live in `*_with_virtual` not
+    `sorted_*`) is silently skipped.
+    """
+    if sorted_xy is None or sorted_xy.size == 0 or input_xy.size == 0:
+        return []
+    used = [False] * len(input_cones)
+    out: List[int] = []
+    max_d2 = max_match_dist_m * max_match_dist_m
+    for sx, sy in sorted_xy:
+        # Squared distance to each input cone.
+        dx = input_xy[:, 0] - sx
+        dy = input_xy[:, 1] - sy
+        d2 = dx * dx + dy * dy
+        # Forbid already-matched candidates by setting their distance
+        # to +inf — preserves uniqueness.
+        for j, taken in enumerate(used):
+            if taken:
+                d2[j] = np.inf
+        j_best = int(np.argmin(d2))
+        if d2[j_best] <= max_d2:
+            used[j_best] = True
+            cid = input_cones[j_best].id
+            if cid >= 0:
+                out.append(int(cid))
+    return out
 
 
 def _cull_cones(cones: List[Cone], pose: Pose2D, max_range_m: float) -> List[Cone]:

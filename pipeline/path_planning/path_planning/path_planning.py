@@ -53,6 +53,7 @@ from tf2_ros.transform_listener import TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 from nav_msgs.msg import Path
 from geometry_msgs.msg import Point, PoseStamped
+from std_msgs.msg import Int32MultiArray
 
 from transforms3d.euler import quat2euler, euler2quat
 
@@ -192,6 +193,13 @@ class Plan_Path(Node):
         # left/right. Frame matches /Path (`odom`).
         self.publisher_debug = self.create_publisher(
             MarkerArray, "/path_planning/debug", 10)
+        # Per-tick LEFT/RIGHT chain landmark-id assignments (#269 option b).
+        # cone_slam subscribes to these and overrides the body_y-derived
+        # landmark colour with the planner's geometry-driven side.
+        self.publisher_left_ids = self.create_publisher(
+            Int32MultiArray, "/path_planning/cones_left_ids", 10)
+        self.publisher_right_ids = self.create_publisher(
+            Int32MultiArray, "/path_planning/cones_right_ids", 10)
         self.create_subscription(
             MarkerArray, "Conos", self._on_cones, 10)
 
@@ -267,6 +275,11 @@ class Plan_Path(Node):
                 x=float(m.pose.position.x),
                 y=float(m.pose.position.y),
                 color=color,
+                # cone_graph_slam encodes the persistent SLAM landmark
+                # id as marker.id (see _publish_cone_map in cone_slam).
+                # Carry it through so the planner-feedback colour path
+                # (#269 option b) can publish side hints by id.
+                id=int(m.id),
             ))
 
         if not cones:
@@ -302,6 +315,21 @@ class Plan_Path(Node):
         # shows what cones FaSTTUBe assigned to each side, which is the
         # most useful signal when the planner just gave up).
         self.publisher_debug.publish(_build_debug_markers(debug))
+
+        # Publish per-side landmark-id sets so cone_slam can override
+        # its body_y-derived colour with the planner's geometric sort
+        # (#269 option b). Only the IDs of cones FaSTTUBe assigned to a
+        # real chain — virtual cones don't have landmark IDs and
+        # un-sorted cones aren't told which side they're on, so they
+        # keep their existing colour. We publish even on empty side
+        # chains so cone_slam's subscriber gets a steady tick rather
+        # than a stuck-at-last-message channel.
+        left_msg = Int32MultiArray()
+        left_msg.data = list(debug.left_landmark_ids)
+        self.publisher_left_ids.publish(left_msg)
+        right_msg = Int32MultiArray()
+        right_msg.data = list(debug.right_landmark_ids)
+        self.publisher_right_ids.publish(right_msg)
 
         # Tick capture: dump (cones, pose, path xy) for offline replay
         # and path-vs-CSV-centerline analysis (#254). Path is dumped as

@@ -27,6 +27,11 @@ class Cone:
     x: float          # world frame
     y: float          # world frame
     color: ConeColor
+    # SLAM landmark ID (encoded as marker.id by cone_slam). Defaults
+    # to -1 for synthetic / test cones that don't come from SLAM. Used
+    # by the planner-feedback colour-update path (#269 option b) to
+    # tell cone_slam which landmarks FaSTTUBe sorted to which side.
+    id: int = -1
 
 
 @dataclass(frozen=True)

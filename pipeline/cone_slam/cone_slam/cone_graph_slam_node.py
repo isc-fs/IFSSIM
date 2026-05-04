@@ -47,7 +47,7 @@ import gtsam
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Int32MultiArray
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -236,6 +236,24 @@ class ConeGraphSlamNode(Node):
         self._latest_gt: Optional[Odometry] = None
         self._gt_init_pose: Optional[gtsam.Pose3] = None
 
+        # --- Planner-feedback colour update (#269 option b) ---
+        # FaSTTUBe sorts cones into LEFT/RIGHT chains based on corridor
+        # geometry. Trust that over the body_y heuristic in
+        # color_classifier.classify(): subscribe to the path planner's
+        # per-tick side assignments and override the landmark colour
+        # accordingly. The DA cross-colour gate (#272) keeps
+        # classifier-flicker recovery working while these settle.
+        self.create_subscription(
+            Int32MultiArray, "/path_planning/cones_left_ids",
+            self._on_planner_left_ids, 10)
+        self.create_subscription(
+            Int32MultiArray, "/path_planning/cones_right_ids",
+            self._on_planner_right_ids, 10)
+        # Counters for the SLAM_OBS log line — how many landmarks have
+        # had their colour overridden by the planner each second.
+        self._planner_color_updates_left = 0
+        self._planner_color_updates_right = 0
+
         # --- Publishers ---
         self._tf_broadcaster = TransformBroadcaster(self)
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
@@ -299,6 +317,22 @@ class ConeGraphSlamNode(Node):
                 f"pos=({self._gt_init_pose.x():+.2f}, {self._gt_init_pose.y():+.2f}), "
                 f"yaw={np.degrees(self._gt_init_pose.rotation().yaw()):+.1f}°"
             )
+
+    # ----- Planner-feedback colour update (#269 option b) -------------------
+
+    def _on_planner_left_ids(self, msg: Int32MultiArray) -> None:
+        """Override the colour of every landmark FaSTTUBe sorted to its
+        LEFT chain. LEFT corresponds to BLUE in our convention."""
+        for lid in msg.data:
+            if self._db.update_color(int(lid), ConeColor.BLUE):
+                self._planner_color_updates_left += 1
+
+    def _on_planner_right_ids(self, msg: Int32MultiArray) -> None:
+        """Override the colour of every landmark FaSTTUBe sorted to its
+        RIGHT chain. RIGHT corresponds to YELLOW."""
+        for lid in msg.data:
+            if self._db.update_color(int(lid), ConeColor.YELLOW):
+                self._planner_color_updates_right += 1
 
     # ----- IMU callback ------------------------------------------------------
 

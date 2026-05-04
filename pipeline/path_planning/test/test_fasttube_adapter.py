@@ -186,6 +186,31 @@ def test_orange_cones_dont_disable_planning() -> None:
     )
 
 
+def test_plan_exposes_per_side_landmark_ids() -> None:
+    """The adapter's PlanDebug carries the SLAM landmark IDs of cones
+    FaSTTUBe sorted into each side chain, so cone_slam can override
+    body_y-derived colours with the planner's geometric sort
+    (#269 option b)."""
+    adapter = FasttubeAdapter()
+    # Tag each cone with a unique id so we can verify the mapping.
+    cones = [
+        Cone(x=c.x, y=c.y, color=c.color, id=10 + i)
+        for i, c in enumerate(_straight_track())
+    ]
+    _, debug = adapter.plan(cones, _car_at_origin())
+
+    # Both side chains should be non-empty on a clean straight track,
+    # and every reported id must be one of the input ids.
+    input_ids = {c.id for c in cones}
+    assert len(debug.left_landmark_ids) > 0
+    assert len(debug.right_landmark_ids) > 0
+    assert all(lid in input_ids for lid in debug.left_landmark_ids)
+    assert all(lid in input_ids for lid in debug.right_landmark_ids)
+    # Same id should not be on both sides.
+    assert (set(debug.left_landmark_ids)
+            & set(debug.right_landmark_ids)) == set()
+
+
 # --- Cone cull (range + behind-car) -----------------------------------------
 
 
