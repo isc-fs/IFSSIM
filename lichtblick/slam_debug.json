@@ -50,7 +50,7 @@
     },
 
     "Plot!pose_drift": {
-      "title": "Position drift (SLAM vs GT)",
+      "title": "Position (SLAM vs GT, both in SLAM-anchored frame)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -78,20 +78,44 @@
           "showLine": true
         },
         {
-          "value": "/testing_only/odom.pose.pose.position.x",
+          "value": "/cone_slam/gt_aligned.pose.pose.position.x",
           "enabled": true,
-          "label": "GT x",
+          "label": "GT x (aligned)",
           "color": "#ff4488",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
           "showLine": true
         },
         {
-          "value": "/testing_only/odom.pose.pose.position.y",
+          "value": "/cone_slam/gt_aligned.pose.pose.position.y",
           "enabled": true,
-          "label": "GT y",
+          "label": "GT y (aligned)",
           "color": "#ffaa44",
           "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
+    "Plot!gt_error": {
+      "title": "Position error magnitude [m] (lower = less SLAM drift)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_slam/gt_error_m.data",
+          "enabled": true,
+          "label": "||SLAM - GT||",
+          "color": "#ff8844",
+          "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true
         }
@@ -172,16 +196,21 @@
       "first": "Plot!pose_drift",
       "second": {
         "direction": "column",
-        "first": "Plot!yaw_drift",
+        "first": "Plot!gt_error",
         "second": {
           "direction": "column",
-          "first": "Plot!cone_count",
-          "second": "RawMessages!state",
-          "splitPercentage": 40
+          "first": "Plot!yaw_drift",
+          "second": {
+            "direction": "column",
+            "first": "Plot!cone_count",
+            "second": "RawMessages!state",
+            "splitPercentage": 40
+          },
+          "splitPercentage": 50
         },
-        "splitPercentage": 50
+        "splitPercentage": 30
       },
-      "splitPercentage": 35
+      "splitPercentage": 30
     },
     "splitPercentage": 65
   }
