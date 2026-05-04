@@ -143,9 +143,24 @@ class FactorGraph:
         landmark_id: int,
         initial_world_xyz: np.ndarray,
     ) -> None:
-        """Insert a brand-new landmark variable."""
-        self._new_values.insert(L(landmark_id),
-                                gtsam.Point3(*initial_world_xyz))
+        """Insert a brand-new landmark variable plus a z-only anchor.
+
+        The bearing-range factor we stage per observation uses
+        `Unit3([body_x, body_y, 0.0])` and a horizontal range, so the
+        Jacobian columns of every cone factor against the landmark's
+        z are identically zero. With the position-only graph (no
+        V(k)/B(k) pivots) this rank-1 deficiency on z compounds across
+        landmarks and iSAM2 throws IndeterminantLinearSystem. The prior
+        below anchors z near the initial estimate (5 cm 1σ) while
+        leaving xy effectively free (10 m 1σ); it adds one constraint
+        per landmark and costs nothing at runtime.
+        """
+        initial_point = gtsam.Point3(*initial_world_xyz)
+        self._new_values.insert(L(landmark_id), initial_point)
+        z_anchor_sigmas = np.array([10.0, 10.0, 0.05])
+        z_anchor_noise = gtsam.noiseModel.Diagonal.Sigmas(z_anchor_sigmas)
+        self._new_factors.add(gtsam.PriorFactorPoint3(
+            L(landmark_id), initial_point, z_anchor_noise))
 
     def stage_cone_observation(
         self,
