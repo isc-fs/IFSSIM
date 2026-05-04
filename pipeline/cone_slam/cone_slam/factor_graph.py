@@ -195,44 +195,6 @@ class FactorGraph:
         """
         return self._flush_update()
 
-    def commit_with_pose_sanity_check(
-        self,
-        predicted_pose: gtsam.Pose3,
-        max_pos_dev_m: float,
-        max_yaw_dev_rad: float,
-    ) -> "tuple[gtsam.Pose3, bool]":
-        """Run iSAM2, then sanity-check the optimized pose at X(self._k)
-        against the IMU-predicted pose. If the deviation exceeds the
-        given thresholds, add a strong prior at the predicted pose and
-        re-run iSAM2; this neutralises the bad cone factor(s) that
-        caused the snap. The bad factors stay in the graph; future
-        iterations relinearize against the corrected pose without
-        snapping.
-
-        Returns (pose, was_corrected).
-        """
-        pose = self._flush_update()
-
-        pos_dev = float(np.linalg.norm(
-            pose.translation() - predicted_pose.translation()))
-        delta_rot = predicted_pose.rotation().between(pose.rotation())
-        yaw_dev = abs(float(delta_rot.yaw()))
-
-        if pos_dev <= max_pos_dev_m and yaw_dev <= max_yaw_dev_rad:
-            return pose, False
-
-        # Excessive jump — apply strong prior at predicted pose.
-        strong_sigmas = np.array([
-            0.005, 0.005, 0.005,   # rotation rxx/ryy/rzz (rad)
-            0.005, 0.005, 0.005,   # translation x/y/z (m)
-        ])
-        strong_noise = gtsam.noiseModel.Diagonal.Sigmas(strong_sigmas)
-        self._new_factors.add(gtsam.PriorFactorPose3(
-            X(self._k), predicted_pose, strong_noise))
-
-        corrected = self._flush_update()
-        return corrected, True
-
     def discard_staged(self) -> None:
         """Drop everything staged since the last commit and rewind
         self._k. Used for the cascade detector's "skip this scan"
