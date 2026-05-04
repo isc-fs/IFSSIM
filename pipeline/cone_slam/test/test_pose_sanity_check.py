@@ -11,19 +11,11 @@ import pytest
 
 gtsam = pytest.importorskip("gtsam")
 
-from cone_slam.factor_graph import FactorGraph, ScanResult
+from cone_slam.factor_graph import FactorGraph
 
 
 def _make_pose(x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> "gtsam.Pose3":
     return gtsam.Pose3(gtsam.Rot3.Rz(yaw), np.array([x, y, 0.0]))
-
-
-def _make_result(pose: "gtsam.Pose3") -> ScanResult:
-    return ScanResult(
-        pose=pose,
-        velocity=np.zeros(3),
-        bias=gtsam.imuBias.ConstantBias(),
-    )
 
 
 @pytest.fixture
@@ -38,15 +30,14 @@ def test_pose_sanity_check_no_correction_below_position_threshold(
 ) -> None:
     """Optimized pose 0.5 m from prediction (within 0.8 m gate) → no correction."""
     optimized = _make_pose(x=0.5)
-    monkeypatch.setattr(fg, "_flush_update",
-                        lambda: _make_result(optimized))
+    monkeypatch.setattr(fg, "_flush_update", lambda: optimized)
 
     predicted = _make_pose(x=0.0)
-    result, was_corrected = fg.commit_with_pose_sanity_check(
+    pose, was_corrected = fg.commit_with_pose_sanity_check(
         predicted, max_pos_dev_m=0.8, max_yaw_dev_rad=0.3)
 
     assert not was_corrected
-    assert result.pose.translation()[0] == pytest.approx(0.5)
+    assert pose.translation()[0] == pytest.approx(0.5)
 
 
 def test_pose_sanity_check_no_correction_below_yaw_threshold(
@@ -54,11 +45,10 @@ def test_pose_sanity_check_no_correction_below_yaw_threshold(
 ) -> None:
     """Optimized pose with yaw 0.2 rad (within 0.3 rad gate) → no correction."""
     optimized = _make_pose(yaw=0.2)
-    monkeypatch.setattr(fg, "_flush_update",
-                        lambda: _make_result(optimized))
+    monkeypatch.setattr(fg, "_flush_update", lambda: optimized)
 
     predicted = _make_pose(yaw=0.0)
-    result, was_corrected = fg.commit_with_pose_sanity_check(
+    pose, was_corrected = fg.commit_with_pose_sanity_check(
         predicted, max_pos_dev_m=0.8, max_yaw_dev_rad=0.3)
 
     assert not was_corrected
@@ -73,19 +63,19 @@ def test_pose_sanity_check_correction_above_position_threshold(
     corrected = _make_pose(x=0.0)
     call_log = []
 
-    def fake_flush() -> ScanResult:
+    def fake_flush() -> "gtsam.Pose3":
         call_log.append(len(call_log))
-        return _make_result(bad_pose if call_log[-1] == 0 else corrected)
+        return bad_pose if call_log[-1] == 0 else corrected
 
     monkeypatch.setattr(fg, "_flush_update", fake_flush)
 
     predicted = _make_pose(x=0.0)
-    result, was_corrected = fg.commit_with_pose_sanity_check(
+    pose, was_corrected = fg.commit_with_pose_sanity_check(
         predicted, max_pos_dev_m=0.8, max_yaw_dev_rad=0.3)
 
     assert was_corrected, "expected correction to fire on 2.0 m position jump"
     assert len(call_log) == 2, "expected two _flush_update calls (initial + corrective)"
-    assert result.pose.translation()[0] == pytest.approx(0.0)
+    assert pose.translation()[0] == pytest.approx(0.0)
 
 
 def test_pose_sanity_check_correction_above_yaw_threshold(
@@ -96,15 +86,14 @@ def test_pose_sanity_check_correction_above_yaw_threshold(
     corrected = _make_pose(yaw=0.0)
     calls = [bad_pose, corrected]
 
-    monkeypatch.setattr(fg, "_flush_update",
-                        lambda: _make_result(calls.pop(0)))
+    monkeypatch.setattr(fg, "_flush_update", lambda: calls.pop(0))
 
     predicted = _make_pose(yaw=0.0)
-    result, was_corrected = fg.commit_with_pose_sanity_check(
+    pose, was_corrected = fg.commit_with_pose_sanity_check(
         predicted, max_pos_dev_m=0.8, max_yaw_dev_rad=0.3)
 
     assert was_corrected
-    assert abs(result.pose.rotation().yaw()) == pytest.approx(0.0, abs=1e-6)
+    assert abs(pose.rotation().yaw()) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_pose_sanity_check_yaw_wraps_correctly(
@@ -115,11 +104,10 @@ def test_pose_sanity_check_yaw_wraps_correctly(
     the relative-rotation form."""
     # Deviation across the wrap: actual ≈ -170°, predicted ≈ +170° → 20° apart.
     actual = _make_pose(yaw=np.radians(-170.0))
-    monkeypatch.setattr(fg, "_flush_update",
-                        lambda: _make_result(actual))
+    monkeypatch.setattr(fg, "_flush_update", lambda: actual)
 
     predicted = _make_pose(yaw=np.radians(170.0))
-    result, was_corrected = fg.commit_with_pose_sanity_check(
+    pose, was_corrected = fg.commit_with_pose_sanity_check(
         predicted, max_pos_dev_m=0.8, max_yaw_dev_rad=np.radians(30.0))
 
     # 20° gap is within 30° threshold, so no correction.
@@ -139,15 +127,14 @@ def test_pose_sanity_check_correction_anchors_at_predicted_position(
     corrected = _make_pose(x=2.0, y=3.0)
     calls = [bad_pose, corrected]
 
-    monkeypatch.setattr(fg, "_flush_update",
-                        lambda: _make_result(calls.pop(0)))
+    monkeypatch.setattr(fg, "_flush_update", lambda: calls.pop(0))
 
-    # Need a non-zero current step so X(self._k) is a valid key. The
-    # method increments self._k via stage_imu_factor in real usage; here
-    # we set it directly because the mock _flush_update doesn't care.
+    # Need a non-zero current step so X(self._k) is a valid key. In real
+    # usage stage_pose_delta increments self._k; here we set it directly
+    # because the mocked _flush_update doesn't read it.
     fg._k = 1
     predicted = _make_pose(x=2.0, y=3.0)
-    result, was_corrected = fg.commit_with_pose_sanity_check(
+    pose, was_corrected = fg.commit_with_pose_sanity_check(
         predicted, max_pos_dev_m=0.8, max_yaw_dev_rad=0.3)
 
     assert was_corrected

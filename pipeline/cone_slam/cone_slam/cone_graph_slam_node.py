@@ -54,6 +54,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 # color_classifier deleted: SLAM is position-only, no per-cone colour
 # anywhere. Visualization renders all landmarks with the same colour.
 from cone_slam.data_association import DISTANCE_GATE_M, Observation, associate
+from cone_slam.bias_ekf import BiasEKF
 from cone_slam.factor_graph import FactorGraph, ScanResult
 from cone_slam.imu_preintegrator import ImuPreintegrator, ImuSample
 from cone_slam.landmark_db import LandmarkDb
@@ -140,6 +141,12 @@ class ConeGraphSlamNode(Node):
         self._preint = ImuPreintegrator()
         self._graph = FactorGraph()
         self._db = LandmarkDb()
+        # Decoupled IMU bias estimator. Owns bias state outside the
+        # SLAM factor graph; cone factors cannot reach it. Initialised
+        # at the end of the calibration window from the same accel/gyro
+        # means used to seed the preintegrator. Updated each scan from
+        # RPM-vs-IMU body-x velocity disagreement.
+        self._bias_ekf = BiasEKF()
         self._latest_result: Optional[ScanResult] = None
         self._state = State.INIT_WAITING_IMU
         self._calib_started_t: Optional[float] = None
@@ -317,6 +324,11 @@ class ConeGraphSlamNode(Node):
         ])
         self._preint.push_sample(ImuSample(t=t, accel=accel, gyro=gyro))
 
+        # Advance the decoupled bias EKF's covariance via random walk.
+        # Mean stays put (RW model has no dynamics); covariance grows.
+        # The `predict_through` is a no-op until calibration completes.
+        self._bias_ekf.predict_through(t)
+
         if self._state == State.INIT_WAITING_IMU:
             self._calib_started_t = t
             self._state = State.INIT_CALIBRATING
@@ -340,13 +352,26 @@ class ConeGraphSlamNode(Node):
             f"{gravity_body[2]:+.3f}) m/s²")
 
         # Anchor x_0 at world origin, stationary.
-        bias = gtsam.imuBias.ConstantBias(accel_bias, gyro_bias)
-        self._graph.initialize_anchor(
-            initial_pose=gtsam.Pose3(),
-            initial_velocity=np.zeros(3),
-            initial_bias=bias,
+        self._graph.initialize_anchor(initial_pose=gtsam.Pose3())
+
+        # Seed the decoupled bias EKF from the same calibration means.
+        # `t_calib_end` is the timestamp of the latest IMU sample folded
+        # into the static-window estimate.
+        self._bias_ekf.init_from_calibration(
+            accel_bias=accel_bias,
+            gyro_bias=gyro_bias,
+            t=self._preint._last_integration_t or 0.0,
         )
-        self._latest_result = self._graph.latest()
+
+        # Assemble the first ScanResult — pose anchored at origin,
+        # velocity zero, bias from calibration. Subsequent results
+        # come from pose-delta integration each scan.
+        bias = gtsam.imuBias.ConstantBias(accel_bias, gyro_bias)
+        self._latest_result = ScanResult(
+            pose=gtsam.Pose3(),
+            velocity=np.zeros(3),
+            bias=bias,
+        )
         self._state = State.SLAM_RUNNING
         self.get_logger().info("SLAM_RUNNING — pose graph anchored at origin")
 
@@ -384,32 +409,37 @@ class ConeGraphSlamNode(Node):
             return
         t_scan = stamp.sec + stamp.nanosec * 1e-9
 
+        # Push the latest bias EKF estimate into the preintegrator
+        # before integrating this scan's IMU window. The preintegrator
+        # uses this bias to correct accel/gyro readings during
+        # integration; bias updates from cone factors no longer happen
+        # because B(k) is no longer in the SLAM graph (#273 follow-up).
+        bias_now = self._bias_ekf.current()
+        self._preint.update_bias(gtsam.imuBias.ConstantBias(
+            bias_now.accel_bias, bias_now.gyro_bias))
+
         # Stage IMU preintegration for this scan window.
         try:
-            pim, _dt = self._preint.integrate_to(t_scan)
+            pim, dt_scan = self._preint.integrate_to(t_scan)
         except RuntimeError as e:
             self.get_logger().warn(f"skip scan: {e}")
             return
-        self._graph.stage_imu_factor(pim, self._latest_result)
 
-        # Stage the motor-RPM velocity prior on V(k). This is the
-        # anchor that prevents the optimizer from rotating the global
-        # frame to find a cheaper minimum during cone-poor windows
-        # (the cascade root cause). Skipped if RPM is stale or hasn't
-        # arrived yet — the prior would be misleading rather than
-        # helpful in that regime.
-        if self._latest_rpm is not None and self._latest_rpm_t is not None:
-            age = self._time.monotonic() - self._latest_rpm_t
-            if age <= RPM_STALE_S:
-                # Use the same predicted yaw we'll use for DA below.
-                _nav_state = gtsam.NavState(
-                    self._latest_result.pose, self._latest_result.velocity)
-                _pred_yaw = pim.predict(
-                    _nav_state, self._latest_result.bias).pose().rotation().yaw()
-                self._graph.stage_velocity_prior(
-                    v_body_long=self._latest_rpm,
-                    predicted_yaw=_pred_yaw,
-                )
+        # Convert the preintegrated measurement into a body-frame pose
+        # delta for the BetweenFactorPose3 we'll stage shortly. The
+        # preint's `predict()` gives a NavState (world-frame pose +
+        # velocity) starting from the previous-scan state; we take the
+        # pose component and express the world-frame motion as a
+        # body-frame delta of the previous pose.
+        prev_nav_state = gtsam.NavState(
+            self._latest_result.pose, self._latest_result.velocity)
+        predicted_nav = pim.predict(
+            prev_nav_state,
+            gtsam.imuBias.ConstantBias(bias_now.accel_bias, bias_now.gyro_bias))
+        predicted_pose = predicted_nav.pose()
+        delta_pose = self._latest_result.pose.between(predicted_pose)
+
+        self._graph.stage_pose_delta(self._latest_result.pose, delta_pose)
 
         # Parse cone observations from /Conos_raw markers.
         observations = self._observations_from_markers(msg)
@@ -420,14 +450,11 @@ class ConeGraphSlamNode(Node):
         per_scan = {"obs_total": len(observations)}
 
         # Run data association against the predicted body-frame position
-        # of every existing landmark, using the iSAM2-predicted pose
-        # from the IMU step (still inside the optimizer's "predicted"
-        # state — we've staged X(k) but not committed yet, so use the
-        # pose that pim.predict produced from the previous result).
-        nav_state = gtsam.NavState(
-            self._latest_result.pose, self._latest_result.velocity)
-        predicted_pose = pim.predict(
-            nav_state, self._latest_result.bias).pose()
+        # of every existing landmark, using the IMU-predicted pose for
+        # this scan (the same `predicted_pose` we used to construct the
+        # BetweenFactorPose3 above). We've staged X(k) but not committed
+        # yet, so the optimised pose isn't available — predicted_pose
+        # is the closest valid query.
         pred_x = predicted_pose.x()
         pred_y = predicted_pose.y()
         pred_yaw = predicted_pose.rotation().yaw()
@@ -492,13 +519,13 @@ class ConeGraphSlamNode(Node):
                 f"skip cone factors: DA-failure spike "
                 f"(obs={total_pre} new={n_new_pre} "
                 f"assoc={total_pre - n_new_pre}) — IMU-only update")
-            # Commit the staged IMU factor + bias-RW factor (the only
-            # things staged at this point — cone factors are staged
-            # only after this check). iSAM2 advances pose by IMU
-            # prediction; no cone constraints applied this scan.
-            result = self._graph.commit()
+            # Commit the BetweenFactorPose3 only (cone factors haven't
+            # been staged yet at this point). iSAM2 advances pose by
+            # IMU prediction; no cone constraints applied this scan.
+            new_pose = self._graph.commit()
+            result = self._assemble_scan_result(
+                new_pose, prev_pose=self._latest_result.pose, dt=dt_scan)
             self._latest_result = result
-            self._preint.update_bias(result.bias)
             self._db.update_from_estimate(self._graph.landmark_position)
             self._publish_tf(stamp, result)
             self._publish_state(stamp, result)
@@ -575,7 +602,7 @@ class ConeGraphSlamNode(Node):
         max_pos_dev_m = self.get_parameter("pose_jump_max_pos_m").value
         max_yaw_dev_rad = self.get_parameter("pose_jump_max_yaw_rad").value
         if self._graph.step > 30:
-            result, was_corrected = self._graph.commit_with_pose_sanity_check(
+            new_pose, was_corrected = self._graph.commit_with_pose_sanity_check(
                 predicted_pose, max_pos_dev_m, max_yaw_dev_rad)
             if was_corrected:
                 self.get_logger().warn(
@@ -584,9 +611,33 @@ class ConeGraphSlamNode(Node):
                     f"(thresholds: {max_pos_dev_m:.2f} m, "
                     f"{np.degrees(max_yaw_dev_rad):.1f}°)")
         else:
-            result = self._graph.commit()
+            new_pose = self._graph.commit()
+
+        # Assemble ScanResult from iSAM2's pose, EKF's bias, and
+        # pose-delta-derived velocity (none of which iSAM2 tracks
+        # under the position-only graph).
+        result = self._assemble_scan_result(
+            new_pose, prev_pose=self._latest_result.pose, dt=dt_scan)
         self._latest_result = result
-        self._preint.update_bias(result.bias)
+
+        # Feed the bias EKF an RPM-vs-IMU velocity disagreement
+        # observation (if RPM is fresh). The IMU-integrated body-x
+        # velocity comes from the predicted nav state we computed for
+        # this scan; the RPM-derived value comes from /motor_rpm.
+        if (self._latest_rpm is not None
+                and self._latest_rpm_t is not None):
+            age = self._time.monotonic() - self._latest_rpm_t
+            if age <= RPM_STALE_S:
+                v_imu_world = predicted_nav.velocity()
+                # Project world-frame IMU velocity into prev-pose body
+                # frame to get body-x for comparison with RPM.
+                cos_y = np.cos(self._latest_result.pose.rotation().yaw())
+                sin_y = np.sin(self._latest_result.pose.rotation().yaw())
+                v_imu_body_x = (cos_y * v_imu_world[0]
+                                + sin_y * v_imu_world[1])
+                self._bias_ekf.update_from_rpm_velocity(
+                    v_imu_body_x=float(v_imu_body_x),
+                    v_rpm_body_x=float(self._latest_rpm))
 
         # Refresh the working landmark estimates so the next DA step
         # uses iSAM2-corrected positions, not stale initial guesses.
@@ -622,6 +673,34 @@ class ConeGraphSlamNode(Node):
                 f"|v|={float(np.linalg.norm(v)):.3f}")
 
     # ----- helpers ----------------------------------------------------------
+
+    def _assemble_scan_result(
+        self,
+        new_pose: gtsam.Pose3,
+        prev_pose: gtsam.Pose3,
+        dt: float,
+    ) -> ScanResult:
+        """Build a ScanResult from iSAM2's pose, EKF bias, and a
+        pose-delta-derived velocity.
+
+        The position-only graph (#273 follow-up) drops V(k) and B(k)
+        from iSAM2, so velocity and bias come from outside:
+          - velocity: finite difference of pose translation over the
+            scan window, expressed in the nav frame.
+          - bias: latest snapshot of the decoupled BiasEKF.
+        """
+        if dt > 1e-6:
+            v_world = np.asarray(
+                (new_pose.translation() - prev_pose.translation()) / dt
+            ).flatten()
+        else:
+            v_world = np.zeros(3)
+        bias = self._bias_ekf.current()
+        return ScanResult(
+            pose=new_pose,
+            velocity=v_world,
+            bias=gtsam.imuBias.ConstantBias(bias.accel_bias, bias.gyro_bias),
+        )
 
     def _accumulate_obs_diag(self, per_scan: dict) -> None:
         """Accumulate per-scan obs/assoc/new counters and emit a
