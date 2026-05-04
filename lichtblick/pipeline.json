@@ -37,22 +37,12 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/fast_limo/pointcloud": {
-          "visible": false,
-          "colorField": "z",
-          "colorMode": "flat",
-          "flatColor": { "r": 0.4, "g": 0.4, "b": 0.4, "a": 0.6 },
-          "pointSize": 1,
-          "pointShape": "circle",
-          "decayTime": 0
-        },
         "/Conos": { "visible": true },
         "/Conos_raw": { "visible": false },
         "/Conos_Orange": { "visible": true },
         "/Path": { "visible": true },
-        "/path_planning/delaunay": { "visible": true },
-        "/Track_azul": { "visible": false },
-        "/Track_amarillo": { "visible": false },
+        "/path_planning/debug": { "visible": true },
+        "/cone_slam/state": { "visible": true },
         "/testing_only/track": { "visible": false }
       },
       "layers": []
@@ -71,9 +61,9 @@
       "maxYValue": 12,
       "paths": [
         {
-          "value": "/fast_limo/state.twist.twist.linear.x",
+          "value": "/cone_slam/state.twist.twist.linear.x",
           "enabled": true,
-          "label": "vx (LIMO, m/s)",
+          "label": "vx (SLAM, m/s)",
           "color": "#00cc88",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
