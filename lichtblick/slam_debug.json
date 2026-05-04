@@ -123,6 +123,48 @@
       "sidebarDimension": 240
     },
 
+    "Plot!velocity": {
+      "title": "Velocity [m/s] — actual vs setpoint, with curvature ahead",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_slam/state.twist.twist.linear.x",
+          "enabled": true,
+          "label": "v actual (SLAM)",
+          "color": "#4488ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/control/v_set_mps.data",
+          "enabled": true,
+          "label": "v setpoint",
+          "color": "#ff4488",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/control/kappa_max_per_m.data",
+          "enabled": true,
+          "label": "|κ| max ahead [1/m]",
+          "color": "#ffaa00",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
     "Plot!yaw_drift": {
       "title": "Yaw rate (IMU vs GT odom)",
       "isSynced": true,
@@ -199,18 +241,23 @@
         "first": "Plot!gt_error",
         "second": {
           "direction": "column",
-          "first": "Plot!yaw_drift",
+          "first": "Plot!velocity",
           "second": {
             "direction": "column",
-            "first": "Plot!cone_count",
-            "second": "RawMessages!state",
-            "splitPercentage": 40
+            "first": "Plot!yaw_drift",
+            "second": {
+              "direction": "column",
+              "first": "Plot!cone_count",
+              "second": "RawMessages!state",
+              "splitPercentage": 40
+            },
+            "splitPercentage": 50
           },
-          "splitPercentage": 50
+          "splitPercentage": 33
         },
-        "splitPercentage": 30
+        "splitPercentage": 25
       },
-      "splitPercentage": 30
+      "splitPercentage": 25
     },
     "splitPercentage": 65
   }
