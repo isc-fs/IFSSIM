@@ -42,7 +42,7 @@ def generate_launch_description():
         ),
 
         Node(
-            package='slam',
+            package='cone_detection',
             executable='Cone_Detection',
             name='Cone_Detection',
             output='screen',

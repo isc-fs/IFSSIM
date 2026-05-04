@@ -71,11 +71,12 @@ def generate_launch_description():
     if PIPELINE_ENABLED:
         nodes += [
 
-            # --- SLAM: LiDAR → raw cone detections (per-cone σ_xy on
+            # --- LiDAR cone detection: ground removal (RANSAC) + DBSCAN
+            # clustering → raw cone observations (per-cone σ_xy on
             # marker.scale.x for cone_graph_slam) ---
             # Uses Numba JIT — compiles on first message, cache persists via volume
             Node(
-                package='slam',
+                package='cone_detection',
                 executable='Cone_Detection',
                 name='Cone_Detection',
                 output='screen',

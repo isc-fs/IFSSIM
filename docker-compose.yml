@@ -134,7 +134,7 @@ services:
       - ./pipeline/cone_slam:/dv_pipeline_stack_ws/src/cone_slam
       - ./pipeline/control:/dv_pipeline_stack_ws/src/control
       - ./pipeline/path_planning:/dv_pipeline_stack_ws/src/path_planning
-      - ./pipeline/slam:/dv_pipeline_stack_ws/src/slam
+      - ./pipeline/cone_detection:/dv_pipeline_stack_ws/src/cone_detection
       - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
       - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
       # AF_UNIX socket directory shared with the FSDS plugin running on
