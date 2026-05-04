@@ -33,6 +33,19 @@ services:
       # window-based throttling — typically holds 10 Hz, at the cost of
       # accepting per-datagram packet loss. Linux hosts can keep TCP.
       - LIDAR_TRANSPORT=${LIDAR_TRANSPORT:-tcp}
+      # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
+      # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
+      # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single
+      # node. At our matrix sizes thread spin-up cost dominates real work,
+      # so 2 threads is empirically faster end-to-end *and* leaves cores
+      # free for the rest of the pipeline. Applied container-wide because
+      # docker-compose's `environment:` block lacks per-process scoping;
+      # the other Python nodes (cone_graph_slam, control, Plan_Path) do
+      # very little BLAS-heavy work and aren't measurably slower under
+      # the cap. Override via env var if a regression appears.
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
       # Re-run `colcon build --symlink-install` at container startup. Default
       # off — Python edits to existing files go live via --symlink-install
       # without any rebuild. Set to "true" only when you've changed setup.py,
