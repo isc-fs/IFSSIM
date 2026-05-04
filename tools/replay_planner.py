@@ -55,17 +55,9 @@ sys.path.insert(0, str(_REPO / "pipeline" / "path_planning"))
 # when invoked outside the container by mistake.
 
 
-# Cone-color int → matplotlib color. Matches ConeColor enum.
-# (Color values are duplicated as raw ints rather than imported from
-#  path_planning.core_types so JSON loading works without the planner
-#  library installed.)
-_COLOR_MAP = {
-    0: "#f0d000",  # YELLOW
-    1: "#3070f0",  # BLUE
-    2: "#ff8000",  # ORANGE
-    3: "#ff4000",  # BIG_ORANGE
-}
-_COLOR_NAMES = {0: "YELLOW", 1: "BLUE", 2: "ORANGE", 3: "BIG_ORANGE"}
+# All cones rendered with the same neutral colour — the pipeline
+# carries no per-cone colour signal anymore.
+_CONE_COLOUR = "#f0d000"
 
 
 def _load_ticks(path: str) -> List[dict]:
@@ -111,12 +103,13 @@ def _pick_tick(ticks: List[dict], spec: str) -> Tuple[int, dict]:
 def _render(tick_idx: int, tick: dict, out_path: str | None) -> None:
     import matplotlib.pyplot as plt
     # Deferred — requires fsd_path_planning inside the pipeline container.
-    from path_planning.core_types import Cone, ConeColor, Pose2D
+    from path_planning.core_types import Cone, Pose2D
     from path_planning.fasttube_adapter import FasttubeAdapter
 
     pose = Pose2D(x=tick["pose"][0], y=tick["pose"][1], yaw=tick["pose"][2])
-    cones = [Cone(x=c[0], y=c[1], color=ConeColor(c[2]))
-             for c in tick["cones"]]
+    # Capture format: cones is a list of [x, y] pairs (or older [x, y, color]
+    # which we ignore the third field on for backward-compat with old captures).
+    cones = [Cone(x=c[0], y=c[1]) for c in tick["cones"]]
 
     adapter = FasttubeAdapter()
     points, debug = adapter.plan(cones, pose)
@@ -129,18 +122,13 @@ def _render(tick_idx: int, tick: dict, out_path: str | None) -> None:
         f"n_cones={len(cones)}  n_path={len(points)} (live={tick.get('n_path')})"
     )
 
-    # Cones
-    by_color: dict[int, List[Tuple[float, float]]] = {}
-    for c in cones:
-        by_color.setdefault(int(c.color), []).append((c.x, c.y))
-    for color_int, pts in by_color.items():
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.scatter(xs, ys,
-                   c=_COLOR_MAP.get(color_int, "#888"),
+    # Cones — single neutral colour.
+    if cones:
+        xs = [c.x for c in cones]
+        ys = [c.y for c in cones]
+        ax.scatter(xs, ys, c=_CONE_COLOUR,
                    edgecolors="black", linewidth=0.5,
-                   s=80, zorder=3,
-                   label=f"cones color={_COLOR_NAMES.get(color_int, color_int)}")
+                   s=80, zorder=3, label=f"cones (n={len(cones)})")
 
     # FaSTTUBe-settled per-side chains (with virtual cones).
     if debug.left_with_virtual.size:
