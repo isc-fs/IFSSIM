@@ -575,11 +575,29 @@ class ConeGraphSlamNode(Node):
 
         # For each matched obs → factor between current pose and the
         # known landmark. For unmatched → allocate a new landmark and
-        # add a factor to it.
+        # add a factor to it. EXCEPT during cascade-recovery widen
+        # mode (issue #301 follow-up): the wide-gate retry by
+        # construction matches ~50–60% of obs and leaves the rest
+        # flagged NEW. Creating those leftover NEWs as fresh landmarks
+        # at the predicted pose pollutes the map with phantoms — the
+        # very pose was wrong by 1–2 m, so the phantoms land 1–2 m off
+        # in world frame. After ~10 cascade scans we accumulate enough
+        # phantoms that they shadow real landmarks in subsequent
+        # Hungarian assignments and the wide gate stops recovering
+        # (live test, 2026-05-05: map jumped 81→100 across a 10-scan
+        # widen burst, then totally lost track at scan 300). Suppress
+        # NEW creation during cascade-recovery: real new cones will be
+        # re-discovered next scan once pose has stabilised against the
+        # widen-matched landmarks.
+        suppress_new_landmarks = (widen_used_m is not None)
         n_new = 0
         n_assoc = 0
+        n_new_suppressed = 0
         for o, m in zip(observations, matches):
             if m.landmark_id == -1:
+                if suppress_new_landmarks:
+                    n_new_suppressed += 1
+                    continue
                 world_xyz = self._body_to_world(
                     o.body_x, o.body_y, pred_x, pred_y, pred_yaw)
                 lm = self._db.create(world_xyz, self._graph.step)
@@ -616,6 +634,13 @@ class ConeGraphSlamNode(Node):
                 n_assoc += 1
         per_scan["new"] = n_new
         per_scan["assoc"] = n_assoc
+        per_scan["new_suppressed"] = n_new_suppressed
+
+        if widen_used_m is not None and n_new_suppressed > 0:
+            self.get_logger().info(
+                f"widen-mode: assoc={n_assoc} new_suppressed="
+                f"{n_new_suppressed} (would-be-phantom landmarks at "
+                f"pre-correction pose)")
 
         self._accumulate_obs_diag(per_scan)
 
