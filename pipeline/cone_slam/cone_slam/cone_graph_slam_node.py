@@ -507,11 +507,51 @@ class ConeGraphSlamNode(Node):
         #     corner the widen needs to fire on every cascade scan to
         #     keep pose anchored. Capping successful widens triggered
         #     the very dead-reckoning loop the widen was added to fix.
-        n_new_pre  = sum(1 for m in matches if m.landmark_id == -1)
+        # Classify each unmatched obs as phantom-candidate (likely a
+        # drift-displaced re-observation of an existing landmark) vs
+        # genuinely new (in unmapped territory). The phantom criterion
+        # matches Lever-1's max widen radius: if no existing landmark
+        # is within 5 m of where the obs would land in world, the obs
+        # can't be a phantom — there's no candidate for it to be
+        # displaced from.
+        SUPPRESS_NEW_RADIUS_M = 5.0
+        obs_classification: list[str] = []  # "matched", "phantom", "genuine"
+        n_phantom_candidates = 0
+        n_genuine_new = 0
+        for o, m in zip(observations, matches):
+            if m.landmark_id != -1:
+                obs_classification.append("matched")
+                continue
+            wx, wy = (
+                pred_x + o.body_x * np.cos(pred_yaw)
+                       - o.body_y * np.sin(pred_yaw),
+                pred_y + o.body_x * np.sin(pred_yaw)
+                       + o.body_y * np.cos(pred_yaw),
+            )
+            nearest_dist = float("inf")
+            for lm in self._db:
+                d = float(np.hypot(wx - lm.position[0], wy - lm.position[1]))
+                if d < nearest_dist:
+                    nearest_dist = d
+            if nearest_dist < SUPPRESS_NEW_RADIUS_M:
+                obs_classification.append("phantom")
+                n_phantom_candidates += 1
+            else:
+                obs_classification.append("genuine")
+                n_genuine_new += 1
+        n_new_pre  = n_phantom_candidates + n_genuine_new
         total_pre  = len(matches)
+        # Cascade trigger now requires PHANTOM-dominance among unmatched.
+        # If most unmatched are genuinely-new (no existing within 5 m),
+        # the obs are correctly "new map cones in unexplored territory"
+        # — fire normal staging instead of the cascade machinery. The
+        # original cascade trigger (>60% NEW at default gate) misfires
+        # whenever the car enters a new section faster than the previous
+        # scan's map covered.
         cascade_triggered = (total_pre >= 5
                              and self._graph.step > 30
-                             and n_new_pre > int(0.60 * total_pre))
+                             and n_new_pre > int(0.60 * total_pre)
+                             and n_phantom_candidates > n_genuine_new)
         # Lever-2 warning band (issue #301): 40-60% NEW at the default
         # gate is below the cascade trigger but above healthy. Commit
         # the matches we have, but with σ × 5 — Huber already caps
@@ -628,51 +668,29 @@ class ConeGraphSlamNode(Node):
         # NEW creation during cascade-recovery: real new cones will be
         # re-discovered next scan once pose has stabilised against the
         # widen-matched landmarks.
-        # Suppression in cascade-recovery / warning-band modes is now
-        # SMART (issue #301 follow-up #3). Previously suppressed every
-        # unmatched obs unconditionally — clean for phantoms, but
-        # starved the map of legitimate new cones in unexplored
-        # territory. Live trace at the second hairpin (2026-05-05):
-        # ~60 scans of recovery, map only +3 landmarks. Eventually no
-        # nearby landmarks left to anchor against and even the 5 m
-        # widen failed.
-        #
-        # Smart rule: in suppress mode, only suppress unmatched obs
-        # whose projected world position is within
-        # SUPPRESS_NEW_RADIUS_M of an existing landmark. Anything
-        # farther is genuinely new — no candidate to be a phantom of.
-        # The radius matches Lever-1's max widen (5 m) so we stay
-        # consistent: if no landmark was within 5 m at the wide-gate
-        # retry, the obs is in unexplored territory and creating it
-        # is correct.
-        SUPPRESS_NEW_RADIUS_M = 5.0
+        # Suppression in cascade-recovery / warning-band modes uses the
+        # phantom-vs-genuine classification computed above. Phantoms
+        # (existing landmark within 5 m of projected world position)
+        # are suppressed — likely drift-displaced re-observations of
+        # existing cones, creating them again would pollute the map.
+        # Genuinely new obs (no existing within 5 m) fall through to
+        # normal landmark creation.
         suppress_new_landmarks = (widen_used_m is not None) or in_warning_band
         cone_sigma_mult = 5.0 if in_warning_band else 1.0
         n_new = 0
         n_assoc = 0
         n_new_suppressed = 0
         n_new_allowed_far = 0
-        for o, m in zip(observations, matches):
+        for idx, (o, m) in enumerate(zip(observations, matches)):
             if m.landmark_id == -1:
                 world_xyz = self._body_to_world(
                     o.body_x, o.body_y, pred_x, pred_y, pred_yaw)
                 if suppress_new_landmarks:
-                    # Find distance to the nearest existing landmark.
-                    nearest = float("inf")
-                    for lm in self._db:
-                        dx = world_xyz[0] - lm.position[0]
-                        dy = world_xyz[1] - lm.position[1]
-                        d = float(np.hypot(dx, dy))
-                        if d < nearest:
-                            nearest = d
-                    if nearest < SUPPRESS_NEW_RADIUS_M:
-                        # Likely a phantom of an existing landmark
-                        # displaced by the same drift that triggered
-                        # cascade recovery in the first place.
+                    cls = obs_classification[idx]
+                    if cls == "phantom":
                         n_new_suppressed += 1
                         continue
-                    # Genuinely new — no candidate to be a phantom of.
-                    # Fall through to landmark creation.
+                    # cls == "genuine" — fall through to creation.
                     n_new_allowed_far += 1
                 lm = self._db.create(world_xyz, self._graph.step)
                 self._graph.stage_new_landmark(lm.id, world_xyz)
@@ -717,10 +735,8 @@ class ConeGraphSlamNode(Node):
                 n_new_suppressed > 0 or n_new_allowed_far > 0):
             self.get_logger().info(
                 f"widen-mode: assoc={n_assoc} "
-                f"new_suppressed={n_new_suppressed} (phantom: <"
-                f"{SUPPRESS_NEW_RADIUS_M:.0f}m to existing) "
-                f"new_allowed_far={n_new_allowed_far} (genuine: "
-                f"≥{SUPPRESS_NEW_RADIUS_M:.0f}m → unexplored)")
+                f"new_suppressed={n_new_suppressed} (phantom) "
+                f"new_allowed_far={n_new_allowed_far} (genuine)")
         elif in_warning_band:
             self.get_logger().info(
                 f"DA warning-band: obs={total_pre} new={n_new_pre} "
@@ -749,9 +765,20 @@ class ConeGraphSlamNode(Node):
         # the corrective prior in that window pins the pose to the
         # uncalibrated-bias prediction and prevents iSAM2 from
         # converging.
+        # Pose-jump sanity check (#277) is BYPASSED in cascade-recovery
+        # mode. The wide-gate matches by construction snap pose by 1–2 m
+        # — that's the whole point of the recovery — and the 0.8 m / 17°
+        # thresholds reject those legitimate corrections, snapping pose
+        # back to the (drift-corrupted) IMU prediction. Live trace
+        # (2026-05-05) showed pose-jump-rejected firing repeatedly on
+        # exactly the scans where wide-gate matches were producing the
+        # correct large correction, ending in pose at (-14, +87) —
+        # physically impossible. The sanity check stays active in
+        # steady-state DA where its original justification (single bad
+        # cone match snapping pose) still applies.
         max_pos_dev_m = self.get_parameter("pose_jump_max_pos_m").value
         max_yaw_dev_rad = self.get_parameter("pose_jump_max_yaw_rad").value
-        if self._graph.step > 30:
+        if self._graph.step > 30 and widen_used_m is None and not in_warning_band:
             result, was_corrected = self._graph.commit_with_pose_sanity_check(
                 predicted_pose, max_pos_dev_m, max_yaw_dev_rad)
             if was_corrected:
