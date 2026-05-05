@@ -134,8 +134,18 @@ class ControlNode(Node):
         # → controller carries v_max into the apex and goes off (#260
         # follow-up). Dropped to 3.0 m/s² (~0.3 g): v_corner < v_max
         # whenever R < 3 m, so any FS-style hairpin actually triggers
-        # a setpoint drop. Tune up later once tire physics is known.
-        self.declare_parameter("a_lat_max", 3.0)
+        # a setpoint drop.
+        #
+        # 2026-05-05 trace: car cleared first hairpin and entered
+        # second at v ≈ 2.79 m/s with steer saturating to ±1.0; before
+        # the controller's slowdown could complete, lateral grip was
+        # exceeded and the car spun out. SLAM cascades that followed
+        # were a downstream effect, not the cause. Halved to 1.5 m/s²
+        # (~0.15 g): a 2 m hairpin now caps at v_corner = 1.73 m/s,
+        # 3 m caps at 2.12 m/s — well below the saturation threshold.
+        # Tune up later once tire physics is known and we have a
+        # completed-lap baseline to regress against.
+        self.declare_parameter("a_lat_max", 1.5)
         self.declare_parameter("a_dec_max", 4.0)
         # Lowered 1.5 → 1.0 to widen the band where the β·R radius cap
         # (in pure_pursuit.py) can actually bind. Previous default left
