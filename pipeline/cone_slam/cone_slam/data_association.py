@@ -136,6 +136,7 @@ def associate(
         Callable[[int], Optional[np.ndarray]]] = None,
     pose_xy_yaw_cov: Optional[np.ndarray] = None,
     current_step: int = -1,
+    gate_override_m: Optional[float] = None,
 ) -> List[Match]:
     """Match observations to landmarks. One Match per observation.
 
@@ -150,11 +151,21 @@ def associate(
         pose_xy_yaw_cov: optional 3×3 marginal of the predicted pose
             for Mahalanobis Jacobian propagation. None → ignored.
         current_step: optional, plumbed through for staleness gating.
+        gate_override_m: optional explicit Euclidean gate radius. When
+            provided, overrides DISTANCE_GATE_M as the base for the
+            per-landmark expansion. Used by the cascade-recovery path
+            in cone_graph_slam_node to widen the gate to 3 m / 5 m on
+            an asymmetric-FOV burst, recover pose against any landmarks
+            that match, and snap back to the default on the next scan.
+            See issue #301.
 
     Returns:
         List of Match, in the same order as observations. landmark_id==-1
         means "no existing landmark — allocate new".
     """
+    base_gate_m = (gate_override_m
+                   if gate_override_m is not None
+                   else DISTANCE_GATE_M)
     matches: List[Match] = [Match(obs_index=i, landmark_id=-1)
                             for i in range(len(observations))]
 
@@ -206,7 +217,7 @@ def associate(
                 1.0 + GATE_EXPANSION_PER_SCAN * stale)
         else:
             gate_mult = 1.0
-        gate_eff = DISTANCE_GATE_M * gate_mult
+        gate_eff = base_gate_m * gate_mult
 
         # Pose-uncertainty contribution to Σ_innov via the Jacobian of
         # body-frame projection w.r.t. (yaw, x_w, y_w).
@@ -235,14 +246,24 @@ def associate(
                            + sigma_pose_contrib
                            + COV_FLOOR_VAR_M2 * np.eye(2))
             innov = np.array([dx, dy])
-            try:
-                sol = np.linalg.solve(sigma_innov, innov)
-            except np.linalg.LinAlgError:
-                continue
-            d2 = float(innov @ sol)
-            if d2 <= MAHALANOBIS_CHI2:
-                # Mahalanobis as gate, Euclidean as Hungarian cost.
-                cost[i, j] = d_eu
+            # When the caller explicitly widened the Euclidean gate (e.g.
+            # cascade-recovery path on issue #301), bypass the Mahalanobis
+            # threshold — the wider Euclidean radius is the signal that we
+            # accept relatively-distant matches in body frame because the
+            # predicted pose is presumed to have drifted. Default sigma
+            # gives MAHALANOBIS_CHI2 ≈ 6 over a 1 m innovation, which would
+            # auto-reject every wide-gate candidate and defeat the retry.
+            if gate_override_m is None:
+                try:
+                    sol = np.linalg.solve(sigma_innov, innov)
+                except np.linalg.LinAlgError:
+                    continue
+                d2 = float(innov @ sol)
+                if d2 > MAHALANOBIS_CHI2:
+                    continue
+            # Hungarian cost stays Euclidean — even at a wide gate we want
+            # the closest match per obs, not the most-statistically-likely.
+            cost[i, j] = d_eu
 
     # Hungarian doesn't accept +∞; replace with a large finite value.
     big = 1e6

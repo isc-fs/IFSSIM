@@ -174,6 +174,13 @@ class ConeGraphSlamNode(Node):
         self._obs_n_scans = 0
         self._obs_last_log_ns = 0
 
+        # Cascade-recovery widen history (issue #301). Each entry is the
+        # step number at which the DA gate was widened past 1 m. Used by
+        # the recovery path to detect "wide gate fired twice in 5 scans"
+        # → escalate to lost-track instead of papering over it. Pruned
+        # opportunistically inside the recovery branch.
+        self._cascade_widen_steps: list[int] = []
+
         # Latest /motor_rpm sample. Wall-clock timestamp because the
         # bridge stamps it with node_->now() (no header.stamp on
         # std_msgs/Float32). Used for staleness check inside _on_cones.
@@ -458,36 +465,82 @@ class ConeGraphSlamNode(Node):
             observations, pred_x, pred_y, pred_yaw, self._db,
             current_step=self._graph.step)
 
-        # Pre-stage cascade-trigger detection. The cascade signature
-        # observed on trackA_manual_001602 around t≈80 s is: a single
-        # scan flips DA from "steady, mostly-associated" to "mostly
-        # new" (e.g., obs=8 new=6 assoc=2). The optimizer then jumps
-        # pose to accommodate the falsely-new landmarks and the graph
-        # never recovers. Detection: if the new-rate suddenly spikes
-        # when (a) we have ≥5 observations to be statistically
-        # meaningful, (b) we're past the early-discovery phase
-        # (step > 30, so most cones in the local map are mature),
-        # (c) >60 % of obs are flagged new — the predicted pose is
-        # likely wrong and committing the cone factors would corrupt
-        # the graph.
+        # Cascade-trigger detection + adaptive gate widening (issue #301).
         #
-        # Recovery (#273): commit the IMU factor only, skip the cone
-        # factors. Earlier behaviour discarded EVERYTHING (the IMU
-        # factor too) and returned, freezing the graph at the prev
-        # committed pose. While the car physically moved during the
-        # skipped scans, the predicted pose for the next scan stayed
-        # stale — so when DA recovered, observed cones were all far
-        # from their landmarks (even further apart than the real drift
-        # the IMU would have indicated), producing yet more "all-new"
-        # scans, more skips, more drift. By committing the IMU we keep
-        # pose dead-reckoning during the skipped window; drift over a
-        # few hundred ms of IMU-only update is much smaller than over
-        # the same window of pose-freeze.
+        # Mechanism observed mid-corner on test_submodule: car enters a
+        # FOV-limited section where one side of the cone corridor isn't
+        # visible (`by-side L=0 R=4.6`). Predicted pose has accumulated
+        # ~1–2 m of IMU drift (sub-meter and harmless on its own); the
+        # 1 m DA gate now rejects most observations as NEW because their
+        # body-frame predicted positions don't match where the existing
+        # landmarks are within 1 m. The original recovery (skip cone
+        # factors → IMU-only) compounds the drift on every subsequent
+        # scan, the cascade self-traps, plan_path follows a path against
+        # the diverging pose, and the car goes off track.
+        #
+        # New recovery (Lever 1 of #301): when the cascade trigger fires
+        # (obs ≥ 5, step > 30, new-rate > 60 %), retry associate() at a
+        # wider Euclidean gate (3 m, then 5 m). If a retry drops the
+        # new-rate below the threshold, take those matches and commit
+        # cone factors normally — the wide-gate matches anchor pose
+        # against the existing map, which is precisely what "1 m gate
+        # plus IMU drift" was preventing. If even 5 m fails, treat as a
+        # genuine lost-track event: skip cone factors for THIS scan
+        # only (no continuous skip), log loudly, and try again next
+        # scan with the default gate.
+        #
+        # Safeguards against wide-gate mis-association (the failure mode
+        # that motivated the original tight 1 m gate, #268/#272):
+        #   - Single retry per cascade burst — once we've snapped pose
+        #     back, the next scan uses the default gate.
+        #   - Track widen events: if 2+ widens fire within 5 scans, the
+        #     underlying cause isn't being addressed (e.g. systematic
+        #     bias drift); escalate to lost-track instead of widening.
         n_new_pre  = sum(1 for m in matches if m.landmark_id == -1)
         total_pre  = len(matches)
-        if (total_pre >= 5
-                and self._graph.step > 30
-                and n_new_pre > int(0.60 * total_pre)):
+        cascade_triggered = (total_pre >= 5
+                             and self._graph.step > 30
+                             and n_new_pre > int(0.60 * total_pre))
+        widen_used_m: Optional[float] = None
+        if cascade_triggered:
+            # Suppress widen if we've widened too often recently — that
+            # means the wide gate is masking an actual problem (drift,
+            # bias) and we shouldn't keep papering over it.
+            recent_widens = sum(
+                1 for s in self._cascade_widen_steps
+                if (self._graph.step - s) <= 5)
+            if recent_widens >= 2:
+                self.get_logger().warn(
+                    f"lost track: DA-failure spike (obs={total_pre} "
+                    f"new={n_new_pre}) and {recent_widens} widens in "
+                    f"last 5 scans — commit IMU-only, no widen")
+            else:
+                for retry_gate in (3.0, 5.0):
+                    retry_matches = associate(
+                        observations, pred_x, pred_y, pred_yaw, self._db,
+                        current_step=self._graph.step,
+                        gate_override_m=retry_gate)
+                    retry_new = sum(
+                        1 for m in retry_matches if m.landmark_id == -1)
+                    if retry_new <= int(0.60 * total_pre):
+                        self.get_logger().info(
+                            f"DA gate widened {DISTANCE_GATE_M:.1f}m "
+                            f"→ {retry_gate:.1f}m: "
+                            f"new {n_new_pre}/{total_pre} → "
+                            f"{retry_new}/{total_pre}")
+                        matches = retry_matches
+                        n_new_pre = retry_new
+                        widen_used_m = retry_gate
+                        self._cascade_widen_steps.append(self._graph.step)
+                        break
+                # If no retry helped (still ≥60 % NEW at 5 m), fall
+                # through with the original 1 m matches; the lost-track
+                # branch below handles it.
+        if cascade_triggered and widen_used_m is None:
+            # Genuine lost-track: 5 m gate didn't help (or skipped due
+            # to repeated widens). Skip cone factors for THIS scan
+            # only — no continuous skip, the next scan tries fresh
+            # at the default gate.
             self.get_logger().warn(
                 f"skip cone factors: DA-failure spike "
                 f"(obs={total_pre} new={n_new_pre} "

@@ -57,6 +57,35 @@ def test_obs_beyond_gate_creates_new_landmark() -> None:
     assert matches[0].landmark_id == -1
 
 
+def test_gate_override_widens_acceptance() -> None:
+    """An obs ~2 m off doesn't match at the default 1 m gate but does
+    match when the caller passes gate_override_m=3.0 — the cascade-
+    recovery path of the SLAM node (issue #301)."""
+    db = LandmarkDb()
+    pose = _car_at_origin_facing_x()
+    db.create(np.array([5.0, 0.0, 0.0]), step=0)
+
+    obs = [Observation(body_x=5.0, body_y=2.0, height=0.3)]
+
+    # Default gate: doesn't match.
+    assert associate(obs, *pose, db)[0].landmark_id == -1
+
+    # Wide gate (cascade-recovery path): does match.
+    assert associate(obs, *pose, db, gate_override_m=3.0)[0].landmark_id == 0
+
+
+def test_gate_override_still_rejects_truly_distant_obs() -> None:
+    """Even at a 5 m gate, a 6 m-distant observation stays NEW —
+    we widen, we don't break the gate entirely."""
+    db = LandmarkDb()
+    pose = _car_at_origin_facing_x()
+    db.create(np.array([5.0, 0.0, 0.0]), step=0)
+
+    obs = [Observation(body_x=5.0, body_y=6.0, height=0.3)]
+    matches = associate(obs, *pose, db, gate_override_m=5.0)
+    assert matches[0].landmark_id == -1
+
+
 def test_cross_corridor_cones_dont_cross_match() -> None:
     """Two physically distinct cones on opposite sides of a 3 m
     corridor. Each obs must associate with its nearer landmark, not
