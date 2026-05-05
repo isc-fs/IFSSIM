@@ -91,17 +91,27 @@ services:
       # doesn't require an image rebuild — restart the container after
       # an edit.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/dv_pipeline_stack_ws/fastdds_profile.xml
-    ports:
-      # UE5 pushes sensor data to these ports — must be mapped so host→container works.
-      # LiDAR uses 51453 (not the adjacent-to-sensor 41453): Docker Desktop on
-      # macOS sometimes only binds the first port of a contiguous UDP range
-      # via its userspace proxy (`com.docker.backend`), even though `docker
-      # port` reports both. Using a well-separated port forces a distinct
-      # proxy binding and avoids the silent half-broken range-mapping.
-      - "127.0.0.1:41452:41452/udp"
-      - "127.0.0.1:51453:51453/udp"
-      # Foxglove WebSocket bridge — connect Lichtblick at ws://localhost:8765
-      - "127.0.0.1:8765:8765"
+    # Host networking: bypasses Docker Desktop's userspace UDP proxy
+    # (com.docker.backend) entirely. The proxy was unreliable for the
+    # high-rate / large-fragmented LiDAR datagrams — under sustained load
+    # the proxy would silently lose its socket binding for the LiDAR
+    # port (`lsof -nP -iUDP | grep 51453` empty), while the smaller-
+    # datagram sensor port stayed bound. Two attempts to fix at the port
+    # level (port-isolation 41452/51453 in 2026-04, then ephemeral-range
+    # avoidance 41453 today) both got circumvented by the proxy itself
+    # losing sockets at any port carrying the fragmented stream. Issue
+    # #286 has the full diagnostic trail.
+    #
+    # Host networking on Docker Desktop (>= 4.34) shares the macOS host
+    # network namespace with the container directly, so the bridge's
+    # listen socket lives on the host's loopback and UE5's sendto() goes
+    # straight there with no userspace proxy in the path. Other services
+    # in the compose stack keep their default bridge networking.
+    network_mode: host
+    # `ports:` is intentionally absent — host networking ignores it. The
+    # bridge process inside the container listens on 41452 (sensor UDP),
+    # 51453 (LiDAR UDP), and 8765 (foxglove WebSocket) directly on the
+    # host's interfaces.
     extra_hosts:
       # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
       - "host.docker.internal:host-gateway"
