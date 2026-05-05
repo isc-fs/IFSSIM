@@ -601,18 +601,52 @@ class ConeGraphSlamNode(Node):
         # NEW creation during cascade-recovery: real new cones will be
         # re-discovered next scan once pose has stabilised against the
         # widen-matched landmarks.
+        # Suppression in cascade-recovery / warning-band modes is now
+        # SMART (issue #301 follow-up #3). Previously suppressed every
+        # unmatched obs unconditionally — clean for phantoms, but
+        # starved the map of legitimate new cones in unexplored
+        # territory. Live trace at the second hairpin (2026-05-05):
+        # ~60 scans of recovery, map only +3 landmarks. Eventually no
+        # nearby landmarks left to anchor against and even the 5 m
+        # widen failed.
+        #
+        # Smart rule: in suppress mode, only suppress unmatched obs
+        # whose projected world position is within
+        # SUPPRESS_NEW_RADIUS_M of an existing landmark. Anything
+        # farther is genuinely new — no candidate to be a phantom of.
+        # The radius matches Lever-1's max widen (5 m) so we stay
+        # consistent: if no landmark was within 5 m at the wide-gate
+        # retry, the obs is in unexplored territory and creating it
+        # is correct.
+        SUPPRESS_NEW_RADIUS_M = 5.0
         suppress_new_landmarks = (widen_used_m is not None) or in_warning_band
         cone_sigma_mult = 5.0 if in_warning_band else 1.0
         n_new = 0
         n_assoc = 0
         n_new_suppressed = 0
+        n_new_allowed_far = 0
         for o, m in zip(observations, matches):
             if m.landmark_id == -1:
-                if suppress_new_landmarks:
-                    n_new_suppressed += 1
-                    continue
                 world_xyz = self._body_to_world(
                     o.body_x, o.body_y, pred_x, pred_y, pred_yaw)
+                if suppress_new_landmarks:
+                    # Find distance to the nearest existing landmark.
+                    nearest = float("inf")
+                    for lm in self._db:
+                        dx = world_xyz[0] - lm.position[0]
+                        dy = world_xyz[1] - lm.position[1]
+                        d = float(np.hypot(dx, dy))
+                        if d < nearest:
+                            nearest = d
+                    if nearest < SUPPRESS_NEW_RADIUS_M:
+                        # Likely a phantom of an existing landmark
+                        # displaced by the same drift that triggered
+                        # cascade recovery in the first place.
+                        n_new_suppressed += 1
+                        continue
+                    # Genuinely new — no candidate to be a phantom of.
+                    # Fall through to landmark creation.
+                    n_new_allowed_far += 1
                 lm = self._db.create(world_xyz, self._graph.step)
                 self._graph.stage_new_landmark(lm.id, world_xyz)
                 self._graph.stage_cone_observation(
@@ -650,17 +684,22 @@ class ConeGraphSlamNode(Node):
         per_scan["new"] = n_new
         per_scan["assoc"] = n_assoc
         per_scan["new_suppressed"] = n_new_suppressed
+        per_scan["new_allowed_far"] = n_new_allowed_far
 
-        if widen_used_m is not None and n_new_suppressed > 0:
+        if widen_used_m is not None and (
+                n_new_suppressed > 0 or n_new_allowed_far > 0):
             self.get_logger().info(
-                f"widen-mode: assoc={n_assoc} new_suppressed="
-                f"{n_new_suppressed} (would-be-phantom landmarks at "
-                f"pre-correction pose)")
+                f"widen-mode: assoc={n_assoc} "
+                f"new_suppressed={n_new_suppressed} (phantom: <"
+                f"{SUPPRESS_NEW_RADIUS_M:.0f}m to existing) "
+                f"new_allowed_far={n_new_allowed_far} (genuine: "
+                f"≥{SUPPRESS_NEW_RADIUS_M:.0f}m → unexplored)")
         elif in_warning_band:
             self.get_logger().info(
                 f"DA warning-band: obs={total_pre} new={n_new_pre} "
                 f"assoc={n_assoc} σ × 5 on cone factors, "
-                f"new_suppressed={n_new_suppressed}")
+                f"new_suppressed={n_new_suppressed} "
+                f"new_allowed_far={n_new_allowed_far}")
 
         self._accumulate_obs_diag(per_scan)
 
