@@ -156,7 +156,16 @@ class ControlNode(Node):
         self.declare_parameter("lookahead_k", 0.5)
         self.declare_parameter("kp_v", 0.5)
         self.declare_parameter("ki_v", 0.05)
-        self.declare_parameter("deadband_v", 0.2)
+        # Velocity-error deadband. Inside |err| < deadband the PI output
+        # is clamped to "coast" (zero throttle, zero regen) so SLAM-velocity
+        # jitter doesn't bounce the actuators. Originally 0.2 m/s — with
+        # kp=0.5 that meant regen wouldn't fire until the car was 0.4 m/s
+        # over the setpoint, which left it cruising into corners that the
+        # planner had already commanded a 0.3 m/s slowdown for. With the
+        # post-#286 sub-meter SLAM the velocity estimate is clean enough
+        # to tighten this — 0.05 m/s lets the controller act on the
+        # planner's setpoint drops at hairpin entry.
+        self.declare_parameter("deadband_v", 0.05)
         self.declare_parameter("throttle_max", 0.6)
         # Stop-latch guard. The FS start gate is also big-orange, so we
         # need to drive at least one lap-ish before the first orange
