@@ -341,6 +341,49 @@ class FactorGraph:
         """
         return self._flush_update()
 
+    def commit_with_pose_sanity_check(
+        self,
+        predicted_pose: gtsam.Pose3,
+        max_pos_dev_m: float,
+        max_yaw_dev_rad: float,
+    ) -> "tuple[ScanResult, bool]":
+        """Run iSAM2 with everything staged, then sanity-check the
+        optimized pose at X(self._k) against an IMU-predicted pose.
+
+        If the optimized pose deviates more than (`max_pos_dev_m`,
+        `max_yaw_dev_rad`) from `predicted_pose`, a strong PriorFactor
+        on X(self._k) is added at `predicted_pose` and iSAM2 is run
+        again. The strong prior over-constrains pose to the IMU-predicted
+        value, neutralising the bad cone factor(s) that caused the
+        snap. Bad factors stay in the graph; future iterations
+        relinearise against the corrected pose without snapping.
+
+        Returns (result, was_corrected). `was_corrected=True` means
+        the sanity check fired.
+        """
+        result = self._flush_update()
+
+        pos_dev = float(np.linalg.norm(
+            result.pose.translation() - predicted_pose.translation()))
+        delta_rot = predicted_pose.rotation().between(result.pose.rotation())
+        yaw_dev = abs(float(delta_rot.yaw()))
+
+        if pos_dev <= max_pos_dev_m and yaw_dev <= max_yaw_dev_rad:
+            return result, False
+
+        # Excessive jump — apply strong prior at predicted pose. Tight
+        # noise (5 mm position, 0.3° rotation) overrides cone factors.
+        strong_sigmas = np.array([
+            0.005, 0.005, 0.005,   # rotation rxx/ryy/rzz (rad)
+            0.005, 0.005, 0.005,   # translation x/y/z (m)
+        ])
+        strong_noise = gtsam.noiseModel.Diagonal.Sigmas(strong_sigmas)
+        self._new_factors.add(gtsam.PriorFactorPose3(
+            X(self._k), predicted_pose, strong_noise))
+
+        corrected = self._flush_update()
+        return corrected, True
+
     def discard_staged(self) -> None:
         """Drop everything staged since the last commit and rewind
         self._k. Used when a pre-commit sanity check determines this

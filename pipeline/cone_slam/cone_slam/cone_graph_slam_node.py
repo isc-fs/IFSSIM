@@ -121,6 +121,25 @@ class ConeGraphSlamNode(Node):
         self.base_frame = self.declare_parameter(
             "base_frame", "base_link").value
 
+        # --- Pose-jump sanity check thresholds (#277) ---
+        # Last-resort guard against iSAM2 teleporting pose to fit a
+        # wrong cone-factor batch (the failure mode trace 2026-05-05:
+        # 22 m pose jump at step 60 because 11 new landmarks were
+        # created at the predicted pose and the optimizer fit them
+        # alongside 2 surviving assocs to a globally-wrong solution).
+        # When the optimizer's pose at this step deviates more than
+        # (max_pos_dev_m, max_yaw_dev_rad) from the IMU-predicted
+        # pose, the sanity check adds a strong PriorFactorPose3 at the
+        # IMU prediction and re-flushes; the bad cone factors stay in
+        # the graph but get over-constrained by the prior.
+        # 0.8 m: ample headroom for a legitimate single-scan iSAM2
+        #         correction (typical: a few cm with mature map).
+        # 17.2°: ditto for yaw.
+        # Gate on `step > 30` so iSAM2's first-30-scan bias-refinement
+        # phase isn't pinned to the uncalibrated-bias prediction.
+        self.declare_parameter("pose_jump_max_pos_m", 0.8)
+        self.declare_parameter("pose_jump_max_yaw_rad", 0.3)
+
         # --- Components ---
         self._preint = ImuPreintegrator()
         self._graph = FactorGraph()
@@ -500,20 +519,30 @@ class ConeGraphSlamNode(Node):
 
         self._accumulate_obs_diag(per_scan)
 
-        # Commit IMU + cone factors. No cascade detector, no
-        # pose-jump sanity check — both were band-aids for failure
-        # modes the new Mahalanobis-DA stack handles natively:
-        #   - cascade detector + IMU-only fallback was causing the
-        #     dead-reckoning self-trap that killed every test_submodule
-        #     run mid-corner. With Mahalanobis-adapted gating we let
-        #     cone factors stay in even on noisy scans; Huber loss
-        #     caps outlier influence.
-        #   - pose-jump sanity check fought legitimate large
-        #     corrections during high-curvature manoeuvres where
-        #     iSAM2's pose marginal grows. The "snap to IMU" recovery
-        #     itself triggered runaway IMU dead-reckoning.
-        # Audit + decision in #301 comment.
-        result = self._graph.commit()
+        # Commit IMU + cone factors with pose-jump sanity check (#277).
+        # Cascade detector is gone — Mahalanobis adaptive gating
+        # handles steady-state DA filtering, and Huber loss caps any
+        # surviving outlier influence. The sanity check stays as a
+        # last-resort guard against optimiser teleports (live trace
+        # 2026-05-05 without this guard: 22 m pose jump in one scan
+        # because 11 new landmarks at the predicted pose plus 2 bad
+        # surviving assocs gave iSAM2 a globally-wrong solution).
+        # Gate on `step > 30` so the first-30-scan bias-refinement
+        # phase isn't artificially pinned to the uncalibrated-bias
+        # prediction.
+        max_pos_dev_m = self.get_parameter("pose_jump_max_pos_m").value
+        max_yaw_dev_rad = self.get_parameter("pose_jump_max_yaw_rad").value
+        if self._graph.step > 30:
+            result, was_corrected = self._graph.commit_with_pose_sanity_check(
+                predicted_pose, max_pos_dev_m, max_yaw_dev_rad)
+            if was_corrected:
+                self.get_logger().warn(
+                    f"pose-jump rejected: snapped to IMU prediction at "
+                    f"step={self._graph.step} "
+                    f"(thresholds: {max_pos_dev_m:.2f} m, "
+                    f"{np.degrees(max_yaw_dev_rad):.1f}°)")
+        else:
+            result = self._graph.commit()
         self._latest_result = result
         self._preint.update_bias(result.bias)
 
