@@ -274,6 +274,7 @@ class FactorGraph:
         body_x: float,
         body_y: float,
         sigma_xy: float = -1.0,
+        sigma_multiplier: float = 1.0,
     ) -> None:
         """Add a BearingRange observation between the current pose
         (X(self._k)) and the landmark.
@@ -319,8 +320,15 @@ class FactorGraph:
 
         # 3D bearing is parameterized as Unit3 (2 DoF tangent space) +
         # 1 DoF range = 3-vector residual. Sigmas are (bearing_x,
-        # bearing_y, range) in tangent space units.
-        sigmas = np.array([bearing_sigma, bearing_sigma, range_sigma])
+        # bearing_y, range) in tangent space units. The optional
+        # sigma_multiplier is the Lever-2 hook from issue #301: when
+        # the SLAM node detects a borderline-DA scan (40-60 % new at
+        # the default gate, below the cascade trigger), it commits the
+        # surviving matches at downweighted sigma so the few good
+        # factors anchor pose without the borderline-bad ones
+        # dominating.
+        sigmas = sigma_multiplier * np.array(
+            [bearing_sigma, bearing_sigma, range_sigma])
         gaussian = gtsam.noiseModel.Diagonal.Sigmas(sigmas)
         # k=1.345 is the classic Huber tuning that gives 95% efficiency
         # under a Gaussian model — i.e. you pay almost nothing in the

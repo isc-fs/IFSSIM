@@ -512,6 +512,18 @@ class ConeGraphSlamNode(Node):
         cascade_triggered = (total_pre >= 5
                              and self._graph.step > 30
                              and n_new_pre > int(0.60 * total_pre))
+        # Lever-2 warning band (issue #301): 40-60% NEW at the default
+        # gate is below the cascade trigger but above healthy. Commit
+        # the matches we have, but with σ × 5 — Huber already caps
+        # outliers; this just down-weights the borderline matches so
+        # they nudge pose without dominating. Suppress NEW landmark
+        # creation here too, same reasoning as cascade-recovery: the
+        # predicted pose is uncertain and the leftover NEWs would be
+        # phantoms at wrong world positions.
+        in_warning_band = (total_pre >= 5
+                           and self._graph.step > 30
+                           and not cascade_triggered
+                           and n_new_pre > int(0.40 * total_pre))
         widen_used_m: Optional[float] = None
         if cascade_triggered:
             # Suppress widen only if FAILED widens (wide-gate retries
@@ -589,7 +601,8 @@ class ConeGraphSlamNode(Node):
         # NEW creation during cascade-recovery: real new cones will be
         # re-discovered next scan once pose has stabilised against the
         # widen-matched landmarks.
-        suppress_new_landmarks = (widen_used_m is not None)
+        suppress_new_landmarks = (widen_used_m is not None) or in_warning_band
+        cone_sigma_mult = 5.0 if in_warning_band else 1.0
         n_new = 0
         n_assoc = 0
         n_new_suppressed = 0
@@ -603,7 +616,8 @@ class ConeGraphSlamNode(Node):
                 lm = self._db.create(world_xyz, self._graph.step)
                 self._graph.stage_new_landmark(lm.id, world_xyz)
                 self._graph.stage_cone_observation(
-                    lm.id, o.body_x, o.body_y, o.sigma_xy)
+                    lm.id, o.body_x, o.body_y, o.sigma_xy,
+                    sigma_multiplier=cone_sigma_mult)
                 n_new += 1
                 if self._lm_capture_fh is not None:
                     try:
@@ -630,7 +644,8 @@ class ConeGraphSlamNode(Node):
             else:
                 self._db.mark_observed(m.landmark_id, self._graph.step)
                 self._graph.stage_cone_observation(
-                    m.landmark_id, o.body_x, o.body_y, o.sigma_xy)
+                    m.landmark_id, o.body_x, o.body_y, o.sigma_xy,
+                    sigma_multiplier=cone_sigma_mult)
                 n_assoc += 1
         per_scan["new"] = n_new
         per_scan["assoc"] = n_assoc
@@ -641,6 +656,11 @@ class ConeGraphSlamNode(Node):
                 f"widen-mode: assoc={n_assoc} new_suppressed="
                 f"{n_new_suppressed} (would-be-phantom landmarks at "
                 f"pre-correction pose)")
+        elif in_warning_band:
+            self.get_logger().info(
+                f"DA warning-band: obs={total_pre} new={n_new_pre} "
+                f"assoc={n_assoc} σ × 5 on cone factors, "
+                f"new_suppressed={n_new_suppressed}")
 
         self._accumulate_obs_diag(per_scan)
 
