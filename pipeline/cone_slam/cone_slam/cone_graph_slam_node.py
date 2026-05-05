@@ -174,12 +174,14 @@ class ConeGraphSlamNode(Node):
         self._obs_n_scans = 0
         self._obs_last_log_ns = 0
 
-        # Cascade-recovery widen history (issue #301). Each entry is the
-        # step number at which the DA gate was widened past 1 m. Used by
-        # the recovery path to detect "wide gate fired twice in 5 scans"
-        # → escalate to lost-track instead of papering over it. Pruned
-        # opportunistically inside the recovery branch.
-        self._cascade_widen_steps: list[int] = []
+        # Cascade-recovery FAILED-widen history (issue #301). Each entry
+        # is the step number at which the wide-gate retry left the
+        # new-rate above the cascade threshold (i.e. didn't actually
+        # snap pose back). Used to escalate to lost-track when the wide
+        # gate is no longer recovering. Successful widens are not
+        # tracked here — those are the recovery path itself and need to
+        # fire freely during sustained FOV-limited sections.
+        self._cascade_failed_widen_steps: list[int] = []
 
         # Latest /motor_rpm sample. Wall-clock timestamp because the
         # bridge stamps it with node_->now() (no header.stamp on
@@ -489,13 +491,22 @@ class ConeGraphSlamNode(Node):
         # only (no continuous skip), log loudly, and try again next
         # scan with the default gate.
         #
-        # Safeguards against wide-gate mis-association (the failure mode
-        # that motivated the original tight 1 m gate, #268/#272):
-        #   - Single retry per cascade burst — once we've snapped pose
-        #     back, the next scan uses the default gate.
-        #   - Track widen events: if 2+ widens fire within 5 scans, the
-        #     underlying cause isn't being addressed (e.g. systematic
-        #     bias drift); escalate to lost-track instead of widening.
+        # Wide-gate mis-association (the cross-corridor failure mode
+        # that motivated the original tight 1 m gate, #268/#272) is
+        # bounded by:
+        #   - Hungarian still enforces 1:1 matching at the wide gate.
+        #   - We only widen when the cascade trigger has fired — it is
+        #     the explicit signal that the predicted pose is too
+        #     uncertain for the tight gate to be informative.
+        #   - "Failed widens" — wide-gate retries that left the new-rate
+        #     above the threshold — are tracked and capped. Two failed
+        #     widens within 5 scans escalates to lost-track. This was
+        #     originally any-widen rather than failed-widen, but the
+        #     first live test (#303) showed that successful widens are
+        #     the recovery path itself: in a sustained FOV-limited
+        #     corner the widen needs to fire on every cascade scan to
+        #     keep pose anchored. Capping successful widens triggered
+        #     the very dead-reckoning loop the widen was added to fix.
         n_new_pre  = sum(1 for m in matches if m.landmark_id == -1)
         total_pre  = len(matches)
         cascade_triggered = (total_pre >= 5
@@ -503,17 +514,18 @@ class ConeGraphSlamNode(Node):
                              and n_new_pre > int(0.60 * total_pre))
         widen_used_m: Optional[float] = None
         if cascade_triggered:
-            # Suppress widen if we've widened too often recently — that
-            # means the wide gate is masking an actual problem (drift,
-            # bias) and we shouldn't keep papering over it.
-            recent_widens = sum(
-                1 for s in self._cascade_widen_steps
+            # Suppress widen only if FAILED widens (wide-gate retries
+            # that didn't actually drop new-rate below threshold) have
+            # been firing repeatedly — that indicates the wide gate
+            # itself isn't recovering pose, so retrying won't help.
+            recent_failed_widens = sum(
+                1 for s in self._cascade_failed_widen_steps
                 if (self._graph.step - s) <= 5)
-            if recent_widens >= 2:
+            if recent_failed_widens >= 2:
                 self.get_logger().warn(
                     f"lost track: DA-failure spike (obs={total_pre} "
-                    f"new={n_new_pre}) and {recent_widens} widens in "
-                    f"last 5 scans — commit IMU-only, no widen")
+                    f"new={n_new_pre}) and {recent_failed_widens} "
+                    f"FAILED widens in last 5 scans — commit IMU-only")
             else:
                 for retry_gate in (3.0, 5.0):
                     retry_matches = associate(
@@ -531,11 +543,12 @@ class ConeGraphSlamNode(Node):
                         matches = retry_matches
                         n_new_pre = retry_new
                         widen_used_m = retry_gate
-                        self._cascade_widen_steps.append(self._graph.step)
                         break
-                # If no retry helped (still ≥60 % NEW at 5 m), fall
-                # through with the original 1 m matches; the lost-track
-                # branch below handles it.
+                else:
+                    # Both 3 m and 5 m left new-rate ≥ 60 % — record as
+                    # a failed widen for the cap. This is the legitimate
+                    # "wide gate isn't helping" signal.
+                    self._cascade_failed_widen_steps.append(self._graph.step)
         if cascade_triggered and widen_used_m is None:
             # Genuine lost-track: 5 m gate didn't help (or skipped due
             # to repeated widens). Skip cone factors for THIS scan
