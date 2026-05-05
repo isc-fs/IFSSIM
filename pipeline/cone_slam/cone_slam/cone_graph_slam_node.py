@@ -721,12 +721,29 @@ class ConeGraphSlamNode(Node):
         # `twist.linear.x` as longitudinal speed and instead get an axis-
         # aligned world component, which is wrong as soon as the car is
         # not pointing along world +X.
+        #
+        # Defensive cap: when the pose-jump sanity check fires, pose is
+        # snapped back to IMU prediction but iSAM2's NavState velocity
+        # isn't — it accumulates IMU integration during the rejected
+        # update and can grow to 15+ m/s as a state-estimator artifact
+        # while the car is physically doing 3 m/s. The controller reads
+        # this twist and saturates regen, which is wrong. Cap each axis
+        # at PHYSICAL_VEL_CAP_MS (well above the sim's v_max but below
+        # the runaway range) so downstream consumers always see a
+        # physically-plausible velocity.
+        PHYSICAL_VEL_CAP_MS = 8.0
         v_world = result.velocity
         c, s = np.cos(pose.rotation().yaw()), np.sin(pose.rotation().yaw())
         # R_w2b = [[ c, s, 0], [-s, c, 0], [0, 0, 1]]; vertical untouched.
-        msg.twist.twist.linear.x = float(c * v_world[0] + s * v_world[1])
-        msg.twist.twist.linear.y = float(-s * v_world[0] + c * v_world[1])
-        msg.twist.twist.linear.z = float(v_world[2])
+        vx_body = float(c * v_world[0] + s * v_world[1])
+        vy_body = float(-s * v_world[0] + c * v_world[1])
+        vz_body = float(v_world[2])
+        msg.twist.twist.linear.x = max(-PHYSICAL_VEL_CAP_MS,
+                                        min(PHYSICAL_VEL_CAP_MS, vx_body))
+        msg.twist.twist.linear.y = max(-PHYSICAL_VEL_CAP_MS,
+                                        min(PHYSICAL_VEL_CAP_MS, vy_body))
+        msg.twist.twist.linear.z = max(-PHYSICAL_VEL_CAP_MS,
+                                        min(PHYSICAL_VEL_CAP_MS, vz_body))
         self._state_pub.publish(msg)
 
         # GT-aligned diagnostic: publish where the ground truth says
