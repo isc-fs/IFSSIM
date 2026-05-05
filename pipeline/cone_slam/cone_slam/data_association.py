@@ -40,8 +40,20 @@ from cone_slam.landmark_db import LandmarkDb
 # loose enough that legitimate same-cone re-observations under typical
 # 100 ms-scan pose drift land within. The cross-colour 1.0 m value
 # from #272 worked well in practice; with colour gone, the same
-# threshold applies uniformly.
-DISTANCE_GATE_M = 1.0
+# threshold applied uniformly.
+#
+# Lever 3a (issue #301): widened to 1.5 m. The 2026-05-05 live trace
+# showed sub-meter SLAM tracking through healthy sections but the
+# cascade trigger was firing on FOV-limited corners with as little as
+# 1.0–1.2 m of cumulative IMU drift — well within the 1.5 m radius
+# from each landmark to its nearest cross-corridor neighbour (typical
+# FS corridor is ≥ 3 m wide, so neighbours are at ~3 m). 1.5 m gives
+# the steady-state DA enough headroom to absorb a normal corner's
+# IMU drift without ever needing to escalate to Lever-1's wider
+# retry. The Hungarian still enforces 1:1 matching so a 1.5 m gate
+# can't double-match within an obs's reach to two different
+# landmarks in the same scan.
+DISTANCE_GATE_M = 1.5
 
 
 # Time-since-association gate expansion. Disabled (cap = 1.0×) — kept
