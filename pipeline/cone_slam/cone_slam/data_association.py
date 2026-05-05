@@ -35,13 +35,21 @@ from scipy.optimize import linear_sum_assignment
 from cone_slam.landmark_db import LandmarkDb
 
 
-# Single Euclidean gate. Tight enough that adjacent cones in an FS
-# corridor (≥ 3 m apart) don't cross-match even when pose has drifted,
-# loose enough that legitimate same-cone re-observations under typical
-# 100 ms-scan pose drift land within. The cross-colour 1.0 m value
-# from #272 worked well in practice; with colour gone, the same
-# threshold applies uniformly.
-DISTANCE_GATE_M = 1.0
+# Coarse Euclidean pre-filter. Acts as the floor below which the
+# Mahalanobis χ² gate (further down) does the actual fine-grained
+# acceptance. Tight enough that adjacent cones in an FS corridor
+# (≥ 3 m apart) don't cross-match even when pose has drifted; loose
+# enough that legitimate same-cone re-observations under typical
+# 100 ms-scan pose drift land within.
+#
+# Bumped 1.0 → 1.5 m (#301 cleanup): live-trace data on the
+# post-#286 stack shows sub-meter SLAM tracking through healthy
+# sections. The 1.0 m gate started rejecting legitimate matches as
+# soon as the corner-induced drift hit the same magnitude as the
+# gate radius. 1.5 m gives steady-state DA the headroom to absorb
+# normal drift without escalating to anything more elaborate, and
+# is still half the cross-corridor cone spacing.
+DISTANCE_GATE_M = 1.5
 
 
 # Time-since-association gate expansion. Disabled (cap = 1.0×) — kept
