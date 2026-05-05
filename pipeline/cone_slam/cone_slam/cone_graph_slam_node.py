@@ -539,6 +539,8 @@ class ConeGraphSlamNode(Node):
                     f"new={n_new_pre}) and {recent_failed_widens} "
                     f"FAILED widens in last 5 scans — commit IMU-only")
             else:
+                last_retry_matches = matches
+                last_retry_new = n_new_pre
                 for retry_gate in (3.0, 5.0):
                     retry_matches = associate(
                         observations, pred_x, pred_y, pred_yaw, self._db,
@@ -546,6 +548,8 @@ class ConeGraphSlamNode(Node):
                         gate_override_m=retry_gate)
                     retry_new = sum(
                         1 for m in retry_matches if m.landmark_id == -1)
+                    last_retry_matches = retry_matches
+                    last_retry_new = retry_new
                     if retry_new <= int(0.60 * total_pre):
                         self.get_logger().info(
                             f"DA gate widened {DISTANCE_GATE_M:.1f}m "
@@ -557,10 +561,33 @@ class ConeGraphSlamNode(Node):
                         widen_used_m = retry_gate
                         break
                 else:
-                    # Both 3 m and 5 m left new-rate ≥ 60 % — record as
-                    # a failed widen for the cap. This is the legitimate
-                    # "wide gate isn't helping" signal.
+                    # Both 3 m and 5 m left new-rate ≥ 60 %. Two cases:
+                    #  (a) The unmatched obs are in genuinely unexplored
+                    #      territory (no existing landmark within 5 m of
+                    #      where they land). Smart-NEW per-obs will
+                    #      create them as legitimate new landmarks. This
+                    #      is the second/third-hairpin "back-stretch
+                    #      entry" pattern — track has progressed to a
+                    #      new section the map hasn't covered yet.
+                    #  (b) The obs are within 5 m world distance of
+                    #      existing landmarks but the wide gate's body-
+                    #      frame match still failed → predicted pose is
+                    #      catastrophically wrong. Smart-NEW per-obs
+                    #      will see "phantom: <5m to existing" and
+                    #      suppress, leaving us with whatever 5 m
+                    #      assocs survived — fewer than the threshold
+                    #      but still real.
+                    # Take the 5 m matches and fall through to staging.
+                    # The smart-NEW per-obs check decides phantom vs
+                    # genuine-new. Record the failed widen for the cap.
+                    matches = last_retry_matches
+                    n_new_pre = last_retry_new
+                    widen_used_m = 5.0  # marks "in suppress mode"
                     self._cascade_failed_widen_steps.append(self._graph.step)
+                    self.get_logger().info(
+                        f"DA wide-gate retry inconclusive "
+                        f"(5m left {last_retry_new}/{total_pre} NEW); "
+                        f"falling through with smart-NEW for unmatched")
         if cascade_triggered and widen_used_m is None:
             # Genuine lost-track: 5 m gate didn't help (or skipped due
             # to repeated widens). Skip cone factors for THIS scan
