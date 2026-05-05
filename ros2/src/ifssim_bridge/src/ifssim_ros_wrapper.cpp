@@ -1106,6 +1106,20 @@ void IFSSIMRosWrapper::staticTfCb()
     publishIdentityStatic("base_link", "fsds/Lidar");
     publishIdentityStatic("base_link", "fsds/GPS");
 
+    // map → odom identity. Owned by the bridge (not by the SLAM node)
+    // so it lands on /tf_static the moment the container starts —
+    // before any pipeline node is enabled. Lichtblick / RViz can then
+    // anchor their world panel from t=0 and the LiDAR cloud doesn't
+    // flicker off when SLAM (re)starts mid-session and republishes the
+    // static (the original cause of the visible disappear/reappear at
+    // session start: a brief TF-tree gap while subscribers re-handshook
+    // the new TRANSIENT_LOCAL publisher of /tf_static).
+    //
+    // This is identity by design — we have no externally-anchored map
+    // (no GPS-aligned global frame), so the SLAM-anchored odom IS the
+    // map for downstream consumers.
+    publishIdentityStatic("map", "odom");
+
     // Camera static TFs — REMOVED in PR #3 step 5. Cameras don't exist on
     // the real IFS-08 (memo: project_no_cameras_on_real_car.md), and after
     // Odometria_perfecta was deleted, the legacy fsds/FSCar parent has

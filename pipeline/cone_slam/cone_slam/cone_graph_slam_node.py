@@ -48,7 +48,7 @@ from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32
-from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
 # color_classifier deleted: SLAM is position-only, no per-cone colour
@@ -239,7 +239,6 @@ class ConeGraphSlamNode(Node):
 
         # --- Publishers ---
         self._tf_broadcaster = TransformBroadcaster(self)
-        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
         self._state_pub = self.create_publisher(
             Odometry, "/cone_slam/state", 10)
         self._cones_pub = self.create_publisher(
@@ -256,16 +255,14 @@ class ConeGraphSlamNode(Node):
         self._gt_error_pub = self.create_publisher(
             Float32, "/cone_slam/gt_error_m", 10)
 
-        # Anchor `map -> odom` as identity on /tf_static. We don't
-        # have map-based localization (no GPS-aligned global frame),
-        # so the SLAM odom frame IS effectively the map frame for
-        # downstream consumers. Without this static, Lichtblick's 3D
-        # panel has no root and nothing renders — the cone map and
-        # the trajectory both anchor on `odom`, which dangles off
-        # /tf_static at recording time. The transform itself is
-        # identity; the publisher exists purely to give visualizers
-        # a parent frame to walk from.
-        self._publish_map_to_odom_static()
+        # Note: `map -> odom` static is owned by ifssim_bridge now (see
+        # publishIdentityStatic in ifssim_ros_wrapper.cpp). Having two
+        # publishers of /tf_static caused a brief TF-tree gap whenever
+        # the SLAM node (re)started mid-session — Lichtblick subscribers
+        # had to re-handshake the new TRANSIENT_LOCAL publisher, and
+        # the LiDAR cloud flickered off for that window. Centralising
+        # the static at bridge startup eliminates the flicker; SLAM
+        # publishes only the dynamic odom -> base_link.
 
         self.get_logger().info(
             "cone_graph_slam initialized — waiting for IMU "
@@ -726,22 +723,6 @@ class ConeGraphSlamNode(Node):
         t.transform.rotation.y = q.y()
         t.transform.rotation.z = q.z()
         self._tf_broadcaster.sendTransform(t)
-
-    def _publish_map_to_odom_static(self) -> None:
-        """Emit `map -> odom` identity on /tf_static once at startup.
-
-        Lichtblick (and rviz2) need a static root that the dynamic
-        chain can hang off; without one the 3D panel renders nothing.
-        Recording-time consumers see this single message at t=0 and
-        keep it for the rest of the run, so it costs effectively
-        nothing per scan.
-        """
-        t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = "map"
-        t.child_frame_id = self.odom_frame
-        t.transform.rotation.w = 1.0
-        self._static_tf_broadcaster.sendTransform(t)
 
     def _publish_state(self, stamp, result: ScanResult) -> None:
         msg = Odometry()
