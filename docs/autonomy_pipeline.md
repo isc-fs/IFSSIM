@@ -1,5 +1,7 @@
 # Autonomy pipeline
 
+> ⚠️ **This doc describes the LEGACY in-tree pipeline that is being phased out.** The four pipeline packages (`cone_detection`, `cone_slam`, `path_planning`, `control`) are frozen ahead of a handoff to a separate team's repo, attached here as a submodule. For the **target end-state architecture** (DV pipeline submodule + IFSSIM-side bridge, sim, mission-control web, and the integration contract between them), see [`integrated_architecture.md`](integrated_architecture.md). For freeze and handoff context, see [#311](https://github.com/isc-fs/IFSSIM/issues/311).
+
 End-to-end overview of the ROS 2 autonomy stack that drives the simulated car: from raw LiDAR/IMU coming out of UE5 through cone detection, SLAM, path planning, and control — and back to UE5 as a `ControlCommand`. Read this before touching any of `pipeline/`.
 
 For sim-side topics (sensors, vehicle physics, RPC) see [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md). For container layout and how to launch the stack see [`GETTING_STARTED_DOCKER.md`](GETTING_STARTED_DOCKER.md).
