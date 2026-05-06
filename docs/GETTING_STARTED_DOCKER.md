@@ -44,9 +44,9 @@ docker compose build
 ```
 
 This builds the custom services (Lichtblick is pulled from the registry, not built locally):
-- **`mission_control_backend`** — FastAPI server (port 8000), handles sim commands, scoring, track management
+- **`mission_control_backend`** — FastAPI server (port 8000), drives the autonomy lifecycle (`StartMission` Action) and handles sim commands, scoring, track management
 - **`mission_control_frontend`** — React dashboard served via Nginx (port 3000)
-- **`dv_pipeline_stack`** — ROS 2 Humble pipeline with sensors, SLAM, control nodes (port 8765)
+- **`dv_pipeline_stack`** — ROS 2 Humble container hosting the sim ↔ ROS bridge and the autonomy submodule (perception → SLAM → path planning → control + mission management). Foxglove WebSocket bridge on port 8765
 - **`lichtblick`** — Web-based ROS 2 visualizer (port 8080), connects to the Foxglove bridge
 
 > First build takes several minutes. Subsequent builds are cached.
@@ -129,27 +129,23 @@ UE5 can be closed normally from the editor. Pressing **Stop** (ending Play mode)
 
 ## Rebuilding after code changes
 
-### Pipeline Python edits (slam, cone_slam, path_planning, control)
+### Python edits inside autonomy nodes
 
-**No rebuild needed.** `pipeline/` and `ros2/src/` are bind-mounted into `dv_pipeline_stack` over the image's baseline, and `colcon build --symlink-install` (run at image build time) made the install tree's Python entries symlinks back to the source. So host edits are live the moment you toggle the pipeline:
+**No rebuild needed.** The autonomy source tree is bind-mounted into `dv_pipeline_stack`, and `colcon build --symlink-install` (run at image build time) made the install tree's Python entries symlinks back to the source. Host edits are live the next time the autonomy lifecycle is brought up:
 
 ```bash
-# Edit pipeline/path_planning/path_planning/planner.py on the host, then:
-curl -X POST http://localhost:8000/api/event/start  # restarts the pipeline
+# Edit any autonomy Python source on the host, then:
+curl -X POST http://localhost:8000/api/event/start  # re-runs StartMission → relaunches lifecycle nodes
 # new code is in effect — no docker cp, no rebuild
 ```
 
-If the pipeline is already running, the simplest way to pick up an edit is to flip the pipeline-control flag:
+The Action call tears the lifecycle nodes down through the standard `ChangeState` transitions and brings them back up clean — far safer than killing processes by hand, and it picks up Python source changes automatically.
 
-```bash
-docker compose exec dv_pipeline_stack bash -c 'rm /pipeline_ctrl/enable; sleep 2; touch /pipeline_ctrl/enable'
-```
+### Changes that *do* need a rebuild
 
-### Pipeline changes that *do* need a rebuild
-
-- **C++ source** (`ros2/src/ifssim_bridge/`) — recompile.
+- **C++ source** (the bridge under `ros2/src/ifssim_bridge/` or any C++ submodule package) — recompile.
 - **`.msg` files** (`ros2/src/fs_msgs/msg/`) — regenerate bindings.
-- **`setup.py` changes** in any pipeline package — re-link entry points.
+- **`setup.py` changes** in any Python package — re-link entry points.
 - Adding a new package.
 
 Two ways to rebuild:
@@ -161,8 +157,10 @@ DV_REBUILD_ON_STARTUP=true docker compose up -d --force-recreate dv_pipeline_sta
 # 2. Build inside the running container without restart (faster for iteration)
 docker compose exec dv_pipeline_stack bash -c \
   "cd /dv_pipeline_stack_ws && colcon build --symlink-install --packages-select <pkg>"
-# then restart the pipeline (toggle /pipeline_ctrl/enable as above)
+# then re-issue StartMission via Mission Control to relaunch the lifecycle
 ```
+
+For bridge-only edits there's a dedicated helper: `tools/refresh-bridge.sh` does a full container teardown + recreate (necessary on macOS to clear accumulated UDP proxy state and Fast DDS shared-memory segments).
 
 ### Mission Control rebuild
 

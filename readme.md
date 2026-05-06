@@ -6,7 +6,7 @@ Simulation environment for the IFS project, developed by ISC Racing Team.
 
 📄 **[Full Functionalities Reference](docs/FUNCTIONALITIES.md)** — sensors, RPC API, ROS 2 bridge, vehicle model, referee system, Mission Control, and more.
 
-🤖 **[Autonomy Pipeline](docs/autonomy_pipeline.md)** — end-to-end overview of the ROS 2 stack: cone detection → SLAM → path planning → control.
+🤖 **[Autonomy Pipeline](docs/autonomy_pipeline.md)** — end-to-end architecture: sim, bridge, mission management, and the autonomy lifecycle nodes (perception → SLAM → path planning → control). Same code on the real car and in sim.
 
 🐳 **[Getting Started — Docker Pipeline](docs/GETTING_STARTED_DOCKER.md)** — build and run the full stack (Mission Control + ROS 2) alongside UE5 in minutes.
 

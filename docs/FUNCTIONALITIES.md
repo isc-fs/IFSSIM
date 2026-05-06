@@ -431,7 +431,7 @@ The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack t
 | `testing_only/track` | `fs_msgs/Track` (latched) | 0.2 Hz | All cone positions *(hidden in competition mode)* |
 | `testing_only/extra_info` | `fs_msgs/ExtraInfo` | 1 Hz | DOO counter, lap count *(hidden in competition mode)* |
 
-**Bridge TF behavior:** the bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — pipeline nodes consume the sensors directly without TF lookups. The live TF tree (`map → odom → base_link`) is published by the autonomy pipeline; see [`autonomy_pipeline.md`](autonomy_pipeline.md) for details. `/fsds/testing_only/odom` (frame `odom`, child `fsds/FSCar`) is a ground-truth odometry feed for debugging only — the autonomy must not consume it.
+**Bridge TF behavior:** the bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — autonomy nodes consume the sensors directly without TF lookups. The live TF tree (`map → odom → fsds/FSCar`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md) for details. `/fsds/testing_only/odom` (frame `odom`, child `fsds/FSCar`) is a ground-truth odometry feed for debugging only — the autonomy must not consume it.
 
 ### Subscribed Topics
 
@@ -708,9 +708,9 @@ The frontend stores the key in `localStorage` under `mc_api_key`; on the first 4
 |---|---|---|
 | `/api/event/state` | GET | Full referee state |
 | `/api/event/set` | POST | Set event type and lap count |
-| `/api/event/start` | POST | Staged session start — refuses with HTTP 400 if no track loaded (cones=0) |
+| `/api/event/start` | POST | Start a session — sends `StartMission` to the autonomy lifecycle. Refuses with HTTP 400 if no track loaded (cones=0). |
 
-The `/api/event/start` sequence is the staged stand-in for a real FS-DV state machine ([#173](https://github.com/isc-fs/IFSSIM/issues/173)): stop the autonomy pipeline → activate RES → set the event mode → resume the sim → start the pipeline → wait ~4.5 s for SLAM to calibrate → auto-release the EBS.
+The `/api/event/start` flow drives the autonomy lifecycle through the typed mission-management interface: the backend is an `rclpy` Action client of `sim_supervisor_node` and sends `StartMission` with the chosen mission. The supervisor relays to `mission_control_node`, which drives `mode_manager` to bring up the right lifecycle nodes with the right strategy flag. Phase 1 (startup) runs the heartbeat + JIT-warmup window; once it reports `ready`, Phase 2 begins and actuator commands start flowing through the supervisor to the bridge. Sim-only setup steps (track load, sim pause/resume, RES line) stay on the bridge JSON-RPC, called by the same backend in parallel. See [`autonomy_pipeline.md`](autonomy_pipeline.md) for the protocol details.
 
 **RES (Remote Emergency Stop):**
 
@@ -882,13 +882,14 @@ All coordinates in the TCP API, UDP streams, ROS 2 topics, Python client, and Mi
 
 ## 14. Autonomy Pipeline
 
-The ROS 2 autonomy stack — cone detection, SLAM, path planning, control — is documented separately in [`autonomy_pipeline.md`](autonomy_pipeline.md). That doc covers:
+The autonomy stack — perception, SLAM, path planning, control — is the same code on the real car and in sim. It lives in a separate repo and is attached here as a submodule, so this functionality reference deliberately doesn't duplicate it. See [`autonomy_pipeline.md`](autonomy_pipeline.md) for the full architecture, which covers:
 
-- The end-to-end topic graph from raw LiDAR through `ControlCommand`.
-- The live TF tree (`map → odom → base_link`) and which node owns which frame.
-- Per-package responsibilities for `pipeline/slam`, `pipeline/cone_slam`, `pipeline/path_planning`, `pipeline/control`.
-- Mission Control's role in the autonomy lifecycle (Start Session → SLAM cal → EBS release).
-- A debugging order for "the car won't drive."
+- The integration contract between IFSSIM (sim, bridge, Mission Control web, viz) and the autonomy submodule.
+- The end-to-end topic graph from `/fsds/lidar/Lidar1` through `/fsds/control_command`.
+- Mission management: `sim_supervisor_node` (the simulated micro), `mission_control_node` (DVPC role), `mode_manager_node` (lifecycle orchestrator).
+- The two-phase runtime action protocol (startup with JIT warmup → runtime with throttle/steering/emergency/finished).
+- The TF tree `map → odom → fsds/FSCar` and which node owns which frame.
+- Open questions still being finalised (odometry source, GSS type, frame aliasing).
 
 For the simulator-side topics that *feed* the autonomy stack (sensors, vehicle physics, RPC, Mission Control surface), see the sections above.
 
