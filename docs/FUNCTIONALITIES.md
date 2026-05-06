@@ -90,63 +90,102 @@ The simulation clock speed is configurable via `settings.json` (`ClockSpeed` fie
 
 ### IFS-08 Formula Student Car
 
-The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. All physics parameters are defined in `settings.json` under `VehiclePhysics` and applied at runtime via `AFSDSVehiclePawn`.
+The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. All physics parameters are defined in `settings.json` under `VehiclePhysics` and applied at runtime via `AFSDSVehiclePawn`. Compile-time defaults live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/FSDSSettings.h` (`FFSDSVehiclePhysics`).
 
-#### Physical Parameters (defaults)
+#### Mass, drivetrain, geometry
 
-| Parameter | Value | Unit |
+| Parameter | Value | Unit | Source |
+|---|---|---|---|
+| Mass | 275 | kg | `Mass` |
+| Drivetrain | RWD | — | `Drivetrain` |
+| Wheel radius | 0.228 | m | `WheelRadius` |
+| Wheel width | 0.190 | m | `WheelWidth` |
+| Max steer angle | 28 | ° | `MaxSteerAngle` |
+| Wheelbase | 1.627 | m | `Wheelbase` |
+| Front track | 1.220 | m | `TrackFront` |
+| Rear track | 1.190 | m | `TrackRear` |
+| Weight distribution front | 43.8 | % | `WeightDistFront` |
+| Centre of gravity height | 0.300 | m | `CoGHeight` |
+
+> **Note on CoG:** runtime `CenterOfMassOverride` is applied (-10 mm in X) but the `FormulaMesh_PhysicsAsset` ships with a forward-biased authored CoM that runtime overrides cannot fully correct (`BodyInstance.COMNudge` saturates non-monotonically). The load-transfer RPC reports the actual Chaos values so autonomy code can consume relative wheel loads correctly even when the absolute distribution is biased.
+
+#### Powertrain
+
+| Parameter | Value | Unit | Source |
+|---|---|---|---|
+| Motor max torque | 230 | Nm | `MotorMaxTorque` |
+| Motor max power | 80,000 | W | `MotorMaxPower` |
+| Max regen torque | 230 | Nm | `MaxRegenTorque` |
+| Max regen power | 6,000 | W | `MaxRegenPower` |
+| Gear ratio | 2.909 | — | `GearRatio` |
+| Drivetrain efficiency | 0.92 | — | `DrivetrainEfficiency` |
+
+The IFS-08 has **no hydraulic service brake** — braking on the drive (rear) wheels is motor regen only. Front wheels have `MaxBrakeTorque = 0`, only retarded by aero drag. EBS is pneumatic on all four corners and is wired to the Chaos handbrake channel.
+
+#### Motor torque curve (at motor, before gear reduction)
+
+`MotorRPM` and `MotorTorque` arrays in `settings.json`:
+
+| RPM | 0 | 1000 | 2000 | 3000 | 4000 | 5000 | 6000 | 6500 |
+|---|---|---|---|---|---|---|---|---|
+| Torque (Nm) | 230 | 240 | 240 | 240 | 240 | 240 | 200 | 180 |
+
+Per RPM point, the runtime applies a power cap `T = min(T, P_max / ω)` before publishing the wheel-side torque curve to Chaos. So `MaxTorque × GearRatio × DrivetrainEfficiency` is the headline wheel torque only at low RPM; above ~3,300 RPM the 80 kW power limit binds first.
+
+#### Tire model — Pacejka Magic Formula '96
+
+The legacy `FrictionForceMultiplier` flat-mu model on the wheel classes is overridden at `BeginPlay` by `FSDSPacejka::BakeToWheel`, which computes the Chaos `LateralSlipGraph` and `LongitudinalSlipGraph` from a Pacejka MF96 fit. Coefficients (in `settings.json` under `VehiclePhysics.Pacejka`):
+
+| Coefficient | Lateral | Longitudinal |
 |---|---|---|
-| Mass | 210 | kg |
-| Drivetrain | RWD | — |
-| Wheel radius | 200 | mm |
-| Wheel width | 190 | mm |
-| Max steer angle | 28 | ° |
-| Motor max torque | 230 | Nm |
-| Motor max power | 80,000 | W |
-| Gear ratio | 2.909 | — |
-| Drivetrain efficiency | 92 | % |
-| Aerodynamic drag (CdA) | 0.95 | m² |
-| Aerodynamic downforce (ClA) | 3.0 | m² |
-| Aero balance front | 45 | % |
-| Tire friction coefficient (μ) | 1.65 | — |
-| Weight distribution front | 43.8 | % |
-| Centre of gravity height | 344 | mm |
-| Suspension damping | 1.5 | — |
+| Stiffness factor B | 10.0 | 12.0 |
+| Shape factor C | 1.9 | 1.7 |
+| Curvature factor E | -1.5 | -0.5 |
 
-#### Motor Torque Curve
+Peak friction `μ_peak` is set globally by `TireMu = 1.4` (unitless, identical front and rear).
 
-| RPM | Torque (Nm) |
-|---|---|
-| 0 | 230 |
-| 1000 | 240 |
-| 2000–5000 | 240 |
-| 6000 | 200 |
-| 6500 | 180 |
+The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWheelRear` is the cold-start fallback before `BakeToWheel` runs and is never the operating-state value.
+
+#### Suspension and roll dynamics
+
+| Parameter | Value | Unit | Source |
+|---|---|---|---|
+| Suspension damping ratio | 1.5 | — | `SuspensionDamping` |
+| Roll centre height, front | 0.040 | m | `RollCenterFront` |
+| Roll centre height, rear | 0.060 | m | `RollCenterRear` |
+| Roll stiffness, front | 27,000 | Nm/rad | `RollStiffnessFront` |
+| Roll stiffness, rear | 22,000 | Nm/rad | `RollStiffnessRear` |
+| Heave stiffness | 227,600 | N/m | `HeaveStiffness` |
+| Pitch stiffness | 155,600 | Nm/rad | `PitchStiffness` |
+
+Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric load-transfer model (lateral + longitudinal weight transfer routed to per-wheel Fz inputs of the Pacejka fit).
 
 #### Wheels
 
-- **Front:** Hoosier 16.0×7.5-10 R20, max steer 28°, friction μ = 1.65, Chaos simulation
-- **Rear:** Identical tire spec, no steering, handbrake capable
+- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.228 m` from settings at runtime), 19 mm width, max steer 28°, no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
+- **Rear (`UFSDSWheelRear`):** Same tire, no steering, drive wheels (motor torque injected via `SetDriveTorque` with `Additive` combine method), `MaxBrakeTorque` sized at `BeginPlay` to `MaxRegenTorque · GearRatio · DrivetrainEfficiency / 2` per wheel so the brake input channel saturates correctly against the regen ceiling.
 
 #### Aerodynamics
 
 Applied per-tick using `AddForce` on the vehicle mesh:
-- **Drag:** `F_drag = 0.5 × ρ × CdA × v²` (opposing velocity)
-- **Downforce:** `F_down = 0.5 × ρ × ClA × v²` (distributed front/rear per `AeroBalanceFront`)
+- **Drag:** `F_drag = 0.5 · ρ · CdA · v²` (opposing velocity), `CdA = 0.9 m²`.
+- **Downforce:** `F_down = 0.5 · ρ · ClA · v²` distributed front/rear per `AeroBalanceFront`, `ClA = 1.8 m²`, `AeroBalanceFront = 0.45`.
 
 Air density ρ = 1.225 kg/m³.
 
-#### Vehicle Control Inputs
+#### Vehicle control inputs
 
 ```
 throttle  ∈ [-1.0, 1.0]   (negative = reverse)
 steering  ∈ [-1.0, 1.0]   (negative = left)
-brake     ∈ [0.0, 1.0]
+brake     ∈ [0.0, 1.0]    (regen demand, capped by MaxRegenTorque + MaxRegenPower)
 ```
 
-#### API Control vs Manual
+The bridge translates `fs_msgs/ControlCommand{throttle, steering, brake}` directly to `setCarControls`. The brake channel is regen demand; the EBS is its own latched signal (`/signal/ebs`).
 
-When `enableApiControl` is called, keyboard/gamepad input is disabled and the vehicle responds only to `setCarControls` commands. Can be toggled at runtime.
+#### API control vs manual
+
+When `enableApiControl` is called, keyboard/gamepad input is disabled and the vehicle responds only to `setCarControls` commands. Can be toggled at runtime. The vehicle also boots in EBS-engaged state (mirroring the FS-DV `AS_Off` rule) — the controller must publish `/signal/ebs_reset` (latched) to release it before commands take effect.
 
 ---
 
@@ -156,47 +195,62 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 ### 4.1 LiDAR
 
-**Implementation:** `FSDSLidarSensor` — multi-channel batch raycasting via UE5's `UKismetSystemLibrary::LineTraceSingle`.
+**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Two ray-cast back-ends are available, selected by the `LidarPath` setting:
 
-| Parameter | Default | Configurable |
-|---|---|---|
-| Channels | 128 | ✓ |
-| Points per second | 100,000 | ✓ |
-| Rotations per second | 10 Hz | ✓ |
-| Vertical FOV upper | +3° | ✓ |
-| Vertical FOV lower | −16° | ✓ |
-| Horizontal FOV | ±60° | ✓ |
-| Max range | 100 m | ✓ |
-| Range noise std (Gaussian) | 3.0 cm | ✓ |
-| Point dropout rate | 1% | ✓ |
-| Mount position | X=1.4m, Z=−0.2m | ✓ |
+- **`cpu` (default):** `LineTraceSingleByChannel` against the Chaos physics scene, parallelised over channels. ~100k traces per scan.
+- **`gpu`:** depth-only render at the LiDAR's spherical scan envelope, decoded by a compute shader. Lower per-scan cost but only Phase 1 wiring has landed (#223) — depth render is active, point-cloud readback + decode (Phase 2/3) is in progress, so the `/lidar/Lidar1` topic is **empty** under `LidarPath="gpu"` until those phases land. Switch back to `"cpu"` for live point clouds.
 
-Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up). Each point is 3 floats (x, y, z) in metres.
+| Parameter | Default | Configurable | Source |
+|---|---|---|---|
+| Channels | 116 | ✓ | `NumberOfChannels` |
+| Points per second | 1,740,000 | ✓ | `PointsPerSecond` |
+| Rotations per second | 10 Hz | ✓ | `RotationsPerSecond` |
+| Vertical FOV upper | +5.9° | ✓ | `VerticalFOVUpper` |
+| Vertical FOV lower | −12.4° | ✓ | `VerticalFOVLower` |
+| Horizontal FOV | −60° to +60° (120°) | ✓ | `HorizontalFOVStart/End` |
+| Max range (global) | 30 m | ✓ | `MaxRange` |
+| Per-channel max range | 25–30 m (datasheet shape) | ✓ | `PerChannelMaxRangeM` |
+| Range noise std (Gaussian) | 0.03 m | ✓ | `RangeNoiseStd` |
+| Point dropout rate | 1% | ✓ | `DropoutRate` |
+| Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
+| Ray-cast back-end | `cpu` | ✓ | `LidarPath` |
 
-**Noise model:** Gaussian range noise applied per point (settings.json declares it in metres; the plugin converts to its cm-internal scale at the wire site). Independent Bernoulli dropout per point.
+**Per-channel max range.** Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer rings reach less far than central beams (60 m bottom, 198 m centre, 90 m top on the real sensor). The sim uses a 116-element array linearly remapped from the datasheet's 60-198 m envelope into the 25–30 m simulator range budget, preserving the relative shape. Length must equal `NumberOfChannels`; mismatch logs a warning and falls back to the global `MaxRange`. Both CPU and GPU back-ends honour the per-channel override.
+
+**Why max range = 30 m, not the datasheet 200 m:** cones past 30 m don't matter for FS detection (max corridor width is well under that), and shrinking the per-ray broadphase cuts per-ray Chaos work by roughly 7×. Bump back to 200 for benchmarks against real-car captures.
+
+**Mount.** `(X=0.0, Y=0.0, Z=1.10)` corresponds to the IFS-08's main hoop crossbar height, CoG-aligned, centred. Pre-2026 settings used a hood-mount approximation (`X=0.5, Z=0.9`); cone-detection cluster-height thresholds were rebaselined when the mount moved.
+
+**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 3 floats (x, y, z) in metres. Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
+
+**Throughput on macOS Docker.** At 1.74 M pts/s, TCP loopback caps the bridge at ~3 Hz on Docker Desktop (Docker's TCP loopback throughput cap on macOS). The UDP transport (`LIDAR_TRANSPORT=udp`, chunked + paced + Fast DDS-friendly bridge reassembly) holds ~7–8 Hz at the same rate. The remaining gap to the nominal 10 Hz is in the DDS layer (1.4 MB BEST_EFFORT message fragment loss between publisher and subscriber). Linux hosts hit nominal rate on TCP without contortions.
+
+**Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point. No intensity channel today (`bReturnPhysicalMaterial=false` at the raycast site, wire format is XYZ only) — see [#255](https://github.com/isc-fs/IFSSIM/issues/255) for the per-point intensity work which would unlock cone-colour DA in `slam_node`.
 
 ### 4.2 IMU
 
-**Implementation:** `FSDSImuSensor` — 6-DOF inertial measurement in body frame.
+**Implementation:** `FSDSImuSensor` — 6-DOF inertial measurement in body frame, parameterised for a **BMI088** (the unit on the real IFS-08).
 
-| Parameter | Default | Configurable |
-|---|---|---|
-| Accelerometer noise std (white, Gaussian) | 0.18 m/s² | ✓ |
-| Gyroscope noise std (white, Gaussian) | 0.004 rad/s | ✓ |
-| Accelerometer bias steady-state σ | 0.01 m/s² | ✓ |
-| Gyroscope bias steady-state σ | 0.0002 rad/s | ✓ |
-| Accelerometer bias correlation time τ | 100 s | ✓ |
-| Gyroscope bias correlation time τ | 100 s | ✓ |
+| Parameter | Default | Configurable | Source |
+|---|---|---|---|
+| Accelerometer noise std (white, Gaussian) | 0.024 m/s² | ✓ | `AccelNoiseStd` |
+| Gyroscope noise std (white, Gaussian) | 0.0035 rad/s | ✓ | `GyroNoiseStd` |
+| Accelerometer bias steady-state σ | 0.01 m/s² | ✓ | `AccelBiasStd` |
+| Gyroscope bias steady-state σ | 0.0002 rad/s | ✓ | `GyroBiasStd` |
+| Accelerometer bias correlation time τ | 100 s | ✓ | `AccelBiasTau` |
+| Gyroscope bias correlation time τ | 100 s | ✓ | `GyroBiasTau` |
 
-**Noise model:** Gaussian white noise plus an **Ornstein–Uhlenbeck** bias process. The discrete update each tick is
+**BMI088 derivation.** Datasheet noise densities: accel `175 µg/√Hz`, gyro `0.014 °/s/√Hz`. At 400 Hz sample rate (200 Hz Nyquist BW) those become `~0.024 m/s²` and `~0.0035 rad/s` per-sample stddevs, matching the defaults above. Bench-test bias drift for a MEMS IMU at FS race-car operating temperatures is typically ~100 s correlation time.
+
+**Noise model.** Gaussian white noise plus an **Ornstein–Uhlenbeck** bias process. The discrete update each tick is
 
 ```
 bias[k+1] = bias[k]·exp(-Δt/τ) + σ·√(1 - exp(-2Δt/τ))·N(0,1)
 ```
 
-so `*BiasStd` is the *long-run* steady-state stddev (the bound), not a drift rate. Realistic τ for a BMI088-class IMU is ~100 s. Earlier versions used a pure random walk (unbounded over long sessions) and `FRandRange(-1,1)` (uniform — gave 1/√3 ≈ 58% of the declared stddev).
+so `*BiasStd` is the *long-run* steady-state stddev (the bound), not a drift rate. Earlier versions used a pure random walk (unbounded over long sessions) and `FRandRange(-1,1)` (uniform — gave 1/√3 ≈ 58% of the declared stddev).
 
-**Outputs:** Linear acceleration (m/s²), angular velocity (rad/s), orientation quaternion — all in ENU body frame.
+**Outputs.** Linear acceleration (m/s²), angular velocity (rad/s), orientation quaternion — all in ENU body frame.
 
 ### 4.3 GPS / GNSS
 
@@ -248,8 +302,10 @@ The bridge publishes `position_covariance.diag = σ²`. Earlier versions emitted
 |---|---|---|
 | Resolution | 785 × 785 px | ✓ |
 | FOV | 90° | ✓ |
-| cam1 position | X=1.6m, Z=−0.2m | ✓ |
-| cam2 position | X=1.6m, Y=−0.15m, Yaw=−10° | ✓ |
+| cam1 position | X=1.6 m, Z=0.2 m | ✓ |
+| cam2 position | X=1.6 m, Y=−0.15 m, Z=0.2 m, Yaw=−10° | ✓ |
+
+The default `settings.json` only configures `ImageType: 0` (Scene RGB) for both cameras; the other image types listed below are supported by the plugin (`EFSDSImageType` enum in `FSDSSettings.h`) and can be requested by adding additional `CaptureSettings` entries per camera.
 
 **Supported image types:**
 
@@ -369,82 +425,124 @@ Two commands open the connection in persistent streaming mode (no further reques
 
 ---
 
-## 6. Data Streaming (UDP Push)
+## 6. Data Streaming (TCP push + UDP push)
 
-For high-frequency sensor data, IFSSIM broadcasts binary frames over UDP without any client request. This is the lowest-latency path and what the ROS 2 bridge uses by default.
+High-frequency sensor data flows out of the plugin on dedicated streaming sockets — separate from the RPC server. The bridge can consume either transport per stream:
+
+- **TCP push streams** opened by the plugin to a fixed bridge endpoint at startup. Reliable; bound by macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) which limits LiDAR throughput on Mac.
+- **UDP push** when the bridge is launched with `lidar_transport:=udp` (or `LIDAR_TRANSPORT=udp` in `docker-compose`). Sender-paced; bypasses macOS Docker's TCP loopback throttle but accepts per-datagram packet loss.
+- **Unix Domain Socket (UDS)** for LiDAR specifically, when the plugin can open `/tmp/ifssim_streams/lidar.sock` on a host where the path is shared into the container — bypasses the TCP stack entirely.
+
+The two binary frame layouts are below. **Both halves of the wire — plugin sender and bridge receiver — must agree byte-for-byte.** The structs are `#pragma pack(push, 1)` on both sides; canonical definitions live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/RPC/FSDSUdpBroadcaster.h` and `ros2/src/ifssim_bridge/include/udp_receiver.h`.
 
 ### Sensor Frame (port 41452, ~100 Hz)
 
-Magic: `0x49465353` ("IFSS")
+Magic: `0x49465353` ("IFSS"). One unified packet carries everything the bridge fans out into separate `/imu`, `/gps`, `/gss`, `/testing_only/odom`, `/motor_rpm`, `/testing_only/extra_info`, and the controls echo.
 
 ```c
 struct SensorFrame {
-    uint32_t magic;        // 0x49465353
-    float    pos_x, pos_y, pos_z;      // ENU position (m)
-    float    pose_qx, pose_qy, pose_qz, pose_qw;  // orientation
-    float    accel_x, accel_y, accel_z;  // m/s²
-    float    gyro_x, gyro_y, gyro_z;     // rad/s
-    float    orient_x, orient_y, orient_z, orient_w;  // IMU quat
-    float    gss_vx, gss_vy, gss_vz;    // body-frame velocity (m/s)
-    float    latitude, longitude, altitude;
+    uint32_t magic;                                 // 0x49465353
+    uint32_t frame_id;
+    uint64_t timestamp;                             // ns since plugin start
+
+    // GPS
+    double   latitude, longitude;                   // WGS84
+    float    altitude;                              // m
+
+    // IMU (body frame)
+    float    accel_x, accel_y, accel_z;             // m/s²
+    float    gyro_x, gyro_y, gyro_z;                // rad/s
+    float    orient_x, orient_y, orient_z, orient_w; // quat (ENU body)
+
+    // Ground-speed sensor (body frame, m/s)
+    float    gss_vx, gss_vy, gss_vz;
+
+    // Pose / odom (ENU world)
+    float    pos_x, pos_y, pos_z;                   // m
+    float    pose_qx, pose_qy, pose_qz, pose_qw;
+    float    speed;                                 // m/s (signed)
+    float    rpm;                                   // motor RPM, post-gearbox-side
+
+    // Referee
+    int32_t  doo_counter, oc_counter, lap_count;
+
+    // Controls echo (most recent setCarControls input)
+    float    throttle, steering, brake;
 };
 ```
 
 ### LiDAR Frame (port 41453, ~10 Hz)
 
-Magic: `0x4C494452` ("LIDR")
+Magic: `0x4C494452` ("LIDR"). Each LiDAR scan is split into chunks; the bridge reassembles into a single point cloud frame.
 
 ```c
 struct LidarChunkHeader {
-    uint32_t magic;         // 0x4C494452
+    uint32_t magic;             // 0x4C494452
+    uint16_t chunk_index;
+    uint16_t total_chunks;
+    uint32_t frame_id;
+    int32_t  points_in_chunk;
     int32_t  total_points;
-    int32_t  chunk_index;
-    int32_t  total_chunks;
+    int32_t  channels;
+    int64_t  lag_ns;            // capture-to-send lag in nanoseconds
 };
-// Followed by: total_points × 3 × float32 (x, y, z in sensor frame, metres)
+// Followed by: points_in_chunk × 3 × float32 (x, y, z) in sensor frame, metres
+// (UE5/ENU: X forward, Y left, Z up). UDP path pads to 700 points per chunk.
 ```
+
+`lag_ns` is the time elapsed between `LidarSensor->LastTimestamp` (the actual capture instant) and packing time. The bridge subtracts it from `node_->now()` when stamping the ROS message, so `header.stamp` reflects the real capture moment regardless of GPU-readback latency (#238).
 
 ---
 
 ## 7. ROS 2 Bridge
 
-The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack to IFSSIM over the TCP RPC server. It uses **4 persistent TCP connections** simultaneously:
+The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack to IFSSIM. It opens several connections to the plugin in parallel; transports per stream are picked at launch:
 
-| Connection | Type | Purpose |
-|---|---|---|
-| Sensor stream | TCP push | GPS, IMU, GSS, Odometry, TF at ~100 Hz |
-| LiDAR stream | TCP push | PointCloud2 at ~10 Hz |
-| Camera client | TCP req/resp | CompressedImage at configurable Hz |
-| Command client | TCP req/resp | Controls, referee queries, settings |
+| Connection | Default transport | Configurable | Purpose |
+|---|---|---|---|
+| Sensor stream | TCP push (port 41452) | TCP / UDP | One unified `SensorFrame` carrying GPS + IMU + GSS + odom + RPM + referee + controls echo |
+| LiDAR stream | TCP push (port 41453) | TCP / UDP / UDS | LiDAR point cloud chunks |
+| Camera client | TCP req/resp (port 41451 RPC) | — | One image per timer tick per camera |
+| Command client | TCP req/resp (port 41451 RPC) | — | `setCarControls`, EBS, track queries, settings |
+
+`lidar_transport` is set via the launch parameter or `LIDAR_TRANSPORT` env var. Bridge logs a warning and falls back to `tcp` for unknown values.
 
 ### Published Topics
 
-| Topic | Message Type | Rate | Description |
+| Topic | Type | Rate | Notes |
 |---|---|---|---|
-| `gps` | `sensor_msgs/NavSatFix` | ~100 Hz | GPS with covariance from settings |
-| `imu` | `sensor_msgs/Imu` | ~100 Hz | IMU with covariance from settings |
-| `gss` | `geometry_msgs/TwistWithCovarianceStamped` | ~100 Hz | Ground speed in body frame |
-| `lidar/Lidar1` | `sensor_msgs/PointCloud2` | ~10 Hz | XYZ point cloud |
-| `camera/<name>/compressed` | `sensor_msgs/CompressedImage` | configurable | PNG-compressed image |
-| `signal/go` | `fs_msgs/GoSignal` | 1 Hz | Mission + track identifiers |
-| `testing_only/odom` | `nav_msgs/Odometry` | ~100 Hz | Ground-truth odometry *(hidden in competition mode)* |
-| `testing_only/track` | `fs_msgs/Track` (latched) | 0.2 Hz | All cone positions *(hidden in competition mode)* |
-| `testing_only/extra_info` | `fs_msgs/ExtraInfo` | 1 Hz | DOO counter, lap count *(hidden in competition mode)* |
+| `gps` | `sensor_msgs/NavSatFix` | ~100 Hz | `frame_id=fsds/GPS`. Covariance diag = `GpsPositionNoiseStd²`. |
+| `imu` | `sensor_msgs/Imu` | ~100 Hz | `frame_id=fsds/IMU`. Covariances from `AccelNoiseStd`, `GyroNoiseStd`. |
+| `gss` | `geometry_msgs/TwistWithCovarianceStamped` | ~100 Hz | `frame_id=fsds/GSS`. Body-frame velocity. |
+| `motor_rpm` | `std_msgs/Float32` | ~100 Hz | Motor RPM (post-gearbox shaft side). |
+| `lidar/Lidar1` | `sensor_msgs/PointCloud2` | up to 10 Hz | `frame_id=fsds/Lidar`. See section 4.1 for actual rates by transport. |
+| `camera/<name>/compressed` | `sensor_msgs/CompressedImage` | `camera_hz` (default 10) | One topic per configured camera; PNG-compressed. |
+| `tire_loads` | `std_msgs/Float32MultiArray` | ~100 Hz | Per-wheel Fz from `ComputeTireLoadsParametric`, order FL/FR/RL/RR. |
+| `signal/go` | `fs_msgs/GoSignal` | 1 Hz | Mission name + track identifier. |
+| `signal/finished` | `fs_msgs/FinishedSignal` | on event | Latched on the sim-side finish detection. |
+| `testing_only/odom` | `nav_msgs/Odometry` | ~100 Hz | `frame_id=odom`, `child=fsds/FSCar`. Ground-truth pose. *Hidden in competition mode.* |
+| `testing_only/track` | `fs_msgs/Track` (latched) | 0.2 Hz | All cone positions. *Hidden in competition mode.* |
+| `testing_only/extra_info` | `fs_msgs/ExtraInfo` | 1 Hz | DOO counter, OC counter, lap count. *Hidden in competition mode.* |
 
-**Bridge TF behavior:** the bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — autonomy nodes consume the sensors directly without TF lookups. The live TF tree (`map → odom → fsds/FSCar`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md) for details. `/fsds/testing_only/odom` (frame `odom`, child `fsds/FSCar`) is a ground-truth odometry feed for debugging only — the autonomy must not consume it.
+> **Topic naming.** The bridge today publishes bare names (no `/fsds/` prefix) and consumers remap or namespace as needed. The autonomy submodule expects a `/fsds/*` namespace per the integration contract in [`autonomy_pipeline.md`](autonomy_pipeline.md); the prefix renames are an open IFSSIM-side work item — until they land, consumers do the prefix on their side.
+
+**Bridge TF behavior.** The bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — autonomy nodes consume the sensors directly without TF lookups. The bridge does publish a few static TFs at startup (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`) on `/tf_static`, populated from the corresponding `getSensorOffset` RPC. The live TF tree (`map → odom → fsds/FSCar`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md). `/testing_only/odom` is for debugging only — the autonomy must not consume it.
+
+> **Quirk on `/testing_only/odom` twist:** the bridge currently leaves `twist.linear.x/y` empty (sets it to zero rather than filling from a velocity field on the FSDS RPC side). Consumers that need velocity from this topic must finite-difference pose; the GT-as-SLAM diagnostic at `pipeline/cone_slam/scripts/gt_pose_relay.py` does exactly that.
 
 ### Subscribed Topics
 
-| Topic | Message Type | Description |
+| Topic | Type | Notes |
 |---|---|---|
-| `control_command` | `fs_msgs/ControlCommand` | Throttle, steering, brake → forwarded to sim |
-| `signal/finished` | `fs_msgs/FinishedSignal` | Mission complete signal |
+| `control_command` | `fs_msgs/ControlCommand` | Throttle, steering, brake → forwarded to sim via `setCarControls`. |
+| `signal/ebs` | `std_msgs/Empty` (latched) | Trigger EBS via the plugin's emergency-brake RPC. |
+| `signal/ebs_reset` | `std_msgs/Empty` (latched) | Clear the bridge's EBS-latched gate (otherwise the bridge silently drops `/control_command` until released). |
 
 ### Services
 
-| Service | Type | Description |
+| Service | Type | Notes |
 |---|---|---|
-| `reset` | `fs_msgs/srv/Reset` | Full level reload |
+| `reset` | `fs_msgs/srv/Reset` | Full level reload (calls the plugin's `reset` RPC). |
 
 ### Custom Message Types (fs_msgs)
 
