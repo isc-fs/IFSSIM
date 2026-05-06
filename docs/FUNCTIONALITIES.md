@@ -195,10 +195,7 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 ### 4.1 LiDAR
 
-**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Two ray-cast back-ends are available, selected by the `LidarPath` setting:
-
-- **`cpu` (default):** `LineTraceSingleByChannel` against the Chaos physics scene, parallelised over channels. ~100k traces per scan.
-- **`gpu`:** depth-only render at the LiDAR's spherical scan envelope, decoded by a compute shader. Lower per-scan cost but only Phase 1 wiring has landed (#223) — depth render is active, point-cloud readback + decode (Phase 2/3) is in progress, so the `/lidar/Lidar1` topic is **empty** under `LidarPath="gpu"` until those phases land. Switch back to `"cpu"` for live point clouds.
+**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Ray-casting runs on the **GPU**: a depth-only render at the LiDAR's spherical scan envelope, decoded by a compute shader into a point cloud. Selected by the `LidarPath` setting (`"gpu"` is the production default; a `"cpu"` fallback using `LineTraceSingleByChannel` parallelised over channels is kept for reference and parity testing).
 
 | Parameter | Default | Configurable | Source |
 |---|---|---|---|
@@ -213,17 +210,15 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Range noise std (Gaussian) | 0.03 m | ✓ | `RangeNoiseStd` |
 | Point dropout rate | 1% | ✓ | `DropoutRate` |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
-| Ray-cast back-end | `cpu` | ✓ | `LidarPath` |
+| Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
 
-**Per-channel max range.** Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer rings reach less far than central beams (60 m bottom, 198 m centre, 90 m top on the real sensor). The sim uses a 116-element array linearly remapped from the datasheet's 60-198 m envelope into the 25–30 m simulator range budget, preserving the relative shape. Length must equal `NumberOfChannels`; mismatch logs a warning and falls back to the global `MaxRange`. Both CPU and GPU back-ends honour the per-channel override.
+**Per-channel max range.** Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer rings reach less far than central beams (60 m bottom, 198 m centre, 90 m top on the real sensor). The sim uses a 116-element array linearly remapped from the datasheet's 60-198 m envelope into the 25–30 m simulator range budget, preserving the relative shape. Length must equal `NumberOfChannels`; mismatch logs a warning and falls back to the global `MaxRange`. Honoured by both back-ends.
 
 **Why max range = 30 m, not the datasheet 200 m:** cones past 30 m don't matter for FS detection (max corridor width is well under that), and shrinking the per-ray broadphase cuts per-ray Chaos work by roughly 7×. Bump back to 200 for benchmarks against real-car captures.
 
 **Mount.** `(X=0.0, Y=0.0, Z=1.10)` corresponds to the IFS-08's main hoop crossbar height, CoG-aligned, centred. Pre-2026 settings used a hood-mount approximation (`X=0.5, Z=0.9`); cone-detection cluster-height thresholds were rebaselined when the mount moved.
 
 **Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 3 floats (x, y, z) in metres. Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
-
-**Throughput on macOS Docker.** At 1.74 M pts/s, TCP loopback caps the bridge at ~3 Hz on Docker Desktop (Docker's TCP loopback throughput cap on macOS). The UDP transport (`LIDAR_TRANSPORT=udp`, chunked + paced + Fast DDS-friendly bridge reassembly) holds ~7–8 Hz at the same rate. The remaining gap to the nominal 10 Hz is in the DDS layer (1.4 MB BEST_EFFORT message fragment loss between publisher and subscriber). Linux hosts hit nominal rate on TCP without contortions.
 
 **Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point. No intensity channel today (`bReturnPhysicalMaterial=false` at the raycast site, wire format is XYZ only) — see [#255](https://github.com/isc-fs/IFSSIM/issues/255) for the per-point intensity work which would unlock cone-colour DA in `slam_node`.
 
