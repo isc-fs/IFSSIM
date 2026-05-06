@@ -111,26 +111,59 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 
 #### Powertrain
 
+The drive torque comes from a **dedicated `UEmraxMotor` class** modelled after the IFS-08's actual motor: an **EMRAX 228 MV** (LC variant) running at a 400 V bus. Chaos's built-in ICE-style engine is set up at construction (so the wheel solver has a non-zero engine to talk to) but **silenced at runtime** — `SetThrottleInput(0)` is held every tick and the per-wheel drive torque is injected via `SetDriveTorque` with an Additive combine. The Chaos engine never produces drive torque; the EMRAX class is the single source of truth for the motoring side.
+
+What this means for `settings.json`: **the `MotorMaxTorque`, `MotorMaxPower`, `MotorRPM[]`, and `MotorTorque[]` fields are vestigial.** They feed the Chaos engine that's bypassed; tweaking them changes nothing observable on the drive side. The only motor-related fields that still influence behaviour are the regen caps (`MaxRegenTorque`, `MaxRegenPower`), which the pawn forwards to `Motor->P.MaxRegenTorqueNm`/`MaxRegenPowerW`. Everything else lives in `FEmraxMotorParams` defaults in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/EmraxMotor.h`.
+
+##### EMRAX 228 MV / LC datasheet parameters (class defaults)
+
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Motor max torque | 230 | Nm | `MotorMaxTorque` |
-| Motor max power | 80,000 | W | `MotorMaxPower` |
-| Max regen torque | 230 | Nm | `MaxRegenTorque` |
-| Max regen power | 6,000 | W | `MaxRegenPower` |
-| Gear ratio | 2.909 | — | `GearRatio` |
-| Drivetrain efficiency | 0.92 | — | `DrivetrainEfficiency` |
+| Pole pairs | 10 | — | `PolePairs` |
+| Rotor inertia | 0.02521 | kg·m² | `RotorInertia` |
+| Motor mass (informational) | 13.5 | kg | `MassKg` |
+| Hard mechanical speed limit | 6,500 | RPM | `MaxMechRpm` |
+| Torque constant | 0.61 | Nm/A_RMS | `KtNmPerArms` |
+| Peak power cap (NX-tech LUT @ 400 V) | 100,000 | W | `MaxPeakPowerW` |
+| Peak torque (S2 2-min, datasheet) | 220 | Nm | `MaxPeakTorqueNm` |
+| Continuous torque (S1, LC cooling) | 130 | Nm | `ContTorqueNm` |
+| Continuous power (S1, LC cooling) | 75,000 | W | `ContPowerW` |
+| Current-loop time constant | 0.0015 | s | `CurrentLoopTau` |
+| Gear ratio | 2.909 | — | `GearRatio` (settings.json) |
+| Drivetrain efficiency | 0.92 | — | `DrivetrainEfficiency` (settings.json) |
 
-The IFS-08 has **no hydraulic service brake** — braking on the drive (rear) wheels is motor regen only. Front wheels have `MaxBrakeTorque = 0`, only retarded by aero drag. EBS is pneumatic on all four corners and is wired to the Chaos handbrake channel.
+##### Peak-torque envelope (motor frame, before gear reduction)
 
-#### Motor torque curve (at motor, before gear reduction)
+Hardcoded in `EmraxMotor.cpp` as a 64-knot lookup with linear interpolation matching the EMRAX 228 MV NX-tech file's 103-RPM grid:
 
-`MotorRPM` and `MotorTorque` arrays in `settings.json`:
-
-| RPM | 0 | 1000 | 2000 | 3000 | 4000 | 5000 | 6000 | 6500 |
+| RPM | 0 – 4532 | 4635 | 4944 | 5253 | 5562 | 5871 | 6180 | 6489 |
 |---|---|---|---|---|---|---|---|---|
-| Torque (Nm) | 230 | 240 | 240 | 240 | 240 | 240 | 200 | 180 |
+| Peak Nm | 220 | 219 | 209 | 199 | 187 | 177 | 164 | 154 |
 
-Per RPM point, the runtime applies a power cap `T = min(T, P_max / ω)` before publishing the wheel-side torque curve to Chaos. So `MaxTorque × GearRatio × DrivetrainEfficiency` is the headline wheel torque only at low RPM; above ~3,300 RPM the 80 kW power limit binds first.
+Constant 220 Nm in the constant-torque region; field-weakening rolloff above ~4,600 RPM. Per tick, the envelope value is further capped by the constant-power boundary `T = min(T_envelope, P_max / ω)` so the 100 kW power limit binds in the field-weakening region as well.
+
+##### Regen (generating) regime
+
+Regen torque is gated by the **battery cell-input current limit**, not by the motor's mechanical envelope. The EMRAX can dump well over 100 kW into a load, but the IFS-08 accumulator (~140 cells) faults out at a few kW of total charge power.
+
+| Parameter | Value | Unit | Source |
+|---|---|---|---|
+| Max regen power | 6,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
+| Max regen torque | 230 | Nm | `MaxRegenTorque` (settings.json) → `Motor->P.MaxRegenTorqueNm` |
+
+At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=6000` yields ~8.8 Nm of available regen — the power cap binds at all but the lowest speeds.
+
+The implementation includes a **single-quadrant regen guard**: regen torque is forced to zero whenever the wheel isn't rotating forward. Asking for regen at `ω ≤ 0` would (a) be electrically unsafe on the real inverter, and (b) produce reverse motor torque on a stationary wheel — driving the car backward from rest, which the real IFS-08 controller cannot do.
+
+##### Inverter dynamics, idle creep, thermal derate
+
+- **Current-loop lag.** First-order discrete with `α = clamp(dt/τ, 0, 1)` and `τ = 1.5 ms`. At a 1 kHz physics tick the response is ~5 ticks to settle.
+- **Idle creep** (`IdleCreepTorqueNm`, off-throttle floor while `|RPM| < IdleCreepRpmThreshold`). Defaults to **0 Nm**, i.e. disabled — real EMRAX has no idle. The non-zero default that previously lived here was a Chaos workaround for the wheel solver freezing at the `ω=0`, `v=0` degenerate state; that's now fixed upstream by `SleepThreshold=0` in `SetupVehicleMovement`, so the workaround is no longer needed and the previously observed ~0.83 m/s creep on EBS-release went away.
+- **I²t thermal derate.** Class fields and budget exist (`OverloadBudgetJ=1e6 J`, `CoolingRateW=8000 W`) but the derate is **currently held at 1.0 (no derate)** in `Step()`. The previous derate path was clamping launch torque below the static-friction-lock threshold and blocking autonomous launches; it'll be reintroduced once the HV-battery class lands and the model has a proper coolant + winding-temp signal rather than the I²t proxy.
+
+##### Brakes
+
+The IFS-08 has **no hydraulic service brake** — retarding torque on the drive (rear) wheels is motor regen only. Front wheels have `MaxBrakeTorque = 0`, retarded only by aero drag and tire scrub. EBS is pneumatic on all four corners and routed through the Chaos handbrake channel (`bAffectedByHandbrake = true` on both wheel classes).
 
 #### Tire model — Pacejka Magic Formula '96
 

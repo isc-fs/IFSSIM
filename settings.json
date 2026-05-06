@@ -10,6 +10,7 @@
       "AllowAPIAlways": true,
       "AutoCreate": true,
       "VehiclePhysics": {
+        "_comment_motor": "MotorMaxTorque, MotorMaxPower, MotorRPM[], MotorTorque[] are vestigial. Drive torque comes from the dedicated UEmraxMotor class (EMRAX 228 MV at 400 V bus, see Plugins/FSDSPlugin/Source/FSDSPlugin/Public/EmraxMotor.h). The pawn silences Chaos's ICE-style engine each tick (SetThrottleInput(0)) and injects per-wheel torque via SetDriveTorque, so these fields feed only the silenced Chaos engine and have no effect on actual driving. Of the motor-side settings, only MaxRegenTorque/MaxRegenPower are forwarded to the EMRAX class. Kept here so existing tooling and external mirrors keep parsing; remove in a future pass.",
         "Mass": 275,
         "Drivetrain": "RWD",
         "WheelRadius": 0.228,
