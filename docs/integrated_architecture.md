@@ -13,13 +13,24 @@ For the legacy in-tree pipeline that exists today (the one being phased out), se
 | Mission Control web (frontend + backend) | IFSSIM | this repo, `tools/mission_control/` |
 | Visualisation (Lichtblick + layouts) | IFSSIM | this repo, `lichtblick/`, container `lichtblick` |
 | Mission management (`sim_supervisor`, `mission_control`, `mode_manager`) | DV pipeline team | external repo, attached as submodule |
-| Autonomy lifecycle nodes (`perception`, `slam`, `odometria`, `path_planning`, `control`) | DV pipeline team | external repo, attached as submodule |
+| Autonomy lifecycle nodes (`perception`, `slam`, `path_planning`, `control`) | DV pipeline team | external repo, attached as submodule |
 | `coche_urdf` + `robot_state_publisher` | DV pipeline team | external repo, attached as submodule |
 | Docker / compose / launch glue | IFSSIM | this repo, `docker/` |
 
 The DV pipeline submodule is intended to be the **same code on the real car and in sim**. IFSSIM is responsible for everything that fakes the real-car environment for it.
 
+### Roles inside mission management (per the pipeline team)
+
+- **`sim_supervisor_node`** simulates the role the IFS-08 micro (uDV) plays on the real car. In sim it sources the `GO` signal and sinks the `FINISHED` signal; on the real car the physical micro plays that role. This node only exists in sim.
+- **`mission_control_node`** receives the selected mission, drives the autonomy lifecycle through `mode_manager`, exchanges heartbeats with the supervisor during startup, and forwards control commands from the autonomy stack to the supervisor (in sim) or the micro over the DVPC bus (real car).
+- **`mode_manager_node`** brings up the correct lifecycle nodes for the mission and passes them the mission-specific flag/strategy so each node knows which behaviour to run.
+- **Autonomy lifecycle nodes** internally use a strategy pattern keyed on the mission flag, so the same node binary handles trackdrive / autocross / accel / skidpad with different inner behaviours.
+
+Note: the pipeline team's diagram-snapshot still shows an `odometria_node`. That node is being removed; the autonomy lifecycle is `perception → slam → path_planning → control` only. Where odometry comes from on the new arch is still TBD (see [Open questions](#open-questions) below).
+
 ## End-to-end graph
+
+The runtime control loop deliberately mirrors the real-car path: the autonomy stack does **not** publish actuator commands directly to the sim. Instead `control_node` sends commands to `mission_control_node`, which forwards them to `sim_supervisor_node` (the simulated micro), which finally publishes them to the bridge. On the real car the same `mission_control_node` forwards to the physical micro over the DVPC bus. The sim path is one redirect longer than strictly necessary on purpose, so a bug in the chain shows up in sim before it shows up at the test track.
 
 ```mermaid
 flowchart TB
@@ -39,8 +50,8 @@ flowchart TB
     end
     class UE5 sim
 
-    subgraph BridgeContainer["🐳 dv_pipeline_stack — owned by this repo"]
-        bridge["<b>ifssim_bridge</b><br/><i>C++</i><br/>UDP recv + JSON-RPC<br/>publishes /fsds/* topics"]
+    subgraph BridgeContainer["🐳 ifssim_bridge_stack — owned by this repo"]
+        bridge["<b>ifssim_bridge</b><br/><i>C++</i><br/>UDP recv + JSON-RPC<br/>publishes /fsds/* topics<br/>subscribes /fsds/control_command"]
     end
     class bridge bridge
 
@@ -61,20 +72,19 @@ flowchart TB
     subgraph PipelineSubmodule["🐳 dv_pipeline_stack — DV pipeline submodule"]
 
         subgraph Mission["Mission management"]
-            sup["<b>sim_supervisor_node</b><br/>(sim-only)"]
+            sup["<b>sim_supervisor_node</b><br/>(sim-only)<br/>simulates uDV micro"]
             mcn["<b>mission_control_node</b>"]
-            mm["<b>mode_manager_node</b><br/>fans out lifecycle ChangeState"]
+            mm["<b>mode_manager_node</b><br/>lifecycle orchestrator"]
         end
         class sup,mcn,mm miss
 
         subgraph Auton["Autonomy pipeline (LifecycleNodes)"]
             cd["<b>cone_detection_node</b><br/><i>perception pkg</i>"]
             slam["<b>slam_node</b><br/><i>slam pkg</i>"]
-            odo["<b>odometria_node</b><br/><i>odometria pkg</i>"]
             plan["<b>path_planning_node</b>"]
-            ctrl["<b>control_node</b><br/>40 Hz timer"]
+            ctrl["<b>control_node</b><br/>40 Hz timer<br/>(slew-limited, PR #308)"]
         end
-        class cd,slam,odo,plan,ctrl autn
+        class cd,slam,plan,ctrl autn
 
         subgraph Infra["Infrastructure"]
             rsp["<b>robot_state_publisher</b><br/>+ joint_state_publisher<br/>coche_urdf, 200 Hz TF"]
@@ -83,59 +93,63 @@ flowchart TB
     end
 
     %% =====================================================================
-    %% INTEGRATION CONTRACT (IFSSIM ↔ submodule, this is the API surface)
+    %% SIM SENSORS: bridge → submodule
     %% =====================================================================
     plugin -- "UDP :51453 (LiDAR)<br/>UDP :41452 (other sensors)" --> bridge
     bridge -- "<b>/fsds/lidar/Lidar1</b><br/>PointCloud2 @ 10 Hz" --> cd
-    bridge -- "<b>/fsds/testing_only/odom</b><br/>nav_msgs/Odometry" --> odo
-    bridge -- "<b>/fsds/gss</b><br/>TwistWithCovarianceStamped" --> odo
-    bridge -- "<b>/fsds/imu</b><br/>sensor_msgs/Imu @ 400 Hz" --> odo
-    ctrl -- "<b>/fsds/control_command</b><br/>fs_msgs/ControlCommand" --> bridge
-    ctrl -- "<b>/signal/ebs</b>, <b>/signal/ebs_reset</b>" --> bridge
-    bridge -- "JSON-RPC :41451<br/>(throttle/regen/steer + EBS<br/>+ loadTrack/setMode/...)" --> plugin
+    bridge -- "<b>/fsds/imu</b><br/>sensor_msgs/Imu @ 400 Hz" --> slam
+    bridge -- "<b>/fsds/gss</b><br/>TwistWithCovarianceStamped" --> slam
+    bridge -- "<b>/fsds/gps</b><br/>NavSatFix" --> slam
+    bridge -- "<b>/fsds/testing_only/odom</b><br/>(diagnostic only)" --> sup
 
     %% =====================================================================
-    %% INTERNAL TO THE SUBMODULE
+    %% AUTONOMY DATAFLOW (internal to submodule)
     %% =====================================================================
     cd -- "/Conos_raw MarkerArray" --> slam
-    slam -- "/Conos MarkerArray" --> plan
+    slam -- "/Conos MarkerArray<br/>+ /odom + TF odom→base_link" --> plan
+    slam -- "/odom + TF" --> ctrl
     plan -- "/Path nav_msgs/Path" --> ctrl
-    odo -- "odom Odometry<br/>+ TF odom→fsds/FSCar" --> slam
-    odo -- "odom Odometry<br/>+ TF odom→fsds/FSCar" --> plan
-    odo -- "odom Odometry<br/>+ TF odom→fsds/FSCar" --> ctrl
-    rsp -. "TF (URDF joints<br/>+ base frame)" .-> slam
+    rsp -. "TF (URDF joints + base)" .-> slam
     rsp -. "TF" .-> ctrl
 
     %% =====================================================================
-    %% MISSION MANAGEMENT (lifecycle + actions)
+    %% MISSION MANAGEMENT — STARTUP (Phase 1) and RUNTIME (Phase 2) ACTIONS
     %% =====================================================================
-    sup -- "start_mission [Action StartMission]" --> mcn
-    sup -- "set_mission [Action SetMission]" --> mcn
-    mcn -- "activate_mode [Srv ActivateMode]" --> mm
-    mm -. "change_state [Srv ChangeState]" .-> cd
+    sup <-- "<b>StartMission [Action]</b><br/>Phase 1 — startup<br/>heartbeat + ready/failed<br/>(JIT-warm window)" --> mcn
+    sup <-- "<b>RuntimeControl [Action]</b><br/>Phase 2 — running<br/>throttle / steering<br/>+ emergency + finished" --> mcn
+    mcn -- "activate_mode [Srv]<br/>+ mission flag" --> mm
+    mm -. "change_state [Srv]<br/>(lifecycle)" .-> cd
     mm -. "change_state" .-> slam
-    mm -. "change_state" .-> odo
     mm -. "change_state" .-> plan
     mm -. "change_state" .-> ctrl
+    ctrl -- "control commands<br/>(throttle/steer)" --> mcn
+    slam -- "emergency / finished" --> mcn
+
+    %% =====================================================================
+    %% SIM-SIDE OUTPUT: sim_supervisor → bridge → FSDS
+    %% =====================================================================
+    sup -- "<b>/fsds/control_command</b><br/>fs_msgs/ControlCommand<br/>(simulating uDV→bridge)" --> bridge
+    sup -- "/signal/ebs, /signal/ebs_reset" --> bridge
+    bridge -- "JSON-RPC :41451<br/>(throttle/regen/steer + EBS<br/>+ loadTrack/setMode/...)" --> plugin
 
     %% =====================================================================
     %% MISSION CONTROL WEB ↔ MISSION MANAGEMENT
     %% =====================================================================
     mcfe -- "REST" --> mcbe
-    mcbe -- "Action: StartMission, SetMission<br/>(rclpy client)" --> mcn
-    mcbe -- "JSON-RPC<br/>(track load, EBS, RES)" --> bridge
+    mcbe -- "StartMission [Action]<br/>(rclpy client)" --> sup
+    mcbe -- "JSON-RPC<br/>(track load, sim pause, RES)" --> bridge
 
     %% =====================================================================
     %% VIZ
     %% =====================================================================
     bridge -. "all /fsds/*" .-> fox
     cd -. "/Conos_raw" .-> fox
-    slam -. "/Conos, TF" .-> fox
+    slam -. "/Conos, /odom, TF" .-> fox
     plan -. "/Path" .-> fox
-    ctrl -. "/control_command, /control/*" .-> fox
+    ctrl -. "/control/*" .-> fox
 ```
 
-Solid arrows are ROS topics or RPC; dashed arrows are TF, services, or visualisation side-channels.
+Solid arrows are ROS topics, RPC, or Action exchanges; dashed arrows are TF, services, or visualisation side-channels. Bidirectional `<-->` arrows represent ROS Actions (request + heartbeats + result).
 
 Colour key: blue = sim, purple = bridge, orange = Mission Control web, magenta = mission management ROS nodes, green = autonomy lifecycle nodes, grey = infrastructure / viz.
 
@@ -148,31 +162,48 @@ This is the API surface between IFSSIM and the DV pipeline submodule. **Any chan
 | Topic | Type | Frame | Rate | Notes |
 |---|---|---|---|---|
 | `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | Already published. |
-| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Quirk:** `twist.linear.x/y` is currently zero — the bridge doesn't fill it (UE5 not pushing twist). The new `odometria_node` must finite-difference pose, or the bridge must be fixed to fill twist. Documented in `pipeline/cone_slam/scripts/gt_pose_relay.py` (PR #309) where the same workaround already exists. |
-| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | TBD | **Type mismatch with current bridge.** Today's bridge publishes `/gss` (without prefix) as `geometry_msgs/TwistStamped` (no covariance). Either the bridge upgrades to `TwistWithCovarianceStamped` and adds the `/fsds/` prefix, or the submodule's `odometria_node` accepts `TwistStamped`. Needs a one-line decision. |
 | `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | Today published as `/imu`. Add `/fsds/` prefix or remap. |
-| `/fsds/motor_rpm` | TBD (likely `std_msgs/Float32`) | — | ~80 Hz | Today published as `/motor_rpm`. Optional — if `/fsds/gss` provides ground-speed, motor RPM can be a redundant signal or dropped on the new arch. New team's call. |
+| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | TBD | **Type mismatch with current bridge.** Today's bridge publishes `/gss` (without prefix) as `geometry_msgs/TwistStamped` (no covariance). Either the bridge upgrades to `TwistWithCovarianceStamped` and adds the `/fsds/` prefix, or the submodule subscribes to `TwistStamped`. Needs a one-line decision. |
+| `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | Today published as `/gps`. Same prefix-rename. |
+| `/fsds/motor_rpm` | TBD | — | ~80 Hz | Today published as `/motor_rpm`. Optional — if `/fsds/gss` covers ground-speed, motor RPM can be redundant. New team's call. |
+| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Diagnostic only on the new arch.** Consumed by `sim_supervisor_node` for ground-truth comparison and the GT-as-SLAM diagnostic pattern (`gt_pose_relay.py`, PR #309). The autonomy must not rely on it. **Quirk:** `twist.linear.x/y` is currently zero — bridge doesn't fill it. Fix at the bridge or finite-difference at the consumer. |
 
-### Topics the submodule must publish back (submodule → bridge)
+### Topics the submodule publishes back to the bridge (sim_supervisor → bridge)
 
-| Topic | Type | Notes |
-|---|---|---|
-| `/fsds/control_command` | `fs_msgs/ControlCommand` | Throttle / regen / steering. Today consumed as `/control_command` after a launch-time remap; the remap goes away. |
-| `/signal/ebs` (latched) | `std_msgs/Empty` | EBS trigger. |
-| `/signal/ebs_reset` (latched) | `std_msgs/Empty` | EBS reset on autonomy boot. |
+The submodule's autonomy stack does **not** publish actuator commands directly to the bridge. Commands flow through `mission_control_node` and `sim_supervisor_node` first (so the sim path matches the real-car `DVPC → micro → CAN` chain). The bridge only ever sees commands from `sim_supervisor_node`.
 
-### Action / service interface (Mission Control web → mission management)
+| Topic | Type | Publisher | Notes |
+|---|---|---|---|
+| `/fsds/control_command` | `fs_msgs/ControlCommand` | `sim_supervisor_node` | Throttle / regen / steering. The bridge subscribes; the autonomy `control_node` does NOT publish to this directly. |
+| `/signal/ebs` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS trigger. |
+| `/signal/ebs_reset` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS reset on autonomy boot. |
 
-The Mission Control FastAPI backend (today on JSON-RPC over the bridge) calls into the submodule's typed ROS interfaces:
+### Runtime action protocol (sim_supervisor ↔ mission_control)
+
+The control loop is a two-phase ROS Action exchange between `sim_supervisor_node` and `mission_control_node`:
+
+**Phase 1 — startup.** The supervisor sends an Action goal carrying the chosen mission (`trackdrive`, `autocross`, `accel`, `skidpad`). The mission controller drives `mode_manager` to bring up the right lifecycle nodes with the right strategy flag, sends periodic heartbeats back to the supervisor (so a crashed startup is detectable), then reports `ready` or `failed`. The startup window is also where Numba JIT compile for the planner runs — explicit design fix for the "car drives straight on the first curve before the planner has compiled" failure that bit us in the in-tree pipeline.
+
+If the operator changes the mission during this window (e.g. switches accel → skidpad), the in-flight startup is cancellable and the system can re-enter Phase 1 for the new mission without a full restart.
+
+**Phase 2 — runtime.** Once Phase 1 reports `ready`, a second Action between the same two nodes carries:
+
+- `throttle`, `steering` — the normal control commands, sourced from the autonomy's `control_node`.
+- `emergency` — flag for emergency braking. Sourced from `slam_node` or any node detecting an unrecoverable state.
+- `finished` — flag for "mission completed", sourced from `slam_node` (e.g. on big-orange detection past the lap-min-distance gate).
+
+The supervisor publishes the resulting commands to `/fsds/control_command` for the bridge to forward to FSDS. On the real car, the same commands would go from `mission_control_node` to the physical micro over the DVPC bus, and `sim_supervisor_node` doesn't run.
+
+### Mission-control-web → mission management
+
+The Mission Control FastAPI backend calls into the supervisor's Action interface to drive the lifecycle, and into the bridge's JSON-RPC for sim-side actions:
 
 | Surface | Type | Source | Target | Purpose |
 |---|---|---|---|---|
-| `start_mission` | `Action StartMission` | mcbe | `mission_control_node` | Begin a session for a given mission (trackdrive / autocross / accel / skidpad). |
-| `set_mission` | `Action SetMission` | mcbe | `mission_control_node` | Change the active mission while in `AS_Off`. |
-| `activate_mode` | `Srv ActivateMode` | `mission_control_node` | `mode_manager_node` | Drive the AS state machine (`AS_Off` → `AS_Ready` → `AS_Driving` → ...). |
-| `change_state` | `Srv ChangeState` (lifecycle_msgs) | `mode_manager_node` | each lifecycle node | Standard ROS 2 `LifecycleNode` transitions. |
+| Start mission | `Action StartMission` (rclpy client) | mcbe | `sim_supervisor_node` | Kicks off Phase 1; supervisor relays to `mission_control_node`. |
+| Track load, sim pause/resume, RES | JSON-RPC | mcbe | `ifssim_bridge` | Sim-only sandbox controls. |
 
-Bridge JSON-RPC (track load, sim pause/resume, sim-side RES, sensor probe) stays on the IFSSIM side and remains called from the FastAPI backend directly. Sim-only commands belong on the IFSSIM side; mission state belongs on the submodule side.
+Bridge JSON-RPC (track load, sim pause/resume, sim-side RES, sensor probe) stays on the IFSSIM side. Sim-only commands belong on the IFSSIM side; mission state belongs on the submodule side via the supervisor.
 
 ## What changes from today
 
@@ -195,14 +226,21 @@ Either the bridge starts filling `twist.linear` from the FSDS RPC sensor data (c
 
 ### 3. Mission Control web ↔ mission management
 
-The FastAPI backend in `tools/mission_control/backend/` currently orchestrates the autonomy lifecycle by killing/relaunching ROS launch under `entrypoint.sh`. Two options:
+The FastAPI backend in `tools/mission_control/backend/` currently orchestrates the autonomy lifecycle by killing/relaunching ROS launch under `entrypoint.sh`. The new arch replaces the shell orchestration entirely:
 
-- **Option A — mcbe stays, switches transport.** Replace shell-orchestration with `rclpy` action clients calling `StartMission` / `SetMission` on `mission_control_node`. Bridge JSON-RPC for sim-side actions stays. Web UI keeps its current FastAPI surface to the React frontend. Cleanest; minimal churn for the frontend.
-- **Option B — mcbe retires.** The new `mission_control_node` exposes a web interface directly (rosbridge / foxglove websocket) and the React frontend talks to it. Removes a layer; bigger frontend change.
+- mcbe becomes an `rclpy` Action client of `sim_supervisor_node` (`StartMission`). The supervisor relays to `mission_control_node`, which drives `mode_manager` and the lifecycle nodes. Mcbe never talks to lifecycle services directly.
+- Bridge JSON-RPC stays on the mcbe side for sim-only actions: track load, sim pause/resume, sim-side RES button, sensor probe.
+- React frontend keeps its REST surface to mcbe. No frontend change.
 
-Option A is the safer first move; Option B is on the table for later if the FastAPI layer no longer earns its keep. #173 is the open issue that subsumes this work.
+This is the only viable shape given that `sim_supervisor_node` is the single entry point to the autonomy lifecycle in sim. #173 is the open issue that subsumes this work.
 
-### 4. Container layout
+### 4. Control commands route through `sim_supervisor`, not directly to the bridge
+
+This is structural, not a topic-rename. On the new arch the bridge subscribes to `/fsds/control_command` from `sim_supervisor_node` (which simulates the IFS-08 micro). The autonomy `control_node` publishes commands as part of an Action payload to `mission_control_node`, which forwards to the supervisor.
+
+Implication for IFSSIM: nothing on the bridge subscriber side changes — it still subscribes to `/fsds/control_command`. But the topic publisher identity moves from "the autonomy's control node" to "the simulated micro node", which means the bridge must tolerate startup-time absence of this topic until Phase 1 reports `ready` (today's bridge sees the topic as soon as the autonomy launches).
+
+### 5. Container layout
 
 Today the `dv_pipeline_stack` container has the in-tree pipeline (`cone_detection`, `cone_slam`, `path_planning`, `control`) plus `ifssim_bridge`. After the migration:
 
@@ -211,11 +249,11 @@ Today the `dv_pipeline_stack` container has the in-tree pipeline (`cone_detectio
 
 Two containers on the same `network_mode: host` (or one Docker network with `host.docker.internal` for cross-container) so DDS sees everything. Minor compose refactor; covered by the migration PR.
 
-### 5. Visualisation
+### 6. Visualisation
 
 `lichtblick/*.json` layouts reference today's topic names (`/cone_slam/state`, `/Conos`, `/Conos_raw`, `/Path`, `/control_command`, ...). They need a one-pass topic-name update once the submodule lands. Easy mechanical change; do it in the same PR that adopts the submodule.
 
-### 6. Frame names
+### 7. Frame names
 
 The submodule's diagram terminates the TF chain at `fsds/FSCar`. Today our pipeline keys on `base_link`. Foxglove layouts and the bridge sensor `frame_id`s currently use `fsds/IMU`, `fsds/GPS`, `fsds/Lidar` — those stay (they're sensor-local). The vehicle frame switch from `base_link` to `fsds/FSCar` propagates through:
 
@@ -224,6 +262,19 @@ The submodule's diagram terminates the TF chain at `fsds/FSCar`. Today our pipel
 - `tools/mission_control/backend/` — any frame string assumptions in telemetry / scoring.
 
 The submodule may instead opt to publish `fsds/FSCar` as an alias of `base_link` to keep REP-105 conventions; that's their call. Worth confirming on integration kickoff.
+
+## Open questions
+
+These came out of the pipeline team's architecture description and need a decision before integration kickoff. Captured here so they don't surface mid-migration.
+
+| # | Question | Where decided |
+|---|---|---|
+| Q1 | **Where does `/odom` come from now that `odometria_node` is removed?** Options: (a) `slam_node` publishes `/odom` and TF the same way today's `cone_graph_slam` does — folds odometry back into SLAM and re-creates the coupling we deliberately broke; (b) keep a thin `odometria` library inside `slam` that fuses IMU + GSS but isn't a separate lifecycle node; (c) sim_supervisor publishes a GT-derived `/odom` for sim-only debugging, real car gets it from the micro. **Implication for the cone-only DA ceiling (#306):** option (a) reverts the architectural fix that made the GT-as-SLAM diagnostic viable. Option (b) keeps the separation. Worth getting right early. | Pipeline team |
+| Q2 | `/fsds/gss` type — does the bridge upgrade to `TwistWithCovarianceStamped` or does the submodule subscribe to today's `TwistStamped`? | IFSSIM × pipeline team |
+| Q3 | Real-car-DVPC presence in sim — is `mission_control_node` always run alongside `sim_supervisor_node`, or does the supervisor co-host the controller's logic in sim? Affects whether mcbe targets the supervisor or the controller. | Pipeline team |
+| Q4 | Frame name `fsds/FSCar` vs REP-105 `base_link` — does the submodule publish both as aliases for compatibility with existing Lichtblick layouts and any IFSSIM-side TF lookups? | Pipeline team |
+| Q5 | Does the bridge need to fill `twist.linear` on `/fsds/testing_only/odom`, or is the consumer (sim_supervisor for diagnostic comparison) OK finite-differencing pose? | IFSSIM |
+| Q6 | What replaces the `entrypoint.sh` flag-file orchestration on the IFSSIM side? Mcbe spawning the submodule's launch via `subprocess`? Or compose-level service dependencies? | IFSSIM |
 
 ## What does NOT change
 
@@ -235,12 +286,13 @@ The submodule may instead opt to publish `fsds/FSCar` as an alias of `base_link`
 
 ## Migration order (suggested)
 
-1. Submodule reaches a runnable state with stub mission management and pass-through `odometria_node` in sim mode.
-2. Bridge PR: topic prefixes `/fsds/*` (sec. 1 above) + twist fill (sec. 2). Land on `dev` while the in-tree pipeline still works (the rename breaks the in-tree pipeline; this is the moment the in-tree pipeline gets retired).
-3. Migration PR: drop in-tree `cone_slam/`, `cone_detection/`, `path_planning/`, `control/`. Add submodule. Update compose, launch, lichtblick layouts.
-4. mcbe PR (Option A): switch from shell orchestration to `rclpy` action client.
-5. End-to-end smoke test: Start Session → autonomy comes up via lifecycle services → laps `test_submodule`.
-6. Close #311.
+1. **Open questions resolved** (sec. above). At minimum Q1 (odometry source) and Q3 (DVPC vs supervisor in sim).
+2. **Submodule reaches a runnable state.** Stub mission management (`sim_supervisor` + `mission_control` + `mode_manager`) with the two-phase Action protocol working end-to-end. Stub autonomy nodes that just echo sensor presence. Submodule has its own Dockerfile and launch.
+3. **Bridge PR (IFSSIM).** Topic prefixes (`/fsds/imu`, `/fsds/gss`, `/fsds/gps`, `/fsds/motor_rpm`) + the type bump on `/fsds/gss` if Q2 lands that way + twist-fill on `/fsds/testing_only/odom` (Q5). Land on `dev` while the in-tree pipeline still works — this rename is the trigger event that retires the in-tree pipeline.
+4. **Migration PR (IFSSIM).** Drop in-tree `cone_slam/`, `cone_detection/`, `path_planning/`, `control/`. Add submodule. Split `dv_pipeline_stack` into `ifssim_bridge_stack` (bridge only) + `dv_pipeline_stack` (submodule only). Update compose, launch, lichtblick layouts (incl. frame rename per Q4).
+5. **mcbe PR (IFSSIM).** Switch FastAPI backend from `entrypoint.sh` flag-file orchestration to `rclpy` Action client of `sim_supervisor_node`. Bridge JSON-RPC stays for sim-only actions.
+6. **End-to-end smoke test.** Start Session → mcbe sends `StartMission` → supervisor + mission_control + mode_manager bring up the lifecycle nodes through Phase 1 (with JIT warmup) → Phase 2 begins → autonomy laps `test_submodule`.
+7. **Close #311.**
 
 ## See also
 
