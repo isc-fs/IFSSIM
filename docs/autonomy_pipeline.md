@@ -56,10 +56,10 @@ flowchart TB
     class bridge bridge
 
     subgraph MCWeb["🐳 mission_control_(frontend|backend) — owned by this repo"]
-        mcfe["<b>frontend</b> (React)"]
-        mcbe["<b>backend</b> (FastAPI)"]
+        mc_frontend["<b>frontend</b> (React)"]
+        mc_backend["<b>backend</b> (FastAPI)"]
     end
-    class mcfe,mcbe mc
+    class mc_frontend,mc_backend mc
 
     subgraph VizContainer["🐳 lichtblick — owned by this repo"]
         fox["<b>foxglove_bridge</b><br/>ws://:8765"]
@@ -135,9 +135,9 @@ flowchart TB
     %% =====================================================================
     %% MISSION CONTROL WEB ↔ MISSION MANAGEMENT
     %% =====================================================================
-    mcfe -- "REST" --> mcbe
-    mcbe -- "StartMission [Action]<br/>(rclpy client)" --> sup
-    mcbe -- "JSON-RPC<br/>(track load, sim pause, RES)" --> bridge
+    mc_frontend -- "REST" --> mc_backend
+    mc_backend -- "StartMission [Action]<br/>(rclpy client)" --> sup
+    mc_backend -- "JSON-RPC<br/>(track load, sim pause, RES)" --> bridge
 
     %% =====================================================================
     %% VIZ
@@ -204,8 +204,8 @@ The Mission Control FastAPI backend calls into the supervisor's Action interface
 
 | Surface | Type | Source | Target | Purpose |
 |---|---|---|---|---|
-| Start mission | `Action StartMission` (rclpy client) | mcbe | `sim_supervisor_node` | Kicks off Phase 1; supervisor relays to `mission_control_node`. |
-| Track load, sim pause/resume, RES | JSON-RPC | mcbe | `ifssim_bridge` | Sim-only sandbox controls. |
+| Start mission | `Action StartMission` (rclpy client) | `mission_control_backend` | `sim_supervisor_node` | Kicks off Phase 1; supervisor relays to `mission_control_node`. |
+| Track load, sim pause/resume, RES | JSON-RPC | `mission_control_backend` | `ifssim_bridge` | Sim-only sandbox controls. |
 
 Bridge JSON-RPC (track load, sim pause/resume, sim-side RES, sensor probe) stays on the IFSSIM side. Sim-only commands belong on the IFSSIM side; mission state belongs on the submodule side via the supervisor.
 
@@ -236,10 +236,10 @@ Architectural choices still being finalised. Listed here because they have downs
 |---|---|---|
 | Q1 | **Where does `/odom` come from?** Options: (a) `slam_node` publishes `/odom` directly — folds odometry into SLAM (re-creates the coupling that bit cone-only DA in #306); (b) thin `odometria` library inside `slam` that fuses IMU + GSS but isn't a separate lifecycle node; (c) `sim_supervisor` publishes a GT-derived `/odom` in sim, real car gets it from the micro. Option (b) preserves the separation that made the GT-as-SLAM diagnostic viable. | DV pipeline |
 | Q2 | `/fsds/gss` type — `TwistWithCovarianceStamped` (type the diagram specifies) vs the simpler `TwistStamped` (no covariance). Drives whether the bridge synthesises covariance or whether the submodule accepts uncovariant input. | IFSSIM × DV pipeline |
-| Q3 | Real-car DVPC presence in sim — is `mission_control_node` always co-resident with `sim_supervisor_node`, or does the supervisor host the DVPC role itself in sim? Affects whether mcbe targets the supervisor or the controller. | DV pipeline |
+| Q3 | Real-car DVPC presence in sim — is `mission_control_node` always co-resident with `sim_supervisor_node`, or does the supervisor host the DVPC role itself in sim? Affects whether `mission_control_backend` targets the supervisor or the controller. | DV pipeline |
 | Q4 | Frame name `fsds/FSCar` vs REP-105 `base_link` — does the submodule publish both as aliases for compatibility with Lichtblick layouts and any IFSSIM-side TF lookups? | DV pipeline |
 | Q5 | Does the bridge fill `twist.linear` on `/fsds/testing_only/odom` from FSDS RPC sensor data, or do consumers (the GT-as-SLAM diagnostic, sim_supervisor's GT compare) finite-difference pose? | IFSSIM |
-| Q6 | Lifecycle orchestration on the IFSSIM side — mcbe spawning the submodule's launch via `subprocess`, compose-level service dependencies, or a thin `entrypoint.sh` watcher? | IFSSIM |
+| Q6 | Lifecycle orchestration on the IFSSIM side — `mission_control_backend` spawning the submodule's launch via `subprocess`, compose-level service dependencies, or a thin `entrypoint.sh` watcher? | IFSSIM |
 
 ## Diagnostic tools
 
