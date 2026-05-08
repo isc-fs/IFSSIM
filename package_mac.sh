@@ -45,15 +45,21 @@ mkdir -p "$USER_SETTINGS_DIR"
 cp "$SCRIPT_DIR/settings.json" "$USER_SETTINGS_DIR/settings.json"
 echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 
-# 4. Force windowed mode in UECommandLine.txt (BuildCookRun overwrites this file)
+# 4. Force windowed mode + 60 FPS cap in UECommandLine.txt
+#    (BuildCookRun overwrites this file)
+#    -ExecCmds runs console commands at startup; t.MaxFPS is also baked
+#    into DefaultEngine.ini [SystemSettings] for future cooked builds,
+#    but -ExecCmds catches builds that predate that change.
 CMDLINE="$SCRIPT_DIR/Saved/StagedBuilds/Mac/UECommandLine.txt"
 if [ -f "$CMDLINE" ]; then
-  # Append -windowed if not already present
   if ! grep -q '\-windowed' "$CMDLINE"; then
     sed -i '' 's/$/ -windowed/' "$CMDLINE"
   fi
+  if ! grep -q 't.MaxFPS' "$CMDLINE"; then
+    sed -i '' 's/$/ -ExecCmds="t.MaxFPS 60"/' "$CMDLINE"
+  fi
 else
-  echo '-project="../../../IFSSIM/IFSSIM.uproject" -windowed' > "$CMDLINE"
+  echo '-project="../../../IFSSIM/IFSSIM.uproject" -windowed -ExecCmds="t.MaxFPS 60"' > "$CMDLINE"
 fi
 echo "  UECommandLine.txt: $(cat "$CMDLINE")"
 
