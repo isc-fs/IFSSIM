@@ -165,10 +165,10 @@ All sensor topics are namespaced under `/fsds/...` — the prefix is what tells 
 |---|---|---|---|---|
 | `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — XYZ only, no intensity. |
 | `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. |
-| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | TBD | Ground-speed sensor. Type still being finalised — see [Open questions](#open-questions) Q2. |
+| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | ~100 Hz | Ground-speed sensor. Bridge fills the diagonal of `twist.covariance` (entries `[0]`, `[7]`, `[14]`) from `VelocityNoiseStd²`. |
 | `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | Currently logged-only on the autonomy side. |
 | `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Optional input — may be redundant with `/fsds/gss`. |
-| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Diagnostic only.** Ground-truth pose for the GT-as-SLAM diagnostic pattern (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `sim_supervisor_node` debugging. Autonomy must not consume it. **Quirk:** `twist.linear.x/y` is empty (bridge doesn't fill it from the FSDS RPC); consumers finite-difference pose if they need velocity — see Open questions Q5. |
+| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Diagnostic only.** Ground-truth pose for the GT-as-SLAM diagnostic pattern (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `sim_supervisor_node` debugging. Autonomy must not consume it. **Quirk:** `twist.linear.x/y` is empty (bridge doesn't fill it from the FSDS RPC); consumers finite-difference pose if they need velocity — see Open questions Q4. |
 
 ### Topics the submodule publishes back (sim_supervisor → bridge)
 
@@ -235,11 +235,10 @@ Architectural choices still being finalised. Listed here because they have downs
 | # | Question | Owner |
 |---|---|---|
 | Q1 | **Where does `/odom` come from?** Options: (a) `slam_node` publishes `/odom` directly — folds odometry into SLAM (re-creates the coupling that bit cone-only DA in #306); (b) thin `odometria` library inside `slam` that fuses IMU + GSS but isn't a separate lifecycle node; (c) `sim_supervisor` publishes a GT-derived `/odom` in sim, real car gets it from the micro. Option (b) preserves the separation that made the GT-as-SLAM diagnostic viable. | DV pipeline |
-| Q2 | `/fsds/gss` type — `TwistWithCovarianceStamped` (type the diagram specifies) vs the simpler `TwistStamped` (no covariance). Drives whether the bridge synthesises covariance or whether the submodule accepts uncovariant input. | IFSSIM × DV pipeline |
-| Q3 | Real-car DVPC presence in sim — is `mission_control_node` always co-resident with `sim_supervisor_node`, or does the supervisor host the DVPC role itself in sim? Affects whether `mission_control_backend` targets the supervisor or the controller. | DV pipeline |
-| Q4 | Frame name `fsds/FSCar` vs REP-105 `base_link` — does the submodule publish both as aliases for compatibility with Lichtblick layouts and any IFSSIM-side TF lookups? | DV pipeline |
-| Q5 | Does the bridge fill `twist.linear` on `/fsds/testing_only/odom` from FSDS RPC sensor data, or do consumers (the GT-as-SLAM diagnostic, sim_supervisor's GT compare) finite-difference pose? | IFSSIM |
-| Q6 | Lifecycle orchestration on the IFSSIM side — `mission_control_backend` spawning the submodule's launch via `subprocess`, compose-level service dependencies, or a thin `entrypoint.sh` watcher? | IFSSIM |
+| Q2 | Real-car DVPC presence in sim — is `mission_control_node` always co-resident with `sim_supervisor_node`, or does the supervisor host the DVPC role itself in sim? Affects whether `mission_control_backend` targets the supervisor or the controller. | DV pipeline |
+| Q3 | Frame name `fsds/FSCar` vs REP-105 `base_link` — does the submodule publish both as aliases for compatibility with Lichtblick layouts and any IFSSIM-side TF lookups? | DV pipeline |
+| Q4 | Does the bridge fill `twist.linear` on `/fsds/testing_only/odom` from FSDS RPC sensor data, or do consumers (the GT-as-SLAM diagnostic, sim_supervisor's GT compare) finite-difference pose? | IFSSIM |
+| Q5 | Lifecycle orchestration on the IFSSIM side — `mission_control_backend` spawning the submodule's launch via `subprocess`, compose-level service dependencies, or a thin `entrypoint.sh` watcher? | IFSSIM |
 
 ## Diagnostic tools
 
