@@ -40,6 +40,14 @@ struct SensorFrame
 
     // Controls echo
     float throttle, steering, brake;
+
+    // Ground-truth body-frame velocity, clean (no GSS sensor noise) — #315.
+    // Plugin populates from VehiclePawn->GetVelocity() rotated into body
+    // frame (same source as pos/orient above, no sensor in the loop).
+    // Bridge sources /testing_only/odom's twist.linear from these fields
+    // so the GT topic is symmetric (clean GT pose AND clean GT twist);
+    // /gss continues to publish the noisy GSS sensor values.
+    float gt_vel_body_x, gt_vel_body_y, gt_vel_body_z; // m/s, body frame
 };
 
 struct LidarChunkHeader

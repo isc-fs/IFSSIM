@@ -50,6 +50,15 @@ struct FFSDSSensorFrame
 	float Throttle = 0.f;
 	float Steering = 0.f;
 	float Brake = 0.f;
+
+	// Ground-truth body-frame velocity, clean (no GSS sensor noise) — #315.
+	// Populated in PackSensorFrame from VehiclePawn->GetVelocity() rotated
+	// into body frame, identical axis convention to the GSS fields above
+	// (X forward, Y left, Z up — UE5/ENU). Bridge sources
+	// /testing_only/odom's twist.linear from these so the odom topic is
+	// fully ground-truth on both pose and twist; /fsds/gss keeps carrying
+	// the noisy GSS sensor values where the noise model belongs.
+	float GtVelBodyX = 0.f, GtVelBodyY = 0.f, GtVelBodyZ = 0.f; // m/s
 };
 
 struct FFSDSLidarChunkHeader
