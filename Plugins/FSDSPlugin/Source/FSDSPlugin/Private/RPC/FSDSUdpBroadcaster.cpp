@@ -220,6 +220,17 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	Frame.PoseOrientZ = EnuQ.Z;
 	Frame.PoseOrientW = EnuQ.W;
 
+	// Ground-truth body-frame velocity (#315). Same source as pose above —
+	// the vehicle pawn directly, no sensor in the loop and no noise. Axis
+	// convention matches the GSS fields above (X forward, Y left, Z up):
+	// UE5 returns body-frame Y in the right direction, so we negate it on
+	// the way out to match ROS / ENU's left-positive Y.
+	const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;          // cm/s → m/s
+	const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
+	Frame.GtVelBodyX =  BodyVel.X;
+	Frame.GtVelBodyY = -BodyVel.Y;
+	Frame.GtVelBodyZ =  BodyVel.Z;
+
 	auto CarState = VehiclePawn->GetCarState();
 	Frame.Speed = CarState.Speed;
 	Frame.RPM = CarState.RPM;

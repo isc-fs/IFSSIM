@@ -1611,6 +1611,16 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		Frame.PoseOrientZ = EnuQ.Z;
 		Frame.PoseOrientW = EnuQ.W;
 
+		// Ground-truth body-frame velocity (#315) — same as the UDP path
+		// in FSDSUdpBroadcaster.cpp. Both senders pack the same struct
+		// layout; this branch is the TCP `streamSensors` route, used by
+		// the bridge when LIDAR_TRANSPORT=tcp (default on Linux).
+		const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;
+		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
+		Frame.GtVelBodyX =  BodyVel.X;
+		Frame.GtVelBodyY = -BodyVel.Y;
+		Frame.GtVelBodyZ =  BodyVel.Z;
+
 		auto CarState = VehiclePawn->GetCarState();
 		Frame.Speed = CarState.Speed;
 		Frame.RPM = CarState.RPM;
