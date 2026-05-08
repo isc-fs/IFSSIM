@@ -556,7 +556,7 @@ The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack t
 
 **Bridge TF behavior.** The bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — autonomy nodes consume the sensors directly without TF lookups. The bridge does publish a few static TFs at startup (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`) on `/tf_static`, populated from the corresponding `getSensorOffset` RPC. The live TF tree (`map → odom → fsds/FSCar`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md). `/testing_only/odom` is for debugging only — the autonomy must not consume it.
 
-> **Quirk on `/testing_only/odom` twist:** the bridge currently leaves `twist.linear.x/y` empty (sets it to zero rather than filling from a velocity field on the FSDS RPC side). Consumers that need velocity from this topic must finite-difference pose; the GT-as-SLAM diagnostic at `pipeline/cone_slam/scripts/gt_pose_relay.py` does exactly that.
+> **`/testing_only/odom` twist asymmetry (current behaviour).** Pose is sourced from the vehicle pawn's clean kinematics, but twist (`twist.linear.x/y/z`) is routed through the **GSS sensor**, which adds `VelocityNoiseStd` noise. The result is asymmetric: clean GT pose with noisy GSS twist on the same Odometry message. The integration contract in [`autonomy_pipeline.md`](autonomy_pipeline.md) calls for both fields to come from clean kinematics; that's a small broadcaster change (add a clean-velocity field to `SensorFrame` and route the odom twist from it) tracked separately.
 
 ### Subscribed Topics
 
@@ -1015,7 +1015,7 @@ The autonomy stack — perception, SLAM, path planning, control — is the same 
 - Mission management: `sim_supervisor_node` (the simulated micro), `mission_control_node` (DVPC role), `mode_manager_node` (lifecycle orchestrator).
 - The two-phase runtime action protocol (startup with JIT warmup → runtime with throttle/steering/emergency/finished).
 - The TF tree `map → odom → fsds/FSCar` and which node owns which frame.
-- Open questions still being finalised (odometry source, frame aliasing, lifecycle orchestration).
+- Open questions still being finalised on the submodule side (odometry source, DVPC-vs-supervisor co-residency, frame aliasing).
 
 For the simulator-side topics that *feed* the autonomy stack (sensors, vehicle physics, RPC, Mission Control surface), see the sections above.
 

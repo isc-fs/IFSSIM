@@ -168,7 +168,7 @@ All sensor topics are namespaced under `/fsds/...` — the prefix is what tells 
 | `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | ~100 Hz | Ground-speed sensor. Bridge fills the diagonal of `twist.covariance` (entries `[0]`, `[7]`, `[14]`) from `VelocityNoiseStd²`. |
 | `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | Currently logged-only on the autonomy side. |
 | `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Optional input — may be redundant with `/fsds/gss`. |
-| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Diagnostic only.** Ground-truth pose for the GT-as-SLAM diagnostic pattern (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `sim_supervisor_node` debugging. Autonomy must not consume it. **Quirk:** `twist.linear.x/y` is empty (bridge doesn't fill it from the FSDS RPC); consumers finite-difference pose if they need velocity — see Open questions Q4. |
+| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Diagnostic only.** Ground-truth pose + clean body-frame velocity. Autonomy must not consume it; intended for the GT-as-SLAM diagnostic (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `sim_supervisor_node`'s GT compare. Both `pose` and `twist` are sourced directly from the vehicle pawn's clean kinematics, not from sensor topics; the GSS-routed twist behaviour is on `/fsds/gss` where the noise belongs. |
 
 ### Topics the submodule publishes back (sim_supervisor → bridge)
 
@@ -209,6 +209,8 @@ The Mission Control FastAPI backend calls into the supervisor's Action interface
 
 Bridge JSON-RPC (track load, sim pause/resume, sim-side RES, sensor probe) stays on the IFSSIM side. Sim-only commands belong on the IFSSIM side; mission state belongs on the submodule side via the supervisor.
 
+**Lifecycle orchestration mechanism.** The submodule's nodes start with the container in the standard ROS 2 `unconfigured` lifecycle state — `docker compose up` brings the autonomy launch up, no flag-file watcher, no `subprocess.Popen` from the backend. `mission_control_backend` never spawns or kills processes; all transitions are driven by `StartMission` Action calls into `sim_supervisor_node`, which fans out `change_state` services through `mode_manager_node` to each lifecycle node. This mirrors how the real car works (processes always running under systemd-equivalent; the micro/DVPC drives state via the same lifecycle services), so the same code path is exercised in sim and on track. Stopping a session is `deactivate` + `cleanup`, not `kill`.
+
 ## TF tree
 
 ```mermaid
@@ -237,14 +239,12 @@ Architectural choices still being finalised. Listed here because they have downs
 | Q1 | **Where does `/odom` come from?** Options: (a) `slam_node` publishes `/odom` directly — folds odometry into SLAM (re-creates the coupling that bit cone-only DA in #306); (b) thin `odometria` library inside `slam` that fuses IMU + GSS but isn't a separate lifecycle node; (c) `sim_supervisor` publishes a GT-derived `/odom` in sim, real car gets it from the micro. Option (b) preserves the separation that made the GT-as-SLAM diagnostic viable. | DV pipeline |
 | Q2 | Real-car DVPC presence in sim — is `mission_control_node` always co-resident with `sim_supervisor_node`, or does the supervisor host the DVPC role itself in sim? Affects whether `mission_control_backend` targets the supervisor or the controller. | DV pipeline |
 | Q3 | Frame name `fsds/FSCar` vs REP-105 `base_link` — does the submodule publish both as aliases for compatibility with Lichtblick layouts and any IFSSIM-side TF lookups? | DV pipeline |
-| Q4 | Does the bridge fill `twist.linear` on `/fsds/testing_only/odom` from FSDS RPC sensor data, or do consumers (the GT-as-SLAM diagnostic, sim_supervisor's GT compare) finite-difference pose? | IFSSIM |
-| Q5 | Lifecycle orchestration on the IFSSIM side — `mission_control_backend` spawning the submodule's launch via `subprocess`, compose-level service dependencies, or a thin `entrypoint.sh` watcher? | IFSSIM |
 
 ## Diagnostic tools
 
 Co-located with the autonomy stack rather than under `tools/`, so they're easy to find when reading the SLAM code.
 
-- **`pipeline/cone_slam/scripts/gt_pose_relay.py`** — a standalone ROS node that replaces `slam_node` by republishing `/fsds/testing_only/odom` under the same node-name and topic contract. Diagnostic for isolating "is SLAM the bottleneck or the consumers?" without changing any consumer. Includes the finite-differenced velocity needed to work around the empty-twist quirk on `/fsds/testing_only/odom`.
+- **`pipeline/cone_slam/scripts/gt_pose_relay.py`** — a standalone ROS node that replaces `slam_node` by republishing `/fsds/testing_only/odom` under the same node-name and topic contract. Diagnostic for isolating "is SLAM the bottleneck or the consumers?" without changing any consumer. The local finite-difference velocity path inside the relay is a holdover from the earlier asymmetric-twist behaviour and can be retired once the bridge fix lands; it doesn't hurt anything to leave in place as a safety net.
 - **`pipeline/cone_slam/scripts/replay_slam.py`** — offline replay of a captured rosbag through the SLAM node. Deterministic reproduction for failure analysis without a running sim.
 - **`SLAM_OBS` per-second log line** in `slam_node` — live obs/assoc/new/skip counters; the cleanest way to see a DA cascade in real time.
 - **`tools/refresh-bridge.sh`** — full container teardown + recreate when Docker UDP wedges or DDS state goes stale on macOS.
