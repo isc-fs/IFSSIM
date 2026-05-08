@@ -13,7 +13,7 @@ This document is a comprehensive technical reference for all systems, components
 3. [Vehicle Model](#3-vehicle-model)
 4. [Sensor Suite](#4-sensor-suite)
 5. [RPC Server (TCP API)](#5-rpc-server-tcp-api)
-6. [Data Streaming (UDP Push)](#6-data-streaming-udp-push)
+6. [Data Streaming (UDP push, with TCP/UDS soft-deprecated)](#6-data-streaming-udp-push-with-tcpuds-soft-deprecated)
 7. [ROS 2 Bridge](#7-ros-2-bridge)
 8. [Python Client](#8-python-client)
 9. [Track System](#9-track-system)
@@ -228,7 +228,7 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 ### 4.1 LiDAR
 
-**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Ray-casting runs on the **GPU**: three SceneCaptures share view geometry — depth (`SCS_SceneDepth`), base colour (`SCS_BaseColor`), world-space normal (`SCS_Normal`) — and a compute shader decodes them per ray into a point cloud with per-point intensity. Selected by the `LidarPath` setting (`"gpu"` is the production default; a `"cpu"` fallback using `LineTraceSingleByChannel` parallelised over channels is kept for reference and parity testing).
+**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Ray-casting runs on the **GPU**: two SceneCaptures share view geometry — depth (`SCS_SceneDepth`) and post-processed colour (`SCS_FinalColorLDR`) — and a compute shader decodes them per ray into a point cloud with per-point intensity. The world-space surface normal at each hit is computed inside the shader from depth-buffer gradients (central differences on neighbouring texels) rather than sampled — Mac UE5 5.7's Metal forward path does not populate the GBuffer that `SCS_Normal`/`SCS_BaseColor` read from, so a third capture would return blank-white on that platform. Selected by the `LidarPath` setting (`"gpu"` is the production default; a `"cpu"` fallback using `LineTraceSingleByChannel` parallelised over channels is kept for reference and parity testing).
 
 | Parameter | Default | Configurable | Source |
 |---|---|---|---|
@@ -257,10 +257,10 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 ```
 intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
 ```
-- **ρ_905** — surface reflectance at 905 nm. Sourced from the `BaseColor` capture's Rec.709 luminance as a placeholder; per-cone-material 905 nm reflectance values (blue ≈ 0.15, yellow ≈ 0.50, orange ≈ 0.65, white-stripe ≈ 0.92) are a follow-up content task.
-- **cos(θ_inc)** — angle of incidence between the ray and the world-space surface normal at the hit, sampled from the `Normal` capture (GPU path) or `FHitResult::ImpactNormal` (CPU path).
-- **(R_ref / range)²** — Lambert inverse-square term, normalised so a perpendicular surface at `R_ref = 1 m` returns the unmodified reflectance.
-- Output clamped to [0, 1]. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
+- **ρ_905** — surface reflectance at 905 nm. Sourced from the `FinalColorLDR` capture's Rec.709 luminance as a placeholder; per-cone-material 905 nm reflectance values (blue ≈ 0.15, yellow ≈ 0.50, orange ≈ 0.65, white-stripe ≈ 0.92) are a follow-up content task.
+- **cos(θ_inc)** — angle of incidence between the ray and the surface normal at the hit. GPU path computes the normal in-shader from depth-buffer central differences (cross-product of neighbour-texel deltas, then mapped from view to world space using the sensor's world rotation rows passed as shader parameters). CPU path uses `FHitResult::ImpactNormal`.
+- **(R_ref / range)²** — Lambert inverse-square term. `R_ref = 5 m` so cone-distance hits land in a useful intensity range — surfaces closer than 5 m saturate to ρ·cos(θ), surfaces farther fall off quadratically. (`R_ref = 1 m` was tried first and squashed 75% of the dynamic range to zero.)
+- Output clamped to [0, 1]. Wire format encodes `intensity < 0` as the "no-hit" sentinel before the bridge filters; valid points carry `intensity ≥ 0`. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
 
 **Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point.
 
@@ -468,8 +468,7 @@ High-frequency sensor data flows out of the plugin on dedicated streaming socket
 
 - **UDP push** (production default for LiDAR; sensor stream can also run on UDP). Sender-paced; bypasses macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) and forwards through gvisor without window-based throttling.
 - **TCP push streams** — *soft-deprecated* (#321 follow-up). Still functional and the bridge will use them if `lidar_transport=tcp` is passed, but bridge logs a deprecation WARN and the wire-format-multiplication cost (every change touches three sender sites) is no longer worth it. Will be deleted in a future PR.
-- **UDS push** for LiDAR — *soft-deprecated* same as TCP. Was a never-finished macOS-only experiment; UDP turned out to be enough.
-- **Unix Domain Socket (UDS)** for LiDAR specifically, when the plugin can open `/tmp/ifssim_streams/lidar.sock` on a host where the path is shared into the container — bypasses the TCP stack entirely.
+- **UDS push** for LiDAR (`/tmp/ifssim_streams/lidar.sock`, host-shared into the container) — *soft-deprecated* same as TCP. Was a never-finished macOS-only experiment to bypass the TCP stack entirely; UDP turned out to be enough.
 
 The two binary frame layouts are below. **Both halves of the wire — plugin sender and bridge receiver — must agree byte-for-byte.** The structs are `#pragma pack(push, 1)` on both sides; canonical definitions live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/RPC/FSDSUdpBroadcaster.h` and `ros2/src/ifssim_bridge/include/udp_receiver.h`.
 
