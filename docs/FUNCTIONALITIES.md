@@ -1015,7 +1015,7 @@ The autonomy stack — perception, SLAM, path planning, control — is the same 
 - Mission management: `sim_supervisor_node` (the simulated micro), `mission_control_node` (DVPC role), `mode_manager_node` (lifecycle orchestrator).
 - The two-phase runtime action protocol (startup with JIT warmup → runtime with throttle/steering/emergency/finished).
 - The TF tree `map → odom → fsds/FSCar` and which node owns which frame.
-- Open questions still being finalised (odometry source, GSS type, frame aliasing).
+- Open questions still being finalised (odometry source, frame aliasing, lifecycle orchestration).
 
 For the simulator-side topics that *feed* the autonomy stack (sensors, vehicle physics, RPC, Mission Control surface), see the sections above.
 
