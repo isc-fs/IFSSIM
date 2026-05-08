@@ -564,59 +564,55 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->ShowFlags.SetReflectionEnvironment(false);
 	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
 
-	// === #255 — intensity captures (BaseColor + WorldNormal) ===
-	// Two extra render targets share the depth capture's view geometry
-	// (FOV, position, rotation, RT size). The decode shader samples
-	// them at the same texel as the depth to compute per-point
-	// intensity = ρ_905 × cos(θ_inc) × (R_ref/range)². RGBA8 is enough
-	// for both — BaseColor is 0..1 sRGB-decoded by the capture, normal
-	// is encoded (n+1)·0.5 into RGB (Z = 0 in the alpha channel which
-	// the shader ignores).
-	auto MakeIntensityCapture = [&](USceneCaptureComponent2D*& Capture,
-	                                UTextureRenderTarget2D*& RT,
-	                                ESceneCaptureSource Source,
-	                                const TCHAR* DebugName)
-	{
-		RT = NewObject<UTextureRenderTarget2D>(this);
-		RT->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA8;
-		RT->ClearColor          = FLinearColor::Black;
-		RT->bAutoGenerateMips   = false;
-		RT->InitAutoFormat(RTW, RTH);
-		RT->UpdateResourceImmediate(true);
+	// === #255 — intensity capture (FinalColorLDR) ===
+	// One extra render target sharing the depth capture's view geometry
+	// (FOV, position, rotation, RT size). The decode shader samples it
+	// at the same texel as the depth to compute per-point intensity =
+	// ρ × cos(θ_inc) × (R_ref/range)², with ρ ≈ luminance(FinalColor)
+	// and cos(θ_inc) computed from depth-gradient surface normals
+	// inside the shader (no separate Normal capture). RGBA8 is enough
+	// for the LDR colour pass.
+	//
+	// SCS_FinalColorLDR is renderer-mode-agnostic — works on Mac UE5
+	// 5.7's Metal forward path where SCS_BaseColor and SCS_Normal both
+	// return blank-white because the GBuffer isn't populated the way
+	// deferred shading expects. The trade-off is that the captured
+	// luminance includes world lighting (sun/shadows), so the same
+	// material reads slightly differently in shadow vs light. For a
+	// sim-side LiDAR proxy that's acceptable; the alternative (forcing
+	// deferred shading project-wide) is too invasive.
+	GPUColorRT = NewObject<UTextureRenderTarget2D>(this);
+	GPUColorRT->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA8;
+	GPUColorRT->ClearColor         = FLinearColor::Black;
+	GPUColorRT->bAutoGenerateMips  = false;
+	GPUColorRT->InitAutoFormat(RTW, RTH);
+	GPUColorRT->UpdateResourceImmediate(true);
 
-		Capture = NewObject<USceneCaptureComponent2D>(Owner);
-		Capture->SetupAttachment(Owner->GetRootComponent());
-		Capture->RegisterComponent();
-		Capture->SetRelativeLocation(SensorOffset);
-		Capture->SetRelativeRotation(FRotator::ZeroRotator);
-		Capture->TextureTarget         = RT;
-		Capture->CaptureSource         = Source;
-		Capture->bCaptureEveryFrame    = false;
-		Capture->bCaptureOnMovement    = false;
-		Capture->bAlwaysPersistRenderingState = true;
-		Capture->FOVAngle              = HFovDeg;
-
-		// Same minimal-show-flags treatment as the depth capture so
-		// post/AA can't hijack the BaseColor/Normal we're sampling.
-		Capture->ShowFlags.SetAntiAliasing(false);
-		Capture->ShowFlags.SetTemporalAA(false);
-		Capture->ShowFlags.SetMotionBlur(false);
-		Capture->ShowFlags.SetBloom(false);
-		Capture->ShowFlags.SetTonemapper(false);
-		Capture->ShowFlags.SetEyeAdaptation(false);
-		Capture->ShowFlags.SetVignette(false);
-		Capture->ShowFlags.SetGrain(false);
-		Capture->ShowFlags.SetLensFlares(false);
-		Capture->ShowFlags.SetScreenSpaceReflections(false);
-		Capture->ShowFlags.SetReflectionEnvironment(false);
-		Capture->ShowFlags.SetAmbientOcclusion(false);
-		(void)DebugName;
-	};
-	MakeIntensityCapture(GPUColorCapture,  GPUColorRT,  ESceneCaptureSource::SCS_BaseColor,    TEXT("BaseColor"));
-	MakeIntensityCapture(GPUNormalCapture, GPUNormalRT, ESceneCaptureSource::SCS_Normal,       TEXT("Normal"));
+	GPUColorCapture = NewObject<USceneCaptureComponent2D>(Owner);
+	GPUColorCapture->SetupAttachment(Owner->GetRootComponent());
+	GPUColorCapture->RegisterComponent();
+	GPUColorCapture->SetRelativeLocation(SensorOffset);
+	GPUColorCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	GPUColorCapture->TextureTarget         = GPUColorRT;
+	GPUColorCapture->CaptureSource         = ESceneCaptureSource::SCS_FinalColorLDR;
+	GPUColorCapture->bCaptureEveryFrame    = false;
+	GPUColorCapture->bCaptureOnMovement    = false;
+	GPUColorCapture->bAlwaysPersistRenderingState = true;
+	GPUColorCapture->FOVAngle              = HFovDeg;
+	// Keep AA/tonemapper enabled here — FinalColorLDR is the post-
+	// processed pipeline output, so the usual visual flags apply. We
+	// only strip the LiDAR-irrelevant ones the depth capture also
+	// stripped (motion blur, bloom, vignette, etc.) to keep the
+	// per-frame cost down.
+	GPUColorCapture->ShowFlags.SetMotionBlur(false);
+	GPUColorCapture->ShowFlags.SetBloom(false);
+	GPUColorCapture->ShowFlags.SetVignette(false);
+	GPUColorCapture->ShowFlags.SetGrain(false);
+	GPUColorCapture->ShowFlags.SetLensFlares(false);
+	GPUColorCapture->ShowFlags.SetScreenSpaceReflections(false);
 
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f depth + 2× RGBA8 colour/normal) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m | ExtraOversample=%.2f×"),
+		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f depth + RGBA8 colour) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m | ExtraOversample=%.2f×"),
 		RTW, RTH, HFovDeg, PlanarVFovDeg, VFovCenterDeg, MaxRange / 100.f, ExtraOversample);
 
 	if (!ValidateProjectionRoundTrip())
@@ -759,8 +755,7 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 
 	const double T0 = FPlatformTime::Seconds();
 	GPUDepthCapture->CaptureScene();
-	if (GPUColorCapture)  GPUColorCapture->CaptureScene();
-	if (GPUNormalCapture) GPUNormalCapture->CaptureScene();
+	if (GPUColorCapture) GPUColorCapture->CaptureScene();
 	EnqueueDecodePass();
 	const double T1 = FPlatformTime::Seconds();
 
@@ -783,8 +778,15 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 	{
 		const FString OutDir  = FPaths::ProjectSavedDir() / TEXT("LidarGPU");
 		UKismetRenderingLibrary::ExportRenderTarget(GetWorld(), GPUDepthRT, OutDir, TEXT("DepthRT.exr"));
+		// #255 — also dump the colour RT for inspection when intensity
+		// values look wrong. (Normal capture removed — depth-gradient
+		// normals are computed inside the shader now.)
+		if (GPUColorRT)
+		{
+			UKismetRenderingLibrary::ExportRenderTarget(GetWorld(), GPUColorRT, OutDir, TEXT("ColorRT.png"));
+		}
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS LiDAR GPU: dumped depth RT after capture #%d → %s/DepthRT.exr"),
+			TEXT("FSDS LiDAR GPU: dumped depth/color RTs after capture #%d → %s/{DepthRT.exr, ColorRT.png}"),
 			GPUCaptureCount, *OutDir);
 		bGPUDumpedRT = true;
 	}
@@ -819,14 +821,12 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	FTextureRenderTargetResource* RTResource = GPUDepthRT->GameThread_GetRenderTargetResource();
 	if (!RTResource) return;
 
-	// #255 — also need the colour and normal RT resources. If either is
-	// missing (CPU path or pre-Phase-3 spike) we can still produce
-	// points, just with intensity stubbed at 0. Capture pointers on the
-	// game thread for the render-thread lambda.
+	// #255 — also need the colour RT resource. The Normal capture is
+	// gone now (depth-derived normals in the shader instead — see
+	// FSDSLidarDecode.usf). Capture pointer on the game thread for the
+	// render-thread lambda.
 	FTextureRenderTargetResource* ColorRTResource =
-		GPUColorRT  ? GPUColorRT->GameThread_GetRenderTargetResource()  : nullptr;
-	FTextureRenderTargetResource* NormalRTResource =
-		GPUNormalRT ? GPUNormalRT->GameThread_GetRenderTargetResource() : nullptr;
+		GPUColorRT ? GPUColorRT->GameThread_GetRenderTargetResource() : nullptr;
 
 	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
 		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
@@ -897,10 +897,14 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		U.SensorRotRowY = FVector3f(M.M[1][0], M.M[1][1], M.M[1][2]);
 		U.SensorRotRowZ = FVector3f(M.M[2][0], M.M[2][1], M.M[2][2]);
 	}
-	// Reference range for the inverse-square term (#255). 1 m matches
-	// the Hesai per-pixel intensity normalisation convention; tune
-	// later if the dynamic range needs adjusting.
-	U.RReferenceM = 1.0f;
+	// Reference range for the inverse-square term (#255). Set to 5 m —
+	// a typical FS-cone detection distance — so perpendicular hits at
+	// 5 m return the full reflectance, closer hits saturate, farther
+	// ones attenuate. Real Hesai applies receiver-side gain to do
+	// approximately this; without the gain a strict R_ref=1 m squashed
+	// 3–15 m returns into [0, 0.04] which exercises only the bottom
+	// few of an 8-bit channel and reads as "always zero" on consumers.
+	U.RReferenceM = 5.0f;
 
 	const int32 SlotIdx = NextDispatchSlot;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
@@ -932,23 +936,20 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	const TArray<float> ChannelMaxRangeCmCopy = PerChannelMaxRangeCm;
 
 	ENQUEUE_RENDER_COMMAND(FSDSLidarDecode)(
-		[Readback, RTResource, ColorRTResource, NormalRTResource,
+		[Readback, RTResource, ColorRTResource,
 		 U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHITexture* DepthRHI = RTResource->GetRenderTargetTexture();
 			if (!DepthRHI) return;
-			FRHITexture* ColorRHI  = ColorRTResource  ? ColorRTResource->GetRenderTargetTexture()  : nullptr;
-			FRHITexture* NormalRHI = NormalRTResource ? NormalRTResource->GetRenderTargetTexture() : nullptr;
-			if (!ColorRHI || !NormalRHI) return;  // intensity textures must be available; bail rather than emit garbage
+			FRHITexture* ColorRHI = ColorRTResource ? ColorRTResource->GetRenderTargetTexture() : nullptr;
+			if (!ColorRHI) return;  // intensity texture must be available; bail rather than emit garbage
 
 			FRDGBuilder GraphBuilder(RHICmdList);
 
-			FRDGTextureRef DepthRDG  = RegisterExternalTexture(
-				GraphBuilder, DepthRHI,  TEXT("FSDSLidarDepthRT"));
-			FRDGTextureRef ColorRDG  = RegisterExternalTexture(
-				GraphBuilder, ColorRHI,  TEXT("FSDSLidarColorRT"));
-			FRDGTextureRef NormalRDG = RegisterExternalTexture(
-				GraphBuilder, NormalRHI, TEXT("FSDSLidarNormalRT"));
+			FRDGTextureRef DepthRDG = RegisterExternalTexture(
+				GraphBuilder, DepthRHI, TEXT("FSDSLidarDepthRT"));
+			FRDGTextureRef ColorRDG = RegisterExternalTexture(
+				GraphBuilder, ColorRHI, TEXT("FSDSLidarColorRT"));
 
 			const FRDGBufferDesc BufDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), NumPoints);
 			FRDGBufferRef OutBuf = GraphBuilder.CreateBuffer(BufDesc, TEXT("FSDSLidarPoints"));
@@ -972,7 +973,6 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			auto* Params = GraphBuilder.AllocParameters<FFSDSLidarDecodeCS::FParameters>();
 			Params->DepthTexture          = DepthRDG;
 			Params->ColorTexture          = ColorRDG;   // #255
-			Params->NormalTexture         = NormalRDG;  // #255
 			Params->OutPoints             = GraphBuilder.CreateUAV(OutBuf);
 			Params->ChannelMaxRangeCm     = GraphBuilder.CreateSRV(ChannelRangeBuf);
 			Params->NumChannels           = U.NumChannels;

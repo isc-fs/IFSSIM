@@ -25,8 +25,7 @@
 #include "/Engine/Public/Platform.ush"
 
 Texture2D<float>  DepthTexture;
-Texture2D<float4> ColorTexture;
-Texture2D<float4> NormalTexture;
+Texture2D<float4> ColorTexture;  // SCS_FinalColorLDR — luminance is the reflectance proxy
 RWStructuredBuffer<float4> OutPoints;
 
 uint  NumChannels;
@@ -231,25 +230,53 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float Pz = DirZ * ScaleM + SensorOffsetZm;
 
 	// === Intensity (#255). Hesai-class working principle: ============
-	//   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
-	// where ρ_905 is the surface 905 nm reflectance (placeholder:
-	// Rec.709 luminance of the BaseColor capture), θ_inc is the angle
+	//   intensity = ρ × cos(θ_inc) × (R_ref / range)²
+	// where ρ is the surface reflectance (placeholder: Rec.709
+	// luminance of the SCS_FinalColorLDR capture), θ_inc is the angle
 	// of incidence between the ray and the surface normal at the hit,
 	// and the inverse-square term is normalised so a perpendicular
 	// surface at R_ref returns the unmodified reflectance.
-	const float3 BaseColor = ColorTexture.Load(int3(Col, Row, 0)).rgb;
-	const float  Reflectance = saturate(dot(BaseColor, float3(0.2126, 0.7152, 0.0722)));
+	const float3 SceneColor  = ColorTexture.Load(int3(Col, Row, 0)).rgb;
+	const float  Reflectance = saturate(dot(SceneColor, float3(0.2126, 0.7152, 0.0722)));
 
-	// SCS_Normal stores the world-space surface normal encoded into
-	// [0, 1] via (n + 1) * 0.5. Decode back to [-1, 1] and renormalise
-	// (the captured normal can be slightly off-unit due to filtering
-	// and quantisation in the RGBA8 RT).
-	const float3 NormalEncoded = NormalTexture.Load(int3(Col, Row, 0)).rgb;
-	const float3 NormalWorld   = normalize(NormalEncoded * 2.0 - 1.0);
+	// Surface normal from depth gradient. We don't have a populated
+	// SCS_Normal RT (Mac UE5 5.7's forward path doesn't fill it), but
+	// the depth RT we already have is enough: the central-difference
+	// gradient of depth across neighbouring texels gives the local
+	// surface tangents in image space, which we cross to get the
+	// surface normal in *view* space, then rotate to world via the
+	// sensor's row vectors. Output is unit-length in world frame.
+	const int CL = max(Col - 1, 0);
+	const int CR = min(Col + 1, int(RTWidth) - 1);
+	const int RU = max(Row - 1, 0);
+	const int RD = min(Row + 1, int(RTHeight) - 1);
+	const float DLeft  = DepthTexture.Load(int3(CL,  Row, 0));
+	const float DRight = DepthTexture.Load(int3(CR,  Row, 0));
+	const float DUp    = DepthTexture.Load(int3(Col, RU,  0));
+	const float DDown  = DepthTexture.Load(int3(Col, RD,  0));
+	// View-space tangent vectors. dx_view = (texel_size_x_world,
+	// 0, dz/dx_pixel). Texel-to-world scale cancels out when we
+	// normalise so we can use the depth gradient directly with unit
+	// pixel deltas.
+	const float3 TangentX_View = float3(2.0, 0.0,           DRight - DLeft);
+	const float3 TangentY_View = float3(0.0, 2.0,           DDown  - DUp);
+	const float3 NormalView    = normalize(cross(TangentY_View, TangentX_View));
 
-	// Ray direction in world frame. (DirX, DirY, DirZ) is the unit
-	// vehicle-local ray direction; rotate by the sensor's world-frame
-	// rotation so dot products against NormalWorld are well-defined.
+	// Sensor's view space → vehicle frame: the SceneCapture looks
+	// along +X (vehicle forward), with +Y_view = right_image and
+	// +Z_view = into_screen. Convert to vehicle-frame coords:
+	//   normal_vehicle.x =  NormalView.z   (toward sensor → into screen)
+	//   normal_vehicle.y = -NormalView.x   (UE Y-right → vehicle Y-right; depth-grad +x_image points right)
+	//   normal_vehicle.z = -NormalView.y   (image Y is down-positive; vehicle Z is up)
+	const float3 NormalVehicle = float3( NormalView.z, -NormalView.x, -NormalView.y);
+
+	// Vehicle frame → world frame via the sensor's pre-packed rotation rows.
+	const float3 NormalWorld = float3(
+		dot(SensorRotRowX, NormalVehicle),
+		dot(SensorRotRowY, NormalVehicle),
+		dot(SensorRotRowZ, NormalVehicle));
+
+	// Ray direction in world frame.
 	const float3 DirVehicle = float3(DirX, DirY, DirZ);
 	const float3 DirWorld   = float3(
 		dot(SensorRotRowX, DirVehicle),

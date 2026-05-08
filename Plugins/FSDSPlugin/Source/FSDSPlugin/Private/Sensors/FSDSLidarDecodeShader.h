@@ -30,8 +30,7 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>,  DepthTexture)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ColorTexture)   // SCS_BaseColor — RGB → ρ_905 proxy via luminance
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, NormalTexture)  // SCS_Normal    — RGB encodes world-space normal in [0,1] range
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ColorTexture)   // SCS_FinalColorLDR — RGB → reflectance proxy via Rec.709 luminance
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, OutPoints)
 
 		SHADER_PARAMETER(uint32, NumChannels)
@@ -74,13 +73,16 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		// the world frame so it can dot against the world-space normal
 		// captured in NormalTexture. Forward-row of the rotation matrix
 		// suffices; the C++ side packs the row vectors in column order.
-		SHADER_PARAMETER(float3, SensorRotRowX)
-		SHADER_PARAMETER(float3, SensorRotRowY)
-		SHADER_PARAMETER(float3, SensorRotRowZ)
+		// FVector3f on the C++ side maps to float3 in the HLSL uniform.
+		SHADER_PARAMETER(FVector3f, SensorRotRowX)
+		SHADER_PARAMETER(FVector3f, SensorRotRowY)
+		SHADER_PARAMETER(FVector3f, SensorRotRowZ)
 
 		// Intensity model (#255). RReferenceM gives the inverse-square
 		// reference range; perpendicular surfaces at this range return
-		// the unmodified reflectance.
+		// the unmodified reflectance. Set CPU-side to 5 m to put
+		// typical FS-cone returns near full-scale (real Hesai applies
+		// receiver-side gain for approximately the same effect).
 		SHADER_PARAMETER(float, RReferenceM)
 	END_SHADER_PARAMETER_STRUCT()
 
