@@ -1,66 +1,213 @@
 # Autonomy pipeline
 
-> ⚠️ **This doc describes the LEGACY in-tree pipeline that is being phased out.** The four pipeline packages (`cone_detection`, `cone_slam`, `path_planning`, `control`) are frozen ahead of a handoff to a separate team's repo, attached here as a submodule. For the **target end-state architecture** (DV pipeline submodule + IFSSIM-side bridge, sim, mission-control web, and the integration contract between them), see [`integrated_architecture.md`](integrated_architecture.md). For freeze and handoff context, see [#311](https://github.com/isc-fs/IFSSIM/issues/311).
-
-End-to-end overview of the ROS 2 autonomy stack that drives the simulated car: from raw LiDAR/IMU coming out of UE5 through cone detection, SLAM, path planning, and control — and back to UE5 as a `ControlCommand`. Read this before touching any of `pipeline/`.
+End-to-end overview of the autonomy stack: from raw LiDAR/IMU coming out of UE5 through perception, SLAM, path planning, and control — and back to UE5 as a `ControlCommand`. Read this before touching any of the autonomy nodes.
 
 For sim-side topics (sensors, vehicle physics, RPC) see [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md). For container layout and how to launch the stack see [`GETTING_STARTED_DOCKER.md`](GETTING_STARTED_DOCKER.md).
 
-## End-to-end data flow
+The DV pipeline (perception, SLAM, path planning, control, mission management) lives in a separate repo and is attached here as a submodule. The point of the split is that **the same code runs on the real car and in sim** — IFSSIM owns everything that fakes the real-car environment for it (sim, sim ↔ ROS bridge, Mission Control web, visualisation, Docker glue), and the autonomy submodule sees the same ROS interface either way. This is the central organising principle of the architecture and shows up in every section below.
+
+## Component ownership
+
+| Side | Owner | Lives in |
+|---|---|---|
+| Sim (UE5 + FSDSPlugin) | IFSSIM | this repo, `Plugins/FSDSPlugin/` |
+| Sim ↔ ROS bridge | IFSSIM | this repo, `ros2/src/ifssim_bridge/` |
+| Mission Control web (frontend + backend) | IFSSIM | this repo, `tools/mission_control/` |
+| Visualisation (Lichtblick + layouts) | IFSSIM | this repo, `lichtblick/`, container `lichtblick` |
+| Mission management (`sim_supervisor`, `mission_control`, `mode_manager`) | DV pipeline | submodule |
+| Autonomy lifecycle nodes (`perception`, `slam`, `path_planning`, `control`) | DV pipeline | submodule |
+| `coche_urdf` + `robot_state_publisher` | DV pipeline | submodule |
+| Docker / compose / launch glue | IFSSIM | this repo, `docker/` |
+
+### Roles inside mission management
+
+- **`sim_supervisor_node`** simulates the role the IFS-08 micro (uDV) plays on the real car. In sim it sources the `GO` signal and sinks the `FINISHED` signal; on the real car the physical micro plays that role. This node only exists in sim.
+- **`mission_control_node`** receives the selected mission, drives the autonomy lifecycle through `mode_manager`, exchanges heartbeats with the supervisor during startup, and forwards control commands from the autonomy stack to the supervisor (in sim) or the micro over the DVPC bus (real car).
+- **`mode_manager_node`** brings up the correct lifecycle nodes for the mission and passes them the mission-specific flag/strategy so each node knows which behaviour to run.
+- **Autonomy lifecycle nodes** internally use a strategy pattern keyed on the mission flag, so the same node binary handles trackdrive / autocross / accel / skidpad with different inner behaviours.
+
+Odometry lives inside `slam_node` (or in a thin fusion library it imports) rather than as a separate node — see [Open questions](#open-questions) for the exact placement decision, which has consequences for how DA degradation in cone-only sections is recoverable.
+
+## End-to-end graph
+
+The runtime control loop mirrors the real-car path: the autonomy stack does **not** publish actuator commands directly to the sim. `control_node` sends commands to `mission_control_node`, which forwards them to `sim_supervisor_node` (the simulated micro), which publishes them to the bridge. On the real car the same `mission_control_node` forwards to the physical micro over the DVPC bus. The sim path is one redirect longer than strictly necessary on purpose, so a bug in the chain shows up in sim before it shows up at the test track.
 
 ```mermaid
 flowchart TB
     classDef sim fill:#1f3a52,stroke:#5fa3d6,color:#e8f0ff
     classDef bridge fill:#3a2a52,stroke:#a778d6,color:#f0e8ff
-    classDef node fill:#2a4a2a,stroke:#7dc97d,color:#e8ffe8
-    classDef ctrl fill:#52382a,stroke:#d6925f,color:#ffe8d8
+    classDef mc fill:#52382a,stroke:#d6925f,color:#ffe8d8
+    classDef miss fill:#523a52,stroke:#d678d6,color:#ffe8ff
+    classDef autn fill:#2a4a2a,stroke:#7dc97d,color:#e8ffe8
+    classDef infra fill:#3a3a3a,stroke:#a8a8a8,color:#e8e8e8
     classDef viz fill:#3a3a3a,stroke:#a8a8a8,color:#e8e8e8,stroke-dasharray:4 4
 
-    subgraph UE5["IFSSIM (host)"]
+    %% =====================================================================
+    %% IFSSIM-OWNED HALF
+    %% =====================================================================
+    subgraph UE5["IFSSIM (host) — owned by this repo"]
         plugin["<b>FSDSPlugin</b><br/><i>C++</i><br/>RPC server :41451<br/>UDP sensor push"]
     end
     class UE5 sim
 
-    subgraph BridgeContainer["🐳 dv_pipeline_stack container — ROS 2 humble"]
-        bridge["<b>ifssim_bridge</b><br/><i>C++</i><br/>UDP/UDS sensor recv<br/>JSON-RPC client"]
-        cd["<b>Cone_Detection</b><br/><i>cone_detection pkg</i><br/>RANSAC ground removal<br/>DBSCAN clustering<br/>two-phase cone fit"]
-        slam["<b>cone_graph_slam</b><br/><i>cone_slam pkg</i><br/>GTSAM iSAM2<br/>IMU preintegration<br/>cone data association"]
-        plan["<b>Plan_Path</b><br/><i>path_planning pkg</i><br/>FaSTTUBe per-side sort<br/>cross-side matching<br/>B-spline output"]
-        ctrl["<b>Control</b><br/><i>control pkg</i><br/>Pure Pursuit lateral<br/>PI velocity longitudinal<br/>EBS / autonomous-stop"]
+    subgraph BridgeContainer["🐳 ifssim_bridge_stack — owned by this repo"]
+        bridge["<b>ifssim_bridge</b><br/><i>C++</i><br/>UDP recv + JSON-RPC<br/>publishes /fsds/* topics<br/>subscribes /fsds/control_command"]
     end
     class bridge bridge
-    class cd,slam,plan node
-    class ctrl ctrl
 
-    subgraph VizContainer["🐳 Lichtblick container"]
+    subgraph MCWeb["🐳 mission_control_(frontend|backend) — owned by this repo"]
+        mc_frontend["<b>frontend</b> (React)"]
+        mc_backend["<b>backend</b> (FastAPI)"]
+    end
+    class mc_frontend,mc_backend mc
+
+    subgraph VizContainer["🐳 lichtblick — owned by this repo"]
         fox["<b>foxglove_bridge</b><br/>ws://:8765"]
     end
     class fox,VizContainer viz
 
+    %% =====================================================================
+    %% DV PIPELINE SUBMODULE
+    %% =====================================================================
+    subgraph PipelineSubmodule["🐳 dv_pipeline_stack — DV pipeline submodule"]
+
+        subgraph Mission["Mission management"]
+            sup["<b>sim_supervisor_node</b><br/>(sim-only)<br/>simulates uDV micro"]
+            mcn["<b>mission_control_node</b>"]
+            mm["<b>mode_manager_node</b><br/>lifecycle orchestrator"]
+        end
+        class sup,mcn,mm miss
+
+        subgraph Auton["Autonomy pipeline (LifecycleNodes)"]
+            cd["<b>cone_detection_node</b><br/><i>perception pkg</i>"]
+            slam["<b>slam_node</b><br/><i>slam pkg</i>"]
+            plan["<b>path_planning_node</b>"]
+            ctrl["<b>control_node</b><br/>40 Hz timer<br/>(slew-limited, PR #308)"]
+        end
+        class cd,slam,plan,ctrl autn
+
+        subgraph Infra["Infrastructure"]
+            rsp["<b>robot_state_publisher</b><br/>+ joint_state_publisher<br/>coche_urdf, 200 Hz TF"]
+        end
+        class rsp infra
+    end
+
+    %% =====================================================================
+    %% SIM SENSORS: bridge → submodule
+    %% =====================================================================
     plugin -- "UDP :51453 (LiDAR)<br/>UDP :41452 (other sensors)" --> bridge
-    bridge -- "/fsds/lidar/Lidar1<br/>PointCloud2 @ 10 Hz" --> cd
-    bridge -- "/imu, /motor_rpm, /gss, /gps" --> slam
-    bridge -- "/imu" --> ctrl
+    bridge -- "<b>/fsds/lidar/Lidar1</b><br/>PointCloud2 @ 10 Hz" --> cd
+    bridge -- "<b>/fsds/imu</b><br/>sensor_msgs/Imu @ 400 Hz" --> slam
+    bridge -- "<b>/fsds/gss</b><br/>TwistWithCovarianceStamped" --> slam
+    bridge -- "<b>/fsds/gps</b><br/>NavSatFix" --> slam
+    bridge -- "<b>/fsds/testing_only/odom</b><br/>(diagnostic only)" --> sup
 
-    cd -- "/Conos_raw<br/>MarkerArray (base_link)<br/>scale.x=σxy  scale.z=height" --> slam
-    cd -- "/Conos_Orange<br/>big-orange only (base_link)" --> ctrl
+    %% =====================================================================
+    %% AUTONOMY DATAFLOW (internal to submodule)
+    %% =====================================================================
+    cd -- "/Conos_raw MarkerArray" --> slam
+    slam -- "/Conos MarkerArray<br/>+ /odom + TF odom→base_link" --> plan
+    slam -- "/odom + TF" --> ctrl
+    plan -- "/Path nav_msgs/Path" --> ctrl
+    rsp -. "TF (URDF joints + base)" .-> slam
+    rsp -. "TF" .-> ctrl
 
-    slam -- "/Conos<br/>persistent landmarks (odom)" --> plan
-    slam -. "TF odom→base_link" .-> plan
-    slam -- "/cone_slam/state<br/>nav_msgs/Odometry" --> ctrl
-    slam -. "TF map→odom (static)<br/>TF odom→base_link" .-> fox
+    %% =====================================================================
+    %% MISSION MANAGEMENT — STARTUP (Phase 1) and RUNTIME (Phase 2) ACTIONS
+    %% =====================================================================
+    sup <-- "<b>StartMission [Action]</b><br/>Phase 1 — startup<br/>heartbeat + ready/failed<br/>(JIT-warm window)" --> mcn
+    sup <-- "<b>RuntimeControl [Action]</b><br/>Phase 2 — running<br/>throttle / steering<br/>+ emergency + finished" --> mcn
+    mcn -- "activate_mode [Srv]<br/>+ mission flag" --> mm
+    mm -. "change_state [Srv]<br/>(lifecycle)" .-> cd
+    mm -. "change_state" .-> slam
+    mm -. "change_state" .-> plan
+    mm -. "change_state" .-> ctrl
+    ctrl -- "control commands<br/>(throttle/steer)" --> mcn
+    slam -- "emergency / finished" --> mcn
 
-    plan -- "/Path<br/>nav_msgs/Path (odom)" --> ctrl
+    %% =====================================================================
+    %% SIM-SIDE OUTPUT: sim_supervisor → bridge → FSDS
+    %% =====================================================================
+    sup -- "<b>/fsds/control_command</b><br/>fs_msgs/ControlCommand<br/>(simulating uDV→bridge)" --> bridge
+    sup -- "/signal/ebs, /signal/ebs_reset" --> bridge
+    bridge -- "JSON-RPC :41451<br/>(throttle/regen/steer + EBS<br/>+ loadTrack/setMode/...)" --> plugin
 
-    ctrl -- "/control_command<br/>fs_msgs/ControlCommand" --> bridge
-    ctrl -- "/signal/ebs<br/>/signal/ebs_reset" --> bridge
+    %% =====================================================================
+    %% MISSION CONTROL WEB ↔ MISSION MANAGEMENT
+    %% =====================================================================
+    mc_frontend -- "REST" --> mc_backend
+    mc_backend -- "StartMission [Action]<br/>(rclpy client)" --> sup
+    mc_backend -- "JSON-RPC<br/>(track load, sim pause, RES)" --> bridge
 
-    bridge -- "JSON-RPC :41451<br/>(throttle/regen/steer<br/>+ EBS, loadTrack, …)" --> plugin
-
-    bridge -. "all topics" .-> fox
+    %% =====================================================================
+    %% VIZ
+    %% =====================================================================
+    bridge -. "all /fsds/*" .-> fox
+    cd -. "/Conos_raw" .-> fox
+    slam -. "/Conos, /odom, TF" .-> fox
+    plan -. "/Path" .-> fox
+    ctrl -. "/control/*" .-> fox
 ```
 
-Solid arrows are ROS topics; dashed arrows are TF lookups or visualization side-channels. Colour: blue = sim, purple = bridge, green = production ROS nodes, orange = controller, grey = visualization.
+Solid arrows are ROS topics, RPC, or Action exchanges; dashed arrows are TF, services, or visualisation side-channels. Bidirectional `<-->` arrows represent ROS Actions (request + heartbeats + result).
+
+Colour key: blue = sim, purple = bridge, orange = Mission Control web, magenta = mission management ROS nodes, green = autonomy lifecycle nodes, grey = infrastructure / viz.
+
+## The integration contract
+
+This is the API surface between IFSSIM and the DV pipeline submodule. **Any change here is a breaking interface change** and must be coordinated.
+
+### Topics IFSSIM publishes (bridge → submodule)
+
+All sensor topics are namespaced under `/fsds/...` — the prefix is what tells the submodule "this is a simulated sensor, not real hardware." On the real car these come from real driver nodes under different names; the bridge is what fakes the FSDS-namespaced surface in sim.
+
+| Topic | Type | Frame | Rate | Notes |
+|---|---|---|---|---|
+| `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — XYZ only, no intensity. |
+| `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. |
+| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | TBD | Ground-speed sensor. Type still being finalised — see [Open questions](#open-questions) Q2. |
+| `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | Currently logged-only on the autonomy side. |
+| `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Optional input — may be redundant with `/fsds/gss`. |
+| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `fsds/FSCar`) | ~80 Hz | **Diagnostic only.** Ground-truth pose for the GT-as-SLAM diagnostic pattern (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `sim_supervisor_node` debugging. Autonomy must not consume it. **Quirk:** `twist.linear.x/y` is empty (bridge doesn't fill it from the FSDS RPC); consumers finite-difference pose if they need velocity — see Open questions Q5. |
+
+### Topics the submodule publishes back (sim_supervisor → bridge)
+
+The submodule's autonomy stack does **not** publish actuator commands directly to the bridge. Commands flow through `mission_control_node` and `sim_supervisor_node` first, so the sim path matches the real-car `DVPC → micro → CAN` chain. The bridge only ever sees commands from `sim_supervisor_node`.
+
+| Topic | Type | Publisher | Notes |
+|---|---|---|---|
+| `/fsds/control_command` | `fs_msgs/ControlCommand` | `sim_supervisor_node` | Throttle / regen / steering. The bridge subscribes; `control_node` does **not** publish here directly. |
+| `/signal/ebs` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS trigger. |
+| `/signal/ebs_reset` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS reset on autonomy boot. |
+
+The bridge tolerates startup-time absence of `/fsds/control_command` until Phase 1 of the runtime action protocol reports `ready` — actuator commands only start flowing after the autonomy lifecycle has fully come up.
+
+### Runtime action protocol (sim_supervisor ↔ mission_control)
+
+The control loop is a two-phase ROS Action exchange between `sim_supervisor_node` and `mission_control_node`:
+
+**Phase 1 — startup.** The supervisor sends an Action goal carrying the chosen mission (`trackdrive`, `autocross`, `accel`, `skidpad`). The mission controller drives `mode_manager` to bring up the right lifecycle nodes with the right strategy flag, sends periodic heartbeats back to the supervisor (so a crashed startup is detectable), then reports `ready` or `failed`. The startup window is also where Numba JIT compile for the planner runs — designed deliberately to absorb the first-call compile delay that would otherwise let the autonomy enter the runtime phase before the planner is ready.
+
+If the operator changes the mission during this window (e.g. switches accel → skidpad), the in-flight startup is cancellable and the system can re-enter Phase 1 for the new mission without a full restart.
+
+**Phase 2 — runtime.** Once Phase 1 reports `ready`, a second Action between the same two nodes carries:
+
+- `throttle`, `steering` — the normal control commands, sourced from the autonomy's `control_node`.
+- `emergency` — flag for emergency braking. Sourced from `slam_node` or any node detecting an unrecoverable state.
+- `finished` — flag for "mission completed", sourced from `slam_node` (e.g. on big-orange detection past the lap-min-distance gate).
+
+The supervisor publishes the resulting commands to `/fsds/control_command` for the bridge to forward to FSDS. On the real car, the same commands would go from `mission_control_node` to the physical micro over the DVPC bus, and `sim_supervisor_node` doesn't run.
+
+### Mission-control-web → mission management
+
+The Mission Control FastAPI backend calls into the supervisor's Action interface to drive the lifecycle, and into the bridge's JSON-RPC for sim-side actions:
+
+| Surface | Type | Source | Target | Purpose |
+|---|---|---|---|---|
+| Start mission | `Action StartMission` (rclpy client) | `mission_control_backend` | `sim_supervisor_node` | Kicks off Phase 1; supervisor relays to `mission_control_node`. |
+| Track load, sim pause/resume, RES | JSON-RPC | `mission_control_backend` | `ifssim_bridge` | Sim-only sandbox controls. |
+
+Bridge JSON-RPC (track load, sim pause/resume, sim-side RES, sensor probe) stays on the IFSSIM side. Sim-only commands belong on the IFSSIM side; mission state belongs on the submodule side via the supervisor.
 
 ## TF tree
 
@@ -70,148 +217,41 @@ flowchart LR
     classDef dyn fill:#2a4a2a,stroke:#7dc97d,color:#e8ffe8
 
     map(("map")) -- "static identity<br/>(/tf_static)" --> odom(("odom"))
-    odom -- "dynamic — SLAM tick rate<br/>(/tf)" --> base(("base_link"))
+    odom -- "dynamic — SLAM tick rate<br/>(/tf)" --> base(("fsds/FSCar"))
 
     class map,odom static
     class base dyn
 ```
 
-- **`map → odom`** is published as identity on `/tf_static` by `cone_graph_slam_node`. We don't have GPS-aligned global localisation, so the SLAM odom frame *is* effectively the map for downstream consumers; the static is there mainly so Lichtblick / Foxglove 3D panels can root themselves on `map`.
-- **`odom → base_link`** is the dynamic vehicle pose published by `cone_graph_slam_node` from its EKF state at SLAM tick rate.
-- The bridge does **not** publish any dynamic TF. Raw sensor messages carry sensor-local `frame_id`s (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`) that are not part of the live TF chain — the pipeline consumes the sensors directly without TF lookups.
-- `/fsds/testing_only/odom` (frame `odom`, child `fsds/FSCar`) is a ground-truth odometry feed published by the bridge for debugging and offline analysis only. The autonomy must not consume it.
+- **`map → odom`** is published as static identity by `slam_node`. Without GPS-aligned global localisation the SLAM odom frame *is* effectively the map for downstream consumers; the static is there mainly so visualisers can root themselves on `map`.
+- **`odom → fsds/FSCar`** is the dynamic vehicle pose published by `slam_node` at SLAM tick rate.
+- The bridge does **not** publish any dynamic TF. Sensor messages carry sensor-local `frame_id`s (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`) that are not part of the live TF chain — autonomy nodes consume the sensors directly without TF lookups.
+- `robot_state_publisher` + `joint_state_publisher` (in `coche_urdf`) publish URDF joint TFs at 200 Hz for visualisation and any downstream consumer that needs articulation.
 
-## Pipeline packages
+## Open questions
 
-The four production packages, top-to-bottom in the dataflow:
+Architectural choices still being finalised. Listed here because they have downstream consequences worth being deliberate about.
 
-| Order | Package | Node | Purpose |
-|---|---|---|---|
-| 1 | `pipeline/cone_detection/` | `Cone_Detection` | LiDAR → raw cone observations |
-| 2 | `pipeline/cone_slam/`      | `cone_graph_slam` | factor-graph SLAM map + odom |
-| 3 | `pipeline/path_planning/`  | `Plan_Path` | centerline path generation |
-| 4 | `pipeline/control/`        | `Control` | pure-pursuit + PI → throttle/regen/steer |
-
-### 1. Cone detection — `pipeline/cone_detection/cone_detection/cone_detection_node.py`
-
-- **In:** `/fsds/lidar/Lidar1` (`sensor_msgs/PointCloud2`, frame `fsds/Lidar`).
-- **Out:** `/Conos_raw` and `/Conos_Orange` (`visualization_msgs/MarkerArray`, frame `base_link`).
-- RANSAC ground-plane removal (Numba-jitted, subsampled to 5 000 points per iteration — see [#247](https://github.com/isc-fs/IFSSIM/issues/247)) → DBSCAN clustering → two-phase L-BFGS-B parametric cone fit with centroid fallback. Cluster height threshold separates big-orange (505 mm) from blue/yellow (325 mm).
-- Per-cone metadata is layered onto `Marker.scale`: `scale.x` carries σxy (observation position uncertainty, sentinel −1 = unknown), `scale.z` carries cluster height. Downstream SLAM consumes both.
-- A per-second `CONE_FILTER` diagnostic line logs the fall-off through each filter stage (input points → clusters → ≥2 pts → height gate → fit/centroid). Use it when observations look thin — it localises the loss in one scan instead of bisecting through the pipeline.
-- Package was named `slam` until [PR #251](https://github.com/isc-fs/IFSSIM/pull/251); renamed to remove the clash with `cone_slam` (which is the actual SLAM stage below).
-
-### 2. Cone-graph SLAM — `pipeline/cone_slam/cone_slam/cone_graph_slam_node.py`
-
-- **In:** `/Conos_raw`, `/imu`, `/motor_rpm`.
-- **Out:** `/cone_slam/state` (`nav_msgs/Odometry`, frame `odom`, child `base_link`), `/Conos` (`MarkerArray` in `odom` — landmarks). Publishes TF `map → odom` (static) and `odom → base_link` (dynamic).
-- GTSAM iSAM2 incremental factor-graph optimisation. Trigger is each `/Conos_raw` scan; IMU pre-integration provides the motion prior between scans, motor RPM is a slow speed reference. Big-orange cones are **not** added to the map (they're handled by `/Conos_Orange` directly to avoid colour confusion with the blue/yellow associator).
-- Internal modules: `factor_graph.py` (GTSAM graph construction), `imu_preintegrator.py` (pre-integrated IMU factor), `data_association.py` (Hungarian cone-to-landmark matching), `landmark_db.py` (persistent ID tracking), `color_classifier.py` (BLUE / YELLOW / ORANGE / BIG_ORANGE).
-- Design rationale and per-iteration tuning history are archived in [`history/cone_graph_slam_design.md`](history/cone_graph_slam_design.md) and [`history/cone_graph_slam_progress.md`](history/cone_graph_slam_progress.md).
-- Open issue: the colour classifier has a centre-band fallthrough that mis-labels far cones at low bearing as ORANGE — see [`fix/241` audit findings](https://github.com/isc-fs/IFSSIM/) for the proposed fix.
-
-### 3. Path planner — `pipeline/path_planning/path_planning/`
-
-- **In:** `/Conos` (the SLAM-mapped cones in `odom`). Looks up TF `odom → base_link` for the car pose.
-- **Out:** `/Path` (`nav_msgs/Path` in `odom`).
-- Wraps the FaSTTUBe Formula Student path-planning library (`fsd_path_planning.PathPlanner`, [papalotis/ft-fsd-path-planning](https://github.com/papalotis/ft-fsd-path-planning), MIT). The library sorts each side of the track independently, matches cones across sides, and outputs a parameterised B-spline. Per-side sort + cross-side matching is robust to:
-  - One-sided observation at corner exits (the inside arc rolling out of the FoV before fresh inside cones come into view).
-  - Spurious off-side cones in the cone soup (orange ghosts caused by the SLAM colour classifier above) — they don't form a plausible per-side sequence, so the sort drops them.
-- Adapter (`fasttube_adapter.py`) translates between our `Cone` / `Pose2D` types and the library's `ConeTypes` / `(global_cones, car_position, car_direction)` surface, swallows library exceptions on degenerate inputs (rate-limited log), and recomputes per-pose-point yaw from finite differences (the controller doesn't read the library's curvature output anyway).
-- Two opt-in env knobs for perf debugging (off by default in production):
-  - `DV_PLANNER_PERF=1` — log P50/P95/max of the inner library call once per ~5 s.
-  - `DV_PLANNER_EXPERIMENTAL=1` — pass `experimental_performance_improvements=True` to the library (~20% P50 win at the cost of slightly different algorithm logic per upstream's README).
-- Optional capture: `DV_PLANNER_CAPTURE=/path/to/file.jsonl` — one JSON line per callback (cones, pose, n_path) for offline replay.
-- The pre-FaSTTUBe in-house Delaunay+walker planner was removed in [PR #244](https://github.com/isc-fs/IFSSIM/pull/244). Skidpad / acceleration mission support is tracked in [#243](https://github.com/isc-fs/IFSSIM/issues/243); planner CPU optimisation in [#246](https://github.com/isc-fs/IFSSIM/issues/246).
-
-### 4. Control — `pipeline/control/control/`
-
-- **In:** `/Path`, `/cone_slam/state`, `/Conos_Orange`, `/imu`.
-- **Out:** `/control_command` (`fs_msgs/ControlCommand` — throttle / regen / steering), `/signal/ebs`, `/signal/ebs_reset`.
-- Layout:
-  - `state.py` — body-frame state snapshot built from `/cone_slam/state` (the twist's child frame is `base_link`).
-  - `reference.py` — path-projection / lookahead utilities. Reads only `(x, y)` from the `nav_msgs/Path` poses and recomputes yaw + curvature from finite differences.
-  - `controllers/pure_pursuit.py` — lateral controller (Pure Pursuit, lookahead-based steering).
-  - `controllers/pi_velocity.py` — longitudinal controller (PI on velocity, with a single-quadrant regen guard at `v < threshold` so we don't push the car backward from rest).
-  - `models/bicycle.py` — kinematic bicycle for the lateral controller's geometry.
-  - `control_node.py` — the ROS-facing wrapper that wires everything together.
-- On init the node publishes `/signal/ebs_reset` (latched) so a fresh autonomy instance can drive without manual EBS clearing. The stop-latch (autonomous finish on big-orange detection) only arms after the car has travelled >30 m from start, so the spawn-line big-orange doesn't trigger an immediate stop.
-- The motor controller in UE5 is single-quadrant regen on the EMRAX 228 model (see [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md)) — regen demand on a stationary or backward-rotating wheel is clamped to zero in `EmraxMotor.cpp`, so the controller can issue regen near zero velocity safely.
-
-## Topic reference (live pipeline)
-
-Quick lookup for what each topic carries, who publishes, who consumes, and what frame.
-
-| Topic | Type | Publisher | Subscribers | Frame |
-|---|---|---|---|---|
-| `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | bridge | Cone_Detection | `fsds/Lidar` |
-| `/imu` | `sensor_msgs/Imu` | bridge | cone_graph_slam, control | `fsds/IMU` |
-| `/motor_rpm` | `std_msgs/Float32` | bridge | cone_graph_slam | — |
-| `/gss` | `geometry_msgs/TwistStamped` | bridge | (logged only) | `fsds/GSS` |
-| `/gps` | `sensor_msgs/NavSatFix` | bridge | (logged only) | `fsds/GPS` |
-| `/Conos_raw` | `visualization_msgs/MarkerArray` | Cone_Detection | cone_graph_slam | `base_link` |
-| `/Conos_Orange` | `visualization_msgs/MarkerArray` | Cone_Detection | control | `base_link` |
-| `/Conos` | `visualization_msgs/MarkerArray` | cone_graph_slam | Plan_Path | `odom` |
-| `/cone_slam/state` | `nav_msgs/Odometry` | cone_graph_slam | control | `odom` (child `base_link`) |
-| `/Path` | `nav_msgs/Path` | Plan_Path | control | `odom` |
-| `/control_command` | `fs_msgs/ControlCommand` | control | bridge | — |
-| `/signal/ebs` | `std_msgs/Empty` (latched) | control | bridge | — |
-| `/signal/ebs_reset` | `std_msgs/Empty` (latched) | control | bridge | — |
-| `/signal/go` | `fs_msgs/GoSignal` | bridge | (mission_control hook) | — |
-| `/signal/finished` | `std_msgs/Empty` | control | bridge | — |
-| `/tf_static` | `tf2_msgs/TFMessage` | cone_graph_slam | TF buffers | — |
-| `/tf` | `tf2_msgs/TFMessage` | cone_graph_slam | TF buffers (Plan_Path) | — |
-| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | bridge | (debug only) | `odom` |
-| `/fsds/testing_only/track` | `MarkerArray` | bridge | (debug only) | `map` |
-
-## Side channels alongside the main loop
-
-- **Mission Control** (`tools/mission_control/`) talks to the bridge over the FSDS RPC port (start/stop session, load track, RES, EBS, snapshot referee state). It does not sit on the ROS topic chain — it manipulates the sim and the autonomy lifecycle from the side.
-- **`/Conos_Orange`** is a dedicated stream of big-orange (finish-line) cones in `base_link`. The control node consumes it directly to implement the autonomous-stop logic without going through SLAM.
-- **EBS / EBS-reset** are latched `std_msgs/Empty` topics (`/signal/ebs`, `/signal/ebs_reset`) the control node publishes for the bridge to act on.
-
-## Mission Control hooks
-
-`tools/mission_control/backend/main.py` is a FastAPI app that orchestrates the autonomy lifecycle. The user-visible Start Session sequence:
-
-1. Stop the autonomy pipeline (kills the launched processes inside the container).
-2. Activate RES (autonomy-disable signal — the bridge holds the car).
-3. Set the FSDS event mode (e.g. trackdrive).
-4. Resume the sim from pause.
-5. Start the autonomy pipeline.
-6. Wait ~4.5 s for SLAM to produce a calibrated estimate.
-7. Auto-release the EBS so the controller can issue commands.
-
-Guardrails the audit + recent fixes added:
-
-- `event_start` refuses with HTTP 400 if the loaded track has zero cones (silent track-load failures used to leave the event running on stale level state).
-- `/api/res/activate` no longer kills the autonomy pipeline; it only pulses the RES line.
-- The EMRAX idle creep torque was disabled (was 5 Nm — a Chaos workaround that produced ~0.83 m/s drift whenever EBS was released without an autonomy command).
-
-A faithful FS-DV state machine (T 14.8.x: `AS_Off` / `AS_Ready` / `AS_Driving` / `AS_Finished` / `AS_Emergency`) is tracked in [#173](https://github.com/isc-fs/IFSSIM/issues/173); the current Mission Control sequence is the staged stand-in until that lands.
-
-## Resource budget at runtime
-
-After [PR #248](https://github.com/isc-fs/IFSSIM/pull/248) (cone_detection RANSAC subsample + BLAS thread cap), steady-state CPU on a Mac M-series host running Docker:
-
-| Component | CPU | Notes |
+| # | Question | Owner |
 |---|---|---|
-| Container total | **~190%** (≈ 2 cores) | Was ~1000% (10 cores) before #248 |
-| Cone_Detection | 53–80% (2 BLAS threads) | RANSAC + DBSCAN |
-| cone_graph_slam | ~20% | GTSAM optimisation |
-| Plan_Path | ~7% | FaSTTUBe inner loop ~10 ms P50 |
-| Control | ~13% | Pure pursuit + PI |
-| ifssim_bridge (C++) | ~17% | UDP recv + JSON-RPC |
-| foxglove_bridge | 0–8% | Idle when no client connected |
+| Q1 | **Where does `/odom` come from?** Options: (a) `slam_node` publishes `/odom` directly — folds odometry into SLAM (re-creates the coupling that bit cone-only DA in #306); (b) thin `odometria` library inside `slam` that fuses IMU + GSS but isn't a separate lifecycle node; (c) `sim_supervisor` publishes a GT-derived `/odom` in sim, real car gets it from the micro. Option (b) preserves the separation that made the GT-as-SLAM diagnostic viable. | DV pipeline |
+| Q2 | `/fsds/gss` type — `TwistWithCovarianceStamped` (type the diagram specifies) vs the simpler `TwistStamped` (no covariance). Drives whether the bridge synthesises covariance or whether the submodule accepts uncovariant input. | IFSSIM × DV pipeline |
+| Q3 | Real-car DVPC presence in sim — is `mission_control_node` always co-resident with `sim_supervisor_node`, or does the supervisor host the DVPC role itself in sim? Affects whether `mission_control_backend` targets the supervisor or the controller. | DV pipeline |
+| Q4 | Frame name `fsds/FSCar` vs REP-105 `base_link` — does the submodule publish both as aliases for compatibility with Lichtblick layouts and any IFSSIM-side TF lookups? | DV pipeline |
+| Q5 | Does the bridge fill `twist.linear` on `/fsds/testing_only/odom` from FSDS RPC sensor data, or do consumers (the GT-as-SLAM diagnostic, sim_supervisor's GT compare) finite-difference pose? | IFSSIM |
+| Q6 | Lifecycle orchestration on the IFSSIM side — `mission_control_backend` spawning the submodule's launch via `subprocess`, compose-level service dependencies, or a thin `entrypoint.sh` watcher? | IFSSIM |
 
-`/Path` publishes at ~7–10 Hz with the FaSTTUBe planner (callback rate matches `/Conos`); some scans return empty when the library throws `LinAlgError` on degenerate cone configurations — tracked in [#246](https://github.com/isc-fs/IFSSIM/issues/246).
+## Diagnostic tools
 
-## When the car won't drive — debugging order
+Co-located with the autonomy stack rather than under `tools/`, so they're easy to find when reading the SLAM code.
 
-1. Is a track loaded? `/api/track/state` should show `cones > 0`. If not, Start Session would refuse anyway since #61.
-2. Are cones being detected? Watch the per-second `CONE_FILTER` log line from `Cone_Detection`. Stage drop-off shows you which gate (min-points, height, fit/centroid) is shedding observations.
-3. Is SLAM producing landmarks? `/Conos` non-empty + `/cone_slam/state` ticking. If `/Conos_raw` is high but `/Conos` stays low, SLAM gating is the bottleneck (#177 was an instance).
-4. Is the planner emitting a path? `ros2 topic hz /Path` should match the `/Conos` rate. If the planner's `plan_empty` counter (in the per-second `PATH_RATE` log line) is high, the FaSTTUBe library is throwing on the cone configuration — set `DV_PLANNER_PERF=1` for timing detail and check the warning logs for the exception type.
-5. Is the controller issuing commands? `/control_command` should tick at the controller rate. Zero throttle with a non-empty `/Path` usually means the controller's stop-latch fired or the velocity reference is zero.
-6. Is the EBS released? `getEbsLatched` via the bridge RPC — if it returns `true`, the car physically can't move. Mission Control's "event_start" releases it; manual `releaseEbs` RPC works too.
-7. If `/control_command` looks healthy and EBS is released but the car doesn't move: bridge half-open TCP issue. `tools/refresh-bridge.sh` clears it. Tracked as a recurring nuisance; no root fix yet.
+- **`pipeline/cone_slam/scripts/gt_pose_relay.py`** — a standalone ROS node that replaces `slam_node` by republishing `/fsds/testing_only/odom` under the same node-name and topic contract. Diagnostic for isolating "is SLAM the bottleneck or the consumers?" without changing any consumer. Includes the finite-differenced velocity needed to work around the empty-twist quirk on `/fsds/testing_only/odom`.
+- **`pipeline/cone_slam/scripts/replay_slam.py`** — offline replay of a captured rosbag through the SLAM node. Deterministic reproduction for failure analysis without a running sim.
+- **`SLAM_OBS` per-second log line** in `slam_node` — live obs/assoc/new/skip counters; the cleanest way to see a DA cascade in real time.
+- **`tools/refresh-bridge.sh`** — full container teardown + recreate when Docker UDP wedges or DDS state goes stale on macOS.
+
+## See also
+
+- [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md) — sim-side topics, sensors, vehicle physics, RPC.
+- [`GETTING_STARTED_DOCKER.md`](GETTING_STARTED_DOCKER.md) — container layout and how to launch the stack.
+- [#255](https://github.com/isc-fs/IFSSIM/issues/255) — LiDAR per-point intensity. The cone-colour signal `slam_node`'s DA needs lives upstream of every pipeline node and depends on UE5 plugin work; IFSSIM-side prerequisite.

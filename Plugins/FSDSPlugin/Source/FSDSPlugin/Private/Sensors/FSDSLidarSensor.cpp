@@ -139,11 +139,20 @@ void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	// GPU backend (#223): rate-limited depth capture; no point-cloud
-	// production yet (Phase 1 milestone is "depth render set up at the
-	// LiDAR's geometry"). Phase 2 adds GPU→CPU readback, Phase 3 the
-	// decode shader. Under GPU mode the CPU path is fully short-
-	// circuited; broadcaster sees an empty cloud until Phase 3 lands.
+	// GPU backend (#223). Production default. TickGPUPath drives all
+	// three pipeline stages:
+	//   Phase 1 — CaptureScene() renders depth at the LiDAR's spherical
+	//             scan envelope into GPUDepthRT.
+	//   Phase 2 — PollGPUReadback() polls the readback ring (ReadbackSlots
+	//             with bInFlight/bLockDispatched flags) and copies the
+	//             decoded float4[] output back to the game thread.
+	//   Phase 3 — EnqueueDecodePass() runs the RDG compute pass driven by
+	//             FSDSLidarDecode.usf which converts the depth texels
+	//             into LiDAR-frame xyz hits.
+	// ConsumeReadbackResult packs valid hits into PointCloudBuffer in the
+	// same flat-float [x,y,z, ...] format the CPU path emits, so the
+	// broadcaster + GetPointCloud() consumers don't need to know which
+	// path produced the data.
 	if (LidarPath == EFSDSLidarPath::GPU)
 	{
 		TickGPUPath(DeltaTime);

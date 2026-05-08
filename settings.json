@@ -10,6 +10,7 @@
       "AllowAPIAlways": true,
       "AutoCreate": true,
       "VehiclePhysics": {
+        "_comment_motor": "MotorMaxTorque, MotorMaxPower, MotorRPM[], MotorTorque[] are vestigial. Drive torque comes from the dedicated UEmraxMotor class (EMRAX 228 MV at 400 V bus, see Plugins/FSDSPlugin/Source/FSDSPlugin/Public/EmraxMotor.h). The pawn silences Chaos's ICE-style engine each tick (SetThrottleInput(0)) and injects per-wheel torque via SetDriveTorque, so these fields feed only the silenced Chaos engine and have no effect on actual driving. Of the motor-side settings, only MaxRegenTorque/MaxRegenPower are forwarded to the EMRAX class. Kept here so existing tooling and external mirrors keep parsing; remove in a future pass.",
         "Mass": 275,
         "Drivetrain": "RWD",
         "WheelRadius": 0.228,
@@ -75,7 +76,7 @@
           "X": 0.0, "Y": 0, "Z": 1.10,
           "RangeNoiseStd": 0.03,
           "DropoutRate": 0.01,
-          "_comment_lidarpath": "GPU path active (#223 Phase 1). Renders depth at the LiDAR's spherical scan envelope; produces NO point cloud yet — Phases 2-3 add async readback + decode shader. The /lidar/Lidar1 topic will be empty under this setting until Phase 3 lands. Switch back to 'cpu' to restore live point clouds.",
+          "_comment_lidarpath": "GPU path (#223). Production default. Three-stage pipeline: depth render at the LiDAR's spherical scan envelope (CaptureScene), async GPU→CPU readback ring, and the FSDSLidarDecode.usf compute pass that turns depth texels into LiDAR-frame xyz hits. Output is the same flat-float point cloud the CPU path emits — switch to 'cpu' only for parity testing or a Chaos LineTrace reference run.",
           "LidarPath": "gpu",
           "_comment_perchannelmaxrange": "Per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle = -12.4°, 115 = highest = +5.9°). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams: 60 m bottom rings, 198 m centre, 90 m top. The array below is derived from the datasheet (App. A.1.2 Sorted by Ring IDs) and linearly remapped [60-198 m] → [25-30 m] so it fits under the sim's MaxRange=30 m perf budget while preserving the relative shape. Regenerate with `python3 tools/gen_per_channel_range.py --pretty`. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this.",
           "PerChannelMaxRangeM": [
