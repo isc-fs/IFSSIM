@@ -12,10 +12,13 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # LIDAR_TRANSPORT — "tcp" (default) or "udp". UDP bypasses macOS Docker
-    # Desktop's TCP loopback throughput cap (~7 MB/s), at the cost of
-    # accepting per-datagram packet loss for the LiDAR stream.
-    lidar_transport = os.environ.get("LIDAR_TRANSPORT", "tcp").lower()
+    # LIDAR_TRANSPORT — "udp" (default, production) or "tcp" / "uds"
+    # (soft-deprecated as of #321 follow-up; kept for parity testing only,
+    # bridge will WARN when either is selected). UDP bypasses macOS Docker
+    # Desktop's TCP loopback throughput cap (~7 MB/s) and was the binding
+    # win — TCP/UDS are no longer worth the wire-format-multiplication
+    # cost.
+    lidar_transport = os.environ.get("LIDAR_TRANSPORT", "udp").lower()
 
     return LaunchDescription([
         DeclareLaunchArgument('host',         default_value='host.docker.internal'),

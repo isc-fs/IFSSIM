@@ -462,12 +462,13 @@ Two commands open the connection in persistent streaming mode (no further reques
 
 ---
 
-## 6. Data Streaming (TCP push + UDP push)
+## 6. Data Streaming (UDP push, with TCP/UDS soft-deprecated)
 
-High-frequency sensor data flows out of the plugin on dedicated streaming sockets — separate from the RPC server. The bridge can consume either transport per stream:
+High-frequency sensor data flows out of the plugin on dedicated streaming sockets — separate from the RPC server.
 
-- **TCP push streams** opened by the plugin to a fixed bridge endpoint at startup. Reliable; bound by macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) which limits LiDAR throughput on Mac.
-- **UDP push** when the bridge is launched with `lidar_transport:=udp` (or `LIDAR_TRANSPORT=udp` in `docker-compose`). Sender-paced; bypasses macOS Docker's TCP loopback throttle but accepts per-datagram packet loss.
+- **UDP push** (production default for LiDAR; sensor stream can also run on UDP). Sender-paced; bypasses macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) and forwards through gvisor without window-based throttling.
+- **TCP push streams** — *soft-deprecated* (#321 follow-up). Still functional and the bridge will use them if `lidar_transport=tcp` is passed, but bridge logs a deprecation WARN and the wire-format-multiplication cost (every change touches three sender sites) is no longer worth it. Will be deleted in a future PR.
+- **UDS push** for LiDAR — *soft-deprecated* same as TCP. Was a never-finished macOS-only experiment; UDP turned out to be enough.
 - **Unix Domain Socket (UDS)** for LiDAR specifically, when the plugin can open `/tmp/ifssim_streams/lidar.sock` on a host where the path is shared into the container — bypasses the TCP stack entirely.
 
 The two binary frame layouts are below. **Both halves of the wire — plugin sender and bridge receiver — must agree byte-for-byte.** The structs are `#pragma pack(push, 1)` on both sides; canonical definitions live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/RPC/FSDSUdpBroadcaster.h` and `ros2/src/ifssim_bridge/include/udp_receiver.h`.
@@ -539,11 +540,11 @@ The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack t
 | Connection | Default transport | Configurable | Purpose |
 |---|---|---|---|
 | Sensor stream | TCP push (port 41452) | TCP / UDP | One unified `SensorFrame` carrying GPS + IMU + GSS + odom + RPM + referee + controls echo |
-| LiDAR stream | TCP push (port 41453) | TCP / UDP / UDS | LiDAR point cloud chunks |
+| LiDAR stream | UDP push (port 41453, default) | UDP / TCP* / UDS* | LiDAR point cloud chunks. *TCP and UDS soft-deprecated; bridge WARNs.* |
 | Camera client | TCP req/resp (port 41451 RPC) | — | One image per timer tick per camera |
 | Command client | TCP req/resp (port 41451 RPC) | — | `setCarControls`, EBS, track queries, settings |
 
-`lidar_transport` is set via the launch parameter or `LIDAR_TRANSPORT` env var. Bridge logs a warning and falls back to `tcp` for unknown values.
+`lidar_transport` is set via the launch parameter or `LIDAR_TRANSPORT` env var. Default is `udp`; bridge logs a warning and falls back to `udp` for unknown values, and logs a deprecation WARN for `tcp`/`uds`.
 
 ### Published Topics
 

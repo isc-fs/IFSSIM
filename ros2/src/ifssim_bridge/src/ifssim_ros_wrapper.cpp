@@ -40,19 +40,31 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // the UDS path once the socket appears.
     lidar_uds_path_ = node_->declare_parameter<std::string>(
         "lidar_uds_path", "/tmp/ifssim_streams/lidar.sock");
-    // LiDAR transport selection: "tcp" (default) or "udp". UDP avoids the
-    // macOS Docker Desktop loopback throughput cap on TCP — at 1.74 M pts/s
-    // the TCP path tops out at ~3 Hz on Mac while the same datagram stream
-    // over UDP forwards through gvisor without window-based throttling.
-    // On Linux hosts both transports work and TCP is preferred (reliable
-    // delivery, no fragmentation accounting).
+    // LiDAR transport selection. Production is "udp" — the others are
+    // **soft-deprecated** as of #321 (originally added to bypass macOS
+    // Docker Desktop's TCP loopback throughput cap; UDP turned out to be
+    // robust enough on every supported host so the duplicate code paths
+    // are no longer worth maintaining). The TCP and UDS senders still
+    // exist for parity testing and rollback, but every wire-format
+    // change must keep all three in sync — that's the cost we're trying
+    // to retire. A future PR will delete the TCP / UDS LiDAR paths
+    // outright once we've confirmed nothing depends on them off-Mac.
     lidar_transport_ = node_->declare_parameter<std::string>(
-        "lidar_transport", "tcp");
-    if (lidar_transport_ != "tcp" && lidar_transport_ != "udp") {
+        "lidar_transport", "udp");
+    if (lidar_transport_ != "tcp"
+        && lidar_transport_ != "udp"
+        && lidar_transport_ != "uds") {
         RCLCPP_WARN(node_->get_logger(),
-            "Unknown lidar_transport '%s' — defaulting to tcp",
+            "Unknown lidar_transport '%s' — defaulting to udp",
             lidar_transport_.c_str());
-        lidar_transport_ = "tcp";
+        lidar_transport_ = "udp";
+    }
+    if (lidar_transport_ != "udp") {
+        RCLCPP_WARN(node_->get_logger(),
+            "lidar_transport='%s' is soft-deprecated (#321 follow-up). "
+            "Production uses 'udp'. The '%s' path is kept for parity "
+            "testing only and may be removed in a future release.",
+            lidar_transport_.c_str(), lidar_transport_.c_str());
     }
 
     initializeConnection();
