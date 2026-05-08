@@ -253,7 +253,7 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	// CurrentHorizontalAngle was a per-iteration accumulator; replaced
 	// with direct h-index → HAngle math so iterations are independent.
 	// The resulting state at end-of-scan is identical (one HFov sweep).
-	struct FRayResult { float X, Y, Z; bool bHit; };
+	struct FRayResult { float X, Y, Z, Intensity; bool bHit; };
 	TArray<FRayResult> SlotResults;
 	const int32 TotalSlots = HorizontalSteps * NumberOfChannels;
 	SlotResults.SetNumUninitialized(TotalSlots);
@@ -331,10 +331,28 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			// the car drives fine; at the first curve the mirrored path
 			// diverges from physical geometry and the controller turns
 			// the wrong way.
+			//
+			// Intensity (#255). The CPU path doesn't sample BaseColor
+			// per material, so the reflectance term is a placeholder
+			// (0.5 mid-grey). cos(θ_inc) is exact via FHitResult::
+			// ImpactNormal, and the (R_ref/range)² term is the same
+			// inverse-square as the GPU path. This produces an intensity
+			// that varies correctly with range and angle even though
+			// per-material reflectance isn't modelled here.
+			constexpr float CPU_REFLECTANCE_PLACEHOLDER = 0.5f;
+			constexpr float R_REFERENCE_M = 1.0f;
+			const float CosIncidence = FMath::Max(0.0f,
+				static_cast<float>(FVector::DotProduct(-RayDir, Hit.ImpactNormal)));
+			const float RangeM   = FMath::Max(Dist / 100.0f, 0.01f);
+			const float Falloff  = (R_REFERENCE_M * R_REFERENCE_M) / (RangeM * RangeM);
+			const float Intensity = FMath::Clamp(
+				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff, 0.0f, 1.0f);
+
 			SlotResults[SlotIdx] = {
-				LocalHit.X / 100.f,
-				-LocalHit.Y / 100.f,
-				LocalHit.Z / 100.f,
+				static_cast<float>(LocalHit.X) / 100.f,
+				static_cast<float>(-LocalHit.Y) / 100.f,
+				static_cast<float>(LocalHit.Z) / 100.f,
+				Intensity,
 				true
 			};
 		}
@@ -352,6 +370,7 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 		NewPoints.Add(R.X);
 		NewPoints.Add(R.Y);
 		NewPoints.Add(R.Z);
+		NewPoints.Add(R.Intensity);  // #255
 		HitCount++;
 	}
 
@@ -545,8 +564,59 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->ShowFlags.SetReflectionEnvironment(false);
 	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
 
+	// === #255 — intensity captures (BaseColor + WorldNormal) ===
+	// Two extra render targets share the depth capture's view geometry
+	// (FOV, position, rotation, RT size). The decode shader samples
+	// them at the same texel as the depth to compute per-point
+	// intensity = ρ_905 × cos(θ_inc) × (R_ref/range)². RGBA8 is enough
+	// for both — BaseColor is 0..1 sRGB-decoded by the capture, normal
+	// is encoded (n+1)·0.5 into RGB (Z = 0 in the alpha channel which
+	// the shader ignores).
+	auto MakeIntensityCapture = [&](USceneCaptureComponent2D*& Capture,
+	                                UTextureRenderTarget2D*& RT,
+	                                ESceneCaptureSource Source,
+	                                const TCHAR* DebugName)
+	{
+		RT = NewObject<UTextureRenderTarget2D>(this);
+		RT->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA8;
+		RT->ClearColor          = FLinearColor::Black;
+		RT->bAutoGenerateMips   = false;
+		RT->InitAutoFormat(RTW, RTH);
+		RT->UpdateResourceImmediate(true);
+
+		Capture = NewObject<USceneCaptureComponent2D>(Owner);
+		Capture->SetupAttachment(Owner->GetRootComponent());
+		Capture->RegisterComponent();
+		Capture->SetRelativeLocation(SensorOffset);
+		Capture->SetRelativeRotation(FRotator::ZeroRotator);
+		Capture->TextureTarget         = RT;
+		Capture->CaptureSource         = Source;
+		Capture->bCaptureEveryFrame    = false;
+		Capture->bCaptureOnMovement    = false;
+		Capture->bAlwaysPersistRenderingState = true;
+		Capture->FOVAngle              = HFovDeg;
+
+		// Same minimal-show-flags treatment as the depth capture so
+		// post/AA can't hijack the BaseColor/Normal we're sampling.
+		Capture->ShowFlags.SetAntiAliasing(false);
+		Capture->ShowFlags.SetTemporalAA(false);
+		Capture->ShowFlags.SetMotionBlur(false);
+		Capture->ShowFlags.SetBloom(false);
+		Capture->ShowFlags.SetTonemapper(false);
+		Capture->ShowFlags.SetEyeAdaptation(false);
+		Capture->ShowFlags.SetVignette(false);
+		Capture->ShowFlags.SetGrain(false);
+		Capture->ShowFlags.SetLensFlares(false);
+		Capture->ShowFlags.SetScreenSpaceReflections(false);
+		Capture->ShowFlags.SetReflectionEnvironment(false);
+		Capture->ShowFlags.SetAmbientOcclusion(false);
+		(void)DebugName;
+	};
+	MakeIntensityCapture(GPUColorCapture,  GPUColorRT,  ESceneCaptureSource::SCS_BaseColor,    TEXT("BaseColor"));
+	MakeIntensityCapture(GPUNormalCapture, GPUNormalRT, ESceneCaptureSource::SCS_Normal,       TEXT("Normal"));
+
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m | ExtraOversample=%.2f×"),
+		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f depth + 2× RGBA8 colour/normal) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m | ExtraOversample=%.2f×"),
 		RTW, RTH, HFovDeg, PlanarVFovDeg, VFovCenterDeg, MaxRange / 100.f, ExtraOversample);
 
 	if (!ValidateProjectionRoundTrip())
@@ -689,6 +759,8 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 
 	const double T0 = FPlatformTime::Seconds();
 	GPUDepthCapture->CaptureScene();
+	if (GPUColorCapture)  GPUColorCapture->CaptureScene();
+	if (GPUNormalCapture) GPUNormalCapture->CaptureScene();
 	EnqueueDecodePass();
 	const double T1 = FPlatformTime::Seconds();
 
@@ -747,6 +819,15 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	FTextureRenderTargetResource* RTResource = GPUDepthRT->GameThread_GetRenderTargetResource();
 	if (!RTResource) return;
 
+	// #255 — also need the colour and normal RT resources. If either is
+	// missing (CPU path or pre-Phase-3 spike) we can still produce
+	// points, just with intensity stubbed at 0. Capture pointers on the
+	// game thread for the render-thread lambda.
+	FTextureRenderTargetResource* ColorRTResource =
+		GPUColorRT  ? GPUColorRT->GameThread_GetRenderTargetResource()  : nullptr;
+	FTextureRenderTargetResource* NormalRTResource =
+		GPUNormalRT ? GPUNormalRT->GameThread_GetRenderTargetResource() : nullptr;
+
 	const int32 PointsPerScan = FMath::Max(1, FMath::RoundToInt(
 		(float)PointsPerSecond / FMath::Max(1.f, RotationsPerSecond)));
 	const int32 NumChannels_LCL    = NumberOfChannels;
@@ -768,6 +849,15 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
 		uint32 RNGSeed;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
+		// #255 — sensor's world-frame rotation rows. The shader uses
+		// these to take the vehicle-local ray direction into world frame
+		// so it can dot against the world-space surface normal sampled
+		// from NormalTexture. Computed once per scan from the owner
+		// transform on the game thread.
+		FVector3f SensorRotRowX;
+		FVector3f SensorRotRowY;
+		FVector3f SensorRotRowZ;
+		float RReferenceM;  // inverse-square reference range (#255)
 	} U;
 	U.NumChannels        = (uint32)NumChannels_LCL;
 	U.NumHorizontalSteps = (uint32)NumHorizontalSteps;
@@ -794,6 +884,23 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.SensorOffsetXm     = SensorOffset.X / 100.f;
 	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
 	U.SensorOffsetZm     = SensorOffset.Z / 100.f;
+
+	// Sensor world rotation rows (#255) — vehicle frame → world frame.
+	// The shader needs them to put the vehicle-local spherical ray
+	// direction into the same frame as the world-space normal stored
+	// in NormalTexture, so the dot product is well-defined. Pull from
+	// the captured pose snapshot stored by TickGPUPath; this is the
+	// pose at dispatch time, which matches the captured normals.
+	{
+		const FMatrix M = GPUPendingOwnerRotation.ToMatrix();
+		U.SensorRotRowX = FVector3f(M.M[0][0], M.M[0][1], M.M[0][2]);
+		U.SensorRotRowY = FVector3f(M.M[1][0], M.M[1][1], M.M[1][2]);
+		U.SensorRotRowZ = FVector3f(M.M[2][0], M.M[2][1], M.M[2][2]);
+	}
+	// Reference range for the inverse-square term (#255). 1 m matches
+	// the Hesai per-pixel intensity normalisation convention; tune
+	// later if the dynamic range needs adjusting.
+	U.RReferenceM = 1.0f;
 
 	const int32 SlotIdx = NextDispatchSlot;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
@@ -825,15 +932,23 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	const TArray<float> ChannelMaxRangeCmCopy = PerChannelMaxRangeCm;
 
 	ENQUEUE_RENDER_COMMAND(FSDSLidarDecode)(
-		[Readback, RTResource, U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy](FRHICommandListImmediate& RHICmdList)
+		[Readback, RTResource, ColorRTResource, NormalRTResource,
+		 U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHITexture* DepthRHI = RTResource->GetRenderTargetTexture();
 			if (!DepthRHI) return;
+			FRHITexture* ColorRHI  = ColorRTResource  ? ColorRTResource->GetRenderTargetTexture()  : nullptr;
+			FRHITexture* NormalRHI = NormalRTResource ? NormalRTResource->GetRenderTargetTexture() : nullptr;
+			if (!ColorRHI || !NormalRHI) return;  // intensity textures must be available; bail rather than emit garbage
 
 			FRDGBuilder GraphBuilder(RHICmdList);
 
-			FRDGTextureRef DepthRDG = RegisterExternalTexture(
-				GraphBuilder, DepthRHI, TEXT("FSDSLidarDepthRT"));
+			FRDGTextureRef DepthRDG  = RegisterExternalTexture(
+				GraphBuilder, DepthRHI,  TEXT("FSDSLidarDepthRT"));
+			FRDGTextureRef ColorRDG  = RegisterExternalTexture(
+				GraphBuilder, ColorRHI,  TEXT("FSDSLidarColorRT"));
+			FRDGTextureRef NormalRDG = RegisterExternalTexture(
+				GraphBuilder, NormalRHI, TEXT("FSDSLidarNormalRT"));
 
 			const FRDGBufferDesc BufDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), NumPoints);
 			FRDGBufferRef OutBuf = GraphBuilder.CreateBuffer(BufDesc, TEXT("FSDSLidarPoints"));
@@ -856,6 +971,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 
 			auto* Params = GraphBuilder.AllocParameters<FFSDSLidarDecodeCS::FParameters>();
 			Params->DepthTexture          = DepthRDG;
+			Params->ColorTexture          = ColorRDG;   // #255
+			Params->NormalTexture         = NormalRDG;  // #255
 			Params->OutPoints             = GraphBuilder.CreateUAV(OutBuf);
 			Params->ChannelMaxRangeCm     = GraphBuilder.CreateSRV(ChannelRangeBuf);
 			Params->NumChannels           = U.NumChannels;
@@ -878,6 +995,10 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;
 			Params->SensorOffsetZm        = U.SensorOffsetZm;
+			Params->SensorRotRowX         = U.SensorRotRowX;  // #255
+			Params->SensorRotRowY         = U.SensorRotRowY;  // #255
+			Params->SensorRotRowZ         = U.SensorRotRowZ;  // #255
+			Params->RReferenceM           = U.RReferenceM;    // #255
 
 			TShaderMapRef<FFSDSLidarDecodeCS> Shader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 			const int32 ThreadGroups = FMath::DivideAndRoundUp(NumPoints, FFSDSLidarDecodeCS::ThreadGroupSize);
@@ -954,10 +1075,13 @@ void UFSDSLidarSensor::PollGPUReadback()
 void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& Points)
 {
 	// Game-thread consumer of the GPU decode pass. Walks the float4[]
-	// output of FSDSLidarDecode.usf and packs valid hits (w == 1) into
-	// PointCloudBuffer in the flat-float [x,y,z, x,y,z, ...] format
-	// FSDSUdpBroadcaster + GetPointCloud() consumers expect. Skips
-	// invalid entries (w == 0: dropped, far-plane, out-of-range, etc.).
+	// output of FSDSLidarDecode.usf and packs valid hits into
+	// PointCloudBuffer in the flat-float [x,y,z,intensity, …] format
+	// FSDSUdpBroadcaster + GetPointCloud() consumers expect. The shader
+	// writes intensity ∈ [0, 1] in P.W for valid hits and -1.0 as the
+	// invalid sentinel (distinct from a clean 0.0 intensity, which is
+	// a valid hit on a black surface or grazing-angle return). Skips
+	// invalid entries (P.W < 0 → dropped / far-plane / out-of-range).
 	if (SlotIdx < 0 || SlotIdx >= ReadbackQueueDepth) return;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
 	Slot.bLockDispatched = false;
@@ -968,14 +1092,15 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 	GPUReadbackCount++;
 
 	TArray<float> NewBuffer;
-	NewBuffer.Reserve(Points.Num() * 3);
+	NewBuffer.Reserve(Points.Num() * 4);
 	int32 HitCount = 0;
 	for (const FVector4f& P : Points)
 	{
-		if (P.W < 0.5f) continue;  // not a valid hit
+		if (P.W < 0.0f) continue;  // -1 sentinel = not a valid hit (#255)
 		NewBuffer.Add(P.X);
 		NewBuffer.Add(P.Y);
 		NewBuffer.Add(P.Z);
+		NewBuffer.Add(P.W);  // intensity ∈ [0, 1]
 		HitCount++;
 	}
 

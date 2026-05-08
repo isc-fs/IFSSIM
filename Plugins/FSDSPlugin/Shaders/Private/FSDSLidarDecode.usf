@@ -1,4 +1,4 @@
-// FSDS GPU LiDAR — depth-to-points decode (#223 Phase 3).
+// FSDS GPU LiDAR — depth-to-points decode (#223 Phase 3, #255 intensity).
 //
 // One thread per LiDAR ray (NumChannels × NumHorizontalSteps total).
 // Each thread:
@@ -6,20 +6,27 @@
 //   2. Maps spherical → image plane via the same formulas the C++
 //      round-trip test validates (tan(h), tan(v_cam) * sec(h),
 //      v_cam = v - tilt).
-//   3. Samples the depth RT at the corresponding texel.
+//   3. Samples the depth, base-colour, and world-space normal RTs at
+//      the corresponding texel.
 //   4. Applies dropout / range noise / min-range cull (matches the
 //      legacy CPU path's noise model so the dual-path validation in
 //      Phase 4 can compare like-for-like).
-//   5. Reconstructs the 3D point in vehicle frame, applies the ROS
+//   5. Computes the Hesai-class intensity:
+//        intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+//      with ρ_905 ≈ luminance(BaseColor) as a placeholder until per-
+//      material 905 nm reflectance is tuned (#255 follow-up content task).
+//   6. Reconstructs the 3D point in vehicle frame, applies the ROS
 //      REP-103 Y-flip, and writes to the output structured buffer.
 //
 // Output buffer is float4[NumRays] where xyz is the point in metres
-// (vehicle frame, ROS REP-103: x forward, y left, z up) and w is a
-// validity flag (1 = hit, 0 = no-hit / dropped / culled).
+// (vehicle frame, ROS REP-103: x forward, y left, z up) and w is the
+// intensity in [0, 1] for valid hits or -1.0 for no-hit/dropped/culled.
 
 #include "/Engine/Public/Platform.ush"
 
-Texture2D<float> DepthTexture;
+Texture2D<float>  DepthTexture;
+Texture2D<float4> ColorTexture;
+Texture2D<float4> NormalTexture;
 RWStructuredBuffer<float4> OutPoints;
 
 uint  NumChannels;
@@ -54,6 +61,20 @@ float SensorOffsetXm;
 float SensorOffsetYm;
 float SensorOffsetZm;
 
+// Sensor world-frame rotation (rows of the matrix) — used to take the
+// vehicle-local ray direction into world frame so it can dot against
+// the world-space surface normal stored in NormalTexture. Computed
+// CPU-side from the sensor's actor rotation each scan.
+float3 SensorRotRowX;
+float3 SensorRotRowY;
+float3 SensorRotRowZ;
+
+// Inverse-square reference range (m). Perpendicular surfaces at this
+// range return the unmodified reflectance — i.e. intensity = ρ_905.
+// Set CPU-side from a const so a single edit re-tunes the gain across
+// the whole sensor.
+float RReferenceM;
+
 
 // Single-step PCG hash. Cheap, decent statistical quality, and
 // trivially deterministic per-ray-per-scan via (RayIdx ^ Seed).
@@ -78,8 +99,11 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const uint TotalRays = NumChannels * NumHorizontalSteps;
 	if (RayIdx >= TotalRays) return;
 
-	// Default to invalid; bail-outs below leave this in place.
-	OutPoints[RayIdx] = float4(0.0, 0.0, 0.0, 0.0);
+	// Default to invalid; bail-outs below leave this in place. The
+	// w channel carries intensity in [0,1] for valid hits or -1.0 as
+	// the invalid sentinel — distinct from a clean 0.0 intensity (a
+	// black surface at grazing angle is a valid hit with intensity 0).
+	OutPoints[RayIdx] = float4(0.0, 0.0, 0.0, -1.0);
 
 	// Buffer ordering: match the CPU path's flat-index convention so
 	// that PointCloud2 consumers receive points in the same memory
@@ -206,7 +230,40 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float Py = DirY * ScaleM + SensorOffsetYm;
 	const float Pz = DirZ * ScaleM + SensorOffsetZm;
 
+	// === Intensity (#255). Hesai-class working principle: ============
+	//   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+	// where ρ_905 is the surface 905 nm reflectance (placeholder:
+	// Rec.709 luminance of the BaseColor capture), θ_inc is the angle
+	// of incidence between the ray and the surface normal at the hit,
+	// and the inverse-square term is normalised so a perpendicular
+	// surface at R_ref returns the unmodified reflectance.
+	const float3 BaseColor = ColorTexture.Load(int3(Col, Row, 0)).rgb;
+	const float  Reflectance = saturate(dot(BaseColor, float3(0.2126, 0.7152, 0.0722)));
+
+	// SCS_Normal stores the world-space surface normal encoded into
+	// [0, 1] via (n + 1) * 0.5. Decode back to [-1, 1] and renormalise
+	// (the captured normal can be slightly off-unit due to filtering
+	// and quantisation in the RGBA8 RT).
+	const float3 NormalEncoded = NormalTexture.Load(int3(Col, Row, 0)).rgb;
+	const float3 NormalWorld   = normalize(NormalEncoded * 2.0 - 1.0);
+
+	// Ray direction in world frame. (DirX, DirY, DirZ) is the unit
+	// vehicle-local ray direction; rotate by the sensor's world-frame
+	// rotation so dot products against NormalWorld are well-defined.
+	const float3 DirVehicle = float3(DirX, DirY, DirZ);
+	const float3 DirWorld   = float3(
+		dot(SensorRotRowX, DirVehicle),
+		dot(SensorRotRowY, DirVehicle),
+		dot(SensorRotRowZ, DirVehicle));
+	const float CosIncidence = saturate(dot(-DirWorld, NormalWorld));
+
+	const float RangeM   = max(ScaleM, 0.01);  // floor at 1 cm so the inverse-square doesn't blow up at point-blank
+	const float RangeRef = max(RReferenceM, 1e-3);
+	const float Falloff  = (RangeRef * RangeRef) / (RangeM * RangeM);
+	const float Intensity = saturate(Reflectance * CosIncidence * Falloff);
+
 	// cm → m + ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The w
-	// channel is the validity flag; w=1 means "real hit".
-	OutPoints[RayIdx] = float4(Px, -Py, Pz, 1.0);
+	// channel carries intensity for valid hits ([0, 1]); -1.0 sentinel
+	// for invalid was written above and any return-path bail leaves it.
+	OutPoints[RayIdx] = float4(Px, -Py, Pz, Intensity);
 }

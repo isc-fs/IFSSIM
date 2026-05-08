@@ -9,16 +9,29 @@
 // Compute-shader binding for FSDSLidarDecode.usf (#223 Phase 3).
 //
 // One thread per LiDAR ray; total dispatch is
-// ceil(NumChannels × NumHorizontalSteps / 64). Reads scene depth from
-// the LiDAR depth RT, applies noise + dropout + far-plane cull, writes
-// 3D points (vehicle frame, ROS REP-103) to a structured buffer.
+// ceil(NumChannels × NumHorizontalSteps / 64). Reads scene depth + base
+// colour + world-space surface normal from the LiDAR's three render
+// targets, applies noise + dropout + far-plane cull, writes 3D points
+// AND an intensity scalar (vehicle frame, ROS REP-103) to a structured
+// buffer.
+//
+// Intensity model (#255). Mirrors the Hesai ATX-S01 working principle:
+//   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+// where ρ_905 is the surface's 905 nm reflectance (placeholder: visible-
+// light luminance of the BaseColor capture; real per-material values
+// are tuned per cone material — deferred follow-up). cos(θ_inc) is the
+// dot product of the inverted ray direction with the world-space
+// surface normal. R_ref normalises the inverse-square falloff so a
+// perpendicular surface at R_ref returns the unmodified reflectance.
 class FFSDSLidarDecodeCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FFSDSLidarDecodeCS);
 	SHADER_USE_PARAMETER_STRUCT(FFSDSLidarDecodeCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>, DepthTexture)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float>,  DepthTexture)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, ColorTexture)   // SCS_BaseColor — RGB → ρ_905 proxy via luminance
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D<float4>, NormalTexture)  // SCS_Normal    — RGB encodes world-space normal in [0,1] range
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, OutPoints)
 
 		SHADER_PARAMETER(uint32, NumChannels)
@@ -55,6 +68,20 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(float, SensorOffsetXm)
 		SHADER_PARAMETER(float, SensorOffsetYm)
 		SHADER_PARAMETER(float, SensorOffsetZm)
+
+		// Sensor world transform — needed inside the shader to take the
+		// vehicle-local ray direction (computed from spherical h/v) into
+		// the world frame so it can dot against the world-space normal
+		// captured in NormalTexture. Forward-row of the rotation matrix
+		// suffices; the C++ side packs the row vectors in column order.
+		SHADER_PARAMETER(float3, SensorRotRowX)
+		SHADER_PARAMETER(float3, SensorRotRowY)
+		SHADER_PARAMETER(float3, SensorRotRowZ)
+
+		// Intensity model (#255). RReferenceM gives the inverse-square
+		// reference range; perpendicular surfaces at this range return
+		// the unmodified reflectance.
+		SHADER_PARAMETER(float, RReferenceM)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

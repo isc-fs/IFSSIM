@@ -243,7 +243,7 @@ void FFSDSRpcServer::ServerThreadFunc()
 				int32 ActualSize = 0;
 				const int32 RequestedSendBuf = 32 * 1024 * 1024;
 				ClientSocket->SetSendBufferSize(RequestedSendBuf, ActualSize);
-				const int32 OneScanMaxBytes = 174000 * 3 * sizeof(float);  // ~2 MB at datasheet rate
+				const int32 OneScanMaxBytes = 174000 * 4 * sizeof(float);  // ~2.8 MB at datasheet rate (xyz+intensity, #255)
 				if (ActualSize < OneScanMaxBytes)
 				{
 					UE_LOG(LogTemp, Warning,
@@ -1511,7 +1511,7 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 		if (!VehiclePawn || !VehiclePawn->LidarSensor) return false;
 
 		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-		int32 NumPoints = Points.Num() / 3;
+		int32 NumPoints = Points.Num() / 4;  // (x, y, z, intensity) per point — #255
 
 		// Send header: "PTS:num_points\n" followed by raw float data
 		FString Header = FString::Printf(TEXT("PTS:%d\n"), NumPoints);
@@ -1519,7 +1519,7 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 		int32 Sent = 0;
 		ClientSocket->Send((const uint8*)HeaderConv.Get(), HeaderConv.Length(), Sent);
 
-		// Send raw float array (x,y,z per point)
+		// Send raw float array — (x, y, z, intensity) per point
 		if (Points.Num() > 0)
 		{
 			int32 ByteSize = Points.Num() * sizeof(float);
@@ -1674,7 +1674,7 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		}
 
 		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-		int32 TotalPoints = Points.Num() / 3;
+		int32 TotalPoints = Points.Num() / 4;  // (x, y, z, intensity) — #255
 
 		if (TotalPoints > 0)
 		{
@@ -1697,11 +1697,11 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 				return;
 			}
 
-			// Send point data — bigger payload (points * 12 bytes), most
-			// likely place to hit a momentarily-full send buffer with the
-			// 3 cm range jitter introduced in #106 producing larger packet
-			// variance per scan.
-			const int32 DataSize = TotalPoints * 3 * sizeof(float);
+			// Send point data — bigger payload (points * 16 bytes since
+			// #255), most likely place to hit a momentarily-full send
+			// buffer with the 3 cm range jitter introduced in #106
+			// producing larger packet variance per scan.
+			const int32 DataSize = TotalPoints * 4 * sizeof(float);
 			if (!SendAll(ClientSocket, (const uint8*)Points.GetData(), DataSize))
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected (body, %d bytes)"), DataSize);
@@ -1949,7 +1949,7 @@ void FFSDSRpcServer::StreamLidarUds(int ClientFd)
 		}
 
 		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-		const int32 TotalPoints = Points.Num() / 3;
+		const int32 TotalPoints = Points.Num() / 4;  // (x, y, z, intensity) — #255
 
 		if (TotalPoints > 0)
 		{
@@ -1968,7 +1968,7 @@ void FFSDSRpcServer::StreamLidarUds(int ClientFd)
 				return;
 			}
 
-			const int32 DataSize = TotalPoints * 3 * sizeof(float);
+			const int32 DataSize = TotalPoints * 4 * sizeof(float);  // #255
 			if (!SendAllPosix(ClientFd, (const uint8_t*)Points.GetData(), DataSize))
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR stream disconnected (body, %d bytes)"), DataSize);

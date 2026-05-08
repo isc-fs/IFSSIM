@@ -145,6 +145,17 @@ private:
 	UPROPERTY() USceneCaptureComponent2D* GPUDepthCapture = nullptr;
 	UPROPERTY() UTextureRenderTarget2D*   GPUDepthRT      = nullptr;
 
+	// #255 — intensity captures. ColorCapture renders SCS_BaseColor,
+	// NormalCapture renders SCS_Normal. Both share view geometry with
+	// GPUDepthCapture (same FOV / RT size / position / rotation), so
+	// the decode shader samples them at the same texel as the depth
+	// to compute Hesai-class intensity:
+	//   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+	UPROPERTY() USceneCaptureComponent2D* GPUColorCapture  = nullptr;
+	UPROPERTY() UTextureRenderTarget2D*   GPUColorRT       = nullptr;
+	UPROPERTY() USceneCaptureComponent2D* GPUNormalCapture = nullptr;
+	UPROPERTY() UTextureRenderTarget2D*   GPUNormalRT      = nullptr;
+
 	// Stand up the depth-only SceneCapture for the GPU path. Called
 	// from BeginPlay when LidarPath==GPU. Phase-1 wiring; the depth
 	// data is rendered but not yet consumed (Phase 2 adds readback,
