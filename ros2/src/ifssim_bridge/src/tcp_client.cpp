@@ -238,7 +238,7 @@ std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector
         int count = std::stoi(header.substr(colonPos + 1));
 
         if (prefix == "PTS") {
-            dataSize = count * 3 * sizeof(float); // 3 floats per point
+            dataSize = count * 4 * sizeof(float); // 4 floats per point — (x, y, z, intensity), #255
         } else if (prefix == "IMG") {
             dataSize = count; // raw byte count
         }

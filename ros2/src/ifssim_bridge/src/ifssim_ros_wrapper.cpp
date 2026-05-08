@@ -40,19 +40,31 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // the UDS path once the socket appears.
     lidar_uds_path_ = node_->declare_parameter<std::string>(
         "lidar_uds_path", "/tmp/ifssim_streams/lidar.sock");
-    // LiDAR transport selection: "tcp" (default) or "udp". UDP avoids the
-    // macOS Docker Desktop loopback throughput cap on TCP — at 1.74 M pts/s
-    // the TCP path tops out at ~3 Hz on Mac while the same datagram stream
-    // over UDP forwards through gvisor without window-based throttling.
-    // On Linux hosts both transports work and TCP is preferred (reliable
-    // delivery, no fragmentation accounting).
+    // LiDAR transport selection. Production is "udp" — the others are
+    // **soft-deprecated** as of #321 (originally added to bypass macOS
+    // Docker Desktop's TCP loopback throughput cap; UDP turned out to be
+    // robust enough on every supported host so the duplicate code paths
+    // are no longer worth maintaining). The TCP and UDS senders still
+    // exist for parity testing and rollback, but every wire-format
+    // change must keep all three in sync — that's the cost we're trying
+    // to retire. A future PR will delete the TCP / UDS LiDAR paths
+    // outright once we've confirmed nothing depends on them off-Mac.
     lidar_transport_ = node_->declare_parameter<std::string>(
-        "lidar_transport", "tcp");
-    if (lidar_transport_ != "tcp" && lidar_transport_ != "udp") {
+        "lidar_transport", "udp");
+    if (lidar_transport_ != "tcp"
+        && lidar_transport_ != "udp"
+        && lidar_transport_ != "uds") {
         RCLCPP_WARN(node_->get_logger(),
-            "Unknown lidar_transport '%s' — defaulting to tcp",
+            "Unknown lidar_transport '%s' — defaulting to udp",
             lidar_transport_.c_str());
-        lidar_transport_ = "tcp";
+        lidar_transport_ = "udp";
+    }
+    if (lidar_transport_ != "udp") {
+        RCLCPP_WARN(node_->get_logger(),
+            "lidar_transport='%s' is soft-deprecated (#321 follow-up). "
+            "Production uses 'udp'. The '%s' path is kept for parity "
+            "testing only and may be removed in a future release.",
+            lidar_transport_.c_str(), lidar_transport_.c_str());
     }
 
     initializeConnection();
@@ -571,8 +583,9 @@ void IFSSIMRosWrapper::lidarStreamThread()
 
         if (header.magic != LIDAR_MAGIC || header.total_points <= 0) continue;
 
-        int data_size = header.total_points * 3 * sizeof(float);
-        std::vector<float> points(header.total_points * 3);
+        // Per-point payload: (x, y, z, intensity) — 4 floats since #255.
+        int data_size = header.total_points * 4 * sizeof(float);
+        std::vector<float> points(header.total_points * 4);
 
         if (!readExact(fd, points.data(), data_size)) {
             RCLCPP_WARN(node_->get_logger(), "LiDAR stream data incomplete");
@@ -901,33 +914,28 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     msg.is_dense = true;
     msg.is_bigendian = false;
 
-    // XYZ-only PointCloud2. The previous layout included a per-point
-    // FLOAT64 timestamp field — it was added for fast_LIMO's HESAI
-    // handler which hard-required it. fast_LIMO has since been ripped
-    // out (replaced by cone_graph_slam, which doesn't subscribe to
-    // /lidar/Lidar1 at all); the only current consumer is Cone_Detection,
-    // which only reads x/y/z and ignores everything else.
+    // XYZ + intensity PointCloud2 (#255). Per-point payload is 16 B —
+    // (x, y, z, intensity) FLOAT32. Intensity ∈ [0, 1] is computed by
+    // the GPU decode shader / CPU LineTrace path:
+    //   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+    // (Hesai ATX-S01 working principle, see FSDSLidarDecode.usf and
+    // FSDSLidarSensor.cpp::PerformScan.)
     //
-    // Per-point construction with PointCloud2Iterator turned out to be
-    // the dominant cost on this thread at the datasheet pts/s rate:
-    // at 100 k pts/scan (1 M pts/s) the iterator loop ran 400 k times
-    // per scan and pushed the publish thread to ~225 ms/scan, so /lidar
-    // throttled to 4–5 Hz instead of 10 Hz. Source data is already a
-    // packed (x,y,z) float32 array; setting up an XYZ-only point step
-    // makes the full point payload a single memcpy of total_points × 12
-    // bytes — typically <1 ms for a 1 M pts/s scan.
+    // Pre-#255 was XYZ-only (12 B/point); the timestamp field that lived
+    // here even earlier was for fast_LIMO's HESAI handler, which has
+    // since been replaced upstream — current consumers read x/y/z and
+    // (now) intensity.
     //
-    // (Behavioural note kept for completeness: FSDSLidarSensor.cpp
-    // snapshots the car transform once per scan and ray-traces all
-    // points from that single pose, so per-point timestamps would all
-    // be equal anyway. fast_LIMO's deskew was a no-op on the sim's
-    // instantaneous data — the timestamp field never carried real
-    // information.)
+    // Per-point construction with PointCloud2Iterator was the dominant
+    // cost on this thread at the datasheet pts/s rate; the source data
+    // is already a packed (x,y,z,intensity) float32 array, so the full
+    // point payload is a single memcpy of total_points × 16 bytes.
     sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(3,
-        "x", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "y", 1, sensor_msgs::msg::PointField::FLOAT32,
-        "z", 1, sensor_msgs::msg::PointField::FLOAT32);
+    modifier.setPointCloud2Fields(4,
+        "x",         1, sensor_msgs::msg::PointField::FLOAT32,
+        "y",         1, sensor_msgs::msg::PointField::FLOAT32,
+        "z",         1, sensor_msgs::msg::PointField::FLOAT32,
+        "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
     modifier.resize(total_points);
 
     // NOTE: points are passed through verbatim — the downstream pipeline
@@ -935,7 +943,7 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     // convention, so "correcting" to REP-103 by negating Y here breaks
     // cone clustering. Leave as-is for compatibility.
     std::memcpy(msg.data.data(), points,
-                static_cast<size_t>(total_points) * 3 * sizeof(float));
+                static_cast<size_t>(total_points) * 4 * sizeof(float));
 
     lidar_pub_->publish(msg);
 }

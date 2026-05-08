@@ -165,7 +165,7 @@ All sensor topics are namespaced under `/fsds/...` — the prefix is what tells 
 
 | Topic | Type | Frame | Rate | Notes |
 |---|---|---|---|---|
-| `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — XYZ only, no intensity. |
+| `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — fields `x`, `y`, `z`, `intensity` (FLOAT32). Intensity follows the Hesai ATX-S01 working principle (ρ × cos(θ) × (R_ref/r)²); see `FUNCTIONALITIES.md` §4.1. |
 | `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. |
 | `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | ~100 Hz | Ground-speed sensor. Bridge fills the diagonal of `twist.covariance` (entries `[0]`, `[7]`, `[14]`) from `VelocityNoiseStd²`. |
 | `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | Currently logged-only on the autonomy side. |
@@ -253,4 +253,4 @@ Co-located with the autonomy stack rather than under `tools/`, so they're easy t
 
 - [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md) — sim-side topics, sensors, vehicle physics, RPC.
 - [`GETTING_STARTED_DOCKER.md`](GETTING_STARTED_DOCKER.md) — container layout and how to launch the stack.
-- [#255](https://github.com/isc-fs/IFSSIM/issues/255) — LiDAR per-point intensity. The cone-colour signal `slam_node`'s DA needs lives upstream of every pipeline node and depends on UE5 plugin work; IFSSIM-side prerequisite.
+- LiDAR per-point intensity follows the Hesai ATX-S01 working principle (`ρ × cos(θ) × (R_ref/r)²`), implemented in #318-style coordinated wire-format change. Per-cone-material 905 nm reflectance tuning is a follow-up content task (separate from the simulator-side principle).

@@ -78,7 +78,9 @@ struct FFSDSLidarChunkHeader
 	// latency or transport jitter. Self-correcting (no anchor needed).
 	// Issue #238.
 	int64 LagNs = 0;
-	// Followed by PointsInChunk * 3 * sizeof(float) bytes of point data
+	// Followed by PointsInChunk * 4 * sizeof(float) bytes of point data:
+	// (x, y, z, intensity) per point — intensity ∈ [0, 1] in #255's
+	// physically-grounded model. Stride was 3 floats pre-#255.
 };
 
 #pragma pack(pop)

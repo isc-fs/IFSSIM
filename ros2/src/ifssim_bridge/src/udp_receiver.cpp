@@ -144,7 +144,8 @@ void UdpReceiver::lidarListenerThread(int port)
         if (header->magic != LIDAR_MAGIC) continue;
 
         int data_offset = sizeof(LidarChunkHeader);
-        int expected_data = header->points_in_chunk * 3 * sizeof(float);
+        // Per-point payload is 4 floats (x, y, z, intensity) since #255.
+        int expected_data = header->points_in_chunk * 4 * sizeof(float);
         if (n < data_offset + expected_data) continue;
 
         // New frame? Deliver whatever we'd assembled of the previous one
@@ -186,7 +187,7 @@ void UdpReceiver::lidarListenerThread(int port)
             pending_lidar_.chunks_received = 0;
             pending_lidar_.delivered = false;
             pending_lidar_.lag_ns = header->lag_ns;
-            pending_lidar_.points.assign(header->total_points * 3, 0.0f);
+            pending_lidar_.points.assign(header->total_points * 4, 0.0f);  // x,y,z,intensity — #255
         }
         if (pending_lidar_.delivered) {
             // Late chunk for an already-delivered frame: drop.
@@ -196,15 +197,16 @@ void UdpReceiver::lidarListenerThread(int port)
         // Copy chunk data into correct position. PointsPerChunk is the
         // uniform chunk stride the plugin uses (last chunk may be shorter,
         // tracked by points_in_chunk). MUST match PointsPerChunk in the
-        // plugin's FSDSUdpBroadcaster.cpp::BroadcastLidarFrame — both
-        // hardcode 700 pts/chunk so each datagram fits under macOS's
-        // default `net.inet.udp.maxdgram` of 9216 bytes (700×12 + 24 =
-        // 8424 B). Linux defaults are much higher; the chunk size is
-        // sized for the most restrictive host.
-        constexpr int LIDAR_UDP_POINTS_PER_CHUNK = 700;
-        int point_offset = header->chunk_index * LIDAR_UDP_POINTS_PER_CHUNK * 3;
+        // plugin's FSDSUdpBroadcaster.cpp::BroadcastLidarFrame — since
+        // #255 both hardcode 500 pts/chunk so each 16-B/point datagram
+        // fits under macOS's default `net.inet.udp.maxdgram` of 9216 B
+        // (500×16 + 24 ≈ 8024 B). Pre-#255 was 700 pts/chunk @ 12 B.
+        // Linux defaults are much higher; chunk size is sized for the
+        // most restrictive host.
+        constexpr int LIDAR_UDP_POINTS_PER_CHUNK = 500;
+        int point_offset = header->chunk_index * LIDAR_UDP_POINTS_PER_CHUNK * 4;
         float* src = (float*)(buffer.data() + data_offset);
-        int floats_count = header->points_in_chunk * 3;
+        int floats_count = header->points_in_chunk * 4;
 
         if (point_offset + floats_count <= (int)pending_lidar_.points.size()) {
             memcpy(pending_lidar_.points.data() + point_offset, src, floats_count * sizeof(float));

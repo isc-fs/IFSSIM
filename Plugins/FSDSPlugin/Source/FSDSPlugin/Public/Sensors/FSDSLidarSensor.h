@@ -145,6 +145,24 @@ private:
 	UPROPERTY() USceneCaptureComponent2D* GPUDepthCapture = nullptr;
 	UPROPERTY() UTextureRenderTarget2D*   GPUDepthRT      = nullptr;
 
+	// #255 — intensity capture. Renders SCS_FinalColorLDR (the post-
+	// shaded scene as the camera would see it under world lighting)
+	// alongside the depth capture; the decode shader samples it at the
+	// same texel as the depth to compute Hesai-class intensity:
+	//   intensity = ρ × cos(θ_inc) × (R_ref / range)²
+	// — with ρ proxied by Rec.709 luminance(FinalColor) and cos(θ_inc)
+	// computed from a depth-gradient surface normal inside the shader.
+	//
+	// FinalColorLDR was chosen over SCS_BaseColor / SCS_Normal because
+	// the GBuffer-sourced captures return blank-white on Mac UE5 5.7's
+	// Metal renderer (forward-shading path doesn't populate the GBuffer
+	// the same way deferred does). FinalColorLDR is renderer-mode-
+	// agnostic; the trade-off is that its luminance includes scene
+	// lighting (a shadowed cone reads dimmer than a sunlit one), which
+	// is a tolerable artefact for a sim-side LiDAR proxy.
+	UPROPERTY() USceneCaptureComponent2D* GPUColorCapture  = nullptr;
+	UPROPERTY() UTextureRenderTarget2D*   GPUColorRT       = nullptr;
+
 	// Stand up the depth-only SceneCapture for the GPU path. Called
 	// from BeginPlay when LidarPath==GPU. Phase-1 wiring; the depth
 	// data is rendered but not yet consumed (Phase 2 adds readback,

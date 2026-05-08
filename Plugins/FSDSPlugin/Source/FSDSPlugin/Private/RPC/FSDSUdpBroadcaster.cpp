@@ -268,8 +268,10 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 {
 	if (!LidarSocket || !LidarAddr.IsValid() || !VehiclePawn || !VehiclePawn->LidarSensor) return;
 
+	// PointCloud is flat float[] of (x, y, z, intensity) per point — 4
+	// floats per hit since #255. Bridge mirrors the same stride.
 	TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-	int32 TotalPoints = Points.Num() / 3;
+	int32 TotalPoints = Points.Num() / 4;
 	if (TotalPoints <= 0) return;
 
 	// macOS's UDP loopback path drops ~33 % of datagrams when the plugin
@@ -330,8 +332,9 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	// the kernel before they hit the wire (the small sensor frames at
 	// 148 B succeed, but a 60 KB LiDAR chunk vanishes with no error).
 	// Linux defaults are far higher (≥64 KB) so the same code works
-	// without tuning. PointsPerChunk=700 → 700×12 + 24 = 8424 B per
-	// datagram, ~9 % below the macOS cap.
+	// without tuning. PointsPerChunk=500 (#255 — was 700 when point
+	// stride was 12 B; intensity adds a 4th float per point so 500×16
+	// + header ≈ 8024 B keeps us under the 9216 B macOS UDP cap).
 	//
 	// MUST match LIDAR_UDP_POINTS_PER_CHUNK in the bridge's
 	// udp_receiver.cpp (chunk_index → start-offset arithmetic depends on
@@ -339,7 +342,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	// fine; the alternative (carrying start_index in the header) bloats
 	// every datagram and would break wire compatibility on the existing
 	// `streamSensors` UDP path that shares the binary frame format.
-	const int32 PointsPerChunk = 700;
+	const int32 PointsPerChunk = 500;
 	int32 TotalChunks = (TotalPoints + PointsPerChunk - 1) / PointsPerChunk;
 
 	// One scratch buffer reused across all chunks of the scan. Sized for
@@ -350,7 +353,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	// background thread) with one allocation per scan, which the
 	// allocator can also keep warm across consecutive scans.
 	const int32 MaxPacketSize = sizeof(FFSDSLidarChunkHeader)
-	                          + PointsPerChunk * 3 * sizeof(float);
+	                          + PointsPerChunk * 4 * sizeof(float);
 	TArray<uint8> Packet;
 	Packet.SetNumUninitialized(MaxPacketSize);
 
@@ -364,7 +367,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 		int32 StartPoint = ChunkIdx * PointsPerChunk;
 		int32 ChunkPoints = FMath::Min(PointsPerChunk, TotalPoints - StartPoint);
 
-		int32 DataSize = ChunkPoints * 3 * sizeof(float);
+		int32 DataSize = ChunkPoints * 4 * sizeof(float);  // (x,y,z,intensity) — #255
 		int32 PacketSize = sizeof(FFSDSLidarChunkHeader) + DataSize;
 
 		// Fill header

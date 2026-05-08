@@ -228,7 +228,7 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 ### 4.1 LiDAR
 
-**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Ray-casting runs on the **GPU**: a depth-only render at the LiDAR's spherical scan envelope, decoded by a compute shader into a point cloud. Selected by the `LidarPath` setting (`"gpu"` is the production default; a `"cpu"` fallback using `LineTraceSingleByChannel` parallelised over channels is kept for reference and parity testing).
+**Implementation:** `FSDSLidarSensor` — modelled after the **Hesai ATX_S01** (1-D rotating mirror, hybrid solid-state). Ray-casting runs on the **GPU**: three SceneCaptures share view geometry — depth (`SCS_SceneDepth`), base colour (`SCS_BaseColor`), world-space normal (`SCS_Normal`) — and a compute shader decodes them per ray into a point cloud with per-point intensity. Selected by the `LidarPath` setting (`"gpu"` is the production default; a `"cpu"` fallback using `LineTraceSingleByChannel` parallelised over channels is kept for reference and parity testing).
 
 | Parameter | Default | Configurable | Source |
 |---|---|---|---|
@@ -251,9 +251,18 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 **Mount.** `(X=0.0, Y=0.0, Z=1.10)` corresponds to the IFS-08's main hoop crossbar height, CoG-aligned, centred. Pre-2026 settings used a hood-mount approximation (`X=0.5, Z=0.9`); cone-detection cluster-height thresholds were rebaselined when the mount moved.
 
-**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 3 floats (x, y, z) in metres. Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
+**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 4 floats `(x, y, z, intensity)` — xyz in metres, intensity in [0, 1]. Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
 
-**Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point. No intensity channel today (`bReturnPhysicalMaterial=false` at the raycast site, wire format is XYZ only) — see [#255](https://github.com/isc-fs/IFSSIM/issues/255) for the per-point intensity work which would unlock cone-colour DA in `slam_node`.
+**Intensity model (#255).** Mirrors the Hesai ATX-S01 working principle:
+```
+intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+```
+- **ρ_905** — surface reflectance at 905 nm. Sourced from the `BaseColor` capture's Rec.709 luminance as a placeholder; per-cone-material 905 nm reflectance values (blue ≈ 0.15, yellow ≈ 0.50, orange ≈ 0.65, white-stripe ≈ 0.92) are a follow-up content task.
+- **cos(θ_inc)** — angle of incidence between the ray and the world-space surface normal at the hit, sampled from the `Normal` capture (GPU path) or `FHitResult::ImpactNormal` (CPU path).
+- **(R_ref / range)²** — Lambert inverse-square term, normalised so a perpendicular surface at `R_ref = 1 m` returns the unmodified reflectance.
+- Output clamped to [0, 1]. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
+
+**Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point.
 
 ### 4.2 IMU
 
@@ -453,12 +462,13 @@ Two commands open the connection in persistent streaming mode (no further reques
 
 ---
 
-## 6. Data Streaming (TCP push + UDP push)
+## 6. Data Streaming (UDP push, with TCP/UDS soft-deprecated)
 
-High-frequency sensor data flows out of the plugin on dedicated streaming sockets — separate from the RPC server. The bridge can consume either transport per stream:
+High-frequency sensor data flows out of the plugin on dedicated streaming sockets — separate from the RPC server.
 
-- **TCP push streams** opened by the plugin to a fixed bridge endpoint at startup. Reliable; bound by macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) which limits LiDAR throughput on Mac.
-- **UDP push** when the bridge is launched with `lidar_transport:=udp` (or `LIDAR_TRANSPORT=udp` in `docker-compose`). Sender-paced; bypasses macOS Docker's TCP loopback throttle but accepts per-datagram packet loss.
+- **UDP push** (production default for LiDAR; sensor stream can also run on UDP). Sender-paced; bypasses macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) and forwards through gvisor without window-based throttling.
+- **TCP push streams** — *soft-deprecated* (#321 follow-up). Still functional and the bridge will use them if `lidar_transport=tcp` is passed, but bridge logs a deprecation WARN and the wire-format-multiplication cost (every change touches three sender sites) is no longer worth it. Will be deleted in a future PR.
+- **UDS push** for LiDAR — *soft-deprecated* same as TCP. Was a never-finished macOS-only experiment; UDP turned out to be enough.
 - **Unix Domain Socket (UDS)** for LiDAR specifically, when the plugin can open `/tmp/ifssim_streams/lidar.sock` on a host where the path is shared into the container — bypasses the TCP stack entirely.
 
 The two binary frame layouts are below. **Both halves of the wire — plugin sender and bridge receiver — must agree byte-for-byte.** The structs are `#pragma pack(push, 1)` on both sides; canonical definitions live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/RPC/FSDSUdpBroadcaster.h` and `ros2/src/ifssim_bridge/include/udp_receiver.h`.
@@ -514,8 +524,9 @@ struct LidarChunkHeader {
     int32_t  channels;
     int64_t  lag_ns;            // capture-to-send lag in nanoseconds
 };
-// Followed by: points_in_chunk × 3 × float32 (x, y, z) in sensor frame, metres
-// (UE5/ENU: X forward, Y left, Z up). UDP path pads to 700 points per chunk.
+// Followed by: points_in_chunk × 4 × float32 (x, y, z, intensity) in sensor frame
+// (UE5/ENU: X forward, Y left, Z up). UDP path pads to 500 points per chunk
+// (500×16 + 24 ≈ 8024 B fits under macOS's 9216 B UDP datagram cap).
 ```
 
 `lag_ns` is the time elapsed between `LidarSensor->LastTimestamp` (the actual capture instant) and packing time. The bridge subtracts it from `node_->now()` when stamping the ROS message, so `header.stamp` reflects the real capture moment regardless of GPU-readback latency (#238).
@@ -529,11 +540,11 @@ The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack t
 | Connection | Default transport | Configurable | Purpose |
 |---|---|---|---|
 | Sensor stream | TCP push (port 41452) | TCP / UDP | One unified `SensorFrame` carrying GPS + IMU + GSS + odom + RPM + referee + controls echo |
-| LiDAR stream | TCP push (port 41453) | TCP / UDP / UDS | LiDAR point cloud chunks |
+| LiDAR stream | UDP push (port 41453, default) | UDP / TCP* / UDS* | LiDAR point cloud chunks. *TCP and UDS soft-deprecated; bridge WARNs.* |
 | Camera client | TCP req/resp (port 41451 RPC) | — | One image per timer tick per camera |
 | Command client | TCP req/resp (port 41451 RPC) | — | `setCarControls`, EBS, track queries, settings |
 
-`lidar_transport` is set via the launch parameter or `LIDAR_TRANSPORT` env var. Bridge logs a warning and falls back to `tcp` for unknown values.
+`lidar_transport` is set via the launch parameter or `LIDAR_TRANSPORT` env var. Default is `udp`; bridge logs a warning and falls back to `udp` for unknown values, and logs a deprecation WARN for `tcp`/`uds`.
 
 ### Published Topics
 

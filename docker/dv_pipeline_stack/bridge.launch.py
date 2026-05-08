@@ -12,10 +12,13 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # LIDAR_TRANSPORT — "tcp" (default) or "udp". UDP bypasses macOS Docker
-    # Desktop's TCP loopback throughput cap (~7 MB/s), at the cost of
-    # accepting per-datagram packet loss for the LiDAR stream.
-    lidar_transport = os.environ.get("LIDAR_TRANSPORT", "tcp").lower()
+    # LIDAR_TRANSPORT — "udp" (default, production) or "tcp" / "uds"
+    # (soft-deprecated as of #321 follow-up; kept for parity testing only,
+    # bridge will WARN when either is selected). UDP bypasses macOS Docker
+    # Desktop's TCP loopback throughput cap (~7 MB/s) and was the binding
+    # win — TCP/UDS are no longer worth the wire-format-multiplication
+    # cost.
+    lidar_transport = os.environ.get("LIDAR_TRANSPORT", "udp").lower()
 
     return LaunchDescription([
         DeclareLaunchArgument('host',         default_value='host.docker.internal'),
@@ -47,7 +50,14 @@ def generate_launch_description():
             parameters=[{
                 'port': 8765,
                 'address': '0.0.0.0',
-                'send_buffer_limit': 10000000,
+                # send_buffer_limit caps the per-client WebSocket send
+                # buffer. Default was 10 MB which holds ~6 PointCloud2
+                # messages at the post-#255 1.53 MB/scan size; any
+                # ~600 ms render hiccup on the Lichtblick side overflows
+                # the buffer and foxglove_bridge drops messages — visible
+                # as LiDAR flicker. 64 MB gives ~4 seconds of headroom,
+                # well past any normal client-side stutter.
+                'send_buffer_limit': 64 * 1024 * 1024,
                 'use_sim_time': False,
             }],
         ),
