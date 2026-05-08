@@ -548,13 +548,13 @@ The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack t
 | `tire_loads` | `std_msgs/Float32MultiArray` | ~100 Hz | Per-wheel Fz from `ComputeTireLoadsParametric`, order FL/FR/RL/RR. |
 | `signal/go` | `fs_msgs/GoSignal` | 1 Hz | Mission name + track identifier. |
 | `signal/finished` | `fs_msgs/FinishedSignal` | on event | Latched on the sim-side finish detection. |
-| `testing_only/odom` | `nav_msgs/Odometry` | ~100 Hz | `frame_id=odom`, `child=fsds/FSCar`. Ground-truth pose. *Hidden in competition mode.* |
+| `testing_only/odom` | `nav_msgs/Odometry` | ~100 Hz | `frame_id=odom`, `child=base_link`. Ground-truth pose. *Hidden in competition mode.* |
 | `testing_only/track` | `fs_msgs/Track` (latched) | 0.2 Hz | All cone positions. *Hidden in competition mode.* |
 | `testing_only/extra_info` | `fs_msgs/ExtraInfo` | 1 Hz | DOO counter, OC counter, lap count. *Hidden in competition mode.* |
 
 > **Topic naming.** The bridge today publishes bare names (no `/fsds/` prefix) and consumers remap or namespace as needed. The autonomy submodule expects a `/fsds/*` namespace per the integration contract in [`autonomy_pipeline.md`](autonomy_pipeline.md); the prefix renames are an open IFSSIM-side work item — until they land, consumers do the prefix on their side.
 
-**Bridge TF behavior.** The bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`, `fsds/FSCar/<cam_name>`) but they are **not part of the live TF chain** — autonomy nodes consume the sensors directly without TF lookups. The bridge does publish a few static TFs at startup (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`) on `/tf_static`, populated from the corresponding `getSensorOffset` RPC. The live TF tree (`map → odom → fsds/FSCar`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md). `/testing_only/odom` is for debugging only — the autonomy must not consume it.
+**Bridge TF behavior.** The bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`; cameras use the FSDS-internal hierarchical name `fsds/FSCar/<cam_name>` in their image messages but it's not part of the live TF chain) — autonomy nodes consume the sensors directly without TF lookups. The bridge publishes a few static TFs at startup (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`) on `/tf_static`, populated from the corresponding `getSensorOffset` RPC. The live TF tree (`map → odom → base_link`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md). `/testing_only/odom` is for debugging only — the autonomy must not consume it.
 
 > **`/testing_only/odom` is fully ground-truth.** Both pose and twist are sourced from the vehicle pawn's clean kinematics — no sensor in the loop, no GSS noise. The plugin packs a separate clean body-frame velocity field into `SensorFrame` (`GtVelBodyX/Y/Z`) and the bridge sources `twist.linear` from those fields with a tiny `1e-9` diagonal covariance. The `/gss` topic continues to carry the noisy GSS sensor model where the noise belongs.
 
@@ -1014,8 +1014,8 @@ The autonomy stack — perception, SLAM, path planning, control — is the same 
 - The end-to-end topic graph from `/fsds/lidar/Lidar1` through `/fsds/control_command`.
 - Mission management: `sim_supervisor_node` (the simulated micro), `mission_control_node` (DVPC role), `mode_manager_node` (lifecycle orchestrator).
 - The two-phase runtime action protocol (startup with JIT warmup → runtime with throttle/steering/emergency/finished).
-- The TF tree `map → odom → fsds/FSCar` and which node owns which frame.
-- Open questions still being finalised on the submodule side (odometry source, DVPC-vs-supervisor co-residency, frame aliasing).
+- The TF tree `map → odom → base_link` and which node owns which frame.
+- One open question still being finalised on the submodule side (where `/odom` comes from now that `odometria_node` is being removed).
 
 For the simulator-side topics that *feed* the autonomy stack (sensors, vehicle physics, RPC, Mission Control surface), see the sections above.
 
