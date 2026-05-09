@@ -102,6 +102,14 @@ res_active = False
 home_pose = {"x": 0.0, "y": 0.0, "z": 0.3, "qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn pose
 _home_pose_captured = False  # set once we snapshot the pawn's map placement (or user pins a home)
 _sim_was_connected = False   # tracks connect/disconnect transitions so we re-capture after a UE5 restart
+# Idempotency guard for `event_start`. Pre-#327 a double-click on
+# Start Session would block 4.5 s on `_state_lock`, then immediately
+# re-run the entire boot sequence — duplicate RES toggles, duplicate
+# pipeline restarts, duplicate `set_event` calls (#327 B7). Frontend
+# now disables the Start button while in flight (#326 F7) but the
+# server-side guard is the load-bearing one. Protected by
+# `_state_lock`.
+_session_starting = False
 
 # Compound-operation lock. FastAPI runs sync `def` handlers in a worker
 # thread pool, so two clients can land in `event_start`, `sim_reset` or
@@ -230,7 +238,12 @@ def sim_reset():
     UE5 editor. Use teleport + disable API control instead."""
     global res_active
     if not sim.is_connected():
-        return {"ok": False, "error": "sim not connected"}
+        # Pre-#327 this returned 200 OK with `{"ok": false}`, so any
+        # frontend or middleware switching on HTTP status thought the
+        # reset had succeeded (B6). Now correctly 503 Service
+        # Unavailable; body shape preserved so existing frontend
+        # `r.ok ? success : error` paths still work.
+        return JSONResponse({"ok": False, "error": "sim not connected"}, status_code=503)
     with _state_lock:
         # Stop pipeline so control node stops publishing commands
         try:
@@ -281,7 +294,24 @@ def event_set(setup: EventSetup):
 
 @app.post("/api/event/start", dependencies=[Depends(require_api_key)])
 def event_start(setup: EventSetup):
-    global current_event, res_active
+    """Boot the autonomy pipeline from a clean slate.
+
+    Three phases:
+      1. Pre-sleep state mutations (under `_state_lock`): stop any
+         existing pipeline, RES-activate to park the car, set event
+         type, kick the launcher.
+      2. SLAM IMU bias-calibration window (NO LOCK): time.sleep(4.5).
+         Pre-#327 this was held under `_state_lock`, blocking every
+         other state-mutating endpoint and the WS telemetry tick for
+         the full window (B1).
+      3. Post-sleep state mutations (under `_state_lock`): release
+         RES, hand control to the autonomy.
+
+    Idempotency: `_session_starting` flag prevents double-click
+    re-firing the boot sequence (B7). Returns 409 if a start is
+    already in progress.
+    """
+    global current_event, res_active, _session_starting
     if not sim.is_connected():
         return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
     # Refuse to start a session if no track is loaded into UE5. Without
@@ -301,72 +331,127 @@ def event_start(setup: EventSetup):
             {"ok": False, "error": "No track loaded — load a track before starting a session"},
             status_code=400,
         )
+
+    # B7 — idempotency. Claim the start slot under the lock; if
+    # another call is already in flight, refuse with 409 Conflict.
     with _state_lock:
-        try:
-            # Stop any running pipeline so the launch sequence below starts
-            # the autonomy from a clean slate (cone_graph_slam, control,
-            # path_planning all relaunched → SLAM re-runs INIT_CALIBRATING).
+        if _session_starting:
+            return JSONResponse(
+                {"ok": False, "error": "Another session start is already in progress"},
+                status_code=409,
+            )
+        _session_starting = True
+
+    try:
+        # === Phase 1: pre-sleep mutations (held under _state_lock) ===
+        with _state_lock:
             try:
-                os.remove(PIPELINE_CTL_FILE)
-            except FileNotFoundError:
-                pass
-            # Park the car under EBS while the pipeline boots. cone_graph_slam
-            # requires 3 s of stationary IMU samples to estimate accel/gyro
-            # bias correctly; if the car moves during that window the bias
-            # estimate locks in the body-frame launch acceleration and every
-            # subsequent LiDAR scan trips DA-failure spikes. EBS holds the
-            # handbrake on all four wheels until we explicitly release it
-            # below, after SLAM has reported SLAM_RUNNING.
-            sim.res_activate()
-            res_active = True
-            sim.set_event(setup.event_type, setup.num_laps)
-            sim.resume()
-            # Start the pipeline now (still EBS-locked). The control node
-            # publishes /signal/ebs_reset on init which clears the bridge's
-            # ebs_triggered_ flag from any prior session.
-            os.makedirs("/pipeline_ctrl", exist_ok=True)
-            open(PIPELINE_CTL_FILE, "w").close()
-            # Wait for cone_graph_slam to clear INIT_CALIBRATING. We don't
-            # have a status topic yet, so we wait the worst-case timing:
-            # ~1 s for the launch process to fork all nodes + 3 s for the
-            # IMU calibration window itself + 0.5 s margin. This is the
-            # ONLY moment in event_start where the car is guaranteed to
-            # be stationary, so any drift here corrupts the SLAM bias.
-            time.sleep(4.5)
-            # SLAM is now SLAM_RUNNING with a clean bias. Release EBS,
-            # hand control to the autonomy, and let the velocity
-            # controller ramp the EMRAX from rest. The user-requested
-            # flow is: click Start Session → RES activates while SLAM
-            # calibrates → SLAM ready → RES auto-releases → car drives.
-            # Strict FS-DV T 14.8.4 / T 14.8.5 timings (≥5 s in AS_Ready
-            # before R2D, ≥3 s in AS_Driving before motion) are NOT
-            # enforced here — they belong in a proper state-machine
-            # implementation (issue #148) that publishes the AS_state
-            # on a CAN-equivalent topic. fix/59 attempted a stop-gap
-            # by leaving EBS engaged for the user to release manually,
-            # but that broke the simple one-click "start session and
-            # drive" flow without delivering the rest of the spec.
-            sim.res_release()
-            res_active = False
+                # Stop any running pipeline so the launch sequence below
+                # starts the autonomy from a clean slate
+                # (cone_graph_slam, control, path_planning all
+                # relaunched → SLAM re-runs INIT_CALIBRATING).
+                try:
+                    os.remove(PIPELINE_CTL_FILE)
+                except FileNotFoundError:
+                    pass
+                # Park the car under EBS while the pipeline boots.
+                # cone_graph_slam requires 3 s of stationary IMU samples
+                # to estimate accel/gyro bias correctly; if the car
+                # moves during that window the bias estimate locks in
+                # the body-frame launch acceleration and every
+                # subsequent LiDAR scan trips DA-failure spikes. EBS
+                # holds the handbrake on all four wheels until we
+                # explicitly release it after SLAM is up.
+                sim.res_activate()
+                res_active = True
+                sim.set_event(setup.event_type, setup.num_laps)
+                sim.resume()
+                # Start the pipeline now (still EBS-locked). The control
+                # node publishes /signal/ebs_reset on init which clears
+                # the bridge's ebs_triggered_ flag from any prior
+                # session.
+                os.makedirs("/pipeline_ctrl", exist_ok=True)
+                open(PIPELINE_CTL_FILE, "w").close()
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+        # === Phase 2: SLAM IMU bias-calibration window (NO LOCK) ===
+        # Wait for cone_graph_slam to clear INIT_CALIBRATING. We don't
+        # have a status topic yet, so we wait the worst-case timing:
+        # ~1 s for the launch process to fork all nodes + 3 s for the
+        # IMU calibration window itself + 0.5 s margin. This is the
+        # ONLY moment in event_start where the car is guaranteed to be
+        # stationary, so any drift here corrupts the SLAM bias.
+        #
+        # CRITICAL — this `time.sleep` runs WITHOUT `_state_lock`.
+        # Pre-#327 (B1) the lock was held across the wait, so every
+        # other state-mutating endpoint (sim_reset, res_activate,
+        # res_release, event_set, track_load) blocked for 4.5 s, and
+        # the WS telemetry loop's RPC calls (which contend on
+        # `SimConnection._lock` already loaded with our Phase 1
+        # commands) went mute too. Releasing the lock here lets the
+        # operator interrupt the boot — clicking Reset or RES during
+        # the calibration window now actually does something. Phase 3
+        # detects that case via the pipeline-control-file check.
+        time.sleep(4.5)
+
+        # === Phase 3: post-sleep mutations (held under _state_lock) ===
+        with _state_lock:
+            # Honour an interrupt that landed during the calibration
+            # window. If the operator hit Reset or stopped the pipeline
+            # during the 4.5 s wait, the control file is gone — don't
+            # blindly release EBS and hand control to a pipeline that
+            # the operator just told us to shut down.
+            if not os.path.exists(PIPELINE_CTL_FILE):
+                log_event(
+                    "event_start",
+                    "aborted post-sleep — pipeline no longer running (likely operator-reset during boot)",
+                )
+                return JSONResponse(
+                    {"ok": False, "error": "session start aborted (pipeline stopped during boot)"},
+                    status_code=409,
+                )
             try:
-                sim._cmd("enableApiControl 1")
+                # SLAM is now SLAM_RUNNING with a clean bias. Release
+                # EBS, hand control to the autonomy, and let the
+                # velocity controller ramp the EMRAX from rest. The
+                # user-requested flow is: click Start Session → RES
+                # activates while SLAM calibrates → SLAM ready → RES
+                # auto-releases → car drives. Strict FS-DV T 14.8.4 /
+                # T 14.8.5 timings (≥5 s in AS_Ready before R2D, ≥3 s
+                # in AS_Driving before motion) are NOT enforced here —
+                # they belong in a proper state-machine implementation
+                # (issue #148) that publishes the AS_state on a
+                # CAN-equivalent topic.
+                sim.res_release()
+                res_active = False
+                try:
+                    sim._cmd("enableApiControl 1")
+                except Exception:
+                    pass
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+            current_event = setup.event_type
+            _save_state({"event": current_event})
+            # The plugin's SetEventType clamps lap counts per event
+            # type (Acceleration/Autocross → 1, Skidpad → 4,
+            # Trackdrive → requested). Echo the referee's actual
+            # required_laps so the UI reflects what the sim will
+            # enforce, not what we asked for.
+            try:
+                ref = sim.get_referee_state()
+                actual_laps = int(ref.get("required_laps", setup.num_laps))
             except Exception:
-                pass
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-        current_event = setup.event_type
-        _save_state({"event": current_event})
-        # The plugin's SetEventType clamps lap counts per event type
-        # (Acceleration/Autocross → 1, Skidpad → 4, Trackdrive → requested).
-        # Echo the referee's actual required_laps so the UI reflects what
-        # the sim will enforce, not what we asked for.
-        try:
-            ref = sim.get_referee_state()
-            actual_laps = int(ref.get("required_laps", setup.num_laps))
-        except Exception:
-            actual_laps = setup.num_laps
-        log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
-    return {"ok": True, "event": setup.event_type, "laps": actual_laps}
+                actual_laps = setup.num_laps
+            log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
+        return {"ok": True, "event": setup.event_type, "laps": actual_laps}
+    finally:
+        # Always clear the idempotency flag — success, exception,
+        # interrupt-abort, or 5xx error from the inner try. Without
+        # this a transient failure would wedge `_session_starting=True`
+        # forever and every subsequent Start would 409.
+        with _state_lock:
+            _session_starting = False
 
 
 # === RES (Remote Emergency Stop) ===
