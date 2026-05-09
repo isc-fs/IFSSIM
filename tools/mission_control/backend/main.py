@@ -15,6 +15,7 @@ import asyncio
 import shutil
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from typing import Optional
 
@@ -97,7 +98,16 @@ def ws_api_key_ok(api_key: Optional[str]) -> bool:
 sim = SimConnection(SIM_HOST, SIM_PORT)
 
 # State
-session_log = []
+# `session_log` was an unbounded list pre-#327 (B3). Multi-hour
+# track-day sessions with frequent RES toggles, resets, pipeline
+# starts/stops, track loads, and event_starts accumulated thousands
+# of entries — all returned in full on every `/api/session/log`
+# poll (3 s tick from the frontend, see #326 F5 fix) and serialised
+# on every export. 5000 entries is generous: at one event per
+# second of active operation that's ~80 minutes of dense activity,
+# beyond which the oldest entries fall off automatically.
+_SESSION_LOG_MAX = 5000
+session_log: deque = deque(maxlen=_SESSION_LOG_MAX)
 res_active = False
 home_pose = {"x": 0.0, "y": 0.0, "z": 0.3, "qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}  # ENU spawn pose
 _home_pose_captured = False  # set once we snapshot the pawn's map placement (or user pins a home)
@@ -751,13 +761,18 @@ def log_event(event_type: str, message: str):
 
 @app.get("/api/session/log")
 def get_session_log():
-    return session_log
+    # Convert deque → list for JSON serialisation. FastAPI's default
+    # encoder handles `deque` via the iterable path but jsonschema /
+    # response_model introspection relies on `list`, so we cast
+    # explicitly. The frontend's `Array.isArray` shape guard
+    # (#326 F6) needs an actual array on the wire too.
+    return list(session_log)
 
 @app.get("/api/session/export")
 def export_session_log():
     """Export session log as JSON download."""
     return Response(
-        content=json.dumps(session_log, indent=2),
+        content=json.dumps(list(session_log), indent=2),
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename=session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"}
     )
