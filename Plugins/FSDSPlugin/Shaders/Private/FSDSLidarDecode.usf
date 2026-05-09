@@ -259,37 +259,37 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float Py = DirY * ScaleM + SensorOffsetYm;
 	const float Pz = DirZ * ScaleM + SensorOffsetZm;
 
-	// === Intensity (#255 / #321). Hesai-class working principle: =====
+	// === Intensity (#255 / #321 / #358). Hesai-class working principle:
 	//   intensity = ρ × cos(θ_inc) × (R_ref / range)²
 	// where ρ is the surface reflectance, θ_inc is the angle of
 	// incidence between the ray and the surface normal at the hit,
 	// and the inverse-square term is normalised so a perpendicular
 	// surface at R_ref returns the unmodified reflectance.
 	//
-	// ρ comes from one of two sources:
-	//   1. (Phase 2) Per-material LUT keyed by stencil ID. The cone
-	//      spawner writes a CustomDepthStencilValue into each cone
-	//      mesh; a post-process material on the LiDAR's
-	//      FinalColorLDR capture encodes that value into the texel's
-	//      alpha channel; we read it back here.
-	//   2. (Fallback) Rec.709 luminance of the rendered colour. Used
-	//      pre-Phase-2 (UseReflectanceLUT=0), and for any hit whose
-	//      stencil ID is 0 (non-cone) or whose LUT slot is unset.
+	// `UseReflectanceLUT == 0`: legacy luminance-only path. ColorTexture
+	// is the raw FinalColorLDR; ρ ≈ Rec.709 luminance(rgb). Used pre-
+	// Phase-2 deployments where M_LiDARStencilEncoder isn't loaded.
 	//
-	// The branch on `UseReflectanceLUT` is on a uniform, so all
-	// threads take the same path — no warp divergence cost.
+	// `UseReflectanceLUT == 1`: Phase-2 path. The post-process material
+	// (M_LiDARStencilEncoder) packs two values into ColorTexture:
+	//   .r = stencil_id / 255   — cone spawner writes the stencil ID,
+	//                             the post-process pipes it here
+	//   .g = Rec.709 luminance(scene.rgb)  — fallback ρ, pre-computed
+	//                                        in the material so the
+	//                                        shader skips the dot-product
+	// Stencil = 0 / out-of-range / LUT slot unset → fall back to .g.
+	//
+	// Branching on the uniform is essentially free (constant across
+	// the whole dispatch).
 	const float4 ColorSample = ColorTexture.Load(int3(Col, Row, 0));
-	const float3 SceneColor  = ColorSample.rgb;
-	const float  Luminance   = saturate(dot(SceneColor, float3(0.2126, 0.7152, 0.0722)));
 
-	float Reflectance = Luminance;
+	float Reflectance;
 	if (UseReflectanceLUT > 0u)
 	{
-		// alpha channel encodes the stencil ID (post-process material
-		// writes `stencil_id / 255.0` into alpha). Round-to-nearest
-		// at the +0.5 step so the LUT index doesn't drift on the
-		// 8-bit representation rounding.
-		const uint StencilID = uint(ColorSample.a * 255.0 + 0.5);
+		// Phase-2 path: stencil in R, pre-computed luminance in G.
+		const uint StencilID = uint(ColorSample.r * 255.0 + 0.5);
+		const float LuminanceFallback = saturate(ColorSample.g);
+		Reflectance = LuminanceFallback;
 		if (StencilID > 0u && StencilID < 16u)
 		{
 			const float LookupRho = GET_SCALAR_ARRAY_ELEMENT(ReflectanceLUT, StencilID);
@@ -298,6 +298,11 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 				Reflectance = LookupRho;
 			}
 		}
+	}
+	else
+	{
+		// Legacy path: raw FinalColorLDR, compute Rec.709 in shader.
+		Reflectance = saturate(dot(ColorSample.rgb, float3(0.2126, 0.7152, 0.0722)));
 	}
 
 	// Surface normal from depth gradient. We don't have a populated
