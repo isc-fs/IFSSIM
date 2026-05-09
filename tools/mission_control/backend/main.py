@@ -6,6 +6,7 @@ Run: uvicorn main:app --host 0.0.0.0 --port 8000
 """
 
 import os
+import re
 import sys
 import glob
 import json
@@ -572,6 +573,73 @@ def vehicle_teleport(req: TeleportRequest):
 
 # === Track Manager ===
 
+# Path-traversal defence for track-name-as-path-segment (#327 B4). Pre-#327
+# `track_load` and `track_preview` accepted any string and joined it
+# onto TRACKS_DIR; with `name="../../etc/passwd.csv"` the join
+# resolved outside TRACKS_DIR and was either read (preview) or sent
+# to UE5's loadTrack RPC (load). `track_delete` had its own ad-hoc
+# `if "/" in name or "\\" in name or ".." in name` check; this
+# replaces all three sites with one helper.
+_TRACK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.csv$")
+_TRACK_STEM_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_track_name(name: str) -> str:
+    """Validate a `<stem>.csv` track filename.
+
+    Allows letters/digits/`._-`, requires a `.csv` suffix, rejects
+    empty/`.`/`..`/dotfile stems, and caps length at 128 chars.
+    Raises HTTPException(400) on invalid input. Returns the
+    validated name unchanged so callers can keep using
+    `os.path.join(TRACKS_DIR, name)`.
+
+    Defense-in-depth: the abspath check at each call site catches
+    anything the regex misses (URL-decoded edge cases, unicode
+    normalisation surprises).
+    """
+    if not name or len(name) > 128:
+        raise HTTPException(status_code=400, detail="Invalid track name")
+    if not _TRACK_NAME_RE.fullmatch(name):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid track name (allowed chars: A-Za-z0-9._-, must end with .csv)",
+        )
+    stem = name[:-4]  # strip ".csv"
+    if stem in (".", "..") or stem.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid track name")
+    return name
+
+
+def _validate_track_stem(stem: str) -> str:
+    """Same as `_validate_track_name` but for the stem only — used by
+    `track_generate`, which appends `.csv` itself.
+    """
+    if not stem or len(stem) > 124:  # leave 4 chars for ".csv"
+        raise HTTPException(status_code=400, detail="Invalid track name")
+    if not _TRACK_STEM_RE.fullmatch(stem):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid track name (allowed chars: A-Za-z0-9._-)",
+        )
+    if stem in (".", "..") or stem.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid track name")
+    return stem
+
+
+def _resolve_track_path(name: str) -> str:
+    """Resolve `<TRACKS_DIR>/<name>` and assert it stays inside TRACKS_DIR.
+
+    Belt-and-braces with `_validate_track_name`: if the regex is ever
+    weakened (e.g. someone allows colons or backslashes by mistake),
+    this still keeps reads/writes scoped to the tracks directory.
+    """
+    base = os.path.abspath(TRACKS_DIR)
+    target = os.path.abspath(os.path.join(base, name))
+    if not (target == base or target.startswith(base + os.sep)):
+        raise HTTPException(status_code=400, detail="Invalid track path")
+    return target
+
+
 def parse_track_csv(filepath):
     cones = {"blue": [], "yellow": [], "big_orange": [], "small_orange": []}
     try:
@@ -606,7 +674,8 @@ def track_list():
 
 @app.get("/api/track/{name}/preview")
 def track_preview(name: str):
-    filepath = os.path.join(TRACKS_DIR, name)
+    name = _validate_track_name(name)
+    filepath = _resolve_track_path(name)
     if not os.path.exists(filepath):
         return JSONResponse({"error": "Track not found"}, status_code=404)
 
@@ -619,9 +688,13 @@ def track_preview(name: str):
 @app.post("/api/track/{name}/load", dependencies=[Depends(require_api_key)])
 def track_load(name: str):
     global current_event
-    filepath = os.path.abspath(os.path.join(TRACKS_DIR, name))
+    name = _validate_track_name(name)
+    filepath = _resolve_track_path(name)
     if not os.path.exists(filepath):
         return JSONResponse({"error": "Track not found"}, status_code=404)
+    # `ue5_path` is sent to UE5's loadTrack RPC; the validated name
+    # (basename only, no `..`, no slashes) keeps this scoped to the
+    # mounted tracks volume on the sim side too.
     ue5_path = os.path.join(UE5_TRACKS_DIR, name)
     event_type = BUILTIN_TRACKS.get(name)
     with _state_lock:
@@ -660,11 +733,14 @@ def capture_home():
 
 @app.delete("/api/track/{name}", dependencies=[Depends(require_api_key)])
 def track_delete(name: str):
-    if "/" in name or "\\" in name or ".." in name:
-        return JSONResponse({"error": "Invalid name"}, status_code=400)
+    # Pre-#327 (B4) this had its own ad-hoc `if "/" in name or "\\" in
+    # name or ".." in name` check that the other two endpoints lacked
+    # — replaced with the shared `_validate_track_name` helper for
+    # consistency.
+    name = _validate_track_name(name)
     if name in BUILTIN_TRACKS:
         return JSONResponse({"error": "Cannot delete built-in track"}, status_code=400)
-    filepath = os.path.join(TRACKS_DIR, name)
+    filepath = _resolve_track_path(name)
     if os.path.exists(filepath):
         os.remove(filepath)
         return {"deleted": name}
@@ -677,7 +753,13 @@ def track_generate(params: TrackGenerate):
         from track_generator import TrackGenerator
         from utils import Mode, SimType
 
-        name_base = params.name.strip() or f"track_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Pre-#327 (B4) `params.name` was used directly as the
+        # destination filename stem — `name="../../etc/passwd"`
+        # would have written to TRACKS_DIR/../../etc/passwd.csv.
+        # `_validate_track_stem` rejects anything outside
+        # `[A-Za-z0-9._-]`. The auto-generated default is
+        # always-safe.
+        name_base = _validate_track_stem(params.name.strip()) if params.name.strip() else f"track_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         # output_yaml() builds its path as: os.path.realpath(os.path.dirname(__file__)) + output_location
         # __file__ is inside TRACK_GEN_PATH (read-only mount), so we use a traversal to
