@@ -117,8 +117,19 @@ export default function TrackManager() {
           {builtinTracks.map(t => (
             <div
               key={t.name}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected === t.name}
+              aria-label={`Select track ${t.name}`}
               onClick={() => selectTrack(t.name)}
-              className={`flex justify-between items-center px-4 py-3 rounded-lg cursor-pointer border transition-all ${
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  selectTrack(t.name)
+                }
+              }}
+              className={`flex justify-between items-center px-4 py-3 rounded-lg cursor-pointer border transition-all
+                         focus:outline-none focus:ring-2 focus:ring-[#ffb81c] focus:ring-offset-2 focus:ring-offset-[#1a1a1a] ${
                 selected === t.name ? 'border-[#ffb81c] bg-[#1a1a0a]' : 'border-[#333] bg-[#111] hover:border-[#555]'
               }`}
             >
@@ -175,10 +186,21 @@ export default function TrackManager() {
             {generatedTracks.map(t => (
               <div
                 key={t.name}
-                className={`flex justify-between items-center px-4 py-3 rounded-lg cursor-pointer border transition-all ${
+                role="button"
+                tabIndex={0}
+                aria-pressed={selected === t.name}
+                aria-label={`Select track ${t.name}`}
+                className={`flex justify-between items-center px-4 py-3 rounded-lg cursor-pointer border transition-all
+                           focus:outline-none focus:ring-2 focus:ring-[#ffb81c] focus:ring-offset-2 focus:ring-offset-[#1a1a1a] ${
                   selected === t.name ? 'border-[#ffb81c] bg-[#1a1a0a]' : 'border-[#333] bg-[#111] hover:border-[#555]'
                 }`}
                 onClick={() => selectTrack(t.name)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    selectTrack(t.name)
+                  }
+                }}
               >
                 <div>
                   <div className="font-medium text-sm">{t.name}</div>
