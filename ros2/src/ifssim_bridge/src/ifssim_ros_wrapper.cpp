@@ -37,6 +37,22 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // #322. LiDAR is now always UDP via UdpReceiver — #321 marked the
     // TCP and UDS paths soft-deprecated, this PR follows through.
 
+    // Opt-in subsampled LiDAR cloud for visualisation. 0 disables it
+    // entirely (production default; no extra publisher, no per-frame
+    // subsample work). Set via the `LIDAR_VIZ_DECIMATION` env var in
+    // docker-compose.yml or as a launch parameter override. See
+    // onLidarFrame() for the publish path and FUNCTIONALITIES.md §7
+    // for the operator-facing rationale.
+    {
+        const int dec = node_->declare_parameter<int>("lidar_viz_decimation", 0);
+        lidar_viz_decimation_ = (dec >= 2) ? static_cast<uint32_t>(dec) : 0;
+        if (dec > 0 && dec < 2) {
+            RCLCPP_WARN(node_->get_logger(),
+                "lidar_viz_decimation=%d clamped to disabled (need >=2 for any actual subsampling)",
+                dec);
+        }
+    }
+
     initializeConnection();
     initializePublishers();
     initializeSubscribers();
@@ -256,6 +272,15 @@ void IFSSIMRosWrapper::initializePublishers()
     // best-effort stream — drops are fine, backpressure is not.
     auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(50)).best_effort();
     lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", lidar_qos);
+    if (lidar_viz_decimation_ >= 2) {
+        // Same QoS as the full cloud — BEST_EFFORT lets a slow tab drop
+        // frames instead of backpressuring the bridge.
+        lidar_viz_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "lidar/Lidar1/viz", lidar_qos);
+        RCLCPP_INFO(node_->get_logger(),
+            "/lidar/Lidar1/viz enabled — every %u-th point published alongside the full cloud",
+            lidar_viz_decimation_);
+    }
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
     // Published edge-triggered when the referee's bFinished flips false->true;
     // consumers (e.g. the control node) brake the car to end the event cleanly.
@@ -807,6 +832,49 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
                 static_cast<size_t>(total_points) * 4 * sizeof(float));
 
     lidar_pub_->publish(msg);
+
+    // Optional /lidar/Lidar1/viz — every Nth point as a separate cloud
+    // for browser-based visualisers (Foxglove web, Lichtblick web) that
+    // burn 30-40 % CPU deserialising the full 1.5 MB/scan stream.
+    // Off by default (lidar_viz_decimation_ == 0); when enabled, the
+    // autonomy stack still gets the full /lidar/Lidar1 cloud, only
+    // viz tools subscribe to /viz. Header (stamp, frame_id) is
+    // identical so the two clouds line up frame-for-frame.
+    if (lidar_viz_pub_ && lidar_viz_decimation_ >= 2) {
+        const uint32_t N = lidar_viz_decimation_;
+        const int viz_count = (total_points + static_cast<int>(N) - 1) / static_cast<int>(N);
+        if (viz_count > 0) {
+            sensor_msgs::msg::PointCloud2 viz;
+            viz.header        = msg.header;
+            viz.height        = 1;
+            viz.width         = static_cast<uint32_t>(viz_count);
+            viz.is_dense      = true;
+            viz.is_bigendian  = false;
+
+            sensor_msgs::PointCloud2Modifier mod(viz);
+            mod.setPointCloud2Fields(4,
+                "x",         1, sensor_msgs::msg::PointField::FLOAT32,
+                "y",         1, sensor_msgs::msg::PointField::FLOAT32,
+                "z",         1, sensor_msgs::msg::PointField::FLOAT32,
+                "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
+            mod.resize(viz_count);
+
+            // Stride-copy: every Nth (x,y,z,intensity) quartet. Kept
+            // simple and deterministic — drop random / voxel-grid
+            // sampling are nice-to-haves but stride is enough to make
+            // a browser tab usable and adds no per-frame allocation
+            // beyond the cloud itself.
+            float* dst = reinterpret_cast<float*>(viz.data.data());
+            for (int i = 0, src_idx = 0; i < viz_count; ++i, src_idx += static_cast<int>(N) * 4) {
+                dst[i*4 + 0] = points[src_idx + 0];
+                dst[i*4 + 1] = points[src_idx + 1];
+                dst[i*4 + 2] = points[src_idx + 2];
+                dst[i*4 + 3] = points[src_idx + 3];
+            }
+
+            lidar_viz_pub_->publish(viz);
+        }
+    }
 }
 
 // =============================================================================

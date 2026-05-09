@@ -25,6 +25,15 @@ REMAP_CMD    = ('/fsds/control_command',     '/control_command')
 PIPELINE_ENABLED = os.environ.get("PIPELINE_ENABLED", "false").lower() == "true"
 # LiDAR transport is UDP-only as of #322 — see bridge.launch.py.
 
+# Opt-in /lidar/Lidar1/viz subsampling for browser-based visualisers.
+# 0 (default) = disabled; >=2 = every-Nth-point cloud alongside the
+# full /lidar/Lidar1 feed. Autonomy stack always subscribes to the
+# full cloud.
+try:
+    LIDAR_VIZ_DECIMATION = int(os.environ.get("LIDAR_VIZ_DECIMATION", "0"))
+except ValueError:
+    LIDAR_VIZ_DECIMATION = 0
+
 
 def generate_launch_description():
     nodes = [
@@ -43,11 +52,12 @@ def generate_launch_description():
             name='ifssim_bridge',
             output='screen',
             parameters=[{
-                'host':         LaunchConfiguration('host'),
-                'port':         LaunchConfiguration('port'),
-                'mission_name': LaunchConfiguration('mission_name'),
-                'track_name':   LaunchConfiguration('track_name'),
-                'competition_mode': False,
+                'host':                  LaunchConfiguration('host'),
+                'port':                  LaunchConfiguration('port'),
+                'mission_name':          LaunchConfiguration('mission_name'),
+                'track_name':            LaunchConfiguration('track_name'),
+                'competition_mode':      False,
+                'lidar_viz_decimation':  LIDAR_VIZ_DECIMATION,
             }],
         ),
 

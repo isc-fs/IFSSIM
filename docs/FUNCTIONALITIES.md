@@ -558,6 +558,7 @@ LiDAR transport is hard-wired to UDP since #322. Earlier versions exposed a `lid
 | `gss` | `geometry_msgs/TwistWithCovarianceStamped` | ~100 Hz | `frame_id=fsds/GSS`. Body-frame velocity. |
 | `motor_rpm` | `std_msgs/Float32` | ~100 Hz | Motor RPM (post-gearbox shaft side). |
 | `lidar/Lidar1` | `sensor_msgs/PointCloud2` | up to 10 Hz | `frame_id=fsds/Lidar`. See section 4.1 for actual rates by transport. |
+| `lidar/Lidar1/viz` | `sensor_msgs/PointCloud2` | up to 10 Hz | **Opt-in subsampled cloud** for browser-based visualisers. Created only when `lidar_viz_decimation` parameter (or `LIDAR_VIZ_DECIMATION` env var) is ≥ 2; published as every-Nth-point of `/lidar/Lidar1` with identical header. Off by default — autonomy stack should always subscribe to `/lidar/Lidar1`. Foxglove web tab CPU drops from ~35 % to ~10 % at decimation=4 with no perceptible difference for "is SLAM seeing the cones I expect" debugging. |
 | `camera/<name>/compressed` | `sensor_msgs/CompressedImage` | `camera_hz` (default 10) | One topic per configured camera; PNG-compressed. |
 | `tire_loads` | `std_msgs/Float32MultiArray` | ~100 Hz | Per-wheel Fz from `ComputeTireLoadsParametric`, order FL/FR/RL/RR. |
 | `signal/go` | `fs_msgs/GoSignal` | 1 Hz | Mission name + track identifier. |
