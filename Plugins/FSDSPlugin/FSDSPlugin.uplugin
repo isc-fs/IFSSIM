@@ -8,7 +8,7 @@
 	"CreatedBy": "ISC Formula Student",
 	"CreatedByURL": "https://github.com/isc-fs/IFSSIM",
 	"EnabledByDefault": true,
-	"CanContainContent": false,
+	"CanContainContent": true,
 	"IsBetaVersion": true,
 	"Installed": false,
 	"Modules": [
