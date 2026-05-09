@@ -89,6 +89,8 @@ Every PR to `dev` or `main` runs through a four-job CI suite (`.github/workflows
 
 A separate workflow (`.github/workflows/plugin-cook.yml`) runs the **full UE5 `BuildCookRun`** on a self-hosted Mac runner with UE5 5.7 installed — but only for PRs that touch `Plugins/`, `Config/`, `Content/`, the `.uproject`, or `package_mac.sh`. PRs that don't touch the UE5 side (e.g. bridge-only or Mission Control-only changes) skip it entirely.
 
+> **Setup note:** the plugin-cook workflow needs a self-hosted Mac runner registered at **Settings → Actions → Runners → New self-hosted runner**, with `UE5_ROOT` set in its env (default `/Users/Shared/Epic Games/UE_5.7`). Same runner the existing `package-mac.yml` (release-on-tag) workflow uses. Until the runner is registered, `plugin-cook` runs as `continue-on-error: true` — visible in PR checks but non-blocking. Once a runner exists, drop that flag to make it a hard gate.
+
 ### Running CI locally
 
 ```bash

@@ -44,6 +44,21 @@ jobs:
     name: BuildCookRun (Shipping, Mac)
     runs-on: [self-hosted, macOS]
     timeout-minutes: 30
+    # Non-blocking until the self-hosted runner is registered. Without
+    # `continue-on-error: true`, every PR that touches the UE5 side
+    # would be stuck "cancelled" because GitHub gives up after ~2 min
+    # with no runner listening. The 4 GitHub-hosted CI jobs in
+    # `ci.yml` are the actual merge gate; this is a "we tried to cook
+    # — see results when a runner exists" signal.
+    #
+    # To register the runner: Settings → Actions → Runners → New
+    # self-hosted runner. Set UE5_ROOT in the runner's env (e.g.
+    # /Users/Shared/Epic Games/UE_5.7). Same setup the existing
+    # `package-mac.yml` already needs for tag-push releases.
+    #
+    # Once a runner is online, removing `continue-on-error` here makes
+    # plugin-cook a hard gate alongside the GitHub-hosted jobs.
+    continue-on-error: true
 
     steps:
       - name: Checkout
