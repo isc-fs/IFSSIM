@@ -915,6 +915,36 @@ def export_session_log():
 
 # === WebSocket Telemetry ===
 
+# WS loop tuning (#327 B8). Pre-#327 the loop ran a flat 200 ms tick
+# (5 Hz) and used a bare `except Exception` that, combined with B2's
+# 3 s connect-timeout, made a downed sim into 3+ Hz of full-fat
+# connect attempts × N WS clients. Adaptive: tick fast when the sim
+# is up (need every frame for the dashboard), slow way down when
+# it's known down (B2's cache short-circuits, no point telling the
+# UI 5 times a second that the sim is still down).
+_WS_NORMAL_TICK_S = 0.2
+_WS_DISCONNECT_TICK_S = 2.0
+# `_WS_SEND_TIMEOUT_S` puts a bound on how long we wait for a single
+# `send_json` to land. Pre-#327 a half-open client (laptop sleeps,
+# wifi hangs) was only detected when the OS eventually noticed the
+# dead TCP — could take minutes. The wait_for timeout gives us an
+# active-detection window without an explicit ping/pong protocol.
+_WS_SEND_TIMEOUT_S = 5.0
+
+
+async def _ws_safe_send(websocket: WebSocket, data: dict) -> bool:
+    """Send `data` with a timeout. Returns True on success, False if
+    the peer is gone or stalled (caller should `break` the loop)."""
+    try:
+        await asyncio.wait_for(
+            websocket.send_json(data),
+            timeout=_WS_SEND_TIMEOUT_S,
+        )
+        return True
+    except (asyncio.TimeoutError, RuntimeError, ConnectionError, WebSocketDisconnect):
+        return False
+
+
 @app.websocket("/ws/telemetry")
 async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(default=None)):
     # WebSocket handshakes from browsers can't carry custom headers, so
@@ -932,72 +962,93 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
     await websocket.accept()
     try:
         while True:
-            try:
-                # Gather state from sim. The three calls go through
-                # SimConnection's threading.Lock, so a slow compound
-                # operation in another worker (event_start does ~5
-                # sequential RPCs while holding the lock) would freeze
-                # the event loop here for hundreds of ms — visible in
-                # the UI as telemetry "skipping". Run them on the
-                # thread pool so the loop stays responsive while we
-                # block on the wire.
-                vehicle = await asyncio.to_thread(sim.get_vehicle_state)
-                ref = await asyncio.to_thread(sim.get_referee_state)
-                sim_status = await asyncio.to_thread(sim.get_status)
+            tick = _WS_NORMAL_TICK_S
 
-                # Snapshot the shared mutables under their lock so a
-                # mid-toggle RES (or mid-capture home pose) doesn't
-                # leave us reading an inconsistent state into the WS
-                # frame (#327 B5).
-                with _state_lock:
-                    res_active_snap = res_active
-                    current_event_snap = current_event
+            # Connection probe. With #342's caching this is sub-µs in
+            # the common case (recent successful command) and capped
+            # at one connect-timeout-attempt per 5 s when known down.
+            connected = await asyncio.to_thread(sim.is_connected)
 
-                data = {
-                    "speed": vehicle.get("speed", 0),
-                    "rpm": vehicle.get("rpm", 0),
-                    "gear": vehicle.get("gear", 0),
-                    "x": vehicle.get("x", 0),
-                    "y": vehicle.get("y", 0),
-                    "z": vehicle.get("z", 0),
-                    "throttle": vehicle.get("controls", {}).get("throttle", 0),
-                    "steering": vehicle.get("controls", {}).get("steering", 0),
-                    "brake": vehicle.get("controls", {}).get("brake", 0),
-                    # Regen telemetry (motor-side). regen_torque/power reflect
-                    # what the sim is currently absorbing; regen_avail_torque
-                    # is the cap at the current ω_motor (motor-peak or
-                    # cell-power-limited, whichever binds); regen_max_*_limit
-                    # are the hardware ceilings from settings.json.
-                    "regen_torque": vehicle.get("regen_torque", 0),
-                    "regen_power": vehicle.get("regen_power", 0),
-                    "regen_avail_torque": vehicle.get("regen_avail_torque", 0),
-                    "regen_max_torque": vehicle.get("regen_max_torque", 0),
-                    "regen_max_power": vehicle.get("regen_max_power", 0),
-                    "doo": ref.get("doo_counter", 0),
-                    "oc": ref.get("oc_counter", 0),
-                    "laps": ref.get("laps", 0),
-                    "required_laps": ref.get("required_laps", 0),
-                    "finished": ref.get("finished", False),
-                    "event": current_event_snap,
-                    "fps": sim_status.get("fps", 0),
-                    "paused": sim_status.get("paused", False),
-                    "res_active": res_active_snap,
-                    "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
-                }
-
-                await websocket.send_json(data)
-            except Exception:
-                # Sim disconnected OR the primary send above just failed
-                # on an already-closed socket. Try one keep-alive-style
-                # error beacon; if that also fails the WS is gone and we
-                # bail out of the loop rather than spinning forever on
-                # RuntimeError.
-                try:
-                    await websocket.send_json({"error": "sim_disconnected"})
-                except Exception:
+            if not connected:
+                # Sim known down. Send the beacon (frontend's shape
+                # gate at #326 F4 drops it) and loop slowly. This is
+                # the path that pre-#327 hammered the connect timeout
+                # at 3+ Hz × N clients.
+                if not await _ws_safe_send(websocket, {"error": "sim_disconnected"}):
                     break
+                tick = _WS_DISCONNECT_TICK_S
+            else:
+                try:
+                    # Gather state from sim. The three calls go through
+                    # SimConnection's threading.Lock, so a slow compound
+                    # operation in another worker (event_start does ~5
+                    # sequential RPCs while holding the lock) would
+                    # freeze the event loop here for hundreds of ms —
+                    # visible in the UI as telemetry "skipping". Run on
+                    # the thread pool so the loop stays responsive
+                    # while we block on the wire.
+                    vehicle = await asyncio.to_thread(sim.get_vehicle_state)
+                    ref = await asyncio.to_thread(sim.get_referee_state)
+                    sim_status = await asyncio.to_thread(sim.get_status)
 
-            await asyncio.sleep(0.2)  # 5Hz
+                    # Snapshot the shared mutables under their lock so
+                    # a mid-toggle RES (or mid-capture home pose)
+                    # doesn't leave us reading an inconsistent state
+                    # into the WS frame (#327 B5).
+                    with _state_lock:
+                        res_active_snap = res_active
+                        current_event_snap = current_event
+
+                    data = {
+                        "speed": vehicle.get("speed", 0),
+                        "rpm": vehicle.get("rpm", 0),
+                        "gear": vehicle.get("gear", 0),
+                        "x": vehicle.get("x", 0),
+                        "y": vehicle.get("y", 0),
+                        "z": vehicle.get("z", 0),
+                        "throttle": vehicle.get("controls", {}).get("throttle", 0),
+                        "steering": vehicle.get("controls", {}).get("steering", 0),
+                        "brake": vehicle.get("controls", {}).get("brake", 0),
+                        # Regen telemetry (motor-side). regen_torque/power
+                        # reflect what the sim is currently absorbing;
+                        # regen_avail_torque is the cap at the current
+                        # ω_motor (motor-peak or cell-power-limited,
+                        # whichever binds); regen_max_*_limit are the
+                        # hardware ceilings from settings.json.
+                        "regen_torque": vehicle.get("regen_torque", 0),
+                        "regen_power": vehicle.get("regen_power", 0),
+                        "regen_avail_torque": vehicle.get("regen_avail_torque", 0),
+                        "regen_max_torque": vehicle.get("regen_max_torque", 0),
+                        "regen_max_power": vehicle.get("regen_max_power", 0),
+                        "doo": ref.get("doo_counter", 0),
+                        "oc": ref.get("oc_counter", 0),
+                        "laps": ref.get("laps", 0),
+                        "required_laps": ref.get("required_laps", 0),
+                        "finished": ref.get("finished", False),
+                        "event": current_event_snap,
+                        "fps": sim_status.get("fps", 0),
+                        "paused": sim_status.get("paused", False),
+                        "res_active": res_active_snap,
+                        "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
+                    }
+
+                    if not await _ws_safe_send(websocket, data):
+                        break
+                except WebSocketDisconnect:
+                    # Re-raise to the outer try so the cleanup is
+                    # consistent with a peer-initiated disconnect.
+                    raise
+                except Exception:
+                    # RPC error during a tick where is_connected said
+                    # we were up — race: sim went down between
+                    # is_connected and the actual call. Send a beacon
+                    # and back off to the disconnected tick rate so
+                    # we're not spinning while the cache catches up.
+                    if not await _ws_safe_send(websocket, {"error": "sim_error"}):
+                        break
+                    tick = _WS_DISCONNECT_TICK_S
+
+            await asyncio.sleep(tick)
     except WebSocketDisconnect:
         pass
 
