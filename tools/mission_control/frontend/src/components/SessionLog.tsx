@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiFetch, promptForApiKey } from '../lib/api'
 
 interface LogEntry {
@@ -7,18 +7,73 @@ interface LogEntry {
   message: string;
 }
 
+// Pre-#326 the response was assigned to `setLog` without checking it
+// was an array; an `{error: "..."}` envelope (which other endpoints
+// return — see Scoring.tsx's `if (!d.error)` check) would write a
+// non-array, then `log.length > 0 && log.map(...)` threw and unmounted
+// the tab (finding F6).
+function isLogArray(p: unknown): p is LogEntry[] {
+  return Array.isArray(p)
+}
+
 export default function SessionLog() {
   const [log, setLog] = useState<LogEntry[]>([])
-
-  const refresh = async () => {
-    const r = await apiFetch('/api/session/log', {}, promptForApiKey)
-    setLog(await r.json())
-  }
+  const [error, setError] = useState<string | null>(null)
+  // `inFlightRef` debounces overlapping polls — pre-#326 the 3 s
+  // interval fired regardless of whether the previous fetch had
+  // returned, so a slow response could land out of order behind a
+  // fresh one and the UI flickered between old and new state
+  // (finding F5). Pair with an `AbortController` so a fetch
+  // outstanding at unmount doesn't try to setState afterwards.
+  const inFlightRef = useRef(false)
 
   useEffect(() => {
+    let cancelled = false
+    let controller: AbortController | null = null
+
+    const refresh = async () => {
+      if (cancelled || inFlightRef.current) return
+      inFlightRef.current = true
+      controller = new AbortController()
+      try {
+        const r = await apiFetch('/api/session/log', { signal: controller.signal }, promptForApiKey)
+        if (cancelled) return
+        if (!r.ok) {
+          setError(`HTTP ${r.status}`)
+          return
+        }
+        const parsed: unknown = await r.json()
+        if (cancelled) return
+        if (isLogArray(parsed)) {
+          setLog(parsed)
+          setError(null)
+        } else {
+          // Non-array response (likely an `{error: "..."}` envelope) —
+          // surface it instead of poisoning state with something the
+          // table can't render.
+          const msg = parsed && typeof parsed === 'object' && 'error' in parsed
+            ? String((parsed as Record<string, unknown>).error)
+            : 'malformed response'
+          setError(msg)
+        }
+      } catch (e: unknown) {
+        // AbortError is expected on cleanup; any other error gets
+        // surfaced.
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        inFlightRef.current = false
+      }
+    }
+
     refresh()
     const interval = setInterval(refresh, 3000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      controller?.abort()
+    }
   }, [])
 
   const exportLog = () => {
@@ -40,16 +95,16 @@ export default function SessionLog() {
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold">Session Log</h2>
           <div className="flex gap-2">
-            <button onClick={refresh}
-              className="px-3 py-1.5 bg-[#333] text-gray-300 rounded text-xs hover:bg-[#444]">
-              Refresh
-            </button>
             <button onClick={exportLog}
               className="px-3 py-1.5 bg-[#ffb81c] text-black font-medium rounded text-xs hover:bg-[#e6a619]">
               Export JSON
             </button>
           </div>
         </div>
+
+        {error && (
+          <p className="mb-3 text-xs text-orange-400">Log fetch error: {error}</p>
+        )}
 
         {log.length > 0 ? (
           <div className="space-y-1 max-h-[500px] overflow-y-auto">

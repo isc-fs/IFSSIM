@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiFetch, promptForApiKey } from '../lib/api'
 
 interface ScoringData {
@@ -19,27 +19,100 @@ interface ScoringData {
   score: number;
 }
 
+// Debounce window for the t_best text input. Pre-#326 the useEffect
+// re-ran on every keystroke (finding F5), firing a fetch per character.
+// 400 ms feels responsive while letting a multi-digit entry settle.
+const T_BEST_DEBOUNCE_MS = 400
+
+function isScoringData(p: unknown): p is ScoringData {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return false
+  const o = p as Record<string, unknown>
+  if (typeof o.error === 'string') return false
+  // Cheap structural check: the `score` and `event` fields are
+  // present in every successful response. No deep validation — the
+  // typed interface above is the contract.
+  return typeof o.score === 'number' && typeof o.event === 'string'
+}
+
 export default function Scoring() {
   const [scoring, setScoring] = useState<ScoringData | null>(null)
   const [tBest, setTBest] = useState('')
+  // `appliedTBest` is the debounced reflection of `tBest`; the polling
+  // effect depends on this, not the raw text input, so typing doesn't
+  // immediately re-fire fetches (finding F5 follow-up).
+  const [appliedTBest, setAppliedTBest] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const inFlightRef = useRef(false)
 
-  const refresh = async () => {
-    const url = tBest ? `/api/scoring/summary?t_best=${tBest}` : '/api/scoring/summary'
-    const r = await apiFetch(url, {}, promptForApiKey)
-    const d = await r.json()
-    if (!d.error) setScoring(d)
-  }
-
+  // Debounce tBest → appliedTBest.
   useEffect(() => {
-    refresh()
-    const interval = setInterval(refresh, 2000)
-    return () => clearInterval(interval)
+    const id = setTimeout(() => setAppliedTBest(tBest), T_BEST_DEBOUNCE_MS)
+    return () => clearTimeout(id)
   }, [tBest])
 
-  if (!scoring) return <p className="text-gray-500">Loading scoring data...</p>
+  // Polling effect — keyed on the debounced value.
+  useEffect(() => {
+    let cancelled = false
+    let controller: AbortController | null = null
+
+    const refresh = async () => {
+      if (cancelled || inFlightRef.current) return
+      inFlightRef.current = true
+      controller = new AbortController()
+      try {
+        const url = appliedTBest
+          ? `/api/scoring/summary?t_best=${appliedTBest}`
+          : '/api/scoring/summary'
+        const r = await apiFetch(url, { signal: controller.signal }, promptForApiKey)
+        if (cancelled) return
+        if (!r.ok) {
+          setError(`HTTP ${r.status}`)
+          return
+        }
+        const parsed: unknown = await r.json()
+        if (cancelled) return
+        if (isScoringData(parsed)) {
+          setScoring(parsed)
+          setError(null)
+        } else {
+          const msg = parsed && typeof parsed === 'object' && 'error' in parsed
+            ? String((parsed as Record<string, unknown>).error)
+            : 'malformed scoring response'
+          setError(msg)
+        }
+      } catch (e: unknown) {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        inFlightRef.current = false
+      }
+    }
+
+    refresh()
+    const interval = setInterval(refresh, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      controller?.abort()
+    }
+  }, [appliedTBest])
+
+  if (!scoring) {
+    return (
+      <div className="space-y-2">
+        <p className="text-gray-500">Loading scoring data...</p>
+        {error && <p className="text-xs text-orange-400">Error: {error}</p>}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
+      {error && (
+        <p className="text-xs text-orange-400">Scoring fetch error: {error}</p>
+      )}
+
       {/* Score Header */}
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6 text-center">
         <div className="text-gray-500 text-xs uppercase tracking-wider mb-2">Event Score</div>
