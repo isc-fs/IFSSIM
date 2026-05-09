@@ -88,7 +88,11 @@ float RReferenceM;
 // Capped at 16 entries (uint8 stencil → 8-bit alpha encoding; we want
 // generous headroom in 0-15 for new cone types without losing the
 // non-cone discrimination range).
-float ReflectanceLUT[16];
+//
+// DECLARE_SCALAR_ARRAY — UE5 packs scalar arrays 4-per-float4 in the
+// constant buffer; we read individual elements via the
+// GET_SCALAR_ARRAY_ELEMENT macro from Platform.ush.
+DECLARE_SCALAR_ARRAY(float, ReflectanceLUT, 16);
 
 // 0 = pre-Phase-2: ignore the LUT entirely, use Rec.709 luminance for
 //     every hit. Default until the post-process material asset
@@ -288,7 +292,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		const uint StencilID = uint(ColorSample.a * 255.0 + 0.5);
 		if (StencilID > 0u && StencilID < 16u)
 		{
-			const float LookupRho = ReflectanceLUT[StencilID];
+			const float LookupRho = GET_SCALAR_ARRAY_ELEMENT(ReflectanceLUT, StencilID);
 			if (LookupRho > 0.0)
 			{
 				Reflectance = LookupRho;

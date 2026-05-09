@@ -1029,7 +1029,13 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->SensorRotRowZ         = U.SensorRotRowZ;  // #255
 			Params->RReferenceM           = U.RReferenceM;    // #255
 			// #321 D-Phase-1 — bind LUT + flag. Inert until Phase 2.
-			for (int32 i = 0; i < 16; ++i) Params->ReflectanceLUT[i] = U.ReflectanceLUT[i];
+			// GET_SCALAR_ARRAY_ELEMENT writes through the FVector4f
+			// packing the SHADER_PARAMETER_SCALAR_ARRAY uses
+			// internally — see FSDSLidarDecodeShader.h.
+			for (int32 i = 0; i < 16; ++i)
+			{
+				GET_SCALAR_ARRAY_ELEMENT(Params->ReflectanceLUT, i) = U.ReflectanceLUT[i];
+			}
 			Params->UseReflectanceLUT     = U.UseReflectanceLUT;
 
 			TShaderMapRef<FFSDSLidarDecodeCS> Shader(GetGlobalShaderMap(GMaxRHIFeatureLevel));

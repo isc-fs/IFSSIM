@@ -93,7 +93,14 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		// placeholder. CPU side fills indices 1-4 with datasheet values
 		// even when UseReflectanceLUT=0 so swap-on lands without a
 		// rebuild.
-		SHADER_PARAMETER_ARRAY(float, ReflectanceLUT, [16])
+		//
+		// SCALAR_ARRAY (not ARRAY) — UE5's SHADER_PARAMETER_ARRAY of
+		// `float` static_asserts on 16-byte element alignment, intended
+		// for FVector4f-shaped entries. SHADER_PARAMETER_SCALAR_ARRAY
+		// packs scalar elements 4-per-float4 internally and exposes
+		// them via GET_SCALAR_ARRAY_ELEMENT(...) on both sides of the
+		// CPU/GPU divide. Same observable semantics, correct alignment.
+		SHADER_PARAMETER_SCALAR_ARRAY(float, ReflectanceLUT, [16])
 		// 0 = Phase-1 default — ignore the LUT, use luminance for every
 		//     hit (current production behaviour, no regression).
 		// 1 = Phase-2 — decode stencil ID from ColorTexture's alpha
