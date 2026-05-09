@@ -26,13 +26,13 @@ services:
       # Skip the autonomous control node — useful for SLAM-only validation
       # or when keyboard-driving for motion sanity checks.
       - DV_DISABLE_CONTROL=${DV_DISABLE_CONTROL:-false}
-      # LiDAR transport — "tcp" (default) or "udp". On macOS Docker
-      # Desktop the host's TCP loopback caps loopback writes at ~7 MB/s,
-      # so 1.74 M pts/s only sustains ~3 Hz on TCP. UDP fragments the
-      # scan into 64 KB datagrams forwarded through gvisor without
-      # window-based throttling — typically holds 10 Hz, at the cost of
-      # accepting per-datagram packet loss. Linux hosts can keep TCP.
-      - LIDAR_TRANSPORT=${LIDAR_TRANSPORT:-tcp}
+      # LiDAR transport is UDP-only as of #322. The plugin pushes
+      # via FSDSUdpBroadcaster on port 51453; the bridge listens
+      # there. The TCP and UDS LiDAR senders existed pre-#322 to
+      # work around macOS Docker Desktop's ~7 MB/s TCP loopback cap,
+      # but UDP turned out to be reliable enough on every supported
+      # host that maintaining three transports was no longer worth
+      # the wire-format cost. The `LIDAR_TRANSPORT` env var is gone.
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
       # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
       # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single

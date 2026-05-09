@@ -55,9 +55,9 @@ class SimClient:
             prefix = header[:colon]
             count = int(header[colon+1:])
 
-            if prefix == "PTS":
-                byte_size = count * 3 * 4
-            elif prefix == "IMG":
+            # PTS handler removed in #322 — see test 7 below for the
+            # call site update.
+            if prefix == "IMG":
                 byte_size = count
             else:
                 s.close()
@@ -161,25 +161,13 @@ def main():
     check("point count > 0", pts is not None and pts > 0, f"points={pts}")
     check("channels = 128", channels == 128, f"channels={channels}")
 
-    # 7. LiDAR binary (what ROS2 bridge uses)
-    print("\n--- LiDAR Binary (PointCloud2 @ 10Hz) ---")
-    header, data = c.binary_cmd("getLidarDataBinary")
-    check("binary header", header.startswith("PTS:"), header)
-
-    if header.startswith("PTS:"):
-        num_pts = int(header.split(":")[1])
-        expected = num_pts * 3 * 4
-        check(f"points received", num_pts > 0, f"{num_pts} points")
-        check(f"data size", len(data) == expected, f"{len(data)}/{expected} bytes")
-
-        if num_pts > 0 and len(data) >= 12:
-            floats = struct.unpack(f"<{min(num_pts*3, len(data)//4)}f", data[:min(num_pts*3*4, len(data))])
-            x, y, z = floats[0], floats[1], floats[2]
-            dist = (x*x + y*y + z*z) ** 0.5
-            check("first point valid", dist > 0.1 and dist < 300, f"({x:.2f},{y:.2f},{z:.2f}) dist={dist:.1f}m")
-
-            distances = [(floats[i*3]**2+floats[i*3+1]**2+floats[i*3+2]**2)**0.5 for i in range(min(num_pts, len(floats)//3))]
-            check("range realistic", min(distances) > 0.3 and max(distances) < 250, f"min={min(distances):.1f}m max={max(distances):.1f}m")
+    # 7. LiDAR binary — removed in #322. The `getLidarDataBinary` RPC
+    # and `streamLidar` TCP push are both gone; LiDAR is UDP-only via
+    # FSDSUdpBroadcaster (port 51453) and the ROS bridge subscribes
+    # there. Coverage moved to the bridge integration tests; this
+    # script's `getLidarData` text RPC at the previous block already
+    # exercises the JSON path that's still available.
+    print("\n--- LiDAR Binary — SKIPPED (TCP RPC removed in #322) ---")
 
     # 8. Camera images (what ROS2 bridge uses)
     print("\n--- Camera Images (CompressedImage @ 10Hz) ---")

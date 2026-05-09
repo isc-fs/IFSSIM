@@ -60,9 +60,10 @@ private:
 	FString ProcessRequest(const FString& Request);
 	bool ProcessBinaryRequest(const FString& Request, FSocket* ClientSocket);
 
-	/** Streaming modes — hold connection open and push data continuously */
+	/** Streaming modes — hold connection open and push data continuously.
+	 *  StreamLidar removed in #322 (TCP LiDAR retired in favour of
+	 *  UDP via FSDSUdpBroadcaster::BroadcastLidarFrame). */
 	void StreamSensors(FSocket* ClientSocket);
-	void StreamLidar(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;
 
 	// Cached binary data for thread-safe transfer
@@ -72,9 +73,11 @@ private:
 
 	// UDS support (opt-in via StartUds). Mirrors the TCP path but using
 	// raw POSIX sockets — UE5's FSocket framework doesn't expose AF_UNIX.
+	// StreamLidarUds removed in #322. StreamSensorsUds remains as a
+	// no-op stub pending a real sensor-over-UDS implementation; the UDS
+	// listener is otherwise idle.
 	void UdsServerThreadFunc();
 	void HandleUdsClient(int ClientFd);
-	void StreamLidarUds(int ClientFd);
 	void StreamSensorsUds(int ClientFd);
 	std::unique_ptr<std::thread> UdsServerThread;
 	std::vector<std::thread> UdsClientThreads;

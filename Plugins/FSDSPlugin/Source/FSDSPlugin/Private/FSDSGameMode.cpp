@@ -81,11 +81,13 @@ void AFSDSGameMode::StartPlay()
 	RpcServer.SetUdpBroadcaster(&UdpBroadcaster);
 	RpcServer.Start(41451);
 
-	// Optional AF_UNIX (UDS) listener for LiDAR streaming. Localhost-only,
-	// bypasses the macOS TCP loopback throughput cap. Path lives under
-	// /tmp/ifssim_streams/ which the docker-compose.yml bind-mounts into
-	// the bridge container at the same path. Best-effort: if mkdir fails
-	// (read-only fs / permissions), we log and continue with TCP only.
+	// AF_UNIX (UDS) listener. Pre-#322 this opened `/tmp/ifssim_streams/lidar.sock`
+	// for the high-throughput LiDAR push that bypassed macOS Docker
+	// Desktop's TCP loopback cap. With the TCP and UDS LiDAR senders
+	// retired and only the StreamSensorsUds no-op stub remaining, the
+	// listener is currently inert. Kept here so a future per-sensor
+	// UDS path can plug in by name without rewiring startup; if you
+	// don't need that, removing this whole block is safe.
 	{
 		const FString StreamsDir = TEXT("/tmp/ifssim_streams");
 		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
@@ -95,20 +97,25 @@ void AFSDSGameMode::StartPlay()
 		}
 		if (PlatformFile.DirectoryExists(*StreamsDir))
 		{
+			// Path retained as `lidar.sock` to keep the docker-compose
+			// bind-mount stable across the #322 transition. Rename in
+			// a follow-up once the bind-mount and any external scripts
+			// are migrated together.
 			RpcServer.StartUds(StreamsDir + TEXT("/lidar.sock"));
 		}
 		else
 		{
 			UE_LOG(LogTemp, Warning,
-			       TEXT("FSDS: could not create %s for UDS streams; bridge will fall back to TCP"),
+			       TEXT("FSDS: could not create %s for UDS streams (sensor stub only since #322)"),
 			       *StreamsDir);
 		}
 	}
 
-	// UDP broadcaster — pushes sensor + LiDAR frames over UDP to the bridge.
-	// Started here unconditionally; the bridge can choose to consume the
-	// LiDAR UDP stream (via lidar_transport=udp) or stay on TCP. Sensor UDP
-	// is benign-but-unused when the bridge consumes sensors via TCP.
+	// UDP broadcaster — pushes sensor + LiDAR frames over UDP to the
+	// bridge. Started here unconditionally. The bridge consumes the
+	// LiDAR UDP stream on port 51453 (LiDAR is UDP-only since #322).
+	// Sensor UDP is currently benign-but-unused — sensors still ride
+	// the TCP push.
 	//
 	// Targeting 127.0.0.1: on macOS Docker Desktop the bridge sits inside
 	// the Linux VM; the docker-compose.yml UDP port forwards (41452/41453)

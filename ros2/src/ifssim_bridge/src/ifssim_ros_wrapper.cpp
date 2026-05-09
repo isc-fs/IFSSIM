@@ -33,39 +33,9 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     mission_name_ = node_->declare_parameter<std::string>("mission_name", "trackdrive");
     track_name_ = node_->declare_parameter<std::string>("track_name", "A");
     competition_mode_ = node_->declare_parameter<bool>("competition_mode", false);
-    // Path to the plugin's AF_UNIX LiDAR socket. Empty disables the UDS
-    // path entirely (TCP only). When set, openStreamSocket tries connect()
-    // on each attempt and falls back to TCP on failure — so the bridge
-    // can start before the plugin (PIE not yet pressed) without losing
-    // the UDS path once the socket appears.
-    lidar_uds_path_ = node_->declare_parameter<std::string>(
-        "lidar_uds_path", "/tmp/ifssim_streams/lidar.sock");
-    // LiDAR transport selection. Production is "udp" — the others are
-    // **soft-deprecated** as of #321 (originally added to bypass macOS
-    // Docker Desktop's TCP loopback throughput cap; UDP turned out to be
-    // robust enough on every supported host so the duplicate code paths
-    // are no longer worth maintaining). The TCP and UDS senders still
-    // exist for parity testing and rollback, but every wire-format
-    // change must keep all three in sync — that's the cost we're trying
-    // to retire. A future PR will delete the TCP / UDS LiDAR paths
-    // outright once we've confirmed nothing depends on them off-Mac.
-    lidar_transport_ = node_->declare_parameter<std::string>(
-        "lidar_transport", "udp");
-    if (lidar_transport_ != "tcp"
-        && lidar_transport_ != "udp"
-        && lidar_transport_ != "uds") {
-        RCLCPP_WARN(node_->get_logger(),
-            "Unknown lidar_transport '%s' — defaulting to udp",
-            lidar_transport_.c_str());
-        lidar_transport_ = "udp";
-    }
-    if (lidar_transport_ != "udp") {
-        RCLCPP_WARN(node_->get_logger(),
-            "lidar_transport='%s' is soft-deprecated (#321 follow-up). "
-            "Production uses 'udp'. The '%s' path is kept for parity "
-            "testing only and may be removed in a future release.",
-            lidar_transport_.c_str(), lidar_transport_.c_str());
-    }
+    // `lidar_transport` and `lidar_uds_path` parameters were removed in
+    // #322. LiDAR is now always UDP via UdpReceiver — #321 marked the
+    // TCP and UDS paths soft-deprecated, this PR follows through.
 
     initializeConnection();
     initializePublishers();
@@ -77,73 +47,29 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
 IFSSIMRosWrapper::~IFSSIMRosWrapper()
 {
     streaming_ = false;
-    // Close fds so blocking recv() calls in threads wake up
+    // Close the sensor TCP fd so the blocking recv() in
+    // sensorStreamThread wakes up. UdpReceiver shuts itself down
+    // through its own destructor — no LiDAR fd to close here since
+    // #322 (TCP-LiDAR retired).
     int sfd = sensor_stream_fd_.exchange(-1);
-    int lfd = lidar_stream_fd_.exchange(-1);
     if (sfd >= 0) close(sfd);
-    if (lfd >= 0) close(lfd);
     // Wake the publish-threads out of their condition_variable waits so
     // they can observe streaming_=false and exit.
     sensor_pub_cv_.notify_all();
     lidar_pub_cv_.notify_all();
     if (sensor_thread_.joinable()) sensor_thread_.join();
     if (sensor_pub_thread_.joinable()) sensor_pub_thread_.join();
-    if (lidar_thread_.joinable()) lidar_thread_.join();
     if (lidar_pub_thread_.joinable()) lidar_pub_thread_.join();
 }
 
 int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
 {
-    // For LiDAR specifically, prefer AF_UNIX (UDS) when a socket path is
-    // configured and exists. macOS TCP loopback caps at ~7 MB/s on the
-    // tested hardware, which throttled the LiDAR rate; UDS bypasses the
-    // TCP stack entirely. Plugin opens the socket at startup if the
-    // /tmp/ifssim_streams/ directory exists. Sensors stay on TCP — the
-    // ~40 KB/s sensor stream isn't bandwidth-bound and UDS would
-    // duplicate the streaming code on the plugin side for no payoff.
-    const bool bUdsCandidate = (command == "streamLidar")
-        && !lidar_uds_path_.empty();
-    if (bUdsCandidate) {
-        int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (sock < 0) return -1;
-        struct sockaddr_un uaddr;
-        memset(&uaddr, 0, sizeof(uaddr));
-        uaddr.sun_family = AF_UNIX;
-        if (lidar_uds_path_.size() >= sizeof(uaddr.sun_path)) {
-            RCLCPP_ERROR(node_->get_logger(),
-                "UDS path too long: %s — falling back to TCP",
-                lidar_uds_path_.c_str());
-            close(sock);
-        } else {
-            std::strncpy(uaddr.sun_path, lidar_uds_path_.c_str(),
-                         sizeof(uaddr.sun_path) - 1);
-            if (::connect(sock, (struct sockaddr*)&uaddr, sizeof(uaddr)) == 0) {
-                // Send command + read OK exactly like the TCP path.
-                std::string msg = command + "\n";
-                send(sock, msg.c_str(), msg.size(), 0);
-                char buf[4];
-                size_t total = 0;
-                bool ok = true;
-                while (total < 3) {
-                    ssize_t n = recv(sock, buf + total, 3 - total, 0);
-                    if (n <= 0) { ok = false; break; }
-                    total += n;
-                }
-                if (ok) {
-                    RCLCPP_INFO(node_->get_logger(),
-                        "Stream '%s' opened over AF_UNIX at %s",
-                        command.c_str(), lidar_uds_path_.c_str());
-                    return sock;
-                }
-            }
-            close(sock);
-            RCLCPP_WARN(node_->get_logger(),
-                "AF_UNIX connect to %s failed (%s) — falling back to TCP",
-                lidar_uds_path_.c_str(), strerror(errno));
-        }
-        // Fall through to TCP.
-    }
-
+    // Pre-#322 this had a leading AF_UNIX branch that opened
+    // /tmp/ifssim_streams/lidar.sock when `command == "streamLidar"`
+    // and `lidar_uds_path_` was set, falling back to TCP on failure.
+    // The UDS LiDAR sender on the plugin side was retired in #322;
+    // the only surviving caller is the sensor stream which always
+    // wanted TCP anyway, so the function collapses to the TCP path.
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
 
@@ -423,63 +349,52 @@ void IFSSIMRosWrapper::startStreaming()
         RCLCPP_ERROR(node_->get_logger(), "Failed to open sensor stream");
     }
 
-    if (lidar_transport_ == "udp") {
-        // UDP mode: bridge listens on 41453 for chunked LiDAR datagrams
-        // from the plugin's UdpBroadcaster. The reassembled frame is
-        // synthesised back into a LidarChunkHeader and pushed through the
-        // same single-slot pending_ buffer the TCP path uses, so the
-        // publish thread is unchanged.
-        udp_receiver_.setLidarCallback(
-            [this](int32_t total_points, int32_t channels,
-                   int64_t lag_ns,
-                   const std::vector<float>& points) {
-                LidarChunkHeader hdr{};
-                hdr.magic = LIDAR_MAGIC;
-                hdr.chunk_index = 0;
-                hdr.total_chunks = 1;
-                hdr.frame_id = 0;
-                hdr.points_in_chunk = total_points;
-                hdr.total_points = total_points;
-                hdr.channels = channels;
-                hdr.lag_ns = lag_ns;
-                {
-                    std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
-                    lidar_pending_ = PendingLidarFrame{hdr, points};
-                }
-                lidar_pub_cv_.notify_one();
-            });
-        // sensor_port=0 disables the sensor listener thread (sensors stay
-        // on TCP — the ~40 KB/s sensor stream isn't bandwidth-bound).
-        // Port 51453 is intentionally non-adjacent to the sensor stream
-        // port (41452) — Docker Desktop on macOS sometimes only proxies
-        // one port of a contiguous UDP range. See docker-compose.yml.
-        udp_receiver_.start(0, 51453);
-        RCLCPP_INFO(node_->get_logger(),
-            "LiDAR transport: UDP (listening on 51453)");
-    } else {
-        lidar_stream_fd_ = openStreamSocket("streamLidar");
-        if (lidar_stream_fd_ >= 0) {
-            RCLCPP_INFO(node_->get_logger(), "LiDAR stream connected");
-        } else {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to open LiDAR stream");
-        }
-    }
+    // LiDAR is UDP-only as of #322. Bridge listens on 41453 for
+    // chunked datagrams from the plugin's UdpBroadcaster. The
+    // reassembled frame is synthesised back into a LidarChunkHeader
+    // and pushed through the same single-slot pending_ buffer the
+    // (now-deleted) TCP path used, so the publish thread is unchanged.
+    udp_receiver_.setLidarCallback(
+        [this](int32_t total_points, int32_t channels,
+               int64_t lag_ns,
+               const std::vector<float>& points) {
+            LidarChunkHeader hdr{};
+            hdr.magic = LIDAR_MAGIC;
+            hdr.chunk_index = 0;
+            hdr.total_chunks = 1;
+            hdr.frame_id = 0;
+            hdr.points_in_chunk = total_points;
+            hdr.total_points = total_points;
+            hdr.channels = channels;
+            hdr.lag_ns = lag_ns;
+            {
+                std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
+                lidar_pending_ = PendingLidarFrame{hdr, points};
+            }
+            lidar_pub_cv_.notify_one();
+        });
+    // sensor_port=0 disables the sensor listener thread (sensors stay
+    // on TCP — the ~40 KB/s sensor stream isn't bandwidth-bound).
+    // Port 51453 is intentionally non-adjacent to the sensor stream
+    // port (41452) — Docker Desktop on macOS sometimes only proxies
+    // one port of a contiguous UDP range. See docker-compose.yml.
+    udp_receiver_.start(0, 51453);
+    RCLCPP_INFO(node_->get_logger(), "LiDAR transport: UDP (listening on 51453)");
 
     streaming_ = true;
 
     sensor_thread_     = std::thread(&IFSSIMRosWrapper::sensorStreamThread,  this);
     sensor_pub_thread_ = std::thread(&IFSSIMRosWrapper::sensorPublishThread, this);
-    if (lidar_transport_ == "tcp") {
-        lidar_thread_  = std::thread(&IFSSIMRosWrapper::lidarStreamThread,  this);
-    }
+    // No `lidar_thread_` — `lidarStreamThread` was the TCP recv loop
+    // and was retired with the rest of the TCP path in #322. The UDP
+    // receiver runs its own listener thread internally.
     lidar_pub_thread_  = std::thread(&IFSSIMRosWrapper::lidarPublishThread,  this);
 
-    // If initial connection failed (UE5 not in Play mode yet), kick off reconnect.
-    // UDP mode doesn't gate on lidar_stream_fd_ — the receiver listens
-    // independently and accepts the first datagram once the plugin sends one.
-    const bool tcp_lidar_failed = (lidar_transport_ == "tcp")
-        && (lidar_stream_fd_ < 0);
-    if (sensor_stream_fd_ < 0 || tcp_lidar_failed) {
+    // If the sensor TCP connection failed (UE5 not in Play mode yet),
+    // kick off reconnect. The LiDAR UDP receiver listens independently
+    // and accepts the first datagram once the plugin sends one, so it
+    // doesn't gate the reconnect decision.
+    if (sensor_stream_fd_ < 0) {
         std::thread(&IFSSIMRosWrapper::triggerReconnect, this).detach();
     }
 }
@@ -561,57 +476,12 @@ void IFSSIMRosWrapper::sensorPublishThread()
     RCLCPP_INFO(node_->get_logger(), "Sensor publish thread exiting");
 }
 
-void IFSSIMRosWrapper::lidarStreamThread()
-{
-    RCLCPP_INFO(node_->get_logger(), "LiDAR stream thread started");
-
-    while (streaming_) {
-        int fd = lidar_stream_fd_.load();
-        if (fd < 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-
-        LidarChunkHeader header;
-        if (!readExact(fd, &header, sizeof(header))) {
-            RCLCPP_WARN(node_->get_logger(), "LiDAR stream disconnected");
-            int expected = fd;
-            if (lidar_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
-            triggerReconnect();
-            continue;
-        }
-
-        if (header.magic != LIDAR_MAGIC || header.total_points <= 0) continue;
-
-        // Per-point payload: (x, y, z, intensity) — 4 floats since #255.
-        int data_size = header.total_points * 4 * sizeof(float);
-        std::vector<float> points(header.total_points * 4);
-
-        if (!readExact(fd, points.data(), data_size)) {
-            RCLCPP_WARN(node_->get_logger(), "LiDAR stream data incomplete");
-            int expected = fd;
-            if (lidar_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
-            triggerReconnect();
-            continue;
-        }
-
-        // Hand the frame off to the publish thread. Single-slot buffer
-        // with drop-oldest semantics: if the consumer hasn't yet
-        // drained the previous frame, the new one overwrites it. This
-        // keeps the recv loop free to immediately re-enter recv() and
-        // drain the kernel TCP buffer — preventing the backpressure
-        // chain that used to cause stream tear-downs every ~1 s under
-        // pipeline load. The mutex is held only long enough to swap
-        // the std::optional (a pointer-swap level operation since
-        // the underlying vector is moved); publish() runs entirely
-        // outside the lock on the consumer side.
-        {
-            std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
-            lidar_pending_ = PendingLidarFrame{header, std::move(points)};
-        }
-        lidar_pub_cv_.notify_one();
-    }
-}
+// IFSSIMRosWrapper::lidarStreamThread — removed in #322. Was the TCP
+// recv loop that consumed `streamLidar`'s framed point cloud; the
+// plugin-side TCP sender is gone, the UdpReceiver delivers frames
+// directly into `lidar_pending_` via the callback set in
+// startStreaming(). The publish thread (lidarPublishThread) is
+// unchanged and still consumes that single-slot buffer.
 
 void IFSSIMRosWrapper::lidarPublishThread()
 {
@@ -644,8 +514,10 @@ void IFSSIMRosWrapper::triggerReconnect()
 {
     std::lock_guard<std::mutex> lock(reconnect_mutex_);
 
-    // Another thread may have already completed the reconnect while we waited
-    if (sensor_stream_fd_ >= 0 && lidar_stream_fd_ >= 0) return;
+    // Another thread may have already completed the reconnect while we
+    // waited. With LiDAR-over-UDP (#322) there's no LiDAR fd to gate
+    // on — the only TCP stream that needs reconnecting is sensors.
+    if (sensor_stream_fd_ >= 0) return;
 
     RCLCPP_INFO(node_->get_logger(), "Reconnecting to IFSSIM (level reset?)...");
 
@@ -710,21 +582,10 @@ void IFSSIMRosWrapper::triggerReconnect()
         }
     }
 
-    // Reconnect LiDAR stream — TCP transport only. In UDP mode the
-    // receiver listens independently and accepts the next datagram once
-    // the plugin's UdpBroadcaster restarts; there is no per-connection
-    // handshake to re-establish.
-    if (lidar_transport_ == "tcp") {
-        while (streaming_ && lidar_stream_fd_ < 0) {
-            int fd = openStreamSocket("streamLidar");
-            if (fd >= 0) {
-                lidar_stream_fd_.store(fd);
-                RCLCPP_INFO(node_->get_logger(), "LiDAR stream reconnected");
-            } else {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-            }
-        }
-    }
+    // No LiDAR reconnect — UdpReceiver listens independently and
+    // accepts the next datagram once the plugin's UdpBroadcaster
+    // sends one. There is no per-connection handshake to
+    // re-establish. The TCP-LiDAR reconnect block was removed in #322.
 }
 
 // =============================================================================

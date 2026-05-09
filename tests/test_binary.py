@@ -55,36 +55,14 @@ def get_image(camera="cam1", image_type=0):
     return png_data, f"IMG:{size}"
 
 def get_lidar():
-    """Get LiDAR point cloud as list of (x,y,z) tuples."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(10)
-    sock.connect((HOST, PORT))
+    """LiDAR point-cloud retrieval over TCP was removed in #322 — the
+    `getLidarDataBinary` RPC and `streamLidar` push are both gone.
+    LiDAR is UDP-only now (port 51453), consumed by `udp_receiver.h`
+    in the bridge. This test stub stays so the rest of `test_binary.py`
+    keeps running; the LiDAR coverage moved to the bridge integration
+    tests."""
+    return [], "skipped:lidar-tcp-rpc-removed-in-322"
 
-    sock.sendall(b"getLidarDataBinary\n")
-
-    # Read header: "PTS:num_points\n"
-    header = recv_line(sock)
-    if not header.startswith("PTS:"):
-        sock.close()
-        return [], header
-
-    num_points = int(header.split(":")[1])
-
-    # Read raw float data (3 floats per point)
-    byte_size = num_points * 3 * 4  # 3 floats * 4 bytes each
-    raw_data = recv_all(sock, byte_size)
-    sock.close()
-
-    # Parse floats
-    num_floats = len(raw_data) // 4
-    floats = struct.unpack(f"<{num_floats}f", raw_data)
-
-    points = []
-    for i in range(0, len(floats), 3):
-        if i + 2 < len(floats):
-            points.append((floats[i], floats[i+1], floats[i+2]))
-
-    return points, f"PTS:{num_points}"
 
 def main():
     print("=" * 50)
@@ -129,16 +107,12 @@ def main():
     else:
         print(f"    [FAIL] {header}")
 
-    # Test 4: LiDAR point cloud
+    # Test 4: LiDAR point cloud — skipped since #322. The TCP-LiDAR
+    # RPCs that this test exercised are gone; LiDAR consumers must
+    # subscribe to /lidar/Lidar1 from the ROS bridge instead.
     print("[4] Getting LiDAR point cloud...")
     points, header = get_lidar()
-    if len(points) > 0:
-        print(f"    [OK] {header} — {len(points)} points received")
-        print(f"    Sample points:")
-        for i, p in enumerate(points[:5]):
-            print(f"      [{i}] x={p[0]:.3f} y={p[1]:.3f} z={p[2]:.3f}")
-    else:
-        print(f"    [FAIL] {header} — 0 points")
+    print(f"    [SKIPPED] {header}")
 
     print()
     print("=" * 50)

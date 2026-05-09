@@ -223,34 +223,18 @@ void FFSDSRpcServer::ServerThreadFunc()
 			{
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
 
-				// Kernel send buffer. Sized to hold an entire LiDAR scan
-				// at the Hesai ATX_S01 datasheet rate (1.74 M pts/s ⇒
-				// 174 k pts × 12 B = ~2 MB body), with headroom for
-				// downstream consumer drain hiccups. Without this, large
-				// scans don't fit in the buffer and Send returns partial
-				// writes — SendAll then has to wait on Socket->Wait
-				// repeatedly for the peer to drain, which was the
-				// dominant per-scan cost at higher rates.
-				//
-				// SO_SNDBUF gets clamped at kern.ipc.maxsockbuf (8 MB on
-				// stock macOS, often higher on Linux). 8 MB is plenty —
-				// holds 4× the largest scan we send — so we don't need
-				// to ask the operator to bump host sysctls. The kernel
-				// returns the actual granted size in `ActualSize`; we
-				// log if it falls below the per-scan body size, since
-				// that's the threshold below which partial-sends start
-				// hurting throughput again.
-				int32 ActualSize = 0;
-				const int32 RequestedSendBuf = 32 * 1024 * 1024;
-				ClientSocket->SetSendBufferSize(RequestedSendBuf, ActualSize);
-				const int32 OneScanMaxBytes = 174000 * 4 * sizeof(float);  // ~2.8 MB at datasheet rate (xyz+intensity, #255)
-				if (ActualSize < OneScanMaxBytes)
-				{
-					UE_LOG(LogTemp, Warning,
-					       TEXT("FSDS RPC: SO_SNDBUF granted %d B (< one-scan max %d B). ")
-					       TEXT("LiDAR throughput will partial-send; consider raising kern.ipc.maxsockbuf."),
-					       ActualSize, OneScanMaxBytes);
-				}
+				// Pre-#322 we bumped SO_SNDBUF to 32 MB here so the
+				// per-client TCP send buffer could hold an entire
+				// LiDAR scan at the Hesai datasheet rate without
+				// partial-sends. With #322 the LiDAR streaming RPC
+				// is gone — production runs LiDAR over UDP via
+				// FSDSUdpBroadcaster::BroadcastLidarFrame — and the
+				// remaining RPC clients (camera images at most a
+				// few MB, the sensor stream at ~40 KB/s, command
+				// req/resp) all fit comfortably in the kernel
+				// default. So this block is removed; if a future
+				// per-client RPC ever pushes >2 MB synchronously,
+				// reintroduce SetSendBufferSize scoped to that path.
 
 				// Handle each client in its own thread. Store it so Stop()
 				// can join the full set before the server is destroyed —
@@ -304,11 +288,11 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 					StreamSensors(ClientSocket);
 					return; // Connection used for streaming, done
 				}
-				if (Request == TEXT("streamLidar"))
-				{
-					StreamLidar(ClientSocket);
-					return;
-				}
+				// `streamLidar` (TCP push) was removed in #322 — LiDAR
+				// is UDP-only now via FSDSUdpBroadcaster. A bridge that
+				// still sends `streamLidar` will fall through to the
+				// command-not-recognised path below and the connection
+				// will close shortly after.
 
 				// Check if this is a binary request
 				if (ProcessBinaryRequest(Request, ClientSocket))
@@ -1506,35 +1490,11 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 		}
 		return true;
 	}
-	else if (Method == TEXT("getLidarDataBinary"))
-	{
-		if (!VehiclePawn || !VehiclePawn->LidarSensor) return false;
-
-		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-		int32 NumPoints = Points.Num() / 4;  // (x, y, z, intensity) per point — #255
-
-		// Send header: "PTS:num_points\n" followed by raw float data
-		FString Header = FString::Printf(TEXT("PTS:%d\n"), NumPoints);
-		FTCHARToUTF8 HeaderConv(*Header);
-		int32 Sent = 0;
-		ClientSocket->Send((const uint8*)HeaderConv.Get(), HeaderConv.Length(), Sent);
-
-		// Send raw float array — (x, y, z, intensity) per point
-		if (Points.Num() > 0)
-		{
-			int32 ByteSize = Points.Num() * sizeof(float);
-			int32 TotalSent = 0;
-			const uint8* Data = (const uint8*)Points.GetData();
-			while (TotalSent < ByteSize)
-			{
-				int32 ChunkSent = 0;
-				ClientSocket->Send(Data + TotalSent, ByteSize - TotalSent, ChunkSent);
-				if (ChunkSent <= 0) break;
-				TotalSent += ChunkSent;
-			}
-		}
-		return true;
-	}
+	// `getLidarDataBinary` (PTS:N\n + raw float array) was removed in
+	// #322. It was the request/response counterpart to the also-deleted
+	// `streamLidar` push, used by no documented client and obsoleted
+	// by FSDSUdpBroadcaster::BroadcastLidarFrame which is the single
+	// LiDAR transport going forward.
 
 	return false; // Not a binary request
 }
@@ -1613,8 +1573,10 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 
 		// Ground-truth body-frame velocity (#315) — same as the UDP path
 		// in FSDSUdpBroadcaster.cpp. Both senders pack the same struct
-		// layout; this branch is the TCP `streamSensors` route, used by
-		// the bridge when LIDAR_TRANSPORT=tcp (default on Linux).
+		// layout; this branch is the TCP `streamSensors` route, which
+		// remains the production sensor path. (LiDAR-over-TCP was
+		// retired in #322; sensors still ride the TCP push because the
+		// ~40 KB/s rate isn't bandwidth-bound.)
 		const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;
 		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
 		Frame.GtVelBodyX =  BodyVel.X;
@@ -1656,63 +1618,11 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	}
 }
 
-void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
-{
-	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started"));
-
-	FString Ack = TEXT("OK\n");
-	FTCHARToUTF8 AckConv(*Ack);
-	int32 Sent = 0;
-	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
-
-	while (bRunning)
-	{
-		if (!VehiclePawn || !VehiclePawn->LidarSensor)
-		{
-			FPlatformProcess::Sleep(0.1f);
-			continue;
-		}
-
-		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-		int32 TotalPoints = Points.Num() / 4;  // (x, y, z, intensity) — #255
-
-		if (TotalPoints > 0)
-		{
-			// Send header — SendAll handles partial-write retry. The
-			// previous code only checked `!bOk` for the header, leaving a
-			// silent way for a partial header send (BytesSent < sizeof
-			// header) to corrupt the bridge's stream framing.
-			FFSDSLidarChunkHeader Header;
-			Header.Magic = 0x4C494452;
-			Header.ChunkIndex = 0;
-			Header.TotalChunks = 1; // Single chunk over TCP (no size limit)
-			Header.FrameID = StreamFrameCounter;
-			Header.PointsInChunk = TotalPoints;
-			Header.TotalPoints = TotalPoints;
-			Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
-
-			if (!SendAll(ClientSocket, (const uint8*)&Header, sizeof(Header)))
-			{
-				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected (header)"));
-				return;
-			}
-
-			// Send point data — bigger payload (points * 16 bytes since
-			// #255), most likely place to hit a momentarily-full send
-			// buffer with the 3 cm range jitter introduced in #106
-			// producing larger packet variance per scan.
-			const int32 DataSize = TotalPoints * 4 * sizeof(float);
-			if (!SendAll(ClientSocket, (const uint8*)Points.GetData(), DataSize))
-			{
-				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream disconnected (body, %d bytes)"), DataSize);
-				return;
-			}
-		}
-
-		// 10Hz LiDAR
-		FPlatformProcess::Sleep(0.1f);
-	}
-}
+// FFSDSRpcServer::StreamLidar (TCP push) — removed in #322. Production
+// LiDAR is UDP-only via FSDSUdpBroadcaster::BroadcastLidarFrame; this
+// method was kept as a parity-test fallback after #321 marked the
+// transports soft-deprecated, but was no longer worth the wire-format
+// triplication every change incurred.
 
 // =============================================================================
 // AF_UNIX (UDS) listener — opt-in high-throughput streaming for localhost
@@ -1921,64 +1831,24 @@ void FFSDSRpcServer::HandleUdsClient(int ClientFd)
 		return;
 	}
 
-	if (Cmd == "streamLidar")
-	{
-		StreamLidarUds(ClientFd);
-	}
-	else if (Cmd == "streamSensors")
+	if (Cmd == "streamSensors")
 	{
 		StreamSensorsUds(ClientFd);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("FSDS UDS: unknown command '%s' (UDS only supports streamLidar/streamSensors)"),
+		// `streamLidar` was removed in #322 — UDS LiDAR transport is
+		// gone, production is UDP only. Sensors-over-UDS is still
+		// stubbed (StreamSensorsUds is a no-op pending a real
+		// implementation). Anything else is a client-side bug.
+		UE_LOG(LogTemp, Warning, TEXT("FSDS UDS: unknown command '%s' (UDS only supports streamSensors; streamLidar removed in #322)"),
 		       UTF8_TO_TCHAR(Cmd.c_str()));
 	}
 }
 
-void FFSDSRpcServer::StreamLidarUds(int ClientFd)
-{
-	UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR streaming started"));
-
-	while (bUdsRunning.load())
-	{
-		if (!VehiclePawn || !VehiclePawn->LidarSensor)
-		{
-			FPlatformProcess::Sleep(0.1f);
-			continue;
-		}
-
-		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
-		const int32 TotalPoints = Points.Num() / 4;  // (x, y, z, intensity) — #255
-
-		if (TotalPoints > 0)
-		{
-			FFSDSLidarChunkHeader Header;
-			Header.Magic = 0x4C494452;
-			Header.ChunkIndex = 0;
-			Header.TotalChunks = 1;
-			Header.FrameID = StreamFrameCounter++;
-			Header.PointsInChunk = TotalPoints;
-			Header.TotalPoints = TotalPoints;
-			Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
-
-			if (!SendAllPosix(ClientFd, (const uint8_t*)&Header, sizeof(Header)))
-			{
-				UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR stream disconnected (header)"));
-				return;
-			}
-
-			const int32 DataSize = TotalPoints * 4 * sizeof(float);  // #255
-			if (!SendAllPosix(ClientFd, (const uint8_t*)Points.GetData(), DataSize))
-			{
-				UE_LOG(LogTemp, Log, TEXT("FSDS UDS: LiDAR stream disconnected (body, %d bytes)"), DataSize);
-				return;
-			}
-		}
-
-		FPlatformProcess::Sleep(0.1f);
-	}
-}
+// FFSDSRpcServer::StreamLidarUds — removed in #322 (parity with TCP
+// path). FSDSUdpBroadcaster::BroadcastLidarFrame is the single
+// surviving LiDAR transport.
 
 void FFSDSRpcServer::StreamSensorsUds(int ClientFd)
 {
