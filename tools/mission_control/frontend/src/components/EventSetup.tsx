@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { apiFetch, promptForApiKey } from '../lib/api'
+import type { TelemetryData } from '../hooks/useWebSocket'
 import { useConfirm } from './ConfirmDialog'
 
 const EVENTS = ['trackdrive', 'autocross', 'acceleration', 'skidpad'] as const
+type EventName = typeof EVENTS[number]
 
-export default function EventSetup({ telemetry }: { telemetry: any }) {
+export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) {
   const [event, setEvent] = useState('trackdrive')
   const [laps, setLaps] = useState(10)
   const [msg, setMsg] = useState('')
@@ -15,12 +17,12 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
   const confirm = useConfirm()
 
   useEffect(() => {
-    if (telemetry.event && telemetry.event !== 'unknown' && EVENTS.includes(telemetry.event as any)) {
-      setEvent(telemetry.event)
+    if (telemetry.event && telemetry.event !== 'unknown' && (EVENTS as readonly string[]).includes(telemetry.event)) {
+      setEvent(telemetry.event as EventName)
     }
   }, [telemetry.event])
 
-  const api = async (url: string, body?: any) => {
+  const api = async (url: string, body?: Record<string, unknown>) => {
     const res = await apiFetch(url, {
       method: 'POST',
       headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -173,7 +175,7 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
   )
 }
 
-function Stat({ label, value, warn, good }: { label: string; value: any; warn?: boolean; good?: boolean }) {
+function Stat({ label, value, warn, good }: { label: string; value: string | number | boolean; warn?: boolean; good?: boolean }) {
   return (
     <div className="bg-[#111] rounded-lg px-4 py-3">
       <div className="text-gray-500 text-xs uppercase mb-1">{label}</div>

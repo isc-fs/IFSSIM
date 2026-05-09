@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useWebSocket } from './hooks/useWebSocket'
+import { useWebSocket, type TelemetryData } from './hooks/useWebSocket'
 import { apiFetch, promptForApiKey } from './lib/api'
 import StatusBar from './components/StatusBar'
 import EventSetup from './components/EventSetup'
@@ -86,7 +86,7 @@ function App() {
   )
 }
 
-function DashboardView({ telemetry }: { telemetry: any }) {
+function DashboardView({ telemetry }: { telemetry: TelemetryData }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
       {/* Speed */}
