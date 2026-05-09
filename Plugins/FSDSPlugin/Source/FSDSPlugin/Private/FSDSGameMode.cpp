@@ -81,35 +81,13 @@ void AFSDSGameMode::StartPlay()
 	RpcServer.SetUdpBroadcaster(&UdpBroadcaster);
 	RpcServer.Start(41451);
 
-	// AF_UNIX (UDS) listener. Pre-#322 this opened `/tmp/ifssim_streams/lidar.sock`
-	// for the high-throughput LiDAR push that bypassed macOS Docker
-	// Desktop's TCP loopback cap. With the TCP and UDS LiDAR senders
-	// retired and only the StreamSensorsUds no-op stub remaining, the
-	// listener is currently inert. Kept here so a future per-sensor
-	// UDS path can plug in by name without rewiring startup; if you
-	// don't need that, removing this whole block is safe.
-	{
-		const FString StreamsDir = TEXT("/tmp/ifssim_streams");
-		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-		if (!PlatformFile.DirectoryExists(*StreamsDir))
-		{
-			PlatformFile.CreateDirectoryTree(*StreamsDir);
-		}
-		if (PlatformFile.DirectoryExists(*StreamsDir))
-		{
-			// Path retained as `lidar.sock` to keep the docker-compose
-			// bind-mount stable across the #322 transition. Rename in
-			// a follow-up once the bind-mount and any external scripts
-			// are migrated together.
-			RpcServer.StartUds(StreamsDir + TEXT("/lidar.sock"));
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning,
-			       TEXT("FSDS: could not create %s for UDS streams (sensor stub only since #322)"),
-			       *StreamsDir);
-		}
-	}
+	// AF_UNIX (UDS) listener removed in this PR. It only ever served
+	// the LiDAR-over-UDS experiment that #322 retired; the
+	// StreamSensorsUds stub kept after that was a no-op. Sensor-over-
+	// UDS can return as a small scoped feature when bandwidth pressure
+	// on the TCP sensor stream actually shows up. The
+	// /tmp/ifssim_streams directory + docker-compose bind-mount that
+	// supported it are also gone.
 
 	// UDP broadcaster — pushes sensor + LiDAR frames over UDP to the
 	// bridge. Started here unconditionally. The bridge consumes the
@@ -133,7 +111,6 @@ void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	RpcServer.SetVehiclePawn(nullptr);
 	UdpBroadcaster.SetVehiclePawn(nullptr);
 	UdpBroadcaster.Stop();
-	RpcServer.StopUds();
 	RpcServer.Stop();
 	UE_LOG(LogTemp, Log, TEXT("FSDS: Simulator shutting down"));
 	Super::EndPlay(EndPlayReason);

@@ -31,19 +31,14 @@ public:
 	void Start(uint16 Port = 41451);
 	void Stop();
 
-	/**
-	 * Optional AF_UNIX (UDS) listener for high-throughput LiDAR / sensor
-	 * streaming. The TCP listener (Start) stays up regardless — UDS is
-	 * opt-in for localhost consumers that want to bypass the macOS TCP
-	 * loopback throughput cap (~7 MB/s) and get the full kernel pipe
-	 * bandwidth (typically 5+ GB/s).
-	 *
-	 * Path is the filesystem socket path; create the parent directory
-	 * if it doesn't exist (and ensure it's mountable into the bridge's
-	 * Docker container if the bridge runs containerised).
-	 */
-	void StartUds(const FString& SocketPath);
-	void StopUds();
+	// AF_UNIX (UDS) listener (StartUds/StopUds) was removed in
+	// the #322 follow-up. It only ever served the LiDAR-over-UDS
+	// experiment that #322 retired; the no-op StreamSensorsUds stub
+	// kept alongside it provided no value. UDS senders for sensors
+	// can be revived later as a small, scoped feature when bandwidth
+	// pressure on the TCP sensor stream actually shows up — none of
+	// the previous infrastructure is needed for that and dragging it
+	// along just costs cognitive overhead.
 
 	void SetVehiclePawn(AFSDSVehiclePawn* Pawn) { VehiclePawn = Pawn; }
 	void SetReferee(AFSDSReferee* Ref) { Referee = Ref; }
@@ -70,21 +65,6 @@ private:
 	TArray<uint8> CachedImageData;
 	TArray<float> CachedLidarData;
 	FCriticalSection BinaryDataLock;
-
-	// UDS support (opt-in via StartUds). Mirrors the TCP path but using
-	// raw POSIX sockets — UE5's FSocket framework doesn't expose AF_UNIX.
-	// StreamLidarUds removed in #322. StreamSensorsUds remains as a
-	// no-op stub pending a real sensor-over-UDS implementation; the UDS
-	// listener is otherwise idle.
-	void UdsServerThreadFunc();
-	void HandleUdsClient(int ClientFd);
-	void StreamSensorsUds(int ClientFd);
-	std::unique_ptr<std::thread> UdsServerThread;
-	std::vector<std::thread> UdsClientThreads;
-	std::mutex UdsClientThreadsMutex;
-	std::atomic<int> UdsListenFd{-1};
-	FString UdsSocketPath;
-	std::atomic<bool> bUdsRunning{false};
 
 	std::unique_ptr<std::thread> ServerThread;
 	// Active per-connection worker threads. HandleClient runs in one of
