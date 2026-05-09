@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiFetch, promptForApiKey } from '../lib/api'
+import { useConfirm } from './ConfirmDialog'
 
 interface Track {
   name: string; path: string; cones: number;
@@ -14,6 +15,19 @@ export default function TrackManager() {
   const [msg, setMsg] = useState('')
   const [genParams, setGenParams] = useState({ n_points: 50, n_regions: 30, max_bound: 150, name: '' })
   const [generating, setGenerating] = useState(false)
+  // `loadingName` holds the name of the track whose Load button is
+  // currently in flight. Pre-#326 the Load buttons fired immediately
+  // with no `disabled` state, so a panicked double-click queued two
+  // sim-state-mutating loads and the UI showed whichever response
+  // landed second (finding F7). All Load buttons disable while ANY
+  // load is running — there is no useful concurrent-load workflow.
+  const [loadingName, setLoadingName] = useState<string | null>(null)
+  // `deletingName` is the same idea for Delete: prevents the user
+  // from queueing a delete on top of an in-flight delete. Visible
+  // separately from `loadingName` so the affected row's button
+  // shows the correct label.
+  const [deletingName, setDeletingName] = useState<string | null>(null)
+  const confirm = useConfirm()
 
   const refresh = async () => {
     const r = await apiFetch('/api/track/list', {}, promptForApiKey)
@@ -31,24 +45,46 @@ export default function TrackManager() {
   }
 
   const loadTrack = async (track: Track) => {
+    if (loadingName) return
+    setLoadingName(track.name)
     setMsg(`Loading ${track.name}...`)
-    const r = await apiFetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' }, promptForApiKey)
-    const d = await r.json()
-    if (d.result?.error) {
-      setMsg(`Error: ${d.result.error}`)
-    } else {
-      setMsg(d.event_type
-        ? `Loaded ${track.name} — event set to ${d.event_type}`
-        : `Loaded ${track.name}`)
+    try {
+      const r = await apiFetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' }, promptForApiKey)
+      const d = await r.json()
+      if (d.result?.error) {
+        setMsg(`Error: ${d.result.error}`)
+      } else {
+        setMsg(d.event_type
+          ? `Loaded ${track.name} — event set to ${d.event_type}`
+          : `Loaded ${track.name}`)
+      }
+    } catch (e) {
+      setMsg(`Error: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setLoadingName(null)
     }
   }
 
   const deleteTrack = async (name: string) => {
-    if (!confirm(`Delete ${name}?`)) return
-    await apiFetch(`/api/track/${encodeURIComponent(name)}`, { method: 'DELETE' }, promptForApiKey)
-    setMsg(`Deleted ${name}`)
-    if (selected === name) { setSelected(null); setPreview(null) }
-    refresh()
+    if (deletingName) return
+    const ok = await confirm({
+      title: 'Delete track?',
+      message: `Permanently delete ${name}? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
+    setDeletingName(name)
+    try {
+      await apiFetch(`/api/track/${encodeURIComponent(name)}`, { method: 'DELETE' }, promptForApiKey)
+      setMsg(`Deleted ${name}`)
+      if (selected === name) { setSelected(null); setPreview(null) }
+      refresh()
+    } catch (e) {
+      setMsg(`Error: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setDeletingName(null)
+    }
   }
 
   const generate = async () => {
@@ -101,9 +137,11 @@ export default function TrackManager() {
               </div>
               <button
                 onClick={e => { e.stopPropagation(); loadTrack(t) }}
-                className="px-3 py-1 bg-green-900/50 text-green-400 border border-green-800 rounded text-xs font-medium hover:bg-green-800/50 whitespace-nowrap"
+                disabled={loadingName !== null}
+                className="px-3 py-1 bg-green-900/50 text-green-400 border border-green-800 rounded text-xs font-medium hover:bg-green-800/50 whitespace-nowrap
+                           disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-green-900/50"
               >
-                Load
+                {loadingName === t.name ? 'Loading…' : 'Load'}
               </button>
             </div>
           ))}
@@ -152,13 +190,21 @@ export default function TrackManager() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={e => { e.stopPropagation(); loadTrack(t) }}
-                    className="px-3 py-1 bg-green-900/50 text-green-400 border border-green-800 rounded text-xs font-medium hover:bg-green-800/50">
-                    Load
+                  <button
+                    onClick={e => { e.stopPropagation(); loadTrack(t) }}
+                    disabled={loadingName !== null || deletingName === t.name}
+                    className="px-3 py-1 bg-green-900/50 text-green-400 border border-green-800 rounded text-xs font-medium hover:bg-green-800/50
+                               disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-green-900/50"
+                  >
+                    {loadingName === t.name ? 'Loading…' : 'Load'}
                   </button>
-                  <button onClick={e => { e.stopPropagation(); deleteTrack(t.name) }}
-                    className="px-2 py-1 text-red-400 border border-red-900 rounded text-xs hover:bg-red-900/30">
-                    Del
+                  <button
+                    onClick={e => { e.stopPropagation(); deleteTrack(t.name) }}
+                    disabled={deletingName !== null || loadingName === t.name}
+                    className="px-2 py-1 text-red-400 border border-red-900 rounded text-xs hover:bg-red-900/30
+                               disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                  >
+                    {deletingName === t.name ? '…' : 'Del'}
                   </button>
                 </div>
               </div>
