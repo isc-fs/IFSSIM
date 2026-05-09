@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { apiWsUrl } from '../lib/api';
 
 export interface TelemetryData {
@@ -41,44 +41,118 @@ const defaultTelemetry: TelemetryData = {
   fps: 0, paused: false, res_active: false, pipeline_enabled: false,
 };
 
+// Reconnect tuning. Capped at 30 s — long enough to spare a slow-restart
+// backend, short enough that an operator-triggered reload reconnects
+// before they get impatient. ±20% jitter avoids reconnect storms when
+// multiple tabs lose the connection at the same instant. Pre-#326 this
+// hook reconnected on a flat 2 s with no cap and no jitter (finding F3).
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_CAP_MS = 30_000;
+const RECONNECT_JITTER = 0.2;
+
+function nextBackoff(attempt: number): number {
+  const exp = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** attempt);
+  const jitter = exp * RECONNECT_JITTER * (Math.random() * 2 - 1);
+  return Math.max(0, exp + jitter);
+}
+
+// Shape gate for incoming WS frames. Pre-#326 every parsed message
+// replaced `data` wholesale (finding F4) — a partial frame, an event
+// envelope, or a ping/pong from a different protocol would blank
+// fields like `speed`/`fps`/`x` and crash the downstream `.toFixed`
+// calls. Now we (a) require it to be a plain object, (b) require at
+// least one of the numeric scalars consumers actually depend on, and
+// (c) merge into the previous state instead of overwriting.
+function isTelemetryFrame(p: unknown): p is Partial<TelemetryData> {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return false;
+  const o = p as Record<string, unknown>;
+  if (typeof o.error === 'string') return false;
+  return typeof o.speed === 'number' || typeof o.fps === 'number';
+}
+
 export function useWebSocket(url: string) {
   const [data, setData] = useState<TelemetryData>(defaultTelemetry);
   const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
-
-  const connect = useCallback(() => {
-    try {
-      // apiWsUrl appends ?api_key=... when the user has one configured.
-      // If the backend enforces auth and the key is missing/wrong, it
-      // closes the handshake with 1008 and we fall through to the
-      // reconnect loop (give the user a chance to set the key, then
-      // retry).
-      const ws = new WebSocket(apiWsUrl(url));
-      wsRef.current = ws;
-
-      ws.onopen = () => setConnected(true);
-      ws.onclose = () => {
-        setConnected(false);
-        setTimeout(connect, 2000); // Reconnect
-      };
-      ws.onerror = () => ws.close();
-      ws.onmessage = (e) => {
-        try {
-          const parsed = JSON.parse(e.data);
-          if (!parsed.error) setData(parsed);
-        } catch {}
-      };
-    } catch {
-      setTimeout(connect, 2000);
-    }
-  }, [url]);
 
   useEffect(() => {
+    // All connection state lives in this effect's closure. A new effect
+    // run (url change, StrictMode dev double-mount) gets a fresh set of
+    // bindings; cleanup of the previous run sets `cancelled = true` on
+    // its OWN bindings, breaking the onclose-triggers-reconnect loop
+    // that pre-#326 leaked timers across remounts (finding F2).
+    let cancelled = false;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    function scheduleRetry() {
+      if (cancelled || reconnectTimer) return;
+      const delay = nextBackoff(attempt++);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!cancelled) connect();
+      }, delay);
+    }
+
+    function connect() {
+      if (cancelled) return;
+      try {
+        const sock = new WebSocket(apiWsUrl(url));
+        ws = sock;
+
+        sock.onopen = () => {
+          if (cancelled) {
+            sock.close();
+            return;
+          }
+          attempt = 0;
+          setConnected(true);
+        };
+        sock.onclose = () => {
+          setConnected(false);
+          scheduleRetry();
+        };
+        sock.onerror = () => sock.close();
+        sock.onmessage = (e) => {
+          try {
+            const parsed: unknown = JSON.parse(e.data);
+            if (isTelemetryFrame(parsed)) {
+              setData(prev => ({ ...prev, ...parsed }));
+            }
+          } catch {
+            // Malformed JSON — silently ignored. Logging at WS rate is
+            // a footgun (one bad server frame would spam the console
+            // 100 Hz); a separate finding would add a rate-limited
+            // error beacon if this ever proves to matter in practice.
+          }
+        };
+      } catch {
+        scheduleRetry();
+      }
+    }
+
     connect();
+
     return () => {
-      wsRef.current?.close();
+      // Unmount or url change. Mark cancelled FIRST so any in-flight
+      // callbacks bail out, then null the WS handlers so close() can't
+      // re-trigger the reconnect loop, then clear the pending timer.
+      cancelled = true;
+      if (ws) {
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.close();
+        ws = null;
+      }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      setConnected(false);
     };
-  }, [connect]);
+  }, [url]);
 
   return { data, connected };
 }
