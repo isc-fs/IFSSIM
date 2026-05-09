@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiFetch, promptForApiKey } from '../lib/api'
+import { useConfirm } from './ConfirmDialog'
 
 const EVENTS = ['trackdrive', 'autocross', 'acceleration', 'skidpad'] as const
 
@@ -11,6 +12,7 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
   // double-click can't re-fire the 4.5 s event_start sequence (#327 B7) or
   // queue a duplicate pipeline-stop. Cleared in the finally block.
   const [busy, setBusy] = useState(false)
+  const confirm = useConfirm()
 
   useEffect(() => {
     if (telemetry.event && telemetry.event !== 'unknown' && EVENTS.includes(telemetry.event as any)) {
@@ -89,9 +91,15 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
           <button
             disabled={busy}
             onClick={async () => {
-              if (!confirm('Stop the autonomy pipeline? The sim and vehicle stay running; this only disables the autonomous driver. Use the RES button in the header for emergency stop.')) {
-                return
-              }
+              const ok = await confirm({
+                title: 'Stop autonomy pipeline?',
+                message:
+                  'This disables the autonomous driver. The sim and vehicle keep running.\n\n' +
+                  'For an emergency stop, use the RES button in the header instead.',
+                confirmLabel: 'Stop pipeline',
+                destructive: true,
+              })
+              if (!ok) return
               setBusy(true)
               setMsg('Stopping pipeline…')
               try {
@@ -129,7 +137,18 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
             className="px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-600">
             Resume
           </button>
-          <button onClick={() => { if (confirm('Reset simulation?')) api('/api/sim/reset') }}
+          <button
+            onClick={async () => {
+              const ok = await confirm({
+                title: 'Reset simulation?',
+                message:
+                  'Teleports the vehicle back to the start, clears DOO/OC counters, and resets the lap counter.\n\n' +
+                  'The autonomy pipeline keeps its current state — disable it separately if you want a clean restart.',
+                confirmLabel: 'Reset',
+                destructive: true,
+              })
+              if (ok) api('/api/sim/reset')
+            }}
             className="px-4 py-2 bg-red-800 text-white rounded-lg text-sm font-medium hover:bg-red-700">
             Reset
           </button>
