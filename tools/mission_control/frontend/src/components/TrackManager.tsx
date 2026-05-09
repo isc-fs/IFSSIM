@@ -226,7 +226,16 @@ export default function TrackManager() {
   )
 }
 
-function Field({ label, value, onChange, type, placeholder, w }: any) {
+interface FieldProps {
+  label: string
+  value: string | number
+  onChange: (v: string) => void
+  type?: string
+  placeholder?: string
+  w?: string
+}
+
+function Field({ label, value, onChange, type, placeholder, w }: FieldProps) {
   return (
     <label className="flex flex-col gap-1 text-xs text-gray-500 uppercase tracking-wide">
       {label}
