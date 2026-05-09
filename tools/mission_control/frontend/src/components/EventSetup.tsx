@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiFetch, promptForApiKey } from '../lib/api'
 import type { TelemetryData } from '../hooks/useWebSocket'
 import { useConfirm } from './ConfirmDialog'
@@ -7,7 +7,7 @@ const EVENTS = ['trackdrive', 'autocross', 'acceleration', 'skidpad'] as const
 type EventName = typeof EVENTS[number]
 
 export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) {
-  const [event, setEvent] = useState('trackdrive')
+  const [event, setEvent] = useState<EventName>('trackdrive')
   const [laps, setLaps] = useState(10)
   const [msg, setMsg] = useState('')
   // `busy` gates Start/Stop while a request is in flight so a panicked
@@ -15,10 +15,20 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
   // queue a duplicate pipeline-stop. Cleared in the finally block.
   const [busy, setBusy] = useState(false)
   const confirm = useConfirm()
+  // `initialSyncDoneRef` ensures we mirror the sim's reported event ONCE
+  // when the first non-unknown frame lands, then leave the local
+  // selection alone. Pre-#326 the effect ran on every WS frame, so a
+  // user picking "skidpad" locally got silently overridden the moment
+  // telemetry reported "trackdrive" again (finding F9). With this
+  // ref the local selection is a "draft" the operator owns until they
+  // actually click Start.
+  const initialSyncDoneRef = useRef(false)
 
   useEffect(() => {
+    if (initialSyncDoneRef.current) return
     if (telemetry.event && telemetry.event !== 'unknown' && (EVENTS as readonly string[]).includes(telemetry.event)) {
       setEvent(telemetry.event as EventName)
+      initialSyncDoneRef.current = true
     }
   }, [telemetry.event])
 

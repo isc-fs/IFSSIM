@@ -27,7 +27,13 @@ export function setApiKey(key: string): void {
   try {
     if (key) localStorage.setItem(STORAGE_KEY, key)
     else localStorage.removeItem(STORAGE_KEY)
-  } catch {}
+  } catch {
+    // localStorage can throw on private-mode Safari, full disk, or
+    // when storage is disabled by enterprise policy. We can survive
+    // any of those — the user just has to re-enter the API key on
+    // every page load. Silently ignored to avoid throwing from a
+    // setter call site.
+  }
 }
 
 /**

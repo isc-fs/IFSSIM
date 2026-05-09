@@ -29,8 +29,17 @@ function App() {
           <StatusBar connected={connected} fps={telemetry.fps} paused={telemetry.paused} resActive={telemetry.res_active} />
         </div>
 
-        {/* RES Button */}
+        {/* RES Button — most safety-critical control in the app, so
+            the toggled "armed" state is conveyed by THREE redundant
+            cues so a colourblind operator can still tell what's
+            happening: text label flips ("RES" ↔ "RES ACTIVE"), the
+            border/glow change colour, and the button gets
+            `aria-pressed="true"` for screen readers. The pulse
+            animation is the fourth, motion-based cue. Pre-#326 this
+            was colour-only (finding F12). */}
         <button
+          aria-pressed={telemetry.res_active}
+          aria-label={telemetry.res_active ? 'Release emergency stop' : 'Activate emergency stop'}
           onClick={async () => {
             if (telemetry.res_active) {
               await apiFetch('/api/res/release', { method: 'POST' }, promptForApiKey)
@@ -45,7 +54,7 @@ function App() {
                          : 'bg-red-900 hover:bg-red-700 text-white border-red-700 shadow-[0_0_10px_rgba(239,68,68,0.2)] hover:shadow-[0_0_20px_rgba(239,68,68,0.4)]'
                      }`}
         >
-          {telemetry.res_active ? 'RES ACTIVE' : 'RES'}
+          {telemetry.res_active ? '■ RES ACTIVE' : 'RES'}
         </button>
       </header>
 
@@ -78,7 +87,7 @@ function App() {
 
       {/* Footer */}
       <footer className="text-center py-4 text-gray-600 text-xs border-t border-[#222]">
-        <a href="https://iscracingteam.com/formulastudent/" target="_blank" className="text-[#ffb81c] hover:underline">
+        <a href="https://iscracingteam.com/formulastudent/" target="_blank" rel="noopener noreferrer" className="text-[#ffb81c] hover:underline">
           ISC Racing Team
         </a> | IFSSIM Formula Student Driverless Simulator
       </footer>
