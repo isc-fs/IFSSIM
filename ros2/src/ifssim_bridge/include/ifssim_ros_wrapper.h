@@ -36,13 +36,18 @@
 #include <mutex>
 
 /**
- * IFSSIM ROS2 Wrapper — TCP push model.
+ * IFSSIM ROS2 Wrapper — sensor over TCP, LiDAR over UDP.
  *
- * Architecture (4 TCP connections):
- *   1. Sensor stream (streamSensors) → IMU at 400Hz, GSS/TF/Odom at 100Hz, GPS at 10Hz
- *   2. LiDAR stream (streamLidar)   → PointCloud2 at ~10Hz
- *   3. Camera client (TCP req/resp)  → CompressedImage at 10Hz
- *   4. Command client (TCP req/resp) → control commands, settings, referee queries
+ * Architecture (3 TCP connections + one UDP listener):
+ *   1. Sensor stream (`streamSensors`, TCP push, port 41452)
+ *      → IMU at 400Hz, GSS/TF/Odom at 100Hz, GPS at 10Hz
+ *   2. LiDAR stream (UDP push from FSDSUdpBroadcaster, port 51453)
+ *      → PointCloud2 at ~10Hz. UdpReceiver handles chunk reassembly.
+ *      LiDAR is UDP-only since #322 (#321's TCP/UDS soft-deprecation).
+ *   3. Camera client (TCP req/resp, port 41451 RPC)
+ *      → CompressedImage at 10Hz
+ *   4. Command client (TCP req/resp, port 41451 RPC)
+ *      → control commands, settings, referee queries
  */
 class IFSSIMRosWrapper
 {
@@ -63,10 +68,13 @@ private:
     void startStreaming();
     void triggerReconnect();  // Called by stream threads on disconnect
 
-    // Streaming threads
+    // Streaming threads. `lidarStreamThread` was the TCP recv loop and
+    // was removed in #322 along with the TCP-LiDAR sender on the
+    // plugin side. UdpReceiver delivers frames directly into
+    // `lidar_pending_` via the callback set in startStreaming(); the
+    // publish thread is unchanged.
     void sensorStreamThread();
     void sensorPublishThread();  // Drains the single-slot buffer, calls onSensorFrame
-    void lidarStreamThread();
     void lidarPublishThread();   // Drains the single-slot buffer, calls onLidarFrame
 
     // Stream data handlers
@@ -96,11 +104,12 @@ private:
     std::unique_ptr<TcpClient> client_;          // Commands + referee queries
     std::unique_ptr<TcpClient> client_camera_;   // Camera image requests
 
-    // Streaming sockets (raw, not TcpClient — held open)
+    // Streaming sockets (raw, not TcpClient — held open).
+    // No `lidar_stream_fd_` / `lidar_thread_` — see comment on
+    // `lidarStreamThread` removal above (#322). The UdpReceiver owns
+    // its own listener thread internally.
     std::atomic<int> sensor_stream_fd_{-1};
-    std::atomic<int> lidar_stream_fd_{-1};
     std::thread sensor_thread_;
-    std::thread lidar_thread_;
     std::atomic<bool> streaming_{false};
     std::mutex reconnect_mutex_;  // Ensures only one thread reconnects at a time
 
@@ -220,24 +229,12 @@ private:
     std::string mission_name_ = "trackdrive";
     std::string track_name_ = "A";
     bool competition_mode_ = false;
-    // Filesystem path to the plugin's AF_UNIX LiDAR socket. Empty when
-    // unavailable (plugin not started, /tmp/ifssim_streams/ not mounted
-    // into the bridge container) — openStreamSocket then uses TCP.
-    std::string lidar_uds_path_;
-    // LiDAR transport: "tcp" (default; honours lidar_uds_path_ on Linux
-    // hosts) or "udp" (consume the plugin's UdpBroadcaster stream on
-    // port 41453, with chunk-reassembly). UDP bypasses macOS Docker
-    // Desktop's TCP loopback throughput cap entirely — that cap is the
-    // remaining bottleneck on the host once SO_SNDBUF/SO_RCVBUF are
-    // tuned and PointCloud2 is built via memcpy. Set via the
-    // `lidar_transport` ROS parameter (mapped from the LIDAR_TRANSPORT
-    // env in docker-compose.yml).
-    std::string lidar_transport_ = "tcp";
     std::vector<std::string> camera_names_;
     // UDP receiver — owns the sensor + LiDAR UDP listener threads.
-    // start() called from initializeConnection when lidar_transport_ ==
-    // "udp"; the LiDAR callback synthesises a LidarChunkHeader and calls
-    // onLidarFrame so the publish path is identical to the TCP one.
+    // start() called unconditionally from initializeConnection (#322
+    // retired the TCP and UDS LiDAR transports; UDP is the only path
+    // now). The LiDAR callback synthesises a LidarChunkHeader and
+    // calls onLidarFrame so the publish path stays as it was.
     UdpReceiver udp_receiver_;
 
     // Sensor mount offsets (ROS body frame, metres). Queried once at

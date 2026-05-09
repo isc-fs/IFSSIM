@@ -15,8 +15,7 @@
 #      Fast DDS daemon state, the rw fs layer).
 #   2. `docker compose up -d dv_pipeline_stack` — recreates from image,
 #      remounts /dev/shm, rebinds host UDP proxies for 41452 and 51453.
-#      LIDAR_TRANSPORT defaults to udp here; pass it as an env var to
-#      override (e.g. `LIDAR_TRANSPORT=tcp ./refresh-bridge.sh`).
+#      LiDAR is UDP-only as of #322; the LIDAR_TRANSPORT env var is gone.
 #   3. Wait for the container to report healthy.
 #   4. Copy the host's current launch.py and entrypoint.sh into the
 #      container — they're COPY'd into the image at build time, not
@@ -37,13 +36,10 @@ set -euo pipefail
 
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
-LIDAR_TRANSPORT="${LIDAR_TRANSPORT:-udp}"
-export LIDAR_TRANSPORT
-
 echo "→ docker compose down dv_pipeline_stack"
 docker compose down dv_pipeline_stack 2>&1 | tail -3
 
-echo "→ docker compose up -d dv_pipeline_stack  (LIDAR_TRANSPORT=$LIDAR_TRANSPORT)"
+echo "→ docker compose up -d dv_pipeline_stack"
 docker compose up -d dv_pipeline_stack 2>&1 | tail -3
 
 echo "→ waiting for healthy..."

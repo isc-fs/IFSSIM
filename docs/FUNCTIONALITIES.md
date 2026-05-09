@@ -13,7 +13,7 @@ This document is a comprehensive technical reference for all systems, components
 3. [Vehicle Model](#3-vehicle-model)
 4. [Sensor Suite](#4-sensor-suite)
 5. [RPC Server (TCP API)](#5-rpc-server-tcp-api)
-6. [Data Streaming (UDP push, with TCP/UDS soft-deprecated)](#6-data-streaming-udp-push-with-tcpuds-soft-deprecated)
+6. [Data Streaming (UDP push)](#6-data-streaming-udp-push)
 7. [ROS 2 Bridge](#7-ros-2-bridge)
 8. [Python Client](#8-python-client)
 9. [Track System](#9-track-system)
@@ -453,22 +453,24 @@ response = s.recv(1024)  # b"true"
 
 #### Streaming Modes
 
-Two commands open the connection in persistent streaming mode (no further requests on that socket):
+One command opens a TCP connection in persistent push mode (no further requests on that socket):
 
 | Command | Mode | Description |
 |---|---|---|
 | `streamSensors` | Push binary | GPS+IMU+GSS+Odom at ~100 Hz |
-| `streamLidar` | Push binary | LiDAR point cloud at ~10 Hz |
+
+LiDAR streaming is UDP-only — there is no `streamLidar` TCP command (removed in #322 along with the AF_UNIX/UDS LiDAR experiment that briefly lived alongside it). See §6.
 
 ---
 
-## 6. Data Streaming (UDP push, with TCP/UDS soft-deprecated)
+## 6. Data Streaming (UDP push)
 
 High-frequency sensor data flows out of the plugin on dedicated streaming sockets — separate from the RPC server.
 
-- **UDP push** (production default for LiDAR; sensor stream can also run on UDP). Sender-paced; bypasses macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) and forwards through gvisor without window-based throttling.
-- **TCP push streams** — *soft-deprecated* (#321 follow-up). Still functional and the bridge will use them if `lidar_transport=tcp` is passed, but bridge logs a deprecation WARN and the wire-format-multiplication cost (every change touches three sender sites) is no longer worth it. Will be deleted in a future PR.
-- **UDS push** for LiDAR (`/tmp/ifssim_streams/lidar.sock`, host-shared into the container) — *soft-deprecated* same as TCP. Was a never-finished macOS-only experiment to bypass the TCP stack entirely; UDP turned out to be enough.
+- **Sensor stream** — TCP push on port 41452 (one open connection, plugin pushes `SensorFrame` at ~100 Hz). The ~40 KB/s sensor stream isn't bandwidth-bound, so TCP's reliability is worth the kernel-loopback cost.
+- **LiDAR stream** — UDP push on port 41453, sender-paced. Bypasses macOS Docker Desktop's TCP loopback throughput cap (~7 MB/s) and forwards through gvisor without window-based throttling. The plugin chunks each scan into datagrams that fit under the platform UDP limit (8024 B = 500 points × 16 B + 24 B header on macOS); the bridge reassembles by `frame_id`.
+
+The TCP and AF_UNIX (UDS) LiDAR senders that briefly lived alongside the UDP path were soft-deprecated in #321 and deleted in #322 — UDP turned out to be reliable enough on every supported host that maintaining three transports was no longer worth the wire-format cost.
 
 The two binary frame layouts are below. **Both halves of the wire — plugin sender and bridge receiver — must agree byte-for-byte.** The structs are `#pragma pack(push, 1)` on both sides; canonical definitions live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/RPC/FSDSUdpBroadcaster.h` and `ros2/src/ifssim_bridge/include/udp_receiver.h`.
 
@@ -534,16 +536,16 @@ struct LidarChunkHeader {
 
 ## 7. ROS 2 Bridge
 
-The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack to IFSSIM. It opens several connections to the plugin in parallel; transports per stream are picked at launch:
+The `ifssim_bridge` package (`ros2/src/ifssim_bridge/`) connects a ROS 2 stack to IFSSIM. It opens several connections to the plugin in parallel:
 
-| Connection | Default transport | Configurable | Purpose |
-|---|---|---|---|
-| Sensor stream | TCP push (port 41452) | TCP / UDP | One unified `SensorFrame` carrying GPS + IMU + GSS + odom + RPM + referee + controls echo |
-| LiDAR stream | UDP push (port 41453, default) | UDP / TCP* / UDS* | LiDAR point cloud chunks. *TCP and UDS soft-deprecated; bridge WARNs.* |
-| Camera client | TCP req/resp (port 41451 RPC) | — | One image per timer tick per camera |
-| Command client | TCP req/resp (port 41451 RPC) | — | `setCarControls`, EBS, track queries, settings |
+| Connection | Transport | Purpose |
+|---|---|---|
+| Sensor stream | TCP push (port 41452) | One unified `SensorFrame` carrying GPS + IMU + GSS + odom + RPM + referee + controls echo |
+| LiDAR stream | UDP push (port 41453) | LiDAR point cloud chunks (`UdpReceiver` reassembles by `frame_id`). |
+| Camera client | TCP req/resp (port 41451 RPC) | One image per timer tick per camera |
+| Command client | TCP req/resp (port 41451 RPC) | `setCarControls`, EBS, track queries, settings |
 
-`lidar_transport` is set via the launch parameter or `LIDAR_TRANSPORT` env var. Default is `udp`; bridge logs a warning and falls back to `udp` for unknown values, and logs a deprecation WARN for `tcp`/`uds`.
+LiDAR transport is hard-wired to UDP since #322. Earlier versions exposed a `lidar_transport` parameter and `LIDAR_TRANSPORT` env var with `tcp` and `uds` alternatives; both fallbacks were removed once UDP proved reliable on every supported host.
 
 ### Published Topics
 

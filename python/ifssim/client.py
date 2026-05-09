@@ -63,9 +63,12 @@ class IFSSIMClient:
         prefix = header[:colon]
         count = int(header[colon + 1:])
 
-        if prefix == "PTS":
-            byte_size = count * 3 * 4
-        elif prefix == "IMG":
+        # PTS handler (`getLidarDataBinary` reply) was removed in #322
+        # along with the rest of the TCP-LiDAR path on the plugin side.
+        # `getLidarData()` below now raises NotImplementedError pointing
+        # callers at the ROS topic /lidar/Lidar1, which is what every
+        # real consumer uses.
+        if prefix == "IMG":
             byte_size = count
         else:
             s.close()
@@ -211,18 +214,18 @@ class IFSSIMClient:
         return data
 
     def getLidarData(self, lidar_name='', vehicle_name='FSCar'):
-        header, raw = self._binary_cmd("getLidarDataBinary")
-        data = LidarData()
-        data.time_stamp = int(time.time() * 1e9)
-
-        if header.startswith("PTS:") and len(raw) > 0:
-            num_floats = len(raw) // 4
-            floats = struct.unpack(f"<{num_floats}f", raw)
-            data.point_cloud = list(floats)
-        else:
-            data.point_cloud = []
-
-        return data
+        # Removed in #322. The `getLidarDataBinary` RPC reply was the
+        # request/response counterpart to the also-deleted `streamLidar`
+        # TCP push; both paths existed pre-#321 to bypass macOS Docker
+        # Desktop's TCP loopback throughput cap, and were retired once
+        # FSDSUdpBroadcaster proved reliable on every supported host.
+        # Real consumers (the ROS bridge, autonomy stack, Lichtblick)
+        # subscribe to /lidar/Lidar1 instead.
+        raise NotImplementedError(
+            "getLidarData was removed in #322 — LiDAR is now UDP-only via "
+            "FSDSUdpBroadcaster. Subscribe to /lidar/Lidar1 from the ROS "
+            "bridge, or replicate the UDP receiver in udp_receiver.h."
+        )
 
     # --- Camera ---
 

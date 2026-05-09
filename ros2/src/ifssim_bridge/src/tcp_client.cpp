@@ -237,9 +237,11 @@ std::string TcpClient::sendBinaryCommand(const std::string& command, std::vector
         std::string prefix = header.substr(0, colonPos);
         int count = std::stoi(header.substr(colonPos + 1));
 
-        if (prefix == "PTS") {
-            dataSize = count * 4 * sizeof(float); // 4 floats per point — (x, y, z, intensity), #255
-        } else if (prefix == "IMG") {
+        // PTS handler (`getLidarDataBinary` reply, 4 floats per point)
+        // was removed in #322 along with the rest of the TCP-LiDAR
+        // path on the plugin side — `sendBinaryCommand` is only ever
+        // called for `simGetImageBinary` now.
+        if (prefix == "IMG") {
             dataSize = count; // raw byte count
         }
     } catch (...) {
