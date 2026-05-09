@@ -19,6 +19,7 @@
 #include "ShaderParameterMacros.h"
 #include "Sensors/FSDSLidarDecodeShader.h"
 #include "FSDSReferee.h"  // FSDSConeStencil:: IDs (#321 D-Phase-1)
+#include "Materials/MaterialInterface.h"  // M_LiDARStencilEncoder load (#321 D-Phase-2)
 
 using FSDSNoise::RandStandardNormal;
 
@@ -612,6 +613,48 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUColorCapture->ShowFlags.SetLensFlares(false);
 	GPUColorCapture->ShowFlags.SetScreenSpaceReflections(false);
 
+	// === #321 D-Phase-2 — stencil → alpha post-process material ======
+	//
+	// The decode shader's `UseReflectanceLUT` branch reads the stencil
+	// ID from the alpha channel of `ColorTexture` and looks up
+	// per-cone-material 905 nm reflectance from `ReflectanceLUT[]`. To
+	// get the stencil into alpha, we apply a tiny post-process material
+	// to GPUColorCapture's blendables that:
+	//   - Outputs SceneTexture:PostProcessInput0.rgb to Emissive Color
+	//     (preserves the rendered colour for the luminance fallback
+	//     path on non-cone hits).
+	//   - Outputs SceneTexture:CustomStencil / 255 to Opacity
+	//     (encodes the cone spawner's CustomDepthStencilValue into
+	//     the alpha channel of FinalColorLDR — exactly what the
+	//     shader's `uint(alpha * 255 + 0.5)` decoder expects).
+	//
+	// Asset path: /FSDSPlugin/Materials/M_LiDARStencilEncoder. If the
+	// asset isn't present (clean checkout, missed editor step), we
+	// log a warning and leave `bReflectanceLUTActive=false` so the
+	// shader falls back to Phase-1 luminance behaviour. Author the
+	// asset via the editor (recipe in #358) or run
+	// Plugins/FSDSPlugin/Tools/create_lidar_stencil_encoder.py from
+	// the UE5 editor's Python console.
+	{
+		const TCHAR* MaterialPath =
+			TEXT("/FSDSPlugin/Materials/M_LiDARStencilEncoder.M_LiDARStencilEncoder");
+		UMaterialInterface* StencilEncoder =
+			LoadObject<UMaterialInterface>(nullptr, MaterialPath);
+		if (StencilEncoder)
+		{
+			GPUColorCapture->PostProcessSettings.AddBlendable(StencilEncoder, 1.0f);
+			bReflectanceLUTActive = true;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS LiDAR GPU: stencil-encoder post-process material loaded — per-cone-material reflectance LUT active (#321 D-Phase-2)"));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS LiDAR GPU: M_LiDARStencilEncoder.uasset not found at %s — falling back to Rec.709 luminance (D-Phase-1 behaviour). Author the asset to enable per-cone reflectance LUT."),
+				MaterialPath);
+		}
+	}
+
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS LiDAR GPU: RT %dx%d (R32f depth + RGBA8 colour) | H-FOV=%.1f° | V-FOV (planar)=%.1f° | tilt=%.2f° | range=%.0f m | ExtraOversample=%.2f×"),
 		RTW, RTH, HFovDeg, PlanarVFovDeg, VFovCenterDeg, MaxRange / 100.f, ExtraOversample);
@@ -928,12 +971,14 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.ReflectanceLUT[FSDSConeStencil::OrangeLarge] = 0.65f;
 	U.ReflectanceLUT[FSDSConeStencil::OrangeSmall] = 0.65f;
 
-	// 0 = Phase-1 — LUT is inert, shader uses Rec.709 luminance for
-	//     every hit (current production behaviour, no regression).
-	// Set to 1 once the M_LiDARStencilEncoder post-process material is
-	// authored and applied to GPUColorCapture's PostProcessSettings;
-	// see Phase-2 follow-up issue.
-	U.UseReflectanceLUT = 0;
+	// Gate the LUT on whether the post-process material loaded
+	// successfully in InitializeGPUPath. If yes, the alpha channel of
+	// `ColorTexture` carries the stencil-ID encoding the shader needs;
+	// if no (asset missing or load failed), stay on the Rec.709
+	// luminance fallback path. Same dispatch shape either way — the
+	// shader branch on `UseReflectanceLUT` is constant across the
+	// dispatch so there's no warp-divergence cost.
+	U.UseReflectanceLUT = bReflectanceLUTActive ? 1u : 0u;
 
 	const int32 SlotIdx = NextDispatchSlot;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];

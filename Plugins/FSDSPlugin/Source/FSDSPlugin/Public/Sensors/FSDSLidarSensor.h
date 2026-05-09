@@ -163,6 +163,18 @@ private:
 	UPROPERTY() USceneCaptureComponent2D* GPUColorCapture  = nullptr;
 	UPROPERTY() UTextureRenderTarget2D*   GPUColorRT       = nullptr;
 
+	// True when the M_LiDARStencilEncoder post-process material was
+	// loaded successfully and added as a blendable to GPUColorCapture
+	// (#321 D-Phase-2). When true, the FinalColorLDR capture's alpha
+	// channel carries `stencil_id / 255` per-pixel, and the decode
+	// shader's `UseReflectanceLUT` uniform is set to 1 so the
+	// per-cone-material reflectance LUT lookup actually fires.
+	// When false, the LUT is dormant and the shader falls back to
+	// Rec.709 luminance — D-Phase-1 behaviour, no regression. Set
+	// once in `InitializeGPUPath` and read each scan in
+	// `EnqueueDecodePass`.
+	bool bReflectanceLUTActive = false;
+
 	// Stand up the depth-only SceneCapture for the GPU path. Called
 	// from BeginPlay when LidarPath==GPU. Phase-1 wiring; the depth
 	// data is rendered but not yet consumed (Phase 2 adds readback,
