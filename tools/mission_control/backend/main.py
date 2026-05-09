@@ -141,6 +141,17 @@ _state_lock = threading.Lock()
 # with the fast RES endpoints. Dedicated lock.
 _gen_lock = threading.Lock()
 
+# Home-pose / sim-connect-tracking globals (#327 B5). Pre-#327 these
+# were mutated and read from FastAPI's threadpool with no
+# synchronization. CPython's GIL prevents single-attribute tearing,
+# but the multi-field `home_pose = {...}` assignment was observable
+# mid-state by a reader from `sim_status` / `vehicle_state`, and the
+# `_home_pose_captured` flag could desync from the dict. Dedicated
+# lock so we don't contend with `_state_lock` (RES toggles fire
+# every frame on a Stop-Session click). Brief enough that a
+# read-then-act pattern under the lock is fine.
+_home_lock = threading.Lock()
+
 
 def _ensure_home_pose_captured():
     """Snapshot the pawn's map-placement pose as home.
@@ -148,21 +159,35 @@ def _ensure_home_pose_captured():
     Runs from the polled status/state endpoints so the capture happens within the
     first poll after UE5 connects — before the pawn has had time to drive away
     from its spawn. On UE5 disconnect (Stop/Play cycle), the captured flag is
-    reset so the next connect re-captures fresh."""
+    reset so the next connect re-captures fresh.
+
+    All reads/writes to `home_pose`, `_home_pose_captured`, and
+    `_sim_was_connected` are now under `_home_lock` (#327 B5).
+    The actual RPC (`sim.get_vehicle_pose`) is called WITHOUT the
+    lock — it's the only slow part of this function, and the inner
+    `SimConnection._lock` already protects the wire.
+    """
     global home_pose, _home_pose_captured, _sim_was_connected
     is_conn = sim.is_connected()
-    if _sim_was_connected and not is_conn:
-        _home_pose_captured = False
-    _sim_was_connected = is_conn
-    if _home_pose_captured or not is_conn:
+
+    # Phase 1 (under `_home_lock`): update connection-tracking state
+    # and decide whether we need to capture this tick.
+    with _home_lock:
+        if _sim_was_connected and not is_conn:
+            _home_pose_captured = False
+        _sim_was_connected = is_conn
+        need_capture = is_conn and not _home_pose_captured
+    if not need_capture:
         return
+
+    # Phase 2 (no lock): RPC for the pose.
     try:
         pose = sim.get_vehicle_pose()
     except Exception:
         return
     if not pose:
         return
-    home_pose = {
+    new_home = {
         "x": pose.get("x", 0.0),
         "y": pose.get("y", 0.0),
         "z": 0.3,  # fixed lift so reset never spawns at ground level
@@ -171,7 +196,15 @@ def _ensure_home_pose_captured():
         "qy": pose.get("qy", 0.0),
         "qz": pose.get("qz", 0.0),
     }
-    _home_pose_captured = True
+
+    # Phase 3 (under `_home_lock`): atomic publish of dict + flag.
+    # Re-check `_home_pose_captured` inside the lock — a concurrent
+    # caller may have captured between Phase 1 and here. Last writer
+    # wins (the values are equivalent within a few ms of each other,
+    # so there's no semantic conflict).
+    with _home_lock:
+        home_pose = new_home
+        _home_pose_captured = True
 _STATE_FILE = os.path.join(TRACKS_DIR, ".ifssim_state.json")
 
 def _load_state():
@@ -262,6 +295,13 @@ def sim_reset():
         except FileNotFoundError:
             pass
         _ensure_home_pose_captured()
+        # Snapshot the home pose under `_home_lock` (#327 B5) so the
+        # three coordinates we pass to teleport_pos are consistent
+        # with each other — a concurrent capture could otherwise
+        # update X/Y/Z one field at a time and we'd teleport to a
+        # mid-update position.
+        with _home_lock:
+            tx, ty, tz = home_pose["x"], home_pose["y"], home_pose["z"]
         try:
             sim.res_activate()
             # Position-only teleport. The full sim.teleport(...) variant
@@ -274,7 +314,7 @@ def sim_reset():
             # whatever yaw the pawn already has from loadTrack /
             # spawn_at_start_gate, which is the orientation the
             # autonomy was calibrated against.
-            sim.teleport_pos(home_pose["x"], home_pose["y"], home_pose["z"])
+            sim.teleport_pos(tx, ty, tz)
             res_active = False
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -513,7 +553,14 @@ def res_release_endpoint():
 
 @app.get("/api/res/status")
 def res_status():
-    return {"res_active": res_active}
+    # `res_active` is a single bool, so the read is atomic under the
+    # GIL — but during a RES toggle the writer is mid-RPC and the
+    # value's eventual state may differ from what the reader sees.
+    # Holding `_state_lock` for the read serialises us behind the
+    # in-flight toggle, so the response reflects the post-toggle
+    # state instead of a pre-toggle snapshot (#327 B5).
+    with _state_lock:
+        return {"res_active": res_active}
 
 
 # === Pipeline ===
@@ -719,7 +766,7 @@ def capture_home():
     pose = sim.get_vehicle_pose()
     if not pose:
         return JSONResponse({"ok": False, "error": "sim not connected"}, status_code=503)
-    home_pose = {
+    new_home = {
         "x": pose.get("x", 0.0),
         "y": pose.get("y", 0.0),
         "z": 0.3,
@@ -728,8 +775,14 @@ def capture_home():
         "qy": pose.get("qy", 0.0),
         "qz": pose.get("qz", 0.0),
     }
-    _home_pose_captured = True
-    return {"ok": True, "home_pose": home_pose}
+    # Atomic publish under `_home_lock` (#327 B5). Pre-fix this did
+    # the dict assignment and flag write lock-free, so a concurrent
+    # `_ensure_home_pose_captured` could see the dict half-updated.
+    with _home_lock:
+        home_pose = new_home
+        _home_pose_captured = True
+        snapshot = dict(home_pose)
+    return {"ok": True, "home_pose": snapshot}
 
 @app.delete("/api/track/{name}", dependencies=[Depends(require_api_key)])
 def track_delete(name: str):
@@ -892,6 +945,14 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                 ref = await asyncio.to_thread(sim.get_referee_state)
                 sim_status = await asyncio.to_thread(sim.get_status)
 
+                # Snapshot the shared mutables under their lock so a
+                # mid-toggle RES (or mid-capture home pose) doesn't
+                # leave us reading an inconsistent state into the WS
+                # frame (#327 B5).
+                with _state_lock:
+                    res_active_snap = res_active
+                    current_event_snap = current_event
+
                 data = {
                     "speed": vehicle.get("speed", 0),
                     "rpm": vehicle.get("rpm", 0),
@@ -917,10 +978,10 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                     "laps": ref.get("laps", 0),
                     "required_laps": ref.get("required_laps", 0),
                     "finished": ref.get("finished", False),
-                    "event": current_event,
+                    "event": current_event_snap,
                     "fps": sim_status.get("fps", 0),
                     "paused": sim_status.get("paused", False),
-                    "res_active": res_active,
+                    "res_active": res_active_snap,
                     "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
                 }
 
