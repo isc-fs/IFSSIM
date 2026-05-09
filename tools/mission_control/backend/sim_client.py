@@ -11,6 +11,7 @@ import json
 import socket
 import threading
 import time
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "python"))
 
@@ -32,6 +33,13 @@ _DISCONNECTED_CACHE_TTL_S = 5.0
 
 class SimConnection:
     """Persistent TCP connection to the IFSSIM RPC server."""
+
+    # Default per-command socket timeout for the read leg. 5 s is
+    # comfortable for the fast-path RPCs (ping, getCarState,
+    # getRefereeState, RES toggles) but trips on long-tail commands
+    # like loadTrack on a large CSV (#327 B11). Per-call override via
+    # the `timeout` kwarg on `_cmd`.
+    _DEFAULT_READ_TIMEOUT_S = 5.0
 
     def __init__(self, host: str = "127.0.0.1", port: int = 41451):
         self.host = host
@@ -63,7 +71,11 @@ class SimConnection:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(3.0)
             s.connect((self.host, self.port))
-            s.settimeout(5.0)
+            # `_cmd` resets the timeout per-invocation (#327 B11), so
+            # this initial value is just a sane default for any code
+            # path that hits the socket before the first `_cmd` call
+            # (currently none, but defensive).
+            s.settimeout(self._DEFAULT_READ_TIMEOUT_S)
             self._sock = s
             self._rbuf = b""
             return True
@@ -85,8 +97,17 @@ class SimConnection:
     # exactly one newline-terminated line per command.
     # ------------------------------------------------------------------
 
-    def _cmd(self, cmd: str) -> str:
+    def _cmd(self, cmd: str, timeout: Optional[float] = None) -> str:
+        """Send `cmd`, return the response line (or "" on failure).
+
+        `timeout` overrides the per-command socket read timeout for
+        long-tail RPCs (#327 B11). Default 5 s is fine for ping /
+        getCarState / RES toggles; loadTrack on a large CSV needs
+        more headroom. The override applies only to this invocation;
+        the next `_cmd` call resets to the default.
+        """
         with self._lock:
+            read_timeout = timeout if timeout is not None else self._DEFAULT_READ_TIMEOUT_S
             for attempt in range(2):
                 try:
                     if self._sock is None and not self._connect():
@@ -96,6 +117,7 @@ class SimConnection:
                         self._last_failure = time.monotonic()
                         return ""
 
+                    self._sock.settimeout(read_timeout)
                     self._sock.sendall((cmd + "\n").encode())
 
                     # Read until newline
@@ -122,8 +144,8 @@ class SimConnection:
             self._last_failure = time.monotonic()
             return ""
 
-    def _json_cmd(self, cmd: str) -> dict:
-        resp = self._cmd(cmd)
+    def _json_cmd(self, cmd: str, timeout: Optional[float] = None) -> dict:
+        resp = self._cmd(cmd, timeout=timeout)
         if not resp:
             return {}
         try:
@@ -225,7 +247,12 @@ class SimConnection:
         self._cmd(f"simSetVehiclePose {x} {y} {z}")
 
     def load_track(self, filepath: str) -> dict:
-        return self._json_cmd(f"loadTrack {filepath}")
+        # loadTrack can take well over 5 s on a large CSV — UE5
+        # parses, spawns each cone actor, rebuilds nav. Pre-#327
+        # the default 5 s timeout (#327 B11) tripped, the client
+        # `_disconnect`ed and retried once, and the caller saw an
+        # empty response and reported "load_track returned nothing".
+        return self._json_cmd(f"loadTrack {filepath}", timeout=30.0)
 
     def get_settings(self) -> str:
         return self._cmd("getSettingsString")
