@@ -167,6 +167,18 @@ private:
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr tire_loads_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_pub_;
+    // Optional subsampled LiDAR cloud for visualisation tools. Browser-
+    // based viewers (Foxglove web, Lichtblick web) deserialise + WebGL-
+    // upload the full 1.5 MB/scan stream on the JS thread, which lands at
+    // 30-40 % CPU on a tab. This publisher emits every Nth point to a
+    // companion topic so a viz session can subscribe to /lidar/Lidar1/viz
+    // and leave /lidar/Lidar1 (full density) for the autonomy stack. Only
+    // created when `lidar_viz_decimation` parameter > 1 (default 0 = off,
+    // production runs unaffected).
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_viz_pub_;
+    // 0 (default) = disabled, no viz publisher created. >= 2 = publish
+    // every Nth point on /lidar/Lidar1/viz alongside the full cloud.
+    uint32_t lidar_viz_decimation_ = 0;
     std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
     rclcpp::Publisher<fs_msgs::msg::GoSignal>::SharedPtr go_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_pub_;

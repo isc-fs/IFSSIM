@@ -33,6 +33,16 @@ services:
       # but UDP turned out to be reliable enough on every supported
       # host that maintaining three transports was no longer worth
       # the wire-format cost. The `LIDAR_TRANSPORT` env var is gone.
+      #
+      # Opt-in subsampled LiDAR cloud for browser-based visualisers
+      # (Foxglove web, Lichtblick web). 0 (default) disables the
+      # /lidar/Lidar1/viz topic entirely — production runs unaffected.
+      # Set to >=2 to publish every Nth point on /viz alongside the
+      # full /lidar/Lidar1 cloud. Foxglove tab CPU on a 1.5 MB/scan
+      # stream sits around 35 %; LIDAR_VIZ_DECIMATION=4 drops it to
+      # ~10 % at 1/4 spatial density, plenty for "is the autonomy
+      # seeing what I think it's seeing" debugging.
+      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-0}
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
       # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
       # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single
@@ -154,8 +164,13 @@ services:
       # mount isn't viable on a given host (path-permission issues,
       # non-Mac/Linux), the bridge silently falls back to TCP.
       - /tmp/ifssim_streams:/tmp/ifssim_streams
-    mem_limit: 1500m      # bridge+foxglove+rosboard: ~300 MB idle, ~1.5 GB with pipeline
-    memswap_limit: 1500m  # disable swap — OOM-kill instead of thrashing
+    # Runtime peaks at ~1.5 GB (bridge + foxglove + pipeline). Bumped
+    # to 2.5 GB because cc1plus compiling ifssim_ros_wrapper.cpp peaks
+    # at ~2 GB after the v2 grew (the file now also handles the
+    # subsampled-viz publish path). Swap stays off — OOM-kill is
+    # better than thrashing in a real run.
+    mem_limit: 2500m
+    memswap_limit: 2500m
     shm_size: 1gb         # Default 64 MB is too small for Fast DDS SHM —
                           # 1 GB lets DDS use its native shared-memory
                           # transport which is dramatically cheaper than

@@ -3,6 +3,8 @@ Bridge-only launch — starts ifssim_bridge without the autonomous pipeline.
 Use this to verify connectivity and topic flow, or for manual/keyboard driving.
 """
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -14,6 +16,15 @@ def generate_launch_description():
     # soft-deprecated; this PR followed through on the deletion).
     # `LIDAR_TRANSPORT` env var and `lidar_transport` ROS parameter
     # are gone — the bridge node hard-wires UdpReceiver on port 51453.
+
+    # LIDAR_VIZ_DECIMATION — opt-in subsampled LiDAR cloud for browser
+    # visualisers. 0 (default) disables /lidar/Lidar1/viz; >=2 enables
+    # it as every-Nth-point alongside the full cloud. The autonomy
+    # stack always subscribes to /lidar/Lidar1 (full density).
+    try:
+        lidar_viz_decimation = int(os.environ.get("LIDAR_VIZ_DECIMATION", "0"))
+    except ValueError:
+        lidar_viz_decimation = 0
 
     return LaunchDescription([
         DeclareLaunchArgument('host',         default_value='host.docker.internal'),
@@ -27,11 +38,12 @@ def generate_launch_description():
             name='ifssim_bridge',
             output='screen',
             parameters=[{
-                'host':             LaunchConfiguration('host'),
-                'port':             LaunchConfiguration('port'),
-                'mission_name':     LaunchConfiguration('mission_name'),
-                'track_name':       LaunchConfiguration('track_name'),
-                'competition_mode': False,
+                'host':                  LaunchConfiguration('host'),
+                'port':                  LaunchConfiguration('port'),
+                'mission_name':          LaunchConfiguration('mission_name'),
+                'track_name':            LaunchConfiguration('track_name'),
+                'competition_mode':      False,
+                'lidar_viz_decimation':  lidar_viz_decimation,
             }],
         ),
 
