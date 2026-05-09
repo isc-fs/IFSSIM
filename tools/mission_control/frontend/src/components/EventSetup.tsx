@@ -7,6 +7,10 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
   const [event, setEvent] = useState('trackdrive')
   const [laps, setLaps] = useState(10)
   const [msg, setMsg] = useState('')
+  // `busy` gates Start/Stop while a request is in flight so a panicked
+  // double-click can't re-fire the 4.5 s event_start sequence (#327 B7) or
+  // queue a duplicate pipeline-stop. Cleared in the finally block.
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (telemetry.event && telemetry.event !== 'unknown' && EVENTS.includes(telemetry.event as any)) {
@@ -57,25 +61,53 @@ export default function EventSetup({ telemetry }: { telemetry: any }) {
 
         <div className="flex gap-3 flex-wrap items-center">
           <button
+            disabled={busy}
             onClick={async () => {
+              setBusy(true)
               setMsg('Starting…')
-              const r = await api('/api/event/start', { event_type: event, num_laps: laps })
-              setMsg(r.ok ? `Session started: ${r.event} (${r.laps} laps)` : `Error: ${r.error}`)
+              try {
+                const r = await api('/api/event/start', { event_type: event, num_laps: laps })
+                setMsg(r.ok ? `Session started: ${r.event} (${r.laps} laps)` : `Error: ${r.error ?? 'unknown'}`)
+              } catch (e) {
+                setMsg(`Error: ${e instanceof Error ? e.message : String(e)}`)
+              } finally {
+                setBusy(false)
+              }
             }}
             className="px-6 py-2.5 bg-green-700 text-white font-bold rounded-lg text-sm hover:bg-green-600 transition-all
-                       shadow-[0_0_10px_rgba(34,197,94,0.3)]"
+                       shadow-[0_0_10px_rgba(34,197,94,0.3)] disabled:opacity-50 disabled:cursor-not-allowed
+                       disabled:hover:bg-green-700"
           >
-            Start Session
+            {busy ? 'Working…' : 'Start Session'}
           </button>
+          {/* Stop Session disables the autonomy pipeline (removes the
+              control file the launcher polls). It deliberately does NOT
+              activate RES — that's the dedicated emergency-stop button
+              in the header. Earlier this button fired
+              /api/res/activate with a misleading "Session stopped"
+              label; see #326 finding F1. */}
           <button
+            disabled={busy}
             onClick={async () => {
-              await api('/api/res/activate')
-              setMsg('Session stopped')
+              if (!confirm('Stop the autonomy pipeline? The sim and vehicle stay running; this only disables the autonomous driver. Use the RES button in the header for emergency stop.')) {
+                return
+              }
+              setBusy(true)
+              setMsg('Stopping pipeline…')
+              try {
+                const r = await api('/api/pipeline/stop')
+                setMsg(r.ok ? 'Autonomy pipeline stopped' : `Error: ${r.error ?? 'unknown'}`)
+              } catch (e) {
+                setMsg(`Error: ${e instanceof Error ? e.message : String(e)}`)
+              } finally {
+                setBusy(false)
+              }
             }}
             className="px-6 py-2.5 bg-red-700 text-white font-bold rounded-lg text-sm hover:bg-red-600 transition-all
-                       shadow-[0_0_10px_rgba(239,68,68,0.3)]"
+                       shadow-[0_0_10px_rgba(239,68,68,0.3)] disabled:opacity-50 disabled:cursor-not-allowed
+                       disabled:hover:bg-red-700"
           >
-            Stop Session
+            {busy ? 'Working…' : 'Stop Session'}
           </button>
           {telemetry.pipeline_enabled && (
             <span className="text-green-400 text-xs font-medium animate-pulse">● PIPELINE RUNNING</span>
