@@ -84,6 +84,24 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		// typical FS-cone returns near full-scale (real Hesai applies
 		// receiver-side gain for approximately the same effect).
 		SHADER_PARAMETER(float, RReferenceM)
+
+		// Per-cone-material reflectance LUT (#321 D-Phase-1). 16-slot
+		// array of ρ_905 values indexed by stencil ID. Index 0 is
+		// reserved for "not a tagged cone"; indices match
+		// FSDSConeStencil::{Blue,Yellow,OrangeLarge,OrangeSmall}.
+		// Slots whose entry is <= 0 fall back to the Rec.709-luminance
+		// placeholder. CPU side fills indices 1-4 with datasheet values
+		// even when UseReflectanceLUT=0 so swap-on lands without a
+		// rebuild.
+		SHADER_PARAMETER_ARRAY(float, ReflectanceLUT, [16])
+		// 0 = Phase-1 default — ignore the LUT, use luminance for every
+		//     hit (current production behaviour, no regression).
+		// 1 = Phase-2 — decode stencil ID from ColorTexture's alpha
+		//     channel and look up the LUT. Requires the
+		//     M_LiDARStencilEncoder post-process material to be applied
+		//     to GPUColorCapture's PostProcessSettings (tracked as a
+		//     follow-up issue).
+		SHADER_PARAMETER(uint32, UseReflectanceLUT)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

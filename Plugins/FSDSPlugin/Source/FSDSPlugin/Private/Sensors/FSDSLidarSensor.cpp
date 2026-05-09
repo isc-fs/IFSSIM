@@ -18,6 +18,7 @@
 #include "GlobalShader.h"
 #include "ShaderParameterMacros.h"
 #include "Sensors/FSDSLidarDecodeShader.h"
+#include "FSDSReferee.h"  // FSDSConeStencil:: IDs (#321 D-Phase-1)
 
 using FSDSNoise::RandStandardNormal;
 
@@ -858,6 +859,13 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		FVector3f SensorRotRowY;
 		FVector3f SensorRotRowZ;
 		float RReferenceM;  // inverse-square reference range (#255)
+
+		// #321 D-Phase-1 — per-cone-material reflectance LUT. Filled
+		// with datasheet ρ_905 values keyed by FSDSConeStencil::* IDs;
+		// inert until D-Phase-2 sets UseReflectanceLUT=1 (which needs
+		// the post-process material that encodes stencil into alpha).
+		float  ReflectanceLUT[16];
+		uint32 UseReflectanceLUT;
 	} U;
 	U.NumChannels        = (uint32)NumChannels_LCL;
 	U.NumHorizontalSteps = (uint32)NumHorizontalSteps;
@@ -905,6 +913,27 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// 3–15 m returns into [0, 0.04] which exercises only the bottom
 	// few of an 8-bit channel and reads as "always zero" on consumers.
 	U.RReferenceM = 5.0f;
+
+	// Per-material reflectance LUT (#321 D-Phase-1 foundation). Indices
+	// match FSDSConeStencil::* IDs the cone spawner writes into each
+	// cone's CustomDepthStencilValue. Values are datasheet 905 nm
+	// reflectance figures from the audit's reference table:
+	//   blue ≈ 0.15, yellow ≈ 0.50, orange ≈ 0.65, white-stripe ≈ 0.92.
+	// Pre-Phase-2 the shader doesn't read this (UseReflectanceLUT=0);
+	// it's pre-populated so flipping the flag in a follow-up PR is a
+	// one-line change with no rebase risk on this table.
+	for (int32 i = 0; i < 16; ++i) U.ReflectanceLUT[i] = 0.0f;
+	U.ReflectanceLUT[FSDSConeStencil::Blue]        = 0.15f;
+	U.ReflectanceLUT[FSDSConeStencil::Yellow]      = 0.50f;
+	U.ReflectanceLUT[FSDSConeStencil::OrangeLarge] = 0.65f;
+	U.ReflectanceLUT[FSDSConeStencil::OrangeSmall] = 0.65f;
+
+	// 0 = Phase-1 — LUT is inert, shader uses Rec.709 luminance for
+	//     every hit (current production behaviour, no regression).
+	// Set to 1 once the M_LiDARStencilEncoder post-process material is
+	// authored and applied to GPUColorCapture's PostProcessSettings;
+	// see Phase-2 follow-up issue.
+	U.UseReflectanceLUT = 0;
 
 	const int32 SlotIdx = NextDispatchSlot;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
@@ -999,6 +1028,9 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->SensorRotRowY         = U.SensorRotRowY;  // #255
 			Params->SensorRotRowZ         = U.SensorRotRowZ;  // #255
 			Params->RReferenceM           = U.RReferenceM;    // #255
+			// #321 D-Phase-1 — bind LUT + flag. Inert until Phase 2.
+			for (int32 i = 0; i < 16; ++i) Params->ReflectanceLUT[i] = U.ReflectanceLUT[i];
+			Params->UseReflectanceLUT     = U.UseReflectanceLUT;
 
 			TShaderMapRef<FFSDSLidarDecodeCS> Shader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 			const int32 ThreadGroups = FMath::DivideAndRoundUp(NumPoints, FFSDSLidarDecodeCS::ThreadGroupSize);

@@ -176,6 +176,29 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 
 		SpawnedCones.Add(ConeActor);
 
+		// Tag this mesh's CustomDepthStencilValue so the LiDAR's
+		// post-process pass (#321 D-Phase-2 follow-up) can read
+		// stencil → 905 nm reflectance via FSDSLidarDecode.usf's
+		// ReflectanceLUT[]. r.CustomDepth=3 (DefaultEngine.ini
+		// [SystemSettings]) enables the depth+stencil pass that
+		// makes these writes observable. ID 0 (Unknown) skips
+		// tagging entirely so non-cone CustomDepth users in the
+		// future don't collide with our value space.
+		uint8 StencilID = FSDSConeStencil::None;
+		switch (Color)
+		{
+		case EFSDSConeColor::Blue:        StencilID = FSDSConeStencil::Blue;        break;
+		case EFSDSConeColor::Yellow:      StencilID = FSDSConeStencil::Yellow;      break;
+		case EFSDSConeColor::OrangeLarge: StencilID = FSDSConeStencil::OrangeLarge; break;
+		case EFSDSConeColor::OrangeSmall: StencilID = FSDSConeStencil::OrangeSmall; break;
+		default: break;
+		}
+		if (StencilID != FSDSConeStencil::None)
+		{
+			MeshComp->SetRenderCustomDepth(true);
+			MeshComp->SetCustomDepthStencilValue(StencilID);
+		}
+
 		// Register with referee for hit tracking and cone position publishing
 		if (Referee)
 		{
