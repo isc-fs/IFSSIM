@@ -10,10 +10,24 @@ import os
 import json
 import socket
 import threading
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "python"))
 
 from ifssim import IFSSIMClient
+
+
+# Connection-state cache TTLs (#327 B2). Pre-#327 every `is_connected()`
+# call did a real `ping` round-trip, and `_require_connected()` was
+# called at the top of every command — so e.g. `release EBS` was two
+# RPCs (ping + releaseEbs), the WS telemetry tick added a ping per
+# state read, and a downed sim made every poll wait the full 3 s
+# connect timeout. The positive TTL is short because the sim can
+# disappear at any time (UE5 crash, Stop in editor); the negative
+# TTL is longer because we don't want to burn the full connect
+# timeout × N WS clients per second when it's known down.
+_CONNECTED_CACHE_TTL_S = 1.0
+_DISCONNECTED_CACHE_TTL_S = 5.0
 
 
 class SimConnection:
@@ -25,6 +39,20 @@ class SimConnection:
         self._sock: socket.socket | None = None
         self._rbuf = b""
         self._lock = threading.Lock()
+        # Connection-state cache. `_last_seen_alive` is updated inside
+        # `_cmd` on every successful round-trip; `_last_failure` is
+        # updated when `_cmd` exhausts its retry. `is_connected()`
+        # consults both before issuing a real ping. Reads are
+        # intentionally lock-free — single-attribute reads are atomic
+        # under the GIL and a stale read just means at worst one
+        # extra ping, no correctness hazard.
+        self._last_seen_alive: float = 0.0
+        self._last_failure: float = 0.0
+        # `_known_dead` starts True so the very first `is_connected()`
+        # call performs a real probe. After any successful command
+        # this flips to False and stays there until a `_cmd` failure
+        # flips it back.
+        self._known_dead: bool = True
 
     # ------------------------------------------------------------------
     # Connection management
@@ -62,6 +90,10 @@ class SimConnection:
             for attempt in range(2):
                 try:
                     if self._sock is None and not self._connect():
+                        # Connect itself failed — cache the failure so
+                        # the next `is_connected()` short-circuits.
+                        self._known_dead = True
+                        self._last_failure = time.monotonic()
                         return ""
 
                     self._sock.sendall((cmd + "\n").encode())
@@ -74,12 +106,20 @@ class SimConnection:
                         self._rbuf += chunk
 
                     line, _, self._rbuf = self._rbuf.partition(b"\n")
+                    # Successful round-trip — refresh the positive
+                    # cache. `is_connected()` will skip the next ping
+                    # if it's called within `_CONNECTED_CACHE_TTL_S`.
+                    self._last_seen_alive = time.monotonic()
+                    self._known_dead = False
                     return line.decode().strip()
 
                 except Exception:
                     self._disconnect()
                     if attempt == 0:
                         continue
+            # Both attempts failed — record the negative cache.
+            self._known_dead = True
+            self._last_failure = time.monotonic()
             return ""
 
     def _json_cmd(self, cmd: str) -> dict:
@@ -96,6 +136,28 @@ class SimConnection:
     # ------------------------------------------------------------------
 
     def is_connected(self) -> bool:
+        """Return whether the sim is currently reachable.
+
+        Cached: a successful command in the last `_CONNECTED_CACHE_TTL_S`
+        means we're still up (no ping needed); a known-dead state
+        within `_DISCONNECTED_CACHE_TTL_S` short-circuits to False
+        (no connect-timeout wait). Falls through to a real `ping` only
+        when the cache expires or the state has never been
+        established. Pre-#327 every call here was a full RPC
+        round-trip; with that pattern multiplied across `_require_connected`
+        and the 100 Hz WS telemetry loop, a downed sim was ~10
+        connect-timeout-attempts/sec per client.
+        """
+        now = time.monotonic()
+        # Positive cache hit — recent successful command implies up.
+        if not self._known_dead and (now - self._last_seen_alive) < _CONNECTED_CACHE_TTL_S:
+            return True
+        # Negative cache hit — known dead and we tried recently. Don't
+        # burn another 3 s connect timeout for this caller.
+        if self._known_dead and (now - self._last_failure) < _DISCONNECTED_CACHE_TTL_S:
+            return False
+        # Cache stale — do a real probe. `_cmd` updates the cache on
+        # both success and failure paths.
         return self._cmd("ping") == "true"
 
     def get_status(self) -> dict:
