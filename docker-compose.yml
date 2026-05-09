@@ -157,13 +157,12 @@ services:
       - ./pipeline/cone_detection:/dv_pipeline_stack_ws/src/cone_detection
       - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
       - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
-      # AF_UNIX socket directory shared with the FSDS plugin running on
-      # the host. The plugin creates /tmp/ifssim_streams/lidar.sock at
-      # PIE start and the bridge connects to it (bypasses macOS TCP
-      # loopback throughput cap of ~7 MB/s; UDS sustains GB/s). If this
-      # mount isn't viable on a given host (path-permission issues,
-      # non-Mac/Linux), the bridge silently falls back to TCP.
-      - /tmp/ifssim_streams:/tmp/ifssim_streams
+      # /tmp/ifssim_streams bind-mount removed: it existed to share an
+      # AF_UNIX LiDAR socket between the host plugin and the bridge
+      # container. The UDS LiDAR sender was retired in #322 and the
+      # surrounding UDS infrastructure (StartUds / StreamSensorsUds
+      # stub) was deleted in this PR's #322 follow-up. Production
+      # LiDAR is UDP-only on port 51453.
     # Runtime peaks at ~1.5 GB (bridge + foxglove + pipeline). Bumped
     # to 2.5 GB because cc1plus compiling ifssim_ros_wrapper.cpp peaks
     # at ~2 GB after the v2 grew (the file now also handles the
