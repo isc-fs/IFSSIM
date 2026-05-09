@@ -76,3 +76,10 @@ Content/tracks/.ifssim_state.json
 
 # Recorded ROS2 bags — large binary sqlite DBs, not source
 tools/bags/
+
+# Auto-generated tracks from tools/random-track-generator. Each run
+# overwrites Content/tracks/random_track.csv; staging an empty/stale
+# version in git just confuses the track validator (and ships a
+# phantom track in package_mac.sh's CSV copy). Real generated tracks
+# are renamed by the operator before commit.
+Content/tracks/random_track.csv

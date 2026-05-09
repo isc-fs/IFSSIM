@@ -5,3 +5,5 @@ matplotlib>=3.7.0
 scipy>=1.8.0
 shapely>=2.0.0
 gpxpy>=1.5.0
+# --- Dev / CI ---
+pytest>=8.0

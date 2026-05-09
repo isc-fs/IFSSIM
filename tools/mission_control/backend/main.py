@@ -664,71 +664,37 @@ def vehicle_teleport(req: TeleportRequest):
 
 # === Track Manager ===
 
-# Path-traversal defence for track-name-as-path-segment (#327 B4). Pre-#327
-# `track_load` and `track_preview` accepted any string and joined it
-# onto TRACKS_DIR; with `name="../../etc/passwd.csv"` the join
-# resolved outside TRACKS_DIR and was either read (preview) or sent
-# to UE5's loadTrack RPC (load). `track_delete` had its own ad-hoc
-# `if "/" in name or "\\" in name or ".." in name` check; this
-# replaces all three sites with one helper.
-_TRACK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.csv$")
-_TRACK_STEM_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# Path-traversal validators live in `track_validators.py` so the CI test
+# suite can exercise them as pure functions without standing up the
+# whole FastAPI app. Thin wrappers below convert `TrackNameError` into
+# the `HTTPException(400)` shape the endpoints expect.
+from track_validators import (
+    TrackNameError,
+    validate_track_name as _vt_name,
+    validate_track_stem as _vt_stem,
+    resolve_track_path as _rt_path,
+)
 
 
 def _validate_track_name(name: str) -> str:
-    """Validate a `<stem>.csv` track filename.
-
-    Allows letters/digits/`._-`, requires a `.csv` suffix, rejects
-    empty/`.`/`..`/dotfile stems, and caps length at 128 chars.
-    Raises HTTPException(400) on invalid input. Returns the
-    validated name unchanged so callers can keep using
-    `os.path.join(TRACKS_DIR, name)`.
-
-    Defense-in-depth: the abspath check at each call site catches
-    anything the regex misses (URL-decoded edge cases, unicode
-    normalisation surprises).
-    """
-    if not name or len(name) > 128:
-        raise HTTPException(status_code=400, detail="Invalid track name")
-    if not _TRACK_NAME_RE.fullmatch(name):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid track name (allowed chars: A-Za-z0-9._-, must end with .csv)",
-        )
-    stem = name[:-4]  # strip ".csv"
-    if stem in (".", "..") or stem.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid track name")
-    return name
+    try:
+        return _vt_name(name)
+    except TrackNameError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def _validate_track_stem(stem: str) -> str:
-    """Same as `_validate_track_name` but for the stem only — used by
-    `track_generate`, which appends `.csv` itself.
-    """
-    if not stem or len(stem) > 124:  # leave 4 chars for ".csv"
-        raise HTTPException(status_code=400, detail="Invalid track name")
-    if not _TRACK_STEM_RE.fullmatch(stem):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid track name (allowed chars: A-Za-z0-9._-)",
-        )
-    if stem in (".", "..") or stem.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid track name")
-    return stem
+    try:
+        return _vt_stem(stem)
+    except TrackNameError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def _resolve_track_path(name: str) -> str:
-    """Resolve `<TRACKS_DIR>/<name>` and assert it stays inside TRACKS_DIR.
-
-    Belt-and-braces with `_validate_track_name`: if the regex is ever
-    weakened (e.g. someone allows colons or backslashes by mistake),
-    this still keeps reads/writes scoped to the tracks directory.
-    """
-    base = os.path.abspath(TRACKS_DIR)
-    target = os.path.abspath(os.path.join(base, name))
-    if not (target == base or target.startswith(base + os.sep)):
-        raise HTTPException(status_code=400, detail="Invalid track path")
-    return target
+    try:
+        return _rt_path(name, TRACKS_DIR)
+    except TrackNameError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def parse_track_csv(filepath):

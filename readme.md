@@ -4,6 +4,8 @@
 
 Simulation environment for the IFS project, developed by ISC Racing Team.
 
+[![CI](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml)
+
 📄 **[Full Functionalities Reference](docs/FUNCTIONALITIES.md)** — sensors, RPC API, ROS 2 bridge, vehicle model, referee system, Mission Control, and more.
 
 🤖 **[Autonomy Pipeline](docs/autonomy_pipeline.md)** — end-to-end architecture: sim, bridge, mission management, and the autonomy lifecycle nodes (perception → SLAM → path planning → control). Same code on the real car and in sim.
@@ -71,6 +73,41 @@ To browse the full history: filter by label and status `closed`.
 The number for the next branch of each type is the last closed issue of that type plus one.
 
 > Example: if the last closed issue with label `feat` is `[feat/4-…] ...`, the next feature branch will be `feat/5-<your-title>`.
+
+---
+
+## Continuous integration
+
+Every PR to `dev` or `main` runs through a four-job CI suite (`.github/workflows/ci.yml`) on free GitHub-hosted Linux runners — total wall time under 4 minutes. PRs cannot merge with a red status.
+
+| Job | What it checks | When it runs |
+|---|---|---|
+| **Bridge — colcon build** | `ifssim_bridge` + `fs_msgs` compile cleanly on ROS 2 Humble | every PR |
+| **Mission Control — frontend** | ESLint clean, `tsc --noEmit` clean, production `npm run build` succeeds | every PR |
+| **Mission Control — backend** | `compileall` syntax check, `pytest` for `track_validators` + `scoring` (pure-Python unit tests, ~70 cases) | every PR |
+| **Tracks — CSV validator** | every `Content/tracks/*.csv` parses (correct field count, known cone types, numeric coordinates within ±500 m) | every PR |
+
+A separate workflow (`.github/workflows/plugin-cook.yml`) runs the **full UE5 `BuildCookRun`** on a self-hosted Mac runner with UE5 5.7 installed — but only for PRs that touch `Plugins/`, `Config/`, `Content/`, the `.uproject`, or `package_mac.sh`. PRs that don't touch the UE5 side (e.g. bridge-only or Mission Control-only changes) skip it entirely.
+
+### Running CI locally
+
+```bash
+# Bridge build (inside the dv_pipeline_stack container)
+docker compose exec dv_pipeline_stack bash -lc \
+  'cd /dv_pipeline_stack_ws && source /opt/ros/humble/setup.bash && \
+   colcon build --packages-select ifssim_bridge'
+
+# Frontend
+cd tools/mission_control/frontend && npx eslint src && npx tsc --noEmit && npm run build
+
+# Backend
+cd tools/mission_control/backend && pytest tests/ -v
+
+# Track CSV validator
+python3 tools/validate_tracks.py
+```
+
+If all four pass locally, the CI gate will pass too.
 
 ---
 
