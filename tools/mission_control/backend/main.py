@@ -43,6 +43,16 @@ PIPELINE_CTL_FILE = "/pipeline_ctrl/enable"
 # Path UE5 uses to load the file — must be the host-side absolute path (UE5 runs on host, not in Docker)
 UE5_TRACKS_DIR = os.environ.get("UE5_TRACKS_DIR", TRACKS_DIR)
 
+# Insert TRACK_GEN_PATH into sys.path ONCE at module load (#327 B9).
+# Pre-#327 `track_generate` did `sys.path.insert(0, TRACK_GEN_PATH)`
+# every call without ever removing it — N-th call left N copies on
+# the path, and only the first one mattered because Python caches
+# imports after the first one. Doing this here means the cost is
+# paid once, the imports below resolve cleanly the first time, and
+# `track_generate` no longer mutates `sys.path`.
+if TRACK_GEN_PATH not in sys.path:
+    sys.path.insert(0, TRACK_GEN_PATH)
+
 SIM_HOST = os.environ.get("IFSSIM_HOST", os.environ.get("SIM_HOST", "127.0.0.1"))
 SIM_PORT = int(os.environ.get("IFSSIM_PORT", os.environ.get("SIM_PORT", "41451")))
 
@@ -207,21 +217,55 @@ def _ensure_home_pose_captured():
         _home_pose_captured = True
 _STATE_FILE = os.path.join(TRACKS_DIR, ".ifssim_state.json")
 
+import logging as _logging  # noqa: E402 — co-located with the helpers that use it
+
+_state_logger = _logging.getLogger("mission_control.state")
+
+
 def _load_state():
     try:
         with open(_STATE_FILE) as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
+        # First run, or state file deleted on purpose. Not an error.
+        return {}
+    except Exception as e:
+        # Any other failure — corrupt JSON, permission denied, full
+        # disk on a read of the atime — was silently swallowed
+        # pre-#327 (B10). Now logged so a wedged state file doesn't
+        # disappear into the void.
+        _state_logger.warning("state file load failed: %s", e)
         return {}
 
+
 def _save_state(data: dict):
+    """Write `data` (merged with existing state) atomically.
+
+    Pre-#327 (B10) this opened the file for write directly and on a
+    crash between truncate and `json.dump` left a zero-byte file;
+    next startup `_load_state` swallowed the resulting JSONDecodeError
+    and the user silently lost their last selected event. Now writes
+    to `<state>.tmp` first, then `os.replace`s into place — the
+    rename is atomic on POSIX and on NTFS, so any read either sees
+    the old file or the fully-written new file, never partial.
+    """
     try:
         s = _load_state()
         s.update(data)
-        with open(_STATE_FILE, "w") as f:
+        tmp_path = _STATE_FILE + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump(s, f)
-    except Exception:
-        pass
+            # Force the OS to flush the user buffer. Without this,
+            # a crash between `close` and `replace` could land us in
+            # the same state we were trying to avoid — except the
+            # `.tmp` file is the corrupt one and the original is
+            # still sound, so cost-of-fix-on-crash is at worst the
+            # next save that overwrites the bad tmp.
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, _STATE_FILE)
+    except Exception as e:
+        _state_logger.warning("state file save failed: %s", e)
 
 current_event = _load_state().get("event", "unknown")
 
@@ -802,7 +846,12 @@ def track_delete(name: str):
 @app.post("/api/track/generate", dependencies=[Depends(require_api_key)])
 def track_generate(params: TrackGenerate):
     try:
-        sys.path.insert(0, TRACK_GEN_PATH)
+        # `sys.path` insertion now happens once at module load
+        # (#327 B9). Imports here are still local because the
+        # third-party package only resolves after that insert and
+        # we want the failure mode (missing dependency) to surface
+        # as a 500 from this endpoint rather than a hard import
+        # error at app startup that takes the whole API down.
         from track_generator import TrackGenerator
         from utils import Mode, SimType
 
