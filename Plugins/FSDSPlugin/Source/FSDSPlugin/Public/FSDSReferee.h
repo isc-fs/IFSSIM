@@ -30,6 +30,39 @@ enum class EFSDSConeColor : uint8
 	Unknown
 };
 
+/**
+ * Stencil IDs the cone spawner writes into each cone's
+ * CustomDepthStencilValue (#321 D-Phase-1). A future LiDAR post-process
+ * material (D-Phase-2 follow-up) samples SceneTexture:CustomStencil and
+ * encodes this ID into the alpha channel of the FinalColorLDR capture
+ * the LiDAR shader already reads. The decode shader then indexes
+ * FSDSLidarDecode.usf's ReflectanceLUT[] by this ID to use per-material
+ * 905 nm reflectance instead of the Rec.709-luminance placeholder.
+ *
+ * ID 0 is reserved for "not a tagged cone" — anything not in the LUT
+ * falls back to the luminance placeholder. Order matches the
+ * EFSDSConeColor enum slots that exist; Unknown gets no tag.
+ *
+ * Adding a new ID also means updating:
+ *   - Plugins/FSDSPlugin/Shaders/Private/FSDSLidarDecode.usf
+ *   - Plugins/FSDSPlugin/Source/FSDSPlugin/Private/Sensors/FSDSLidarSensor.cpp
+ *     (LUT initialisation in InitializeGPUPath)
+ *   - The Phase-2 post-process material's stencil-to-alpha encoding
+ */
+namespace FSDSConeStencil
+{
+	static constexpr uint8 None        = 0;  // not a tagged cone
+	static constexpr uint8 Blue        = 1;
+	static constexpr uint8 Yellow      = 2;
+	static constexpr uint8 OrangeLarge = 3;
+	static constexpr uint8 OrangeSmall = 4;
+	// IDs 5-15 reserved for future cone types (white-stripe sub-material,
+	// custom DV cones). Cap at 15 because the LUT is uint8 stencil →
+	// 8-bit alpha encoding; anything > 15 drops dynamic range we want
+	// for the lookup-vs-fallback discrimination.
+	static constexpr uint8 MaxID       = 15;
+}
+
 USTRUCT(BlueprintType)
 struct FFSDSCone
 {
