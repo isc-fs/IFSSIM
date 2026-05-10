@@ -104,6 +104,8 @@ flowchart TB
     bridge -- "<b>/fsds/testing_only/odom</b><br/>(diagnostic only — GT-aligned)" --> slam
     bridge -- "<b>/fsds/imu</b><br/>(filter prediction)" --> sup
     bridge -- "<b>/fsds/motor_rpm</b><br/>(filter correction)" --> sup
+    bridge -- "<b>/fsds/steering_angle</b><br/>(kinematic-bicycle cross-check, #383)" --> sup
+    bridge -- "<b>/fsds/brake_pressure</b><br/>(slip-event α scaling, #383)" --> sup
 
     %% =====================================================================
     %% AUTONOMY DATAFLOW (internal to submodule)
@@ -171,7 +173,9 @@ All sensor topics are namespaced under `/fsds/...` — the prefix is what tells 
 |---|---|---|---|---|
 | `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — fields `x`, `y`, `z`, `intensity` (FLOAT32). Intensity follows the Hesai ATX-S01 working principle (ρ × cos(θ) × (R_ref/r)²); see `FUNCTIONALITIES.md` §4.1. |
 | `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. Consumed by `slam_node` (preintegration) AND `sim_supervisor_node` (filter prediction step) post-feat/360. |
-| `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Drive-axle RPM. Primary longitudinal velocity input — both `slam_node` (velocity prior) and `sim_supervisor_node` (filter correction step) consume it. The IFS-08 doesn't have GSS, so this + IMU is the full odometry input set. |
+| `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Drive-axle RPM. Primary longitudinal velocity input — both `slam_node` (velocity prior) and `sim_supervisor_node` (filter correction step) consume it. The IFS-08 doesn't have GSS, so RPM + IMU + steering + brake_pressure is the full real-car odometry input set. |
+| `/fsds/steering_angle` | `std_msgs/Float32` | — | ~100 Hz | **Phase 3 (#383).** Front-wheel angle in radians, converted in the bridge from the plugin's normalized [-1, 1] axis input via `max_steering_angle_rad` (default 0.5). Consumed by `sim_supervisor_node` for the kinematic-bicycle yaw cross-check (`ω_pred = (vx/L)·tan(δ)`); residual published on `/odom_diag/yaw_residual_rad_s`. |
+| `/fsds/brake_pressure` | `std_msgs/Float32` | — | ~100 Hz | **Phase 3 (#383).** Commanded brake authority [0, 1]. Echoed from `SensorFrame.brake` (the controls echo back from UE5). Consumed by `sim_supervisor_node` to scale the OdometryFilter's `α_vx` toward zero during brake events (drive wheels potentially locked → RPM unreliable). Effective α published on `/odom_diag/effective_alpha_vx`. |
 | `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | ~100 Hz | **Published but not consumed.** The IFS-08 has no ground-speed sensor; the bridge keeps the topic for backward-compat with code that hasn't migrated yet. New consumers must not depend on it. |
 | `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | **Published but not consumed.** Reserved for future global-localisation work (e.g. GPS-aligned `map` frame); no autonomy node subscribes today. |
 | `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `base_link`) | ~80 Hz | **Diagnostic only.** Ground-truth pose + clean body-frame velocity. Autonomy must not consume it on the production path; consumed only by the GT-as-SLAM diagnostic (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `slam_node`'s GT-aligned residual publisher (`/cone_slam/gt_aligned`, `/cone_slam/gt_error_m`). |
@@ -245,7 +249,7 @@ Architectural choices still being finalised. Listed here because they have downs
 
 | # | Question | Owner |
 |---|---|---|
-| Q1 | **Where does `/odom` come from?** ✅ **Resolved.** Phase 1 (feat/360): `sim_supervisor_node` owns `/odom` topic; filter is IMU + motor RPM only (no GSS — the IFS-08 doesn't have one). Phase 2 (feat/392 — this PR): TF ownership moved — supervisor takes `odom→base_link`, slam_node publishes `map→odom` for drift correction, `/Conos` and `/Path` migrate to map frame, `/cone_slam/state` renamed to `/slam/pose`. Phase 3 brings steering angle + brake pressure in as cross-checks (#383). Implementations in `pipeline/sim_supervisor/sim_supervisor/odometry.py`, `pipeline/cone_slam/cone_slam/tf_math.py`. | DV pipeline |
+| Q1 | **Where does `/odom` come from?** ✅ **Resolved across three phases.** Phase 1 (feat/360): `sim_supervisor_node` owns the `/odom` topic; filter is IMU + motor RPM only (no GSS — the IFS-08 doesn't have one). Phase 2 (feat/392): TF ownership moved — supervisor takes `odom→base_link`, slam_node publishes `map→odom` for drift correction, `/Conos` and `/Path` migrate to map frame, `/cone_slam/state` renamed to `/slam/pose`. Phase 3 (feat/394 — this PR): `/fsds/steering_angle` and `/fsds/brake_pressure` added to the bridge; filter consumes them as kinematic-bicycle yaw cross-check + brake-event α_vx scaling. Diagnostics on `/odom_diag/yaw_residual_rad_s`, `/odom_diag/slip_flag`, `/odom_diag/effective_alpha_vx`. Implementations in `pipeline/sim_supervisor/sim_supervisor/odometry.py` + `tf_math.py`. | DV pipeline |
 | Q2 | **IMU consumption rate inside the OdometryFilter.** Currently subscribes at the BMI088 native rate (400 Hz, deep queue) and integrates every sample. Publish rate to `/odom` is decoupled at 100 Hz. Open question: would downsampling IMU to 100 Hz at the subscription level (matching publish rate) lose meaningful filter quality? Bias estimation during the 3 s stationary window benefits from full-rate sampling; the steady-state predict step likely doesn't need it. **Action:** quantify before tightening — bag a real drive, replay through both 400 Hz and 100 Hz versions of the filter, compare /odom-vs-GT residual. | DV pipeline |
 
 ## Diagnostic tools

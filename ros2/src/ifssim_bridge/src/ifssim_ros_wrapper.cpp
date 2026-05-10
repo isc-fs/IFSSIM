@@ -33,6 +33,15 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     mission_name_ = node_->declare_parameter<std::string>("mission_name", "trackdrive");
     track_name_ = node_->declare_parameter<std::string>("track_name", "A");
     competition_mode_ = node_->declare_parameter<bool>("competition_mode", false);
+    // Maximum front-wheel angle (radians). The UE5 plugin sends
+    // steering as a normalized [-1, 1] axis input through
+    // SensorFrame.steering; we convert to radians at the publish
+    // site so /fsds/steering_angle is in SI units (the contract
+    // sim_supervisor's OdometryFilter expects post-#383). 0.5 rad
+    // matches the IFS-08 URDF rack limit; raise via launch arg if
+    // the plugin's max-axis-to-angle mapping changes.
+    max_steering_angle_rad_ = node_->declare_parameter<double>(
+        "max_steering_angle_rad", 0.5);
     // `lidar_transport` and `lidar_uds_path` parameters were removed in
     // #322. LiDAR is now always UDP via UdpReceiver — #321 marked the
     // TCP and UDS paths soft-deprecated, this PR follows through.
@@ -251,6 +260,22 @@ void IFSSIMRosWrapper::initializePublishers()
     //   v_x = rpm × (2π × WheelRadius / GearRatio) / 60
     // For IFS-08 (WheelRadius=0.228 m, GearRatio=2.909): v ≈ rpm × 0.00821 m/s.
     motor_rpm_pub_ = node_->create_publisher<std_msgs::msg::Float32>("motor_rpm", sensor_qos);
+    // /steering_angle — actual front-wheel angle (rad), converted at
+    // publish time from the SensorFrame.steering normalized [-1, 1]
+    // axis input. Phase 3 (#383) input to sim_supervisor's
+    // OdometryFilter — the kinematic-bicycle yaw prediction
+    //     ω_pred = (v_x / wheelbase) · tan(δ)
+    // gives a cross-check on IMU gyro_z and a slip-detection signal
+    // when residual > threshold.
+    steering_angle_pub_ = node_->create_publisher<std_msgs::msg::Float32>(
+        "steering_angle", sensor_qos);
+    // /brake_pressure — commanded brake authority [0, 1], echoed from
+    // the autonomy's last ControlCommand.brake. Phase 3 (#383) input
+    // to OdometryFilter — when brake > threshold, RPM-derived v_x is
+    // unreliable (drive wheels can lock) and the complementary filter
+    // collapses α_vx toward zero, falling back to IMU integration.
+    brake_pressure_pub_ = node_->create_publisher<std_msgs::msg::Float32>(
+        "brake_pressure", sensor_qos);
     // /tire_loads — vertical load Fz at each wheel [N], order [FL, FR, RL, RR].
     // Sourced from Chaos's per-wheel SpringForce via the plugin RPC, so this
     // is the same Fz the wheel solver is using to compute grip this tick.
@@ -716,6 +741,32 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
             std_msgs::msg::Float32 msg;
             msg.data = f.rpm;
             motor_rpm_pub_->publish(msg);
+        }
+
+        // /steering_angle — front-wheel angle (rad). SensorFrame.steering
+        // is the normalized [-1, 1] axis value the autonomy commanded
+        // through ControlCommand; UE5's vehicle controller renders it
+        // by multiplying with the rack limit. We convert here so
+        // downstream consumers see SI units. Real-car parity: the
+        // IFS-08 reads steering-rack potentiometer on CAN; bridge
+        // publishes the same SI value either way. #383.
+        {
+            std_msgs::msg::Float32 msg;
+            msg.data = static_cast<float>(f.steering * max_steering_angle_rad_);
+            steering_angle_pub_->publish(msg);
+        }
+
+        // /brake_pressure — commanded brake authority [0, 1] echoed
+        // from SensorFrame.brake. Proxy for hydraulic line pressure
+        // in the absence of a Chaos brake-fluid model: when the
+        // autonomy commands brake > threshold the drive wheels can
+        // lock, RPM-derived v_x is no longer reliable, and the
+        // OdometryFilter should fall back to IMU-only integration.
+        // #383.
+        {
+            std_msgs::msg::Float32 msg;
+            msg.data = f.brake;
+            brake_pressure_pub_->publish(msg);
         }
 
         // TF odom → fsds/FSCar — REMOVED in PR #3 of the GLIM rebuild.

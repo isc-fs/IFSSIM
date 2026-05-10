@@ -31,6 +31,11 @@ from sim_supervisor.odometry import (
     OdometryFilter,
     RPM_TO_MS,
     G,
+    ALPHA_VX,
+    ALPHA_VX_BRAKE,
+    BRAKE_LOCKUP_THRESHOLD,
+    SLIP_YAW_RESIDUAL_THRESHOLD,
+    WHEELBASE_M,
 )
 
 
@@ -231,3 +236,107 @@ def test_reset_clears_state(stationary_filter):
     assert s.x == 0.0 and s.y == 0.0
     assert s.vx == 0.0 and s.vy == 0.0
     assert s.yaw == 0.0
+
+
+# ---------------------------------------------------------------------
+# Phase 3 (#383) — steering + brake cross-checks
+# ---------------------------------------------------------------------
+def test_yaw_residual_zero_when_kinematics_match(stationary_filter):
+    """If steering = 0 and gyro_z = 0, predicted yaw rate = 0 and
+    measured yaw rate = 0 → residual should be ~0."""
+    f = stationary_filter
+    accel = np.array([0.0, 0.0, G])
+    gyro = np.zeros(3)
+    # Pin vx to a small non-zero value via RPM so the kinematic-bicycle
+    # prediction has something to multiply (ω_pred = vx/L · tan δ).
+    for i in range(50):
+        f.push_rpm(t=i * 0.0125, rpm=50.0)
+    f.push_steering(t=0.0, angle_rad=0.0)
+    # Drive a few IMU samples; with steering=0 the predicted yaw rate
+    # is zero regardless of vx.
+    t0 = 1500 * 0.0025
+    for i in range(20):
+        f.push_imu(t0 + i * 0.0025, accel, gyro)
+    d = f.diagnostics
+    assert math.isclose(d.yaw_residual_rad_s, 0.0, abs_tol=1e-9)
+    assert d.slip_flag is False
+
+
+def test_yaw_residual_nonzero_under_steering(stationary_filter):
+    """With steering δ != 0 and gyro_z = 0, the kinematic-bicycle
+    prediction gives a non-zero ω_pred — the residual measures the
+    "expected vs measured" turn rate. Slip flag set when residual
+    exceeds the threshold."""
+    f = stationary_filter
+    accel = np.array([0.0, 0.0, G])
+    gyro = np.zeros(3)
+    # Build up vx ≈ 5 m/s by saturating the filter with RPM
+    target_rpm = 556.0  # ≈ 5 m/s at RPM_TO_MS = 0.00821
+    for i in range(200):
+        f.push_rpm(t=i * 0.0125, rpm=target_rpm)
+    # Steer at +0.3 rad (~17°) — kinematic predicts ω = (5/1.55)·tan(0.3) ≈ 1.0 rad/s
+    f.push_steering(t=0.0, angle_rad=0.3)
+    t0 = 1500 * 0.0025
+    for i in range(20):
+        f.push_imu(t0 + i * 0.0025, accel, gyro)
+    d = f.diagnostics
+    expected_pred = (f.state.vx / WHEELBASE_M) * math.tan(0.3)
+    assert math.isclose(d.yaw_residual_rad_s, expected_pred, abs_tol=0.05)
+    # The expected residual ≈ 1.0 rad/s is above the 0.3 rad/s slip
+    # threshold → slip flag should be set.
+    assert d.slip_flag is True
+
+
+def test_brake_collapses_alpha_vx(stationary_filter):
+    """When brake_pressure > BRAKE_LOCKUP_THRESHOLD, the next RPM
+    correction should use ALPHA_VX_BRAKE (not ALPHA_VX)."""
+    f = stationary_filter
+    # Start vx at 0; one RPM correction at normal α gives vx ≈ α·target
+    target_rpm = 100.0
+    target_vx = target_rpm * RPM_TO_MS
+
+    # Push brake above threshold first
+    f.push_brake(t=0.0, brake=0.5)
+    # Now an RPM sample arrives — should apply the brake-α
+    f.push_rpm(t=0.0, rpm=target_rpm)
+    # vx after one correction at α_brake from 0 = α_brake · target
+    assert math.isclose(
+        f.state.vx, ALPHA_VX_BRAKE * target_vx, abs_tol=1e-6,
+    )
+    assert math.isclose(f.diagnostics.effective_alpha_vx, ALPHA_VX_BRAKE, abs_tol=1e-9)
+
+
+def test_brake_release_restores_alpha_vx(stationary_filter):
+    """After brake drops below threshold, α_vx returns to the normal
+    correction strength."""
+    f = stationary_filter
+    target_rpm = 100.0
+    # Brake on, one correction
+    f.push_brake(t=0.0, brake=0.5)
+    f.push_rpm(t=0.0, rpm=target_rpm)
+    # Brake off, second correction — α back to normal
+    f.push_brake(t=0.1, brake=0.0)
+    f.push_rpm(t=0.1, rpm=target_rpm)
+    assert math.isclose(f.diagnostics.effective_alpha_vx, ALPHA_VX, abs_tol=1e-9)
+
+
+def test_brake_below_threshold_uses_normal_alpha(stationary_filter):
+    """Light brake (below BRAKE_LOCKUP_THRESHOLD) doesn't trigger the
+    fallback — we keep the normal α even on partial-brake tickover."""
+    f = stationary_filter
+    f.push_brake(t=0.0, brake=BRAKE_LOCKUP_THRESHOLD - 0.05)
+    f.push_rpm(t=0.0, rpm=100.0)
+    assert math.isclose(f.diagnostics.effective_alpha_vx, ALPHA_VX, abs_tol=1e-9)
+
+
+def test_reset_clears_phase3_state(stationary_filter):
+    """reset() restores steering / brake / diagnostics to defaults."""
+    f = stationary_filter
+    f.push_steering(t=0.0, angle_rad=0.4)
+    f.push_brake(t=0.0, brake=0.7)
+    f.push_rpm(t=0.0, rpm=200.0)
+    assert f.diagnostics.effective_alpha_vx == ALPHA_VX_BRAKE  # under brake
+    f.reset()
+    assert f.diagnostics.effective_alpha_vx == ALPHA_VX        # default
+    assert f.diagnostics.slip_flag is False
+    assert math.isclose(f.diagnostics.yaw_residual_rad_s, 0.0, abs_tol=1e-9)

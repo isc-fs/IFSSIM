@@ -12,6 +12,22 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **/odom Phase 3 — steering_angle + brake_pressure filter inputs**
+  (#383). Bridge publishes two new sensor topics at 100 Hz:
+  `/fsds/steering_angle` (radians, converted from the plugin's
+  normalized [-1, 1] axis via `max_steering_angle_rad`) and
+  `/fsds/brake_pressure` (normalized [0, 1] from the controls echo).
+  `sim_supervisor_node.OdometryFilter` consumes both:
+  kinematic-bicycle yaw cross-check (`ω_pred = (vx/L)·tan(δ)`) for
+  slip detection; brake-event α_vx scaling (collapses RPM correction
+  weight when brake authority > 30 %) for slip-aware longitudinal
+  tracking. Three new diagnostic topics surface the cross-check
+  state: `/odom_diag/yaw_residual_rad_s`, `/odom_diag/slip_flag`,
+  `/odom_diag/effective_alpha_vx`. 6 new unit tests covering yaw
+  residual / brake α-scaling / reset semantics.
+
 ### Changed
 
 - **/odom Phase 2 — REP-105 TF restructure** (#382). `sim_supervisor_node`

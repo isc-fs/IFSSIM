@@ -104,6 +104,40 @@ CALIBRATION_SECONDS: float = 3.0
 # average out RPM quantisation noise.
 ALPHA_VX: float = 0.10
 
+# Phase 3 (#383) — wheelbase used in the kinematic-bicycle yaw
+# prediction:
+#     ω_pred = (v_x / wheelbase) · tan(δ)
+# Compared against IMU gyro_z to publish a yaw residual diagnostic +
+# detect lateral-slip events. 1.55 m matches the IFS-08 URDF
+# (pipeline/coche_urdf/urdf/ifs_08.urdf rear-axle-midpoint origin to
+# front-axle midpoint via the steer-link positions).
+WHEELBASE_M: float = 1.55
+
+# Brake-pressure threshold above which RPM is considered unreliable
+# (drive wheels potentially locked). When exceeded the complementary
+# filter's α_vx is scaled toward zero so vx integration tracks the
+# IMU prediction rather than the RPM-derived target. 0.30 (30 % brake
+# command) is a deliberately conservative floor — light braking
+# during throttle-off doesn't trigger fallback; only meaningful
+# brake authority does.
+BRAKE_LOCKUP_THRESHOLD: float = 0.30
+
+# α_vx multiplier when brake pressure exceeds BRAKE_LOCKUP_THRESHOLD.
+# 0.0 = ignore RPM entirely during brake events; 1.0 = trust RPM as
+# normal. 0.05 keeps a small residual pull toward RPM (so the filter
+# eventually re-converges after the brake event) but lets IMU
+# integration dominate during the slip window.
+ALPHA_VX_BRAKE: float = 0.05
+
+# Maximum allowed RPM-vs-steering-prediction disagreement before a
+# scan is flagged as a slip event. The OdometryFilter doesn't act on
+# the flag itself (that's for downstream consumers + diagnostics); it
+# just publishes the residual on /odom_diag/yaw_residual via the
+# supervisor. 0.3 rad/s ≈ 17 °/s — comfortably above sensor noise
+# but well below the steering-angle-range × wheelbase product would
+# imply at typical FS speeds.
+SLIP_YAW_RESIDUAL_THRESHOLD: float = 0.3
+
 # Body-frame lateral-velocity decay per IMU step. The kinematic
 # bicycle assumes vy ≈ 0 in clean rolling regimes; this slow leak
 # pulls vy toward zero, with the IMU accel-y prediction term still
@@ -129,6 +163,28 @@ class OdometryState:
     vx: float = 0.0
     vy: float = 0.0
     yaw_rate: float = 0.0
+
+
+@dataclass
+class FilterDiagnostics:
+    """Phase 3 (#383) — cross-check residuals the supervisor surfaces
+    on /odom_diag/* for tuning + slip detection. Populated each IMU
+    tick when both steering and IMU samples are fresh.
+    """
+
+    # ω_pred - ω_measured, where ω_pred = (vx/L)·tan(δ).
+    # Persistent non-zero residual = car is sliding (yaw rate from
+    # IMU differs from what steering geometry would predict).
+    yaw_residual_rad_s: float = 0.0
+
+    # True iff |yaw_residual| > SLIP_YAW_RESIDUAL_THRESHOLD on the
+    # latest tick. Sticky-latched would be a nicer downstream signal;
+    # this is the raw per-tick truth (downstream consumers can debounce).
+    slip_flag: bool = False
+
+    # Effective α_vx applied to the most recent RPM correction. Drops
+    # toward ALPHA_VX_BRAKE when brake_pressure > threshold.
+    effective_alpha_vx: float = ALPHA_VX
 
 
 @dataclass
@@ -174,21 +230,38 @@ class OdometryFilter:
         calibration_seconds: float = CALIBRATION_SECONDS,
         alpha_vx: float = ALPHA_VX,
         beta_vy_leak: float = BETA_VY_LEAK,
+        wheelbase_m: float = WHEELBASE_M,
+        brake_lockup_threshold: float = BRAKE_LOCKUP_THRESHOLD,
+        alpha_vx_brake: float = ALPHA_VX_BRAKE,
+        slip_yaw_residual_threshold: float = SLIP_YAW_RESIDUAL_THRESHOLD,
     ) -> None:
         self._rpm_to_ms = rpm_to_ms
         self._rpm_stale_s = rpm_stale_s
         self._calibration_seconds = calibration_seconds
         self._alpha_vx = alpha_vx
         self._beta_vy_leak = beta_vy_leak
+        self._wheelbase_m = wheelbase_m
+        self._brake_lockup_threshold = brake_lockup_threshold
+        self._alpha_vx_brake = alpha_vx_brake
+        self._slip_yaw_residual_threshold = slip_yaw_residual_threshold
 
         self._state = OdometryState()
         self._calib = _Calibration()
+        self._diag = FilterDiagnostics(effective_alpha_vx=alpha_vx)
 
         # Last-seen timestamps. Wall-clock for RPM staleness, IMU
         # timestamp for integration dt.
         self._t_imu_last: Optional[float] = None
         self._t_rpm_last: Optional[float] = None
         self._latest_rpm_vx: Optional[float] = None
+
+        # Phase 3 (#383) inputs — latest steering angle (rad) +
+        # brake authority [0, 1]. Updated by push_steering / push_brake
+        # from the bridge's /fsds/steering_angle and /fsds/brake_pressure
+        # topics. Default zero is the safe assumption when no samples
+        # have arrived yet (straight-ahead, no brake).
+        self._latest_steering_rad: float = 0.0
+        self._latest_brake: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -197,6 +270,12 @@ class OdometryFilter:
     def state(self) -> OdometryState:
         return self._state
 
+    @property
+    def diagnostics(self) -> FilterDiagnostics:
+        """Phase 3 cross-check residuals (yaw residual + slip flag +
+        effective α_vx). Published by sim_supervisor on /odom_diag/*."""
+        return self._diag
+
     def is_calibrated(self) -> bool:
         return self._calib.completed
 
@@ -204,9 +283,12 @@ class OdometryFilter:
         """Tear down all state. Used on lifecycle on_cleanup."""
         self._state = OdometryState()
         self._calib = _Calibration()
+        self._diag = FilterDiagnostics(effective_alpha_vx=self._alpha_vx)
         self._t_imu_last = None
         self._t_rpm_last = None
         self._latest_rpm_vx = None
+        self._latest_steering_rad = 0.0
+        self._latest_brake = 0.0
 
     def push_imu(
         self,
@@ -276,6 +358,24 @@ class OdometryFilter:
         self._state.x += (c * self._state.vx - s * self._state.vy) * dt
         self._state.y += (s * self._state.vx + c * self._state.vy) * dt
 
+        # Phase 3 (#383): kinematic-bicycle yaw-rate cross-check.
+        # Predicted yaw rate from current vx + steering angle:
+        #     ω_pred = (v_x / wheelbase) · tan(δ)
+        # Residual = ω_pred - ω_measured (IMU gyro_z). Persistent
+        # non-zero residual = the car is sliding (real ω diverges
+        # from kinematic prediction). Publishes via .diagnostics —
+        # supervisor surfaces on /odom_diag/yaw_residual.
+        if self._wheelbase_m > 1e-3:
+            yaw_rate_pred = (
+                self._state.vx / self._wheelbase_m
+                * math.tan(self._latest_steering_rad)
+            )
+            self._diag.yaw_residual_rad_s = yaw_rate_pred - self._state.yaw_rate
+            self._diag.slip_flag = (
+                abs(self._diag.yaw_residual_rad_s)
+                > self._slip_yaw_residual_threshold
+            )
+
     def push_rpm(self, t: float, rpm: float) -> None:
         """Ingest one motor-RPM sample. Called from the RPM
         subscription callback (~80 Hz). t is wall-clock seconds; we
@@ -289,11 +389,45 @@ class OdometryFilter:
         if not self._calib.completed:
             return
 
+        # Phase 3 (#383): scale α_vx down when brake authority is high
+        # (drive wheels potentially locked → RPM unreliable). The
+        # filter falls back to IMU integration during the slip window;
+        # vx re-converges to RPM after brake releases.
+        if self._latest_brake > self._brake_lockup_threshold:
+            alpha = self._alpha_vx_brake
+        else:
+            alpha = self._alpha_vx
+        self._diag.effective_alpha_vx = alpha
+
         # Apply the complementary-filter correction immediately on
         # arrival rather than waiting for the next IMU step. RPM is
         # the slower input; deferring would add latency.
         residual = self._latest_rpm_vx - self._state.vx
-        self._state.vx += self._alpha_vx * residual
+        self._state.vx += alpha * residual
+
+    def push_steering(self, t: float, angle_rad: float) -> None:
+        """Ingest one steering-angle sample (#383). Called from the
+        sim_supervisor /fsds/steering_angle subscription. Stored as
+        the latest input to the kinematic-bicycle yaw cross-check in
+        push_imu. No state mutation here — the prediction lives in
+        push_imu so it stays time-aligned with the IMU gyro_z it's
+        compared against."""
+        del t  # currently only the value matters; staleness not gated
+        self._latest_steering_rad = float(angle_rad)
+
+    def push_brake(self, t: float, brake: float) -> None:
+        """Ingest one brake-pressure sample (#383). Called from the
+        sim_supervisor /fsds/brake_pressure subscription. Stored as
+        the latest input to the α_vx scaling in push_rpm; clamped to
+        [0, 1] defensively even though the bridge enforces the
+        normalisation."""
+        del t
+        b = float(brake)
+        if b < 0.0:
+            b = 0.0
+        elif b > 1.0:
+            b = 1.0
+        self._latest_brake = b
 
     # ------------------------------------------------------------------
     # Internal — calibration
