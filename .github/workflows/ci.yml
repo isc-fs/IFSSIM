@@ -214,10 +214,14 @@ jobs:
   # even when one of the needed jobs failed, so a red gate still
   # gets a comment listing which job is the blocker.
   #
+  # The status-glyph mapping is built in a bash step rather than
+  # inline ${{ }} expressions because GitHub Actions' expression
+  # language doesn't support nested ternaries reliably (and `+`
+  # isn't a string-concat operator there). Cleanest separation: bash
+  # builds the markdown, sticky-pull-request-comment posts it.
+  #
   # Permissions: pull-requests:write is the minimum needed to post
-  # and edit the comment. The default GITHUB_TOKEN doesn't grant
-  # this on PRs from forks; this still works on same-repo PRs (the
-  # only kind we currently get).
+  # and edit the comment.
   # ---------------------------------------------------------------
   ci-summary:
     name: CI summary
@@ -227,21 +231,63 @@ jobs:
     permissions:
       pull-requests: write
     steps:
+      - name: Build status table
+        id: build
+        env:
+          BRIDGE_RESULT:    ${{ needs.bridge-build.result }}
+          FRONTEND_RESULT:  ${{ needs.frontend.result }}
+          BACKEND_RESULT:   ${{ needs.backend.result }}
+          TRACKS_RESULT:    ${{ needs.tracks.result }}
+          LINKS_RESULT:     ${{ needs.links.result }}
+          HEAD_SHA:         ${{ github.event.pull_request.head.sha }}
+          RUN_ID:           ${{ github.run_id }}
+          SERVER_URL:       ${{ github.server_url }}
+          REPO:             ${{ github.repository }}
+          WORKFLOW:         ${{ github.workflow }}
+          HEAD_REF:         ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          # Map a job-result word to a glyph + label. Bash makes the
+          # nesting trivial; ${{ }} expressions don't.
+          glyph() {
+            case "$1" in
+              success)   echo "✅ pass" ;;
+              failure)   echo "❌ failure" ;;
+              cancelled) echo "🚫 cancelled" ;;
+              skipped)   echo "⏭ skip" ;;
+              *)         echo "⚠ $1" ;;
+            esac
+          }
+
+          BRIDGE_GLYPH=$(glyph "$BRIDGE_RESULT")
+          FRONTEND_GLYPH=$(glyph "$FRONTEND_RESULT")
+          BACKEND_GLYPH=$(glyph "$BACKEND_RESULT")
+          TRACKS_GLYPH=$(glyph "$TRACKS_RESULT")
+          LINKS_GLYPH=$(glyph "$LINKS_RESULT")
+
+          # GITHUB_OUTPUT multi-line value protocol: <key><<DELIM ... DELIM
+          # See https://docs.github.com/actions/using-workflows/workflow-commands-for-github-actions#multiline-strings
+          {
+            echo "message<<__SUMMARY_END__"
+            echo "## CI status — last commit \`${HEAD_SHA:0:7}\`"
+            echo ""
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| Bridge — colcon build | ${BRIDGE_GLYPH} |"
+            echo "| Mission Control — frontend | ${FRONTEND_GLYPH} |"
+            echo "| Mission Control — backend | ${BACKEND_GLYPH} |"
+            echo "| Tracks — CSV validator | ${TRACKS_GLYPH} |"
+            echo "| Docs — markdown link checker | ${LINKS_GLYPH} |"
+            echo ""
+            echo "<sub>Run [\`${RUN_ID}\`](${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}) · workflow \`${WORKFLOW}\` · branch \`${HEAD_REF}\`</sub>"
+            echo "__SUMMARY_END__"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Sticky CI status comment
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           # `header` keys the comment so subsequent runs edit the
           # same one rather than appending new comments.
           header: ci-status
-          message: |
-            ## CI status — last commit `${{ github.event.pull_request.head.sha }}`
-
-            | Job | Result |
-            |---|---|
-            | Bridge — colcon build | ${{ needs.bridge-build.result == 'success' && '✅ pass' || (needs.bridge-build.result == 'skipped' && '⏭ skip' || '❌ ' + needs.bridge-build.result) }} |
-            | Mission Control — frontend | ${{ needs.frontend.result == 'success' && '✅ pass' || (needs.frontend.result == 'skipped' && '⏭ skip' || '❌ ' + needs.frontend.result) }} |
-            | Mission Control — backend | ${{ needs.backend.result == 'success' && '✅ pass' || (needs.backend.result == 'skipped' && '⏭ skip' || '❌ ' + needs.backend.result) }} |
-            | Tracks — CSV validator | ${{ needs.tracks.result == 'success' && '✅ pass' || (needs.tracks.result == 'skipped' && '⏭ skip' || '❌ ' + needs.tracks.result) }} |
-            | Docs — markdown link checker | ${{ needs.links.result == 'success' && '✅ pass' || (needs.links.result == 'skipped' && '⏭ skip' || '❌ ' + needs.links.result) }} |
-
-            <sub>Run [`${{ github.run_id }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) · workflow `${{ github.workflow }}` · branch `${{ github.head_ref }}`</sub>
+          message: ${{ steps.build.outputs.message }}
