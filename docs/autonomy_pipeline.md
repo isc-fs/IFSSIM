@@ -129,8 +129,9 @@ flowchart TB
     mm -. "change_state" .-> slam
     mm -. "change_state" .-> plan
     mm -. "change_state" .-> ctrl
-    ctrl -- "control commands<br/>(throttle/steer)" --> mcn
-    slam -- "emergency / finished" --> mcn
+    ctrl -- "<b>/ctrl/cmd_internal</b><br/>fs_msgs/ControlCommand @ 40 Hz" --> mcn
+    ctrl -- "<b>/ctrl/emergency</b><br/>std_msgs/Bool (latched)" --> mcn
+    slam -- "<b>/slam/finished</b><br/>std_msgs/Bool (latched)" --> mcn
 
     %% =====================================================================
     %% SIM-SIDE OUTPUT: sim_supervisor → bridge → FSDS
@@ -186,11 +187,21 @@ The submodule's autonomy stack does **not** publish actuator commands directly t
 
 | Topic | Type | Publisher | Notes |
 |---|---|---|---|
-| `/fsds/control_command` | `fs_msgs/ControlCommand` | `sim_supervisor_node` | Throttle / regen / steering. The bridge subscribes; `control_node` does **not** publish here directly. |
-| `/signal/ebs` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS trigger. |
-| `/signal/ebs_reset` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS reset on autonomy boot. |
+| `/fsds/control_command` | `fs_msgs/ControlCommand` | `sim_supervisor_node` | Throttle / regen / steering. The bridge subscribes; `control_node` does **not** publish here directly — its output flows through `/ctrl/cmd_internal` → RuntimeControl action → supervisor (#384). |
+| `/signal/ebs` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS trigger. Latched on the rising edge of RuntimeControl `Feedback.emergency`. Post-#384 the autonomy never publishes here directly. |
+| `/signal/ebs_reset` (latched) | `std_msgs/Empty` | `sim_supervisor_node` | EBS reset on supervisor activate (mirrors uDV power-up). Post-#384 the autonomy never publishes here directly. |
 
 The bridge tolerates startup-time absence of `/fsds/control_command` until Phase 1 of the runtime action protocol reports `ready` — actuator commands only start flowing after the autonomy lifecycle has fully come up.
+
+### Autonomy-internal actuator topics (control_node → mission_control_node)
+
+These topics live inside the autonomy submodule and exist to drive the RuntimeControl action's Feedback frames. The supervisor never subscribes to them directly — `mission_control_node` aggregates them and surfaces them as RuntimeControl `Feedback` per tick.
+
+| Topic | Type | Publisher | Subscriber | Notes |
+|---|---|---|---|---|
+| `/ctrl/cmd_internal` | `fs_msgs/ControlCommand` | `control_node` | `mission_control_node` | Per-tick throttle / steering / brake from the controller, 40 Hz. Renamed from `/control_command` in #384 so the bridge can never accidentally re-subscribe to the autonomy's pre-aggregation source. |
+| `/ctrl/emergency` (latched) | `std_msgs/Bool` | `control_node` | `mission_control_node` | EBS request. `mission_control_node` surfaces a rising edge as `Feedback.emergency=true`; the supervisor then latches `/signal/ebs`. Default-false latched at controller activate so a late mcn subscription sees a defined state. |
+| `/slam/finished` (latched) | `std_msgs/Bool` | `slam_node` | `mission_control_node` | Mission-completion signal. Surfaced as `Feedback.finished=true`; mission_control then terminates the RuntimeControl action with `outcome="finished"`. Currently a stub (always false) — wiring the actual lap-min-distance + big-orange detector to flip it is a follow-up. |
 
 ### Runtime action protocol (sim_supervisor ↔ mission_control)
 
@@ -200,13 +211,13 @@ The control loop is a two-phase ROS Action exchange between `sim_supervisor_node
 
 If the operator changes the mission during this window (e.g. switches accel → skidpad), the in-flight startup is cancellable and the system can re-enter Phase 1 for the new mission without a full restart.
 
-**Phase 2 — runtime.** Once Phase 1 reports `ready`, a second Action between the same two nodes carries:
+**Phase 2 — runtime.** Once Phase 1 reports `ready`, the supervisor opens a `RuntimeControl` Action against `mission_control_node` and `mission_control_node` streams `Feedback` frames back at 40 Hz, sourced from:
 
-- `throttle`, `steering` — the normal control commands, sourced from the autonomy's `control_node`.
-- `emergency` — flag for emergency braking. Sourced from `slam_node` or any node detecting an unrecoverable state.
-- `finished` — flag for "mission completed", sourced from `slam_node` (e.g. on big-orange detection past the lap-min-distance gate).
+- `throttle`, `steering` — `/ctrl/cmd_internal` (`fs_msgs/ControlCommand`) from `control_node`.
+- `emergency` — latched `/ctrl/emergency` (`std_msgs/Bool`) from `control_node` (any node detecting an unrecoverable state would publish here).
+- `finished` — latched `/slam/finished` (`std_msgs/Bool`) from `slam_node` (e.g. on big-orange detection past the lap-min-distance gate).
 
-The supervisor publishes the resulting commands to `/fsds/control_command` for the bridge to forward to FSDS. On the real car, the same commands go from `mission_control_node` to the physical uDV via standard ROS 2 client calls (microROS over USB CDC), and `sim_supervisor_node` doesn't run.
+The supervisor's `RuntimeControl` feedback callback republishes each frame onto `/fsds/control_command` for the bridge to forward to FSDS, and latches `/signal/ebs` on the rising edge of `Feedback.emergency`. The action terminates with `outcome="finished"` / `"emergency"` / `"cancelled"`; the cancelled path is what runs when the operator presses Stop Session in Mission Control (the web backend sends StartMission with mission=""). On the real car, the same Action runs between `mission_control_node` and the physical uDV via microROS over USB CDC, and `sim_supervisor_node` doesn't run.
 
 ### Mission-control-web → mission management
 
