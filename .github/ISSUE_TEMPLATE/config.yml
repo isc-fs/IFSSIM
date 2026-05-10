@@ -1,0 +1,13 @@
+# Disable blank issues so reporters land on the templated forms below.
+# Branch-tracking issues created by `.github/workflows/branch-issue.yml`
+# are not affected — those bypass templates entirely (they're created
+# by a workflow, not by a human filling in a form).
+blank_issues_enabled: false
+
+contact_links:
+  - name: "I want to drive the sim"
+    url: https://github.com/isc-fs/IFSSIM/blob/dev/docs/QUICKSTART.md
+    about: 15-minute first-run guide. Most usage questions are answered there.
+  - name: "How does X work? (sensors / RPC / topics / scoring / …)"
+    url: https://github.com/isc-fs/IFSSIM/blob/dev/docs/FUNCTIONALITIES.md
+    about: The full technical reference. Likely answers your question before you file an issue.
