@@ -1,0 +1,86 @@
+name: Package Windows Build
+
+# Mirrors package-mac.yml / package-linux.yml for Win64. Triggered
+# on version tags (e.g. v1.0.0) or when a GitHub Release is
+# manually created. Output is attached to the same Release as the
+# Mac and Linux archives.
+#
+# Requires a self-hosted runner labelled "windows" with UE5 5.7
+# and Visual Studio 2022 (C++ workload) installed. UE5 cannot
+# cross-compile to Windows from any other host, so this genuinely
+# needs a Windows machine.
+#
+# To register the runner: Settings → Actions → Runners → New
+# self-hosted runner → Windows. Set UE5_ROOT in its env (e.g.
+# C:\Program Files\Epic Games\UE_5.7).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  release:
+    types: [created]
+
+jobs:
+  package:
+    runs-on: [self-hosted, Windows]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Resolve UE5 root
+        id: ue5
+        shell: pwsh
+        run: |
+          $Root = if ($env:UE5_ROOT) { $env:UE5_ROOT } else { "C:\Program Files\Epic Games\UE_5.7" }
+          $RunUAT = Join-Path $Root "Engine\Build\BatchFiles\RunUAT.bat"
+          if (-not (Test-Path $RunUAT)) {
+              Write-Error "UE5 not found at '$Root'. Set UE5_ROOT on the runner."
+              exit 1
+          }
+          "root=$Root" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Package (BuildCookRun, Win64 Shipping)
+        shell: pwsh
+        run: |
+          $RunUAT = Join-Path "${{ steps.ue5.outputs.root }}" "Engine\Build\BatchFiles\RunUAT.bat"
+          & $RunUAT BuildCookRun `
+            -project="$env:GITHUB_WORKSPACE\IFSSIM.uproject" `
+            -platform=Win64 `
+            -clientconfig=Shipping `
+            -cook -build -stage -pak `
+            -archive `
+            -archivedirectory="$env:GITHUB_WORKSPACE\Packaged" `
+            -noP4 -utf8output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage tracks alongside binary
+        shell: pwsh
+        run: |
+          $TracksDst = Join-Path $env:GITHUB_WORKSPACE "Packaged\Windows\tracks"
+          New-Item -ItemType Directory -Force -Path $TracksDst | Out-Null
+          Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE "Content\tracks\*.csv") `
+                    -Destination $TracksDst -Force
+          Get-ChildItem $TracksDst
+
+      - name: Zip artifact
+        id: zip
+        shell: pwsh
+        run: |
+          $Version = "${{ github.ref_name }}"
+          $ZipName = "IFSSIM-$Version-windows.zip"
+          $ZipPath = Join-Path $env:GITHUB_WORKSPACE $ZipName
+          Compress-Archive -Path (Join-Path $env:GITHUB_WORKSPACE "Packaged\Windows\*") `
+                           -DestinationPath $ZipPath -Force
+          "name=$ZipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.zip.outputs.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

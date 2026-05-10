@@ -87,9 +87,21 @@ Every PR to `dev` or `main` runs through a four-job CI suite (`.github/workflows
 | **Mission Control — backend** | `compileall` syntax check, `pytest` for `track_validators` + `scoring` (pure-Python unit tests, ~70 cases) | every PR |
 | **Tracks — CSV validator** | every `Content/tracks/*.csv` parses (correct field count, known cone types, numeric coordinates within ±500 m) | every PR |
 
-A separate workflow (`.github/workflows/plugin-cook.yml`) runs the **full UE5 `BuildCookRun`** on a self-hosted Mac runner with UE5 5.7 installed — but only for PRs that touch `Plugins/`, `Config/`, `Content/`, the `.uproject`, or `package_mac.sh`. PRs that don't touch the UE5 side (e.g. bridge-only or Mission Control-only changes) skip it entirely.
+### Release pipelines (per-platform)
 
-> **Setup note:** the plugin-cook workflow needs a self-hosted Mac runner registered at **Settings → Actions → Runners → New self-hosted runner**, with `UE5_ROOT` set in its env (default `/Users/Shared/Epic Games/UE_5.7`). Same runner the existing `package-mac.yml` (release-on-tag) workflow uses. Until the runner is registered, `plugin-cook` runs as `continue-on-error: true` — visible in PR checks but non-blocking. Once a runner exists, drop that flag to make it a hard gate.
+Three workflows produce shipping builds when a version tag (e.g. `v0.1.0`) is pushed. All run on **self-hosted runners** because UE5 5.7 must be installed on the host — there's no GitHub-hosted runner with UE5 pre-baked, and installing the engine per-run is impractical.
+
+| Workflow | Runner label | Requirements | Local-dev script |
+|---|---|---|---|
+| `package-mac.yml` | `[self-hosted, macOS]` | UE5 5.7 + Mac codesigning identity | `./package_mac.sh` |
+| `package-linux.yml` | `[self-hosted, Linux]` | UE5 5.7 (Linux clone of UnrealEngine, built from source — Epic doesn't ship a Linux binary) | `./package_linux.sh` |
+| `package-windows.yml` | `[self-hosted, Windows]` | UE5 5.7 + Visual Studio 2022 (C++ workload) | `./package_windows.ps1` |
+
+Each runner needs `UE5_ROOT` exported in its env (e.g. `/Users/Shared/Epic Games/UE_5.7` on Mac, `/opt/UE_5.7` on Linux, `C:\Program Files\Epic Games\UE_5.7` on Windows). Register at **Settings → Actions → Runners → New self-hosted runner**.
+
+The local-dev scripts (`package_mac.sh`, `package_linux.sh`, `package_windows.ps1`) produce the same staged distribution shape — `Saved/StagedBuilds/<Platform>/` with the binary, `tracks/` sibling directory, patched `UECommandLine.txt`. They run on the corresponding host platform; `package_linux.sh` can also cross-compile from a macOS dev box if Epic's Linux Clang Toolchain is installed (set `LINUX_MULTIARCH_ROOT`).
+
+**No self-hosted runners registered yet?** That's OK. The CI gate above (Bridge / Frontend / Backend / Tracks) runs on free GitHub-hosted runners and protects every PR. The release workflows just sit idle until a tag is pushed AND a runner is online — without runners, tag pushes won't produce release artefacts but won't break anything either.
 
 ### Running CI locally
 
