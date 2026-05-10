@@ -202,3 +202,46 @@ jobs:
             ./CHANGELOG.md
             ./docs/**/*.md
           fail: true
+
+  # ---------------------------------------------------------------
+  # Sticky PR comment — aggregate the five gating jobs above into a
+  # single status table that's edited in place on every push. Saves
+  # reviewers the tab-switch to the Checks page; one always-current
+  # comment shows the entire gate at a glance.
+  #
+  # Only runs on pull_request events (not on push to dev/main —
+  # there's no PR to comment on). `if: always()` makes the job fire
+  # even when one of the needed jobs failed, so a red gate still
+  # gets a comment listing which job is the blocker.
+  #
+  # Permissions: pull-requests:write is the minimum needed to post
+  # and edit the comment. The default GITHUB_TOKEN doesn't grant
+  # this on PRs from forks; this still works on same-repo PRs (the
+  # only kind we currently get).
+  # ---------------------------------------------------------------
+  ci-summary:
+    name: CI summary
+    needs: [bridge-build, frontend, backend, tracks, links]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Sticky CI status comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          # `header` keys the comment so subsequent runs edit the
+          # same one rather than appending new comments.
+          header: ci-status
+          message: |
+            ## CI status — last commit `${{ github.event.pull_request.head.sha }}`
+
+            | Job | Result |
+            |---|---|
+            | Bridge — colcon build | ${{ needs.bridge-build.result == 'success' && '✅ pass' || (needs.bridge-build.result == 'skipped' && '⏭ skip' || '❌ ' + needs.bridge-build.result) }} |
+            | Mission Control — frontend | ${{ needs.frontend.result == 'success' && '✅ pass' || (needs.frontend.result == 'skipped' && '⏭ skip' || '❌ ' + needs.frontend.result) }} |
+            | Mission Control — backend | ${{ needs.backend.result == 'success' && '✅ pass' || (needs.backend.result == 'skipped' && '⏭ skip' || '❌ ' + needs.backend.result) }} |
+            | Tracks — CSV validator | ${{ needs.tracks.result == 'success' && '✅ pass' || (needs.tracks.result == 'skipped' && '⏭ skip' || '❌ ' + needs.tracks.result) }} |
+            | Docs — markdown link checker | ${{ needs.links.result == 'success' && '✅ pass' || (needs.links.result == 'skipped' && '⏭ skip' || '❌ ' + needs.links.result) }} |
+
+            <sub>Run [`${{ github.run_id }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) · workflow `${{ github.workflow }}` · branch `${{ github.head_ref }}`</sub>
