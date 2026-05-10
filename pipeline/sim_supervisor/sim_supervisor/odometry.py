@@ -56,14 +56,34 @@ from typing import Optional
 import numpy as np
 
 
-# Motor-RPM → body-frame longitudinal velocity. Lifted verbatim from
-# cone_graph_slam_node.py — the 2026-04-28 empirical constant computed
-# against trackA_manual_001602's GT odometry across 7000+ motion
-# samples. The doc-derived value (0.00821) was 8.6 % too low; this is
-# the correction. Re-derive in Phase 3 against fresh GT once the new
-# /odom topic exists and we can compare /odom.twist.linear.x to
-# /fsds/testing_only/odom.twist.linear.x directly.
-RPM_TO_MS: float = 0.00898
+# Motor-RPM → body-frame longitudinal velocity.
+#
+# 2026-05-10 re-derivation (issue #380): bagged /odom and
+# /testing_only/odom over a 41 s motion window on test_submodule.csv,
+# paired GT vs filter-output samples within ±50 ms windows, computed
+# mean(|GT.vx|) / mean(|/odom.vx|) = 0.9140 across 3324 paired
+# samples (p10=0.898, p90=0.944, spread 0.046 — tight, steady).
+# Implies CURRENT 0.00898 produces a +9.4 % vx overestimate. New
+# constant 0.00898 × 0.9140 = 0.00821.
+#
+# This recovers exactly the doc-derived value from
+# docs/dv_pipeline_rebuild.md §3.5:
+#     RPM_TO_MS = (2π × WheelRadius / GearRatio) / 60
+#               = (2π × 0.228   / 2.909      ) / 60
+#               = 0.00821
+# i.e. (2π·r_wheel) / (gearratio·60) — pure geometry. The 2026-04-28
+# adjustment to 0.00898 measured raw RPM×const against GT (no filter
+# in between); the lap bag this time measured filter-output vs GT,
+# which is the closed-loop quantity that actually matters for /odom
+# users. Both are valid measurements; the closed-loop one wins for
+# consumer-facing accuracy.
+#
+# slam_node uses this same constant as a velocity prior in iSAM2;
+# the prior factor's covariance lets cone observations correct the
+# small residual bias, so reverting to 0.00821 doesn't hurt SLAM
+# either (its observed 4.6 % path-length error in #378 was dominated
+# by yaw drift and DA cascades, not the velocity prior magnitude).
+RPM_TO_MS: float = 0.00821
 
 # Drop motor-RPM samples this old (seconds). Sustained staleness means
 # the bridge stopped publishing; fall back to IMU-only prediction

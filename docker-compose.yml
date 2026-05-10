@@ -130,15 +130,19 @@ services:
       # Redirected here via NUMBA_CACHE_DIR above so slam, control, and
       # path_planning (including the vendored fsd_path_planning) all share it.
       - numba_cache:/numba_cache
-      # Shared pipeline control flag — backend writes here to start/stop the pipeline
-      - pipeline_ctrl:/pipeline_ctrl
+      # `pipeline_ctrl` shared-volume mount removed in #381. Pre-feat/389
+      # the backend wrote `/pipeline_ctrl/enable` to start the autonomy
+      # and entrypoint.sh polled for it; that flag-file mechanism is
+      # retired in favour of the StartMission action chain (sup ↔ mcn
+      # ↔ mode_manager). Mission Control's /api/event/start and
+      # /api/pipeline/start now use rclpy actions exclusively.
       # Bind-mount each ROS package over the image's COPY'd baseline so host
       # source is the source of truth at runtime. Image-time `colcon build
       # --symlink-install` produced an install/ tree whose Python entries are
       # symlinks back to /dv_pipeline_stack_ws/src/<pkg>/...; with these
       # bind-mounts those symlinks now resolve to live host code. Edit a
-      # Python file, restart the pipeline (toggle the pipeline_ctrl flag),
-      # and the change is in effect — no `docker cp`, no image rebuild.
+      # Python file, restart the container, and the change is in effect —
+      # no `docker cp`, no image rebuild.
       #
       # Caveats (set DV_REBUILD_ON_STARTUP=true or run colcon build via
       # `docker compose exec dv_pipeline_stack` for these):
@@ -235,7 +239,8 @@ services:
       - IFSSIM_MC_CORS_ORIGINS=${IFSSIM_MC_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     volumes:
       - ./Content/tracks:/tracks
-      - pipeline_ctrl:/pipeline_ctrl
+      # `pipeline_ctrl` shared-volume mount removed in #381 — flag-file
+      # path retired; autonomy bring-up is via StartMission action chain.
       - ./tools/random-track-generator:/track_gen:ro
     mem_limit: 512m
     memswap_limit: 512m
@@ -280,4 +285,7 @@ services:
 
 volumes:
   numba_cache:
-  pipeline_ctrl:
+  # `pipeline_ctrl` named volume removed in #381 — see the mount-site
+  # comments above for context. Existing `pipeline_ctrl` volumes on
+  # developer machines can be reclaimed with `docker volume rm
+  # ifssim_pipeline_ctrl` after this commit lands; harmless if left.
