@@ -1,0 +1,86 @@
+# Pre-commit hooks — run the same checks CI runs, locally, before
+# you push. Fewer red-CI cycles, faster feedback loop.
+#
+# Install once per machine:
+#     pip install pre-commit
+#     pre-commit install
+#
+# After `pre-commit install`, every `git commit` runs these hooks
+# against staged files. To skip in an emergency: `git commit -n`
+# (the next push will still hit CI's full version).
+#
+# To run all hooks against all files (e.g. after a rebase):
+#     pre-commit run --all-files
+
+# Pin to a recent format version so 'pre-commit autoupdate' tracks
+# from a known baseline.
+default_language_version:
+  python: python3
+
+repos:
+  # ---------------------------------------------------------------
+  # Repo hygiene — cheap, broadly useful checks.
+  # ---------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        # Spare *.usf and *.uasset — UE5 shaders sometimes have
+        # trailing whitespace by convention; .uasset is binary.
+        exclude: '\.(usf|uasset)$'
+      - id: end-of-file-fixer
+        exclude: '\.(usf|uasset|csv)$'
+      - id: check-yaml
+        # GitHub Actions uses GitHub-Flavored YAML which extends the
+        # spec slightly; --unsafe lets the parser accept it.
+        args: [--unsafe]
+      - id: check-added-large-files
+        # Default is 500 KB; bump to 5 MB so committed cooked
+        # binaries / model assets don't trip without warning.
+        args: [--maxkb=5000]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: '\.(ps1|bat|cmd)$'  # Windows scripts can keep CRLF
+
+  # ---------------------------------------------------------------
+  # Python — same lints CI runs in the backend job.
+  # ruff is fast (Rust); covers most of what flake8/isort/pyupgrade
+  # would, in one tool. Only checks files under tools/ + tests/ so
+  # the random-track-generator / autonomy submodule (different
+  # owners) aren't touched.
+  # ---------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        files: '^(tools/|tests/)'
+        args: [--fix]
+      - id: ruff-format
+        files: '^(tools/|tests/)'
+
+  # ---------------------------------------------------------------
+  # Frontend — local mirror of the CI lint job. We use a `local`
+  # repo so pre-commit invokes the project's own ESLint installed
+  # via package-lock.json (matches CI exactly), rather than a
+  # separately versioned ESLint that might disagree.
+  # ---------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: eslint-frontend
+        name: ESLint (Mission Control frontend)
+        language: system
+        entry: bash -c 'cd tools/mission_control/frontend && npx --no-install eslint "$@"' --
+        files: '^tools/mission_control/frontend/src/.*\.(ts|tsx|js|jsx)$'
+        # Skip if frontend deps haven't been installed — pre-commit
+        # shouldn't fail just because someone's never run npm ci yet.
+        # The CI gate catches it on push.
+        require_serial: true
+
+      - id: track-csv-validator
+        name: Track CSV validator
+        language: system
+        entry: python3 tools/validate_tracks.py
+        files: '^Content/tracks/.*\.csv$'
+        pass_filenames: false  # the script walks the directory itself

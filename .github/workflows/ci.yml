@@ -165,3 +165,40 @@ jobs:
 
       - name: Validate
         run: python3 tools/validate_tracks.py
+
+  # ---------------------------------------------------------------
+  # Internal markdown link check — catches dead links inside the
+  # repo's docs (relative paths, anchors). External URL checking is
+  # OFF by default: GitHub-the-internet's flakiness would turn this
+  # into a noisy red flag, and broken external links are mostly the
+  # third-party site's problem rather than ours.
+  #
+  # Tool: lychee (Rust). `--offline` flag skips external URLs and
+  # only verifies relative file paths + anchors, which is exactly
+  # what we want.
+  # ---------------------------------------------------------------
+  links:
+    name: Docs — markdown link checker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Lychee (offline mode)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # `--offline` skips external URLs (only checks relative
+          # paths + section anchors). `--no-progress` keeps the
+          # log clean. `--exclude-loopback` doesn't apply here
+          # since we're offline anyway. Scan the README + every
+          # `.md` under docs/ and CHANGELOG.
+          args: >-
+            --offline
+            --no-progress
+            --verbose
+            ./readme.md
+            ./CHANGELOG.md
+            ./docs/**/*.md
+          fail: true

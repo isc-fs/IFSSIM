@@ -12,7 +12,21 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
-— nothing yet —
+### Added
+
+- **Dependabot** weekly updates for npm (frontend), pip (backend), and
+  github-actions, with minor/patch updates grouped per ecosystem.
+- **PR template + issue templates** (bug report, feature request) under
+  `.github/`. Blank issues are disabled — reporters land on the
+  templated forms or the QUICKSTART / FUNCTIONALITIES quick links.
+- **CI 5th job: markdown link checker** (lychee, `--offline` mode) —
+  catches dead internal links + broken section anchors in `*.md`.
+  External URLs not checked (GitHub-the-internet's flakiness is not
+  our gate).
+- **Pre-commit hooks** (`.pre-commit-config.yaml`) — opt-in local
+  checks that mirror CI: ruff format + lint, ESLint, track CSV
+  validator, repo hygiene (trailing whitespace, EOL, large-file
+  guard). Setup instructions in README.
 
 ---
 

@@ -1,0 +1,96 @@
+name: Bug report
+description: Something is broken or behaving wrong in the sim, the bridge, or Mission Control.
+title: "[bug] <short summary>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check:
+        - **[QUICKSTART troubleshooting](https://github.com/isc-fs/IFSSIM/blob/dev/docs/QUICKSTART.md#troubleshooting)** — the most common failure modes are listed there.
+        - **[CHANGELOG known limitations](https://github.com/isc-fs/IFSSIM/blob/dev/CHANGELOG.md)** — issues we already know about and are tracking.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: One paragraph. What did you observe vs what you expected.
+      placeholder: |
+        Loaded skidpad, started the session — Mission Control hung at "Stopping pipeline…" after I clicked Stop. The sim window kept rendering but the WS dashboard froze.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list. Should let someone else reproduce it on a clean checkout.
+      placeholder: |
+        1. `./package_mac.sh` (cook clean)
+        2. `./tools/refresh-bridge.sh`
+        3. `open Saved/StagedBuilds/Mac/IFSSIM-Mac-Shipping.app`
+        4. In Mission Control, load `skidpad.csv`, click Start Session
+        5. Wait 6 seconds
+        6. Click Stop Session
+        7. UI hangs
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: IFSSIM version / commit
+      description: |
+        If you cooked from source: output of `git rev-parse --short HEAD`.
+        If you downloaded a release artefact: the tag (e.g. `v0.1.0`).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: false
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Windows
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component?
+      description: If unsure, pick the most relevant one and we'll re-label.
+      options:
+        - UE5 plugin / sim
+        - ROS 2 bridge
+        - Mission Control (frontend)
+        - Mission Control (backend)
+        - Track system / cones
+        - Shipping pipeline (package_*.sh / .ps1)
+        - Documentation
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: |
+        Bridge logs are most useful: `docker compose logs --tail=200 dv_pipeline_stack`.
+        Mission Control backend logs print to the terminal where you ran `./tools/mission_control/run.sh`.
+        UE5 Shipping has logs disabled by default — if you can repro from an Editor PIE session, that log is at `~/Library/Logs/Unreal Engine/IFSSIMEditor/IFSSIM.log` on Mac.
+        Paste the relevant excerpt; if it's huge, attach as a file.
+      render: shell
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Custom settings.json (if any)
+      description: |
+        If you've changed the default `settings.json` (sensor noise levels, vehicle physics, LiDAR FOV, etc.), paste the diff here. Many "weird behaviour" reports trace back to non-default settings.
+      render: jsonc

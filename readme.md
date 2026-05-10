@@ -161,9 +161,23 @@ cd tools/mission_control/backend && pytest tests/ -v
 
 # Track CSV validator
 python3 tools/validate_tracks.py
+
+# Markdown internal-link checker (skip external URLs)
+npx lychee --offline ./readme.md ./CHANGELOG.md ./docs/**/*.md
 ```
 
-If all four pass locally, the CI gate will pass too.
+If all five pass locally, the CI gate will pass too.
+
+### Pre-commit hooks (optional)
+
+Want CI's checks to run on every `git commit` instead of waiting for the push? Install the [pre-commit](https://pre-commit.com) framework once per machine:
+
+```bash
+pip install pre-commit
+pre-commit install        # in the repo root — installs the git hook
+```
+
+From then on, every commit runs ruff (Python lint + format), ESLint (frontend), the track CSV validator (when CSVs change), plus repo hygiene (trailing whitespace, EOL, large-file guard). Skip in an emergency with `git commit -n`; the push-time CI gate will still catch the issue. To run all hooks against all files (after a rebase, say): `pre-commit run --all-files`.
 
 ## Automation
 
