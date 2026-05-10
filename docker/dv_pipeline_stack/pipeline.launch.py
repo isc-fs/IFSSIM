@@ -181,7 +181,13 @@ def generate_launch_description() -> LaunchDescription:
     # downstream call.
     actions += _auto_active("mode_manager", "mode_manager_node", "mode_manager_node")
     actions += _auto_active("mission_control", "mission_control_node", "mission_control_node")
-    actions += _auto_active("sim_supervisor", "sim_supervisor_node", "sim_supervisor_node")
+    # sim_supervisor needs /imu + /motor_rpm remapped onto /fsds/* so
+    # its OdometryFilter sees the bridge's sensor stream (Phase 1 of
+    # the /odom split — feat/360).
+    actions += _auto_active(
+        "sim_supervisor", "sim_supervisor_node", "sim_supervisor_node",
+        remappings=[REMAP_IMU, REMAP_RPM],
+    )
 
     # ------------------ Autonomy lifecycle nodes (unconfigured) ------------------
     # Brought up to `active` by mode_manager when StartMission arrives.
