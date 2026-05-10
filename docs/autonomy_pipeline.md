@@ -100,16 +100,18 @@ flowchart TB
     plugin -- "UDP :51453 (LiDAR)<br/>UDP :41452 (other sensors)" --> bridge
     bridge -- "<b>/fsds/lidar/Lidar1</b><br/>PointCloud2 @ 10 Hz" --> cd
     bridge -- "<b>/fsds/imu</b><br/>sensor_msgs/Imu @ 400 Hz" --> slam
-    bridge -- "<b>/fsds/gss</b><br/>TwistWithCovarianceStamped" --> slam
-    bridge -- "<b>/fsds/gps</b><br/>NavSatFix" --> slam
-    bridge -- "<b>/fsds/testing_only/odom</b><br/>(diagnostic only)" --> sup
+    bridge -- "<b>/fsds/motor_rpm</b><br/>Float32 @ 80 Hz<br/>(velocity prior)" --> slam
+    bridge -- "<b>/fsds/testing_only/odom</b><br/>(diagnostic only — GT-aligned)" --> slam
+    bridge -- "<b>/fsds/imu</b><br/>(filter prediction)" --> sup
+    bridge -- "<b>/fsds/motor_rpm</b><br/>(filter correction)" --> sup
 
     %% =====================================================================
     %% AUTONOMY DATAFLOW (internal to submodule)
     %% =====================================================================
     cd -- "/Conos_raw MarkerArray" --> slam
-    slam -- "/Conos MarkerArray<br/>+ /odom + TF odom→base_link" --> plan
-    slam -- "/odom + TF" --> ctrl
+    slam -- "<b>/Conos MarkerArray</b><br/>+ TF odom→base_link" --> plan
+    slam -- "<b>/cone_slam/state</b><br/>(absolute pose, ~10 Hz)<br/>+ TF" --> ctrl
+    sup -- "<b>/odom</b><br/>nav_msgs/Odometry @ 100 Hz<br/>(IMU+RPM dead-reckoning)" --> ctrl
     plan -- "/Path nav_msgs/Path" --> ctrl
     rsp -. "TF (URDF joints + base)" .-> slam
     rsp -. "TF" .-> ctrl
@@ -145,9 +147,10 @@ flowchart TB
     %% VIZ
     %% =====================================================================
     bridge -. "all /fsds/*" .-> fox
-    cd -. "/Conos_raw" .-> fox
-    slam -. "/Conos, /odom, TF" .-> fox
-    plan -. "/Path" .-> fox
+    cd -. "/Conos_raw, /Conos_Orange" .-> fox
+    slam -. "/Conos, /cone_slam/state, /cone_slam/gt_*, TF" .-> fox
+    sup -. "/odom" .-> fox
+    plan -. "/Path, /path_planning/debug" .-> fox
     ctrl -. "/control/*" .-> fox
 ```
 
@@ -166,11 +169,11 @@ All sensor topics are namespaced under `/fsds/...` — the prefix is what tells 
 | Topic | Type | Frame | Rate | Notes |
 |---|---|---|---|---|
 | `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — fields `x`, `y`, `z`, `intensity` (FLOAT32). Intensity follows the Hesai ATX-S01 working principle (ρ × cos(θ) × (R_ref/r)²); see `FUNCTIONALITIES.md` §4.1. |
-| `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. |
-| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | ~100 Hz | Ground-speed sensor. Bridge fills the diagonal of `twist.covariance` (entries `[0]`, `[7]`, `[14]`) from `VelocityNoiseStd²`. |
-| `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | Currently logged-only on the autonomy side. |
-| `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Optional input — may be redundant with `/fsds/gss`. |
-| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `base_link`) | ~80 Hz | **Diagnostic only.** Ground-truth pose + clean body-frame velocity. Autonomy must not consume it; intended for the GT-as-SLAM diagnostic (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `sim_supervisor_node`'s GT compare. Both `pose` and `twist` are sourced directly from the vehicle pawn's clean kinematics, not from sensor topics; the GSS-routed twist behaviour is on `/fsds/gss` where the noise belongs. |
+| `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. Consumed by `slam_node` (preintegration) AND `sim_supervisor_node` (filter prediction step) post-feat/360. |
+| `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Drive-axle RPM. Primary longitudinal velocity input — both `slam_node` (velocity prior) and `sim_supervisor_node` (filter correction step) consume it. The IFS-08 doesn't have GSS, so this + IMU is the full odometry input set. |
+| `/fsds/gss` | `geometry_msgs/TwistWithCovarianceStamped` | `fsds/GSS` | ~100 Hz | **Published but not consumed.** The IFS-08 has no ground-speed sensor; the bridge keeps the topic for backward-compat with code that hasn't migrated yet. New consumers must not depend on it. |
+| `/fsds/gps` | `sensor_msgs/NavSatFix` | `fsds/GPS` | ~10 Hz | **Published but not consumed.** Reserved for future global-localisation work (e.g. GPS-aligned `map` frame); no autonomy node subscribes today. |
+| `/fsds/testing_only/odom` | `nav_msgs/Odometry` | `odom` (child `base_link`) | ~80 Hz | **Diagnostic only.** Ground-truth pose + clean body-frame velocity. Autonomy must not consume it on the production path; consumed only by the GT-as-SLAM diagnostic (`pipeline/cone_slam/scripts/gt_pose_relay.py`) and `slam_node`'s GT-aligned residual publisher (`/cone_slam/gt_aligned`, `/cone_slam/gt_error_m`). |
 
 ### Topics the submodule publishes back (sim_supervisor → bridge)
 
