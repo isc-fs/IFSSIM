@@ -37,17 +37,35 @@ from __future__ import annotations
 
 import time
 
+import numpy as np
+
 import rclpy
 from rclpy.action import ActionServer, ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn, State
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import (
+    QoSProfile,
+    QoSHistoryPolicy,
+    ReliabilityPolicy,
+    DurabilityPolicy,
+)
 
-from std_msgs.msg import Empty as EmptyMsg
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Empty as EmptyMsg, Float32
+
 from fs_msgs.msg import ControlCommand
 from dv_msgs.action import StartMission, RuntimeControl
 from dv_msgs.srv import ActivateMode
+
+from sim_supervisor.odometry import OdometryFilter
+
+
+# /odom publication rate. 100 Hz target — gives the 40 Hz controller
+# fresh data every tick with margin, doesn't burn the CPU. Decoupled
+# from the IMU subscription rate (which is the BMI088's native ~400 Hz).
+ODOM_PUBLISH_HZ: float = 100.0
 
 
 # Total time we'll wait for mission_control_node.start_mission_orchestration
@@ -87,6 +105,19 @@ class SimSupervisorNode(LifecycleNode):
         # on the inner ActionClient future (against mission_control)
         # without deadlocking on the same mutually-exclusive group.
         self._cb_group = ReentrantCallbackGroup()
+
+        # Odometry filter (Phase 1 of the /odom split — see
+        # docs/autonomy_pipeline.md §"Open questions" Q1). Subscribes
+        # to /imu and /motor_rpm, publishes /odom at ODOM_PUBLISH_HZ.
+        # The supervisor is the natural owner because on the real car
+        # the uDV (which this node simulates) publishes /odom from the
+        # same input set.
+        self._odom_filter: OdometryFilter | None = None
+        self._odom_pub = None
+        self._odom_pub_timer = None
+        self._sub_imu = None
+        self._sub_rpm = None
+        self._odom_first_publish_logged: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle transitions
@@ -133,14 +164,91 @@ class SimSupervisorNode(LifecycleNode):
             EmptyMsg, "/signal/ebs_reset", LATCHED_QOS,
         )
 
+        # /odom infrastructure — created here, subscriptions and
+        # timer come up in on_activate.
+        #
+        # Phase 1 scope: topic only. We do NOT broadcast the
+        # odom→base_link TF here because slam_node still owns that
+        # broadcaster — two publishers writing to the same TF parent→
+        # child causes last-writer-wins flicker between dead-reckoning
+        # (us) and SLAM-corrected (slam_node). Phase 2 (separate
+        # branch) hands the TF to us and slam_node starts publishing
+        # map→odom drift correction instead. Until then, /odom.pose
+        # and the TF tree's odom→base_link describe slightly different
+        # things; consumers that care about absolute pose should keep
+        # using TF lookups (which see slam's estimate), and consumers
+        # that care about high-rate velocity should switch to
+        # /odom.twist (which we own).
+        self._odom_filter = OdometryFilter()
+        self._odom_pub = self.create_lifecycle_publisher(
+            Odometry, "/odom", 50,
+        )
+
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
-        self.get_logger().info("on_activate")
+        self.get_logger().info(
+            "on_activate: starting /odom subscriptions + publish timer "
+            f"({ODOM_PUBLISH_HZ:.0f} Hz)")
+
+        # Reset the filter so a deactivate→activate cycle starts a
+        # fresh stationary calibration. The car may have been moved
+        # in sim during the inactive window; assuming continuity
+        # would corrupt the bias estimates.
+        if self._odom_filter is not None:
+            self._odom_filter.reset()
+        self._odom_first_publish_logged = False
+
+        # IMU subscription — BEST_EFFORT to match what the bridge
+        # publishes, deep queue (2000) so the predict step doesn't
+        # lose samples while RPM messages are being processed on the
+        # same executor. Same QoS choice slam_node makes for the same
+        # reason.
+        imu_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=2000,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._sub_imu = self.create_subscription(
+            Imu, "/imu", self._on_imu, imu_qos,
+            callback_group=self._cb_group,
+        )
+
+        # Motor RPM — 80 Hz from the bridge. BEST_EFFORT, shallow queue.
+        rpm_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._sub_rpm = self.create_subscription(
+            Float32, "/motor_rpm", self._on_rpm, rpm_qos,
+            callback_group=self._cb_group,
+        )
+
+        # Publish /odom on a fixed-rate timer rather than per-IMU-tick:
+        # decouples publish rate from input rate, gives downstream
+        # consumers a predictable cadence regardless of IMU jitter.
+        self._odom_pub_timer = self.create_timer(
+            1.0 / ODOM_PUBLISH_HZ,
+            self._publish_odom,
+            callback_group=self._cb_group,
+        )
+
         return super().on_activate(state)
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
-        self.get_logger().info("on_deactivate")
+        self.get_logger().info("on_deactivate: stopping /odom + subs")
+        if self._odom_pub_timer is not None:
+            self.destroy_timer(self._odom_pub_timer)
+            self._odom_pub_timer = None
+        if self._sub_imu is not None:
+            self.destroy_subscription(self._sub_imu)
+            self._sub_imu = None
+        if self._sub_rpm is not None:
+            self.destroy_subscription(self._sub_rpm)
+            self._sub_rpm = None
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
@@ -153,12 +261,85 @@ class SimSupervisorNode(LifecycleNode):
         self._control_pub = None
         self._ebs_pub = None
         self._ebs_reset_pub = None
+        # /odom infra — subs/timer already gone via on_deactivate, but
+        # we still own the publisher + filter + broadcaster.
+        if self._odom_pub_timer is not None:
+            self.destroy_timer(self._odom_pub_timer)
+            self._odom_pub_timer = None
+        self._odom_pub = None
+        self._odom_filter = None
         self._current_mission = None
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("on_shutdown")
         return TransitionCallbackReturn.SUCCESS
+
+    # ------------------------------------------------------------------
+    # /odom — IMU + RPM → dead-reckoning Odometry
+    # ------------------------------------------------------------------
+    def _on_imu(self, msg: Imu) -> None:
+        """Drive the filter's predict step."""
+        if self._odom_filter is None:
+            return
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        accel = np.array([
+            msg.linear_acceleration.x,
+            msg.linear_acceleration.y,
+            msg.linear_acceleration.z,
+        ])
+        gyro = np.array([
+            msg.angular_velocity.x,
+            msg.angular_velocity.y,
+            msg.angular_velocity.z,
+        ])
+        self._odom_filter.push_imu(t, accel, gyro)
+
+    def _on_rpm(self, msg: Float32) -> None:
+        """Drive the filter's correction step."""
+        if self._odom_filter is None:
+            return
+        # Wall-clock timestamp — the bridge publishes Float32 with no
+        # header.stamp on /motor_rpm, so we mark received-time here.
+        # Used for staleness inside the filter.
+        self._odom_filter.push_rpm(time.monotonic(), float(msg.data))
+
+    def _publish_odom(self) -> None:
+        """Timer-driven /odom emission. Skips while the filter is
+        still in stationary calibration (first ~3 s after activate)."""
+        if self._odom_filter is None or self._odom_pub is None:
+            return
+        if not self._odom_filter.is_calibrated():
+            return
+
+        s = self._odom_filter.state
+        now = self.get_clock().now().to_msg()
+
+        if not self._odom_first_publish_logged:
+            self.get_logger().info(
+                "/odom first publish — IMU+RPM filter calibrated")
+            self._odom_first_publish_logged = True
+
+        # nav_msgs/Odometry: pose in header.frame_id (odom),
+        # twist in child_frame_id (base_link). REP-103 axes.
+        msg = Odometry()
+        msg.header.stamp = now
+        msg.header.frame_id = "odom"
+        msg.child_frame_id = "base_link"
+        msg.pose.pose.position.x = s.x
+        msg.pose.pose.position.y = s.y
+        msg.pose.pose.position.z = 0.0
+        # 2D yaw → quaternion
+        half = 0.5 * s.yaw
+        msg.pose.pose.orientation.w = float(np.cos(half))
+        msg.pose.pose.orientation.x = 0.0
+        msg.pose.pose.orientation.y = 0.0
+        msg.pose.pose.orientation.z = float(np.sin(half))
+        msg.twist.twist.linear.x = s.vx
+        msg.twist.twist.linear.y = s.vy
+        msg.twist.twist.linear.z = 0.0
+        msg.twist.twist.angular.z = s.yaw_rate
+        self._odom_pub.publish(msg)
 
     # ------------------------------------------------------------------
     # Action handlers (skeletons)

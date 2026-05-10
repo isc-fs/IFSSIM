@@ -238,7 +238,8 @@ Architectural choices still being finalised. Listed here because they have downs
 
 | # | Question | Owner |
 |---|---|---|
-| Q1 | **Where does `/odom` come from?** Options: (a) `slam_node` publishes `/odom` directly — folds odometry into SLAM (re-creates the coupling that bit cone-only DA in #306); (b) thin `odometria` library inside `slam` that fuses IMU + GSS but isn't a separate lifecycle node; (c) `sim_supervisor` publishes a GT-derived `/odom` in sim, real car gets it from the uDV. Option (b) preserves the separation that made the GT-as-SLAM diagnostic viable. | DV pipeline |
+| Q1 | **Where does `/odom` come from?** ✅ **Resolved (feat/360, Phase 1):** option (c) — `sim_supervisor_node` owns `/odom` in sim, the real-car uDV will own it on the car. Filter is IMU + motor RPM only (no GSS — the IFS-08 doesn't have one). Implementation in `pipeline/sim_supervisor/sim_supervisor/odometry.py`. Phase 2 (separate branch) will move TF ownership: supervisor takes `odom→base_link`, slam_node starts publishing `map→odom` for drift correction. Phase 3 brings steering angle + brake pressure in as cross-checks. | DV pipeline |
+| Q2 | **IMU consumption rate inside the OdometryFilter.** Currently subscribes at the BMI088 native rate (400 Hz, deep queue) and integrates every sample. Publish rate to `/odom` is decoupled at 100 Hz. Open question: would downsampling IMU to 100 Hz at the subscription level (matching publish rate) lose meaningful filter quality? Bias estimation during the 3 s stationary window benefits from full-rate sampling; the steady-state predict step likely doesn't need it. **Action:** quantify before tightening — bag a real drive, replay through both 400 Hz and 100 Hz versions of the filter, compare /odom-vs-GT residual. | DV pipeline |
 
 ## Diagnostic tools
 
