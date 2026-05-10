@@ -4,6 +4,8 @@
 
 Simulation environment for the IFS project, developed by ISC Racing Team.
 
+[![CI](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml)
+
 📄 **[Full Functionalities Reference](docs/FUNCTIONALITIES.md)** — sensors, RPC API, ROS 2 bridge, vehicle model, referee system, Mission Control, and more.
 
 🤖 **[Autonomy Pipeline](docs/autonomy_pipeline.md)** — end-to-end architecture: sim, bridge, mission management, and the autonomy lifecycle nodes (perception → SLAM → path planning → control). Same code on the real car and in sim.
@@ -71,6 +73,55 @@ To browse the full history: filter by label and status `closed`.
 The number for the next branch of each type is the last closed issue of that type plus one.
 
 > Example: if the last closed issue with label `feat` is `[feat/4-…] ...`, the next feature branch will be `feat/5-<your-title>`.
+
+---
+
+## Continuous integration
+
+Every PR to `dev` or `main` runs through a four-job CI suite (`.github/workflows/ci.yml`) on free GitHub-hosted Linux runners — total wall time under 4 minutes. PRs cannot merge with a red status.
+
+| Job | What it checks | When it runs |
+|---|---|---|
+| **Bridge — colcon build** | `ifssim_bridge` + `fs_msgs` compile cleanly on ROS 2 Humble | every PR |
+| **Mission Control — frontend** | ESLint clean, `tsc --noEmit` clean, production `npm run build` succeeds | every PR |
+| **Mission Control — backend** | `compileall` syntax check, `pytest` for `track_validators` + `scoring` (pure-Python unit tests, ~70 cases) | every PR |
+| **Tracks — CSV validator** | every `Content/tracks/*.csv` parses (correct field count, known cone types, numeric coordinates within ±500 m) | every PR |
+
+### Release pipelines (per-platform)
+
+Three workflows produce shipping builds when a version tag (e.g. `v0.1.0`) is pushed. All run on **self-hosted runners** because UE5 5.7 must be installed on the host — there's no GitHub-hosted runner with UE5 pre-baked, and installing the engine per-run is impractical.
+
+| Workflow | Runner label | Requirements | Local-dev script |
+|---|---|---|---|
+| `package-mac.yml` | `[self-hosted, macOS]` | UE5 5.7 + Mac codesigning identity | `./package_mac.sh` |
+| `package-linux.yml` | `[self-hosted, Linux]` | UE5 5.7 (Linux clone of UnrealEngine, built from source — Epic doesn't ship a Linux binary) | `./package_linux.sh` |
+| `package-windows.yml` | `[self-hosted, Windows]` | UE5 5.7 + Visual Studio 2022 (C++ workload) | `./package_windows.ps1` |
+
+Each runner needs `UE5_ROOT` exported in its env (e.g. `/Users/Shared/Epic Games/UE_5.7` on Mac, `/opt/UE_5.7` on Linux, `C:\Program Files\Epic Games\UE_5.7` on Windows). Register at **Settings → Actions → Runners → New self-hosted runner**.
+
+The local-dev scripts (`package_mac.sh`, `package_linux.sh`, `package_windows.ps1`) produce the same staged distribution shape — `Saved/StagedBuilds/<Platform>/` with the binary, `tracks/` sibling directory, patched `UECommandLine.txt`. They run on the corresponding host platform; `package_linux.sh` can also cross-compile from a macOS dev box if Epic's Linux Clang Toolchain is installed (set `LINUX_MULTIARCH_ROOT`).
+
+**No self-hosted runners registered yet?** That's OK. The CI gate above (Bridge / Frontend / Backend / Tracks) runs on free GitHub-hosted runners and protects every PR. The release workflows just sit idle until a tag is pushed AND a runner is online — without runners, tag pushes won't produce release artefacts but won't break anything either.
+
+### Running CI locally
+
+```bash
+# Bridge build (inside the dv_pipeline_stack container)
+docker compose exec dv_pipeline_stack bash -lc \
+  'cd /dv_pipeline_stack_ws && source /opt/ros/humble/setup.bash && \
+   colcon build --packages-select ifssim_bridge'
+
+# Frontend
+cd tools/mission_control/frontend && npx eslint src && npx tsc --noEmit && npm run build
+
+# Backend
+cd tools/mission_control/backend && pytest tests/ -v
+
+# Track CSV validator
+python3 tools/validate_tracks.py
+```
+
+If all four pass locally, the CI gate will pass too.
 
 ---
 

@@ -1,0 +1,167 @@
+name: CI
+
+# PR-gating build/test suite. Every job runs on a free GitHub-hosted
+# runner so contributors don't need a self-hosted Mac/UE5 to land a
+# PR. The full plugin cook (UE5 BuildCookRun) is gated separately in
+# `plugin-cook.yml` and only fires on PRs that touch Plugins/** or
+# Config/** — that's the path that genuinely needs UE5 installed.
+#
+# Triggers:
+#   - pull_request to dev/main: gates merges
+#   - push to dev/main: post-merge sanity (catches squash-introduced
+#     accidents and gives main/dev a clean status badge)
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+# Cancel an in-flight run when the same PR gets a new push — saves
+# minutes and keeps the queue moving.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------
+  # Bridge — colcon build of the ifssim_bridge ROS 2 package.
+  # Uses the official ROS Humble desktop image; same toolchain the
+  # dv_pipeline_stack container uses, so a green build here means a
+  # green build in production.
+  # ---------------------------------------------------------------
+  bridge-build:
+    name: Bridge — colcon build
+    runs-on: ubuntu-latest
+    container: ros:humble-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Bridge build doesn't need LFS-tracked binary assets; skip
+          # the large .uasset / mesh fetch.
+          lfs: false
+
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-colcon-common-extensions \
+            ros-humble-foxglove-bridge \
+            ros-humble-rclcpp \
+            ros-humble-rclpy \
+            ros-humble-sensor-msgs \
+            ros-humble-sensor-msgs-py \
+            ros-humble-geometry-msgs \
+            ros-humble-nav-msgs \
+            ros-humble-tf2-msgs \
+            ros-humble-std-msgs \
+            ros-humble-rosidl-default-generators
+          rm -rf /var/lib/apt/lists/*
+
+      - name: colcon build (ifssim_bridge + fs_msgs)
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          cd ros2
+          colcon build \
+            --packages-select fs_msgs ifssim_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+  # ---------------------------------------------------------------
+  # Frontend — Mission Control React app.
+  # Lint + typecheck + production build. Catches eslint regressions
+  # (#326 cleanup pinned the tree clean — this keeps it that way).
+  # ---------------------------------------------------------------
+  frontend:
+    name: Mission Control — frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/mission_control/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tools/mission_control/frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        # We pinned the entire src/ tree lint-clean in #338; keep it
+        # that way. New `any`s, unused vars, missing react-hooks deps
+        # all fail the build.
+        run: npx eslint src
+
+      - name: Typecheck
+        # `tsc --noEmit` against the project's tsconfig — catches the
+        # `: any` defeats-typing class of regressions that #336
+        # closed.
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+  # ---------------------------------------------------------------
+  # Mission Control backend — Python unit tests.
+  # The integration tests under tools/mission_control/backend/.venv
+  # need a running sim; skip those. The new tests/ directory is
+  # pure-Python (validators + scoring) and runs offline.
+  # ---------------------------------------------------------------
+  backend:
+    name: Mission Control — backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/mission_control/backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install
+        # `requirements.txt` already lists pytest among the dev deps
+        # (we add it in this PR). FastAPI / pydantic pulled in for
+        # the cases where main.py imports leak into a test.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check (py_compile every file)
+        run: |
+          python -m compileall -q . tests/
+
+      - name: pytest (unit tests only)
+        run: pytest tests/ -v
+
+  # ---------------------------------------------------------------
+  # Tracks — every CSV under Content/tracks/ parses cleanly.
+  # Catches stale generator output (#365 cycle hit a 1-byte empty
+  # `random_track.csv` that would have shipped a phantom track).
+  # ---------------------------------------------------------------
+  tracks:
+    name: Tracks — CSV validator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Track CSVs are tiny text files (~kB each); LFS not used.
+          lfs: false
+
+      - name: Validate
+        run: python3 tools/validate_tracks.py
