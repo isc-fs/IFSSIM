@@ -2,19 +2,58 @@
 
 # IFSSIM
 
-Simulation environment for the IFS project, developed by ISC Racing Team.
+A Formula Student Driverless simulator built on Unreal Engine 5.7,
+with a Hesai-class LiDAR, a full FS-Rules-2026 referee, a ROS 2
+bridge, and a Mission Control orchestration UI. Developed by ISC
+Racing Team as the test bench for the autonomy stack that runs on
+their IFS-08 race car.
 
 [![CI](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml)
 
-📄 **[Full Functionalities Reference](docs/FUNCTIONALITIES.md)** — sensors, RPC API, ROS 2 bridge, vehicle model, referee system, Mission Control, and more.
+---
 
-🤖 **[Autonomy Pipeline](docs/autonomy_pipeline.md)** — end-to-end architecture: sim, bridge, mission management, and the autonomy lifecycle nodes (perception → SLAM → path planning → control). Same code on the real car and in sim.
+## I want to drive the sim
 
-🐳 **[Getting Started — Docker Pipeline](docs/GETTING_STARTED_DOCKER.md)** — build and run the full stack (Mission Control + ROS 2) alongside UE5 in minutes.
+→ **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — 15 minutes,
+   prerequisites + clone + cook + bridge up + first track loaded.
+   Manual driving works out of the box; for the autonomy stack, see
+   below.
+
+## I want to wire my autonomy code to it
+
+→ **[`docs/autonomy_pipeline.md`](docs/autonomy_pipeline.md)** —
+   end-to-end architecture (sim → bridge → SLAM / planning /
+   control → Mission Control), integration contracts, the topics
+   and frames the bridge guarantees. The same code that runs on
+   the real IFS-08 runs against this sim.
+
+→ **[`docs/GETTING_STARTED_DOCKER.md`](docs/GETTING_STARTED_DOCKER.md)** —
+   bringing up the full bridge + autonomy stack alongside the
+   sim, in a Docker pipeline.
+
+## I want to know what every knob does
+
+→ **[`docs/FUNCTIONALITIES.md`](docs/FUNCTIONALITIES.md)** —
+   exhaustive technical reference: every sensor and its noise
+   model, the RPC API, the wire format, the ROS 2 topics with
+   types and rates, vehicle physics parameters, configuration
+   schema, coordinate conventions.
+
+## I want to see what changed between releases
+
+→ **[`CHANGELOG.md`](CHANGELOG.md)** — release-level human-readable
+   delta. Known limitations live there too — read it before
+   reporting "the IFS-08 CoG looks off".
 
 ---
 
-## Getting started
+# Hacking on IFSSIM
+
+Everything below is for contributors — people writing PRs against
+this repository. If you only want to run the sim, the four links
+above are enough.
+
+## Getting set up
 
 1. Create a GitHub account if you don't have one yet.
 2. Download and install [GitHub Desktop](https://desktop.github.com/) (beginner) or [Git CLI](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) (advanced).
@@ -29,7 +68,12 @@ Simulation environment for the IFS project, developed by ISC Racing Team.
    - SSH: `git@github.com:isc-fs/IFSSIM.git`
    - HTTPS: `https://github.com/isc-fs/IFSSIM.git`
 
----
+4. The repo uses **Git LFS** for binary assets (cone meshes, vehicle
+   textures, the M_LiDARStencilEncoder material). After cloning:
+   ```bash
+   git lfs install
+   git lfs pull
+   ```
 
 ## How we work with this repository
 
@@ -74,8 +118,6 @@ The number for the next branch of each type is the last closed issue of that typ
 
 > Example: if the last closed issue with label `feat` is `[feat/4-…] ...`, the next feature branch will be `feat/5-<your-title>`.
 
----
-
 ## Continuous integration
 
 Every PR to `dev` or `main` runs through a four-job CI suite (`.github/workflows/ci.yml`) on free GitHub-hosted Linux runners — total wall time under 4 minutes. PRs cannot merge with a red status.
@@ -101,7 +143,7 @@ Each runner needs `UE5_ROOT` exported in its env (e.g. `/Users/Shared/Epic Games
 
 The local-dev scripts (`package_mac.sh`, `package_linux.sh`, `package_windows.ps1`) produce the same staged distribution shape — `Saved/StagedBuilds/<Platform>/` with the binary, `tracks/` sibling directory, patched `UECommandLine.txt`. They run on the corresponding host platform; `package_linux.sh` can also cross-compile from a macOS dev box if Epic's Linux Clang Toolchain is installed (set `LINUX_MULTIARCH_ROOT`).
 
-**No self-hosted runners registered yet?** That's OK. The CI gate above (Bridge / Frontend / Backend / Tracks) runs on free GitHub-hosted runners and protects every PR. The release workflows just sit idle until a tag is pushed AND a runner is online — without runners, tag pushes won't produce release artefacts but won't break anything either.
+**No self-hosted runners registered yet?** That's OK. The CI gate above (Bridge / Frontend / Backend / Tracks) runs on free GitHub-hosted runners and protects every PR. The release workflows just sit idle until a tag is pushed AND a runner is online — without runners, tag pushes won't produce release artefacts but won't break anything else.
 
 ### Running CI locally
 
@@ -122,8 +164,6 @@ python3 tools/validate_tracks.py
 ```
 
 If all four pass locally, the CI gate will pass too.
-
----
 
 ## Automation
 
@@ -148,8 +188,6 @@ When the developer makes their first commit and pushes it, the workflow automati
 
 - If the developer manually edits the issue before pushing their first commit, the workflow will not overwrite the description.
 - The description is only updated once — subsequent commits do not modify the issue.
-
----
 
 ## Step-by-step workflow
 
@@ -193,9 +231,10 @@ The message of your **first commit** will be used to automatically fill in the i
 When the work is ready, open a Pull Request on GitHub from your branch toward `dev`. In the PR description write `Closes #<issue-number>` so the issue closes automatically when the PR is merged.
 
 Before requesting a review, check that:
-- The code compiles with no errors or warnings
+- The CI gate is green (Bridge / Frontend / Backend / Tracks all passing)
 - You have tested the change if applicable
 - The PR targets `dev`, not `main`
+- If your change is user-visible, **`CHANGELOG.md` has a one-liner under `## [Unreleased]`**
 
 ### 5. Review and merge
 
@@ -204,6 +243,8 @@ Another team member will review the PR. Once approved, it is merged into `dev` a
 ### 6. Merging into main
 
 When `dev` holds a set of validated changes that are ready, a responsible team member opens a Pull Request from `dev` into `main`. This only happens after full validation.
+
+When cutting a release, move the `[Unreleased]` block in `CHANGELOG.md` under the new version heading, push a `vX.Y.Z` tag, and the per-platform release workflows pick it up (provided the corresponding self-hosted runners are registered — see "Release pipelines" above).
 
 ---
 
