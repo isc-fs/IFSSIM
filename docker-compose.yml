@@ -187,9 +187,40 @@ services:
     build:
       context: .
       dockerfile: docker/mission_control_backend/Dockerfile
+    # Host networking: matches dv_pipeline_stack so Fast DDS multicast
+    # discovery between the two containers Just Works without an
+    # intermediate Discovery Server. The backend's StartMission action
+    # client (ros_bridge.py) lives on the same DDS domain as
+    # sim_supervisor_node and reaches it directly. Side effects:
+    #   • `ports:` is ignored under host networking; backend listens
+    #     on host port 8000 directly. The frontend's nginx now
+    #     proxies to host.docker.internal:8000 instead of the
+    #     compose-network DNS name.
+    #   • extra_hosts is also a no-op (host networking always uses
+    #     the host's resolver); kept off this entry.
+    network_mode: host
     environment:
       - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
       - IFSSIM_PORT=${IFSSIM_PORT:-41451}
+      # ROS 2 / DDS — must match dv_pipeline_stack's domain so the
+      # supervisor's action server is visible. Default 0 matches the
+      # rest of the stack.
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # Force Fast DDS to UDP-only on the backend side. Both containers
+      # run with `network_mode: host` so discovery works either way,
+      # but the data plane is the trap: dv_pipeline_stack's
+      # fastdds_profile.xml advertises SHM as the preferred transport,
+      # and Fast DDS's default builtin includes SHM too — so a writer
+      # in either container picks SHM for delivery, and the *other*
+      # container can't see the writer's /dev/shm segments (Docker
+      # gives each container an isolated /dev/shm by default). Symptom:
+      # `ros2 action list` works (UDP-multicast discovery), but a goal
+      # sent from the backend never reaches the supervisor and the
+      # client times out at "goal acceptance". Forcing UDPv4 only on
+      # the backend means it never advertises SHM as a locator, so
+      # dv_pipeline_stack's writer falls back to UDP when talking to
+      # us. Action goals are small (<1 KB), UDP overhead is negligible.
+      - FASTDDS_BUILTIN_TRANSPORTS=UDPv4
       # Container-internal path for reading/writing track files
       - TRACKS_DIR=/tracks
       # Host-side path sent to UE5 via RPC (UE5 runs on host, needs the real absolute path)
@@ -206,19 +237,18 @@ services:
       - ./Content/tracks:/tracks
       - pipeline_ctrl:/pipeline_ctrl
       - ./tools/random-track-generator:/track_gen:ro
-    ports:
-      - "127.0.0.1:8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    mem_limit: 256m
-    memswap_limit: 256m
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/sim/status', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      # Backend now bootstraps rclpy + builds an ActionClient at
+      # startup; ROS image takes ~2-3 s longer to come up than the old
+      # python:3.12-slim base. 20 s start period gives that headroom.
+      start_period: 20s
 
   # Lichtblick — web-based ROS 2 visualizer, connects to Foxglove bridge at ws://localhost:8765
   lichtblick:
@@ -235,6 +265,12 @@ services:
       dockerfile: docker/mission_control_frontend/Dockerfile
     ports:
       - "127.0.0.1:3000:80"
+    # Backend is on host networking now; nginx upstream targets
+    # host.docker.internal:8000 instead of the compose DNS name.
+    # extra_hosts ensures that name resolves to the host gateway from
+    # inside the frontend container.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - mission_control_backend
     mem_limit: 64m

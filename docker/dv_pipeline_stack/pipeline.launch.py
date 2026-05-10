@@ -1,29 +1,74 @@
 """
-IFSSIM full pipeline launch file.
+IFSSIM full pipeline launch file — DV pipeline alignment series.
 
-Starts the IFSSIM ROS2 bridge + the full IFS07-DV driverless pipeline
-in a single launch. Topic remappings translate IFSSIM topic names to
-the /fsds/* names expected by the IFS07-DV nodes.
+Brings everything up in a single launch:
 
-Set PIPELINE_ENABLED=true to include SLAM/path_planning/control nodes.
-When false (default), only the bridge and foxglove_bridge are launched.
+  Always-active (plain Nodes / launch includes):
+    ifssim_bridge          — UE5 ↔ ROS bridge
+    foxglove_bridge        — visualisation WebSocket
+    robot_state_publisher  — coche_urdf TF tree
+    joint_state_publisher  — default-zero joint states feeding RSP
+
+  Mission management (LifecycleNodes, auto-configured+activated at
+  launch start so their action/service endpoints are ready):
+    mode_manager_node
+    mission_control_node
+    sim_supervisor_node
+
+  Autonomy (LifecycleNodes, parked in `unconfigured` until mode_manager
+  drives them through configure→activate via change_state fan-out):
+    cone_detection_node
+    slam_node
+    path_planning_node
+    control_node
+
+The PIPELINE_ENABLED env flag from the pre-lifecycle layout has been
+retired — once the autonomy nodes are LifecycleNodes, "is the pipeline
+running?" is a question of lifecycle state, not whether the processes
+exist. mission_control_backend (step 5 of this series) will trigger
+the autonomy lifecycle through StartMission → mode_manager →
+change_state, replacing the old /pipeline_ctrl/enable flag-file
+mechanism in entrypoint.sh.
+
+Topic remappings translate IFSSIM-side `/fsds/*` names to the names
+the pipeline nodes consume (per the integration contract in
+docs/autonomy_pipeline.md §"Topics IFSSIM publishes").
 """
 
+from __future__ import annotations
+
 import os
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    RegisterEventHandler,
+)
+from launch.events import matches_action
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import LifecycleNode, Node
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
+from ament_index_python.packages import get_package_share_directory
 
-# Topic remappings: IFSSIM → FSDS naming expected by pipeline nodes
-REMAP_LIDAR  = ('/fsds/lidar/Lidar1',        '/lidar/Lidar1')
-REMAP_ODOM   = ('/fsds/testing_only/odom',   '/testing_only/odom')
-REMAP_TRACK  = ('/fsds/testing_only/track',  '/testing_only/track')
-REMAP_GSS    = ('/fsds/gss',                 '/gss')
-REMAP_CMD    = ('/fsds/control_command',     '/control_command')
+from lifecycle_msgs.msg import Transition
 
-PIPELINE_ENABLED = os.environ.get("PIPELINE_ENABLED", "false").lower() == "true"
-# LiDAR transport is UDP-only as of #322 — see bridge.launch.py.
+# ---------------------------------------------------------------------
+# Topic remappings (IFSSIM /fsds/* surface → pipeline-side names).
+# Single source of truth — every node that consumes one of these
+# pulls the tuple from here so a remap change can't drift between
+# nodes.
+# ---------------------------------------------------------------------
+REMAP_LIDAR = ("/fsds/lidar/Lidar1", "/lidar/Lidar1")
+REMAP_GSS   = ("/fsds/gss",          "/gss")
+REMAP_IMU   = ("/fsds/imu",          "/imu")
+REMAP_GT    = ("/fsds/testing_only/odom", "/testing_only/odom")
+REMAP_RPM   = ("/fsds/motor_rpm",    "/motor_rpm")
+REMAP_CMD   = ("/fsds/control_command", "/control_command")
+
 
 # Opt-in /lidar/Lidar1/viz subsampling for browser-based visualisers.
 # 0 (default) = disabled; >=2 = every-Nth-point cloud alongside the
@@ -35,98 +80,127 @@ except ValueError:
     LIDAR_VIZ_DECIMATION = 0
 
 
-def generate_launch_description():
-    nodes = [
+def _auto_active(package: str, executable: str, name: str,
+                 remappings=None) -> list:
+    """Return [LifecycleNode, configure_event, activate_handler] so the
+    named node is auto-driven from `unconfigured` to `active` at launch
+    start. Used for the management trio whose action/service endpoints
+    must be live before mode_manager fans out change_state to the
+    autonomy nodes."""
+    node = LifecycleNode(
+        package=package,
+        executable=executable,
+        name=name,
+        namespace="",
+        output="screen",
+        remappings=remappings or [],
+    )
+    configure = EmitEvent(event=ChangeState(
+        lifecycle_node_matcher=matches_action(node),
+        transition_id=Transition.TRANSITION_CONFIGURE,
+    ))
+    # When configure completes (state → 'inactive'), emit activate.
+    activate = RegisterEventHandler(OnStateTransition(
+        target_lifecycle_node=node,
+        goal_state="inactive",
+        entities=[EmitEvent(event=ChangeState(
+            lifecycle_node_matcher=matches_action(node),
+            transition_id=Transition.TRANSITION_ACTIVATE,
+        ))],
+    ))
+    return [node, activate, configure]
 
-        # --- Launch arguments (passed through from entrypoint) ---
-        DeclareLaunchArgument('host',         default_value='host.docker.internal'),
-        DeclareLaunchArgument('port',         default_value='41451'),
-        DeclareLaunchArgument('mission_name', default_value='trackdrive'),
-        DeclareLaunchArgument('track_name',   default_value='A'),
 
-        # --- IFSSIM bridge ---
-        # Connects to UE5 over TCP/UDP, publishes all sensor topics
+def _autonomy_lifecycle(package: str, executable: str, name: str,
+                        remappings=None) -> LifecycleNode:
+    """Return a LifecycleNode parked in 'unconfigured'. mode_manager
+    drives the configure/activate transitions via change_state fan-out
+    when StartMission arrives; until then the node holds no
+    subscriptions and emits no traffic."""
+    return LifecycleNode(
+        package=package,
+        executable=executable,
+        name=name,
+        namespace="",
+        output="screen",
+        remappings=remappings or [],
+    )
+
+
+def generate_launch_description() -> LaunchDescription:
+    coche_urdf_share = get_package_share_directory("coche_urdf")
+    rsp_launch = os.path.join(
+        coche_urdf_share, "launch", "robot_state_publisher.launch.py")
+
+    actions = [
+        # ------------------ Launch arguments ------------------
+        DeclareLaunchArgument("host",         default_value="host.docker.internal"),
+        DeclareLaunchArgument("port",         default_value="41451"),
+        DeclareLaunchArgument("mission_name", default_value="trackdrive"),
+        DeclareLaunchArgument("track_name",   default_value="A"),
+
+        # ------------------ Bridge + foxglove ------------------
         Node(
-            package='ifssim_bridge',
-            executable='ifssim_bridge',
-            name='ifssim_bridge',
-            output='screen',
+            package="ifssim_bridge",
+            executable="ifssim_bridge",
+            name="ifssim_bridge",
+            output="screen",
             parameters=[{
-                'host':                  LaunchConfiguration('host'),
-                'port':                  LaunchConfiguration('port'),
-                'mission_name':          LaunchConfiguration('mission_name'),
-                'track_name':            LaunchConfiguration('track_name'),
-                'competition_mode':      False,
-                'lidar_viz_decimation':  LIDAR_VIZ_DECIMATION,
+                "host":                 LaunchConfiguration("host"),
+                "port":                 LaunchConfiguration("port"),
+                "mission_name":         LaunchConfiguration("mission_name"),
+                "track_name":           LaunchConfiguration("track_name"),
+                "competition_mode":     False,
+                "lidar_viz_decimation": LIDAR_VIZ_DECIMATION,
+            }],
+        ),
+        Node(
+            package="foxglove_bridge",
+            executable="foxglove_bridge",
+            name="foxglove_bridge",
+            output="screen",
+            parameters=[{
+                "port":              8765,
+                "address":           "0.0.0.0",
+                "send_buffer_limit": 64 * 1024 * 1024,
+                "use_sim_time":      False,
             }],
         ),
 
-        # --- Foxglove WebSocket bridge — connect Lichtblick at ws://localhost:8765 ---
-        Node(
-            package='foxglove_bridge',
-            executable='foxglove_bridge',
-            name='foxglove_bridge',
-            output='screen',
-            parameters=[{
-                'port': 8765,
-                'address': '0.0.0.0',
-                'send_buffer_limit': 10000000,
-                'use_sim_time': False,
-            }],
+        # ------------------ URDF + RSP/JSP ------------------
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(rsp_launch),
         ),
     ]
 
-    if PIPELINE_ENABLED:
-        nodes += [
+    # ------------------ Mission management (auto-active) ------------------
+    # mode_manager comes up first so its activate_mode service is
+    # registered before mission_control_node's StartMission handler
+    # tries to call into it. sim_supervisor last so its StartMission
+    # server only opens after mission_control is ready to receive its
+    # downstream call.
+    actions += _auto_active("mode_manager", "mode_manager_node", "mode_manager_node")
+    actions += _auto_active("mission_control", "mission_control_node", "mission_control_node")
+    actions += _auto_active("sim_supervisor", "sim_supervisor_node", "sim_supervisor_node")
 
-            # --- LiDAR cone detection: ground removal (RANSAC) + DBSCAN
-            # clustering → raw cone observations (per-cone σ_xy on
-            # marker.scale.x for cone_graph_slam) ---
-            # Uses Numba JIT — compiles on first message, cache persists via volume
-            Node(
-                package='cone_detection',
-                executable='Cone_Detection',
-                name='Cone_Detection',
-                output='screen',
-                remappings=[REMAP_LIDAR],
-            ),
+    # ------------------ Autonomy lifecycle nodes (unconfigured) ------------------
+    # Brought up to `active` by mode_manager when StartMission arrives.
+    # Order in the LaunchDescription doesn't constrain bring-up order;
+    # mode_manager.AUTONOMY_LIFECYCLE_NODES owns that.
+    actions.append(_autonomy_lifecycle(
+        "cone_detection", "cone_detection_node", "cone_detection_node",
+        remappings=[REMAP_LIDAR],
+    ))
+    actions.append(_autonomy_lifecycle(
+        "cone_slam", "slam_node", "slam_node",
+        remappings=[REMAP_IMU, REMAP_RPM, REMAP_GT],
+    ))
+    actions.append(_autonomy_lifecycle(
+        "path_planning", "path_planning_node", "path_planning_node",
+    ))
+    actions.append(_autonomy_lifecycle(
+        "control", "control_node", "control_node",
+        remappings=[REMAP_CMD],
+    ))
 
-            # --- Cone-graph SLAM (cone_slam): IMU + cones + motor_rpm
-            # → odom→base_link TF, /cone_slam/state, /Conos (persistent
-            # landmark IDs, world frame). Replaces the legacy
-            # Odometria_perfecta (GT-only sim hack), Publicar_Mapa
-            # (downstream of fast_LIMO's TF) and Publicar_Track
-            # (debug viz only) — none ran on the real car.
-            Node(
-                package='cone_slam',
-                executable='cone_graph_slam',
-                name='cone_graph_slam',
-                output='screen',
-            ),
-
-            # --- Path planning: cone map → target path ---
-            Node(
-                package='path_planning',
-                executable='Plan_Path',
-                name='path_planning',
-                output='screen',
-            ),
-
-            # --- Control: path + /cone_slam/state → control command ---
-            # Delayed 20s to let Numba finish compiling in Cone_Detection
-            # first. Control no longer subscribes to GSS or any bridge-side
-            # odom topic — it consumes /cone_slam/state for vehicle-frame
-            # velocity, since the real car won't have GSS mounted and the
-            # SLAM node already integrates motor RPM + IMU into the same
-            # twist field we'd otherwise read from the sensor.
-            Node(
-                package='control',
-                executable='Control',
-                name='control',
-                output='screen',
-                prefix=["bash -c 'sleep 20; $0 $@' "],
-                remappings=[REMAP_CMD],
-            ),
-        ]
-
-    return LaunchDescription(nodes)
+    return LaunchDescription(actions)
