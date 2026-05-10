@@ -99,7 +99,15 @@ class RosBridge:
         self._executor = None
         self._spin_thread: Optional[threading.Thread] = None
         self._start_mission_client = None
+        self._control_get_state_client = None
         self._ready_event = threading.Event()
+        # Cache for the last-known control_node lifecycle state, with
+        # a short TTL so the telemetry tick (1 Hz default) doesn't
+        # storm the get_state service. Stored as
+        # (state_id_or_None, monotonic_timestamp). state_id == 3 is
+        # PRIMARY_STATE_ACTIVE per lifecycle_msgs.
+        self._control_state_cache: tuple[Optional[int], float] = (None, 0.0)
+        self._control_state_cache_ttl_s: float = 0.5
 
     def _spin_up(self) -> None:
         # Lazy import — keeps module load cheap when ROS isn't present
@@ -109,9 +117,11 @@ class RosBridge:
         from rclpy.executors import MultiThreadedExecutor
         from rclpy.node import Node
         from dv_msgs.action import StartMission
+        from lifecycle_msgs.srv import GetState
 
         self._rclpy = rclpy
         self._StartMission = StartMission
+        self._GetState = GetState
 
         rclpy.init()
         self._node = Node("mission_control_backend_ros_bridge")
@@ -119,6 +129,14 @@ class RosBridge:
             self._node,
             StartMission,
             "/start_mission",
+        )
+        # Lifecycle state probe — used by is_pipeline_active() so the
+        # frontend's PIPELINE RUNNING indicator reflects whether the
+        # autonomy is actually configured+active, not just whether the
+        # supervisor (which is always up) can be reached.
+        self._control_get_state_client = self._node.create_client(
+            GetState,
+            "/control_node/get_state",
         )
 
         self._executor = MultiThreadedExecutor()
@@ -160,6 +178,8 @@ class RosBridge:
         self._spin_thread = None
         self._node = None
         self._start_mission_client = None
+        self._control_get_state_client = None
+        self._control_state_cache = (None, 0.0)
         self._rclpy = None
 
     # ------------------------------------------------------------------
@@ -174,6 +194,59 @@ class RosBridge:
         if self._start_mission_client is None:
             return False
         return self._start_mission_client.wait_for_server(timeout_sec=timeout_s)
+
+    def is_pipeline_active(self) -> bool:
+        """Return True iff control_node is in lifecycle state `active`.
+
+        The right signal for the UI's "PIPELINE RUNNING" indicator:
+        the management trio (mode_manager / mission_control /
+        sim_supervisor) is always active once the container is up,
+        so `is_action_server_available()` is a poor proxy — it stays
+        true even after a `start_mission("")` tear-down. control_node
+        is the leaf consumer of the bring-up chain, so checking its
+        state is the accurate "autonomy is doing work" signal.
+
+        Cached for `_control_state_cache_ttl_s` (500 ms by default)
+        so the 1 Hz telemetry tick doesn't storm the service.
+        """
+        if self._control_get_state_client is None:
+            return False
+
+        now = time.monotonic()
+        cached_state, cached_ts = self._control_state_cache
+        if cached_state is not None and (now - cached_ts) < self._control_state_cache_ttl_s:
+            return cached_state == 3  # PRIMARY_STATE_ACTIVE
+
+        state_id = self._get_control_state_blocking()
+        # Cache successful reads only — on a failed read we keep the
+        # previous cache value, which means a transient get_state hiccup
+        # doesn't flicker the UI. Only refresh the timestamp on success.
+        if state_id is not None:
+            self._control_state_cache = (state_id, now)
+            return state_id == 3
+
+        # No successful read AND no cached value — assume inactive.
+        return cached_state == 3 if cached_state is not None else False
+
+    def _get_control_state_blocking(self) -> Optional[int]:
+        """Synchronously query /control_node/get_state. Returns the
+        state ID (an int from lifecycle_msgs.msg.State.PRIMARY_STATE_*)
+        or None if the service is unavailable / call times out."""
+        if self._control_get_state_client is None:
+            return None
+        if not self._control_get_state_client.service_is_ready():
+            return None
+        future = self._control_get_state_client.call_async(self._GetState.Request())
+        deadline = time.monotonic() + 1.0
+        while not future.done():
+            if time.monotonic() >= deadline:
+                self._control_get_state_client.remove_pending_request(future)
+                return None
+            time.sleep(0.02)
+        result = future.result()
+        if result is None:
+            return None
+        return int(result.current_state.id)
 
     def start_mission(
         self,

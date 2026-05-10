@@ -763,23 +763,22 @@ def pipeline_stop():
 def pipeline_status():
     """Report whether autonomy is currently active.
 
-    Post-#381 the flag-file is gone; status reflects the actual
-    lifecycle state of control_node (the leaf consumer — if it's
-    active, everything upstream of it is too per mode_manager's
-    bring-up order). If ros_bridge isn't initialised the endpoint
-    returns enabled=false since the action chain can't be driven
-    anyway.
+    Reflects the actual lifecycle state of `control_node` — the leaf
+    consumer in the mode_manager bring-up order. If control_node is
+    `active`, everything upstream of it (cone_detection, slam,
+    planning) is too. Checking control_node alone is one rclpy call
+    instead of four; cached in ros_bridge for 500 ms so the 1 Hz
+    telemetry tick doesn't storm the get_state service.
+
+    Pre-#392 this checked `is_action_server_available()` instead,
+    which stayed True after a `Stop Session` tear-down (the
+    management trio remains active) and caused the UI's PIPELINE
+    RUNNING indicator to stick green forever.
     """
     if not _ros_bridge_available:
         return {"enabled": False, "reason": "ros_bridge unavailable"}
-    # Cheap check — ros_bridge holds the StartMission action client
-    # already; if the action server is reachable, the management
-    # trio is up. control_node's actual state would need a separate
-    # lifecycle.get_state probe; for the status endpoint, the
-    # action-server check is a good-enough proxy. Future enhancement
-    # tracked as part of #387 (per-node lifecycle progress feedback).
     return {
-        "enabled": RosBridge.get().is_action_server_available(timeout_s=0.0),
+        "enabled": RosBridge.get().is_pipeline_active(),
     }
 
 
@@ -1204,15 +1203,17 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                         "fps": sim_status.get("fps", 0),
                         "paused": sim_status.get("paused", False),
                         "res_active": res_active_snap,
-                        # Post-#381 the flag-file is gone — `pipeline_enabled`
-                        # now reflects whether the StartMission action server
-                        # is reachable (a good-enough proxy for "autonomy
-                        # management trio active"). False if ros_bridge
-                        # didn't initialise. Frontend UI continues to use
-                        # this field as before.
+                        # Reflects whether control_node is in lifecycle
+                        # state `active` — the accurate "autonomy is
+                        # running" signal. Cached in ros_bridge for
+                        # 500 ms so this 1 Hz tick doesn't storm
+                        # /control_node/get_state. Pre-#392 this used
+                        # action-server reachability, which stayed
+                        # true after Stop Session and stuck the UI
+                        # indicator green.
                         "pipeline_enabled": (
                             _ros_bridge_available
-                            and RosBridge.get().is_action_server_available(timeout_s=0.0)
+                            and RosBridge.get().is_pipeline_active()
                         ),
                     }
 
