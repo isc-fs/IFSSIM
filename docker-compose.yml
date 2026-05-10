@@ -206,6 +206,21 @@ services:
       # supervisor's action server is visible. Default 0 matches the
       # rest of the stack.
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # Force Fast DDS to UDP-only on the backend side. Both containers
+      # run with `network_mode: host` so discovery works either way,
+      # but the data plane is the trap: dv_pipeline_stack's
+      # fastdds_profile.xml advertises SHM as the preferred transport,
+      # and Fast DDS's default builtin includes SHM too — so a writer
+      # in either container picks SHM for delivery, and the *other*
+      # container can't see the writer's /dev/shm segments (Docker
+      # gives each container an isolated /dev/shm by default). Symptom:
+      # `ros2 action list` works (UDP-multicast discovery), but a goal
+      # sent from the backend never reaches the supervisor and the
+      # client times out at "goal acceptance". Forcing UDPv4 only on
+      # the backend means it never advertises SHM as a locator, so
+      # dv_pipeline_stack's writer falls back to UDP when talking to
+      # us. Action goals are small (<1 KB), UDP overhead is negligible.
+      - FASTDDS_BUILTIN_TRANSPORTS=UDPv4
       # Container-internal path for reading/writing track files
       - TRACKS_DIR=/tracks
       # Host-side path sent to UE5 via RPC (UE5 runs on host, needs the real absolute path)

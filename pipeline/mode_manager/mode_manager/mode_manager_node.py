@@ -16,6 +16,7 @@ any change_state services. Real wiring lands in step 5.
 
 from __future__ import annotations
 
+import time
 from typing import Iterable
 
 import rclpy
@@ -220,14 +221,21 @@ class ModeManagerNode(LifecycleNode):
         req = ChangeState.Request()
         req.transition.id = transition_id
         future = cli.call_async(req)
-        # Spin in place. activate_mode runs on a service callback
-        # thread under MultiThreadedExecutor, so blocking here doesn't
-        # starve other callbacks.
-        rclpy.spin_until_future_complete(
-            self, future, timeout_sec=_CHANGE_STATE_TIMEOUT_S,
-        )
-        if not future.done():
-            return False, f"timeout waiting for transition {transition_id}"
+        # Sleep-poll until the future resolves. We can't use
+        # rclpy.spin_until_future_complete here because we're already
+        # inside a callback dispatched by this node's outer
+        # MultiThreadedExecutor; a nested spin would create a second
+        # executor and try to re-attach the same node, which deadlocks
+        # under default settings. The ReentrantCallbackGroup that owns
+        # this client lets the outer MTE dispatch the response while
+        # we yield wall time below — same pattern as
+        # mission_control_node._execute_start_mission.
+        deadline = time.monotonic() + _CHANGE_STATE_TIMEOUT_S
+        while not future.done():
+            if time.monotonic() >= deadline:
+                cli.remove_pending_request(future)
+                return False, f"timeout waiting for transition {transition_id}"
+            time.sleep(0.05)
         result = future.result()
         if result is None:
             return False, "change_state returned None (rclpy error)"
