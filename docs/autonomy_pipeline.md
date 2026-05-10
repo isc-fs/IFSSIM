@@ -109,10 +109,11 @@ flowchart TB
     %% AUTONOMY DATAFLOW (internal to submodule)
     %% =====================================================================
     cd -- "/Conos_raw MarkerArray" --> slam
-    slam -- "<b>/Conos MarkerArray</b><br/>+ TF odom→base_link" --> plan
-    slam -- "<b>/cone_slam/state</b><br/>(absolute pose, ~10 Hz)<br/>+ TF" --> ctrl
-    sup -- "<b>/odom</b><br/>nav_msgs/Odometry @ 100 Hz<br/>(IMU+RPM dead-reckoning)" --> ctrl
-    plan -- "/Path nav_msgs/Path" --> ctrl
+    slam -- "<b>/Conos MarkerArray</b><br/>(map frame)<br/>+ TF map→odom" --> plan
+    slam -- "<b>/slam/pose</b><br/>(absolute pose, ~10 Hz, map frame)<br/>+ TF map→odom" --> ctrl
+    sup -- "<b>/odom</b><br/>nav_msgs/Odometry @ 100 Hz<br/>+ TF odom→base_link<br/>(IMU+RPM dead-reckoning)" --> ctrl
+    sup -. "<b>/odom</b><br/>(for map→odom drift correction)" .-> slam
+    plan -- "<b>/Path</b><br/>(map frame)" --> ctrl
     rsp -. "TF (URDF joints + base)" .-> slam
     rsp -. "TF" .-> ctrl
 
@@ -148,7 +149,7 @@ flowchart TB
     %% =====================================================================
     bridge -. "all /fsds/*" .-> fox
     cd -. "/Conos_raw, /Conos_Orange" .-> fox
-    slam -. "/Conos, /cone_slam/state, /cone_slam/gt_*, TF" .-> fox
+    slam -. "/Conos, /slam/pose, /cone_slam/gt_*, TF" .-> fox
     sup -. "/odom" .-> fox
     plan -. "/Path, /path_planning/debug" .-> fox
     ctrl -. "/control/*" .-> fox
@@ -220,20 +221,23 @@ Bridge JSON-RPC (track load, sim pause/resume, sim-side RES, sensor probe) stays
 
 ```mermaid
 flowchart LR
-    classDef static fill:#3a3a3a,stroke:#a8a8a8,color:#e8e8e8
     classDef dyn fill:#2a4a2a,stroke:#7dc97d,color:#e8ffe8
 
-    map(("map")) -- "static identity<br/>(/tf_static)" --> odom(("odom"))
-    odom -- "dynamic — SLAM tick rate<br/>(/tf)" --> base(("base_link"))
+    map(("map")) -- "dynamic — SLAM tick rate ~10 Hz<br/>drift correction<br/>(/tf)" --> odom(("odom"))
+    odom -- "dynamic — 100 Hz<br/>dead-reckoning<br/>(/tf)" --> base(("base_link"))
 
-    class map,odom static
-    class base dyn
+    class map,odom,base dyn
 ```
 
-- **`map → odom`** is published as static identity by `slam_node`. Without GPS-aligned global localisation the SLAM odom frame *is* effectively the map for downstream consumers; the static is there mainly so visualisers can root themselves on `map`.
-- **`odom → base_link`** is the dynamic vehicle pose published by `slam_node` at SLAM tick rate. `base_link` is the canonical vehicle frame everywhere — the bridge already roots its sensor static TFs there (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`), and the autonomy stack uses the same name. No `fsds/FSCar` aliasing.
+Post-#382 (Phase 2 of the /odom split):
+
+- **`map → odom`** is the dynamic drift-correction transform, broadcast by `slam_node` at scan rate (~10 Hz). Computed at each tick as `slam_pose ⊖ latest /odom` so the chain `map → odom → base_link` resolves to SLAM's absolute pose at the leaf, regardless of how far supervisor's dead-reckoning has drifted between SLAM ticks. Pure-Python math lives in `pipeline/cone_slam/cone_slam/tf_math.py` (`compute_map_to_odom`); see also `test/test_map_to_odom.py`.
+- **`odom → base_link`** is the dynamic dead-reckoning transform, broadcast by `sim_supervisor_node` at 100 Hz from the IMU+RPM complementary filter. On the real car this is owned by the uDV firmware.
+- The map-frame `slam_pose` and `odom-frame` supervisor pose are both 2D in practice (yaw-only quaternion); the chain composition stays well-conditioned across yaw-wrap.
+- `base_link` is the canonical vehicle frame everywhere — the bridge already roots its sensor static TFs there (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`), and the autonomy stack uses the same name. No `fsds/FSCar` aliasing.
 - The bridge does **not** publish any dynamic TF. Sensor messages carry sensor-local `frame_id`s (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`) that are not part of the live TF chain — autonomy nodes consume the sensors directly without TF lookups.
 - `robot_state_publisher` + `joint_state_publisher` (in `coche_urdf`) publish URDF joint TFs at 200 Hz for visualisation and any downstream consumer that needs articulation.
+- **Pre-#382 (legacy)**: `slam_node` owned both edges — `odom → base_link` dynamic at scan rate, `map → odom` static identity. /tf_static was used. Phase 2 retired both: `odom → base_link` moved to `sim_supervisor` at higher rate, `map → odom` became the dynamic drift-correction transform. /tf_static is no longer used by the autonomy stack.
 
 ## Open questions
 
@@ -241,7 +245,7 @@ Architectural choices still being finalised. Listed here because they have downs
 
 | # | Question | Owner |
 |---|---|---|
-| Q1 | **Where does `/odom` come from?** ✅ **Resolved (feat/360, Phase 1):** option (c) — `sim_supervisor_node` owns `/odom` in sim, the real-car uDV will own it on the car. Filter is IMU + motor RPM only (no GSS — the IFS-08 doesn't have one). Implementation in `pipeline/sim_supervisor/sim_supervisor/odometry.py`. Phase 2 (separate branch) will move TF ownership: supervisor takes `odom→base_link`, slam_node starts publishing `map→odom` for drift correction. Phase 3 brings steering angle + brake pressure in as cross-checks. | DV pipeline |
+| Q1 | **Where does `/odom` come from?** ✅ **Resolved.** Phase 1 (feat/360): `sim_supervisor_node` owns `/odom` topic; filter is IMU + motor RPM only (no GSS — the IFS-08 doesn't have one). Phase 2 (feat/392 — this PR): TF ownership moved — supervisor takes `odom→base_link`, slam_node publishes `map→odom` for drift correction, `/Conos` and `/Path` migrate to map frame, `/cone_slam/state` renamed to `/slam/pose`. Phase 3 brings steering angle + brake pressure in as cross-checks (#383). Implementations in `pipeline/sim_supervisor/sim_supervisor/odometry.py`, `pipeline/cone_slam/cone_slam/tf_math.py`. | DV pipeline |
 | Q2 | **IMU consumption rate inside the OdometryFilter.** Currently subscribes at the BMI088 native rate (400 Hz, deep queue) and integrates every sample. Publish rate to `/odom` is decoupled at 100 Hz. Open question: would downsampling IMU to 100 Hz at the subscription level (matching publish rate) lose meaningful filter quality? Bias estimation during the 3 s stationary window benefits from full-rate sampling; the steady-state predict step likely doesn't need it. **Action:** quantify before tightening — bag a real drive, replay through both 400 Hz and 100 Hz versions of the filter, compare /odom-vs-GT residual. | DV pipeline |
 
 ## Diagnostic tools
