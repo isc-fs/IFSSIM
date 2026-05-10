@@ -45,22 +45,24 @@ mkdir -p "$USER_SETTINGS_DIR"
 cp "$SCRIPT_DIR/settings.json" "$USER_SETTINGS_DIR/settings.json"
 echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 
-# 4. Force windowed mode + 60 FPS cap in UECommandLine.txt
-#    (BuildCookRun overwrites this file)
+# 4. Force absolute -project path + windowed + 60 FPS cap in UECommandLine.txt.
+#    BuildCookRun writes its own relative -project path here that's only
+#    valid when the engine and project live on the same volume / under
+#    the same user. With the engine at /Users/Shared/Epic Games/UE_5.7/
+#    and the project at /Users/$USER/.../IFSSIM/, UE's relative-path
+#    composer produces a malformed string of the form
+#    "../../../../../../Shared/Epic Games/UE_5.7/../../../<user>/Documents/..."
+#    which doesn't resolve to a real file — every launch from the
+#    packaged .app then throws "Failed to open descriptor file" and
+#    the app exits before any in-game code runs. We force-overwrite
+#    with an absolute path computed from $SCRIPT_DIR to sidestep
+#    UE's broken relative composition entirely.
 #    -ExecCmds runs console commands at startup; t.MaxFPS is also baked
 #    into DefaultEngine.ini [SystemSettings] for future cooked builds,
 #    but -ExecCmds catches builds that predate that change.
 CMDLINE="$SCRIPT_DIR/Saved/StagedBuilds/Mac/UECommandLine.txt"
-if [ -f "$CMDLINE" ]; then
-  if ! grep -q '\-windowed' "$CMDLINE"; then
-    sed -i '' 's/$/ -windowed/' "$CMDLINE"
-  fi
-  if ! grep -q 't.MaxFPS' "$CMDLINE"; then
-    sed -i '' 's/$/ -ExecCmds="t.MaxFPS 60"/' "$CMDLINE"
-  fi
-else
-  echo '-project="../../../IFSSIM/IFSSIM.uproject" -windowed -ExecCmds="t.MaxFPS 60"' > "$CMDLINE"
-fi
+PROJECT_ABS="$SCRIPT_DIR/IFSSIM.uproject"
+echo "-project=\"$PROJECT_ABS\" -windowed -ExecCmds=\"t.MaxFPS 60\"" > "$CMDLINE"
 echo "  UECommandLine.txt: $(cat "$CMDLINE")"
 
 echo ""
