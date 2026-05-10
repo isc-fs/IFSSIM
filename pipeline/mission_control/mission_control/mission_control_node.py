@@ -104,6 +104,14 @@ class MissionControlNode(LifecycleNode):
         self._latest_emergency: bool = False
         self._latest_finished: bool = False
 
+        # Active RuntimeControl goal — set when _execute_runtime_control
+        # begins, cleared on terminate. The /ctrl/cmd_internal
+        # subscription callback consults this to know whether to
+        # forward each command immediately as a Feedback frame. See
+        # the comment block above _on_ctrl_cmd for the latency
+        # rationale.
+        self._active_runtime_goal_handle = None
+
     # ------------------------------------------------------------------
     # Lifecycle transitions
     # ------------------------------------------------------------------
@@ -174,10 +182,30 @@ class MissionControlNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     # ------------------------------------------------------------------
-    # RuntimeControl input topic callbacks — cache only, no work
+    # RuntimeControl input topic callbacks
+    #
+    # Initial impl polled cached values from a 40 Hz timer loop inside
+    # _execute_runtime_control. That added ~25 ms of worst-case latency
+    # per relay (command lands 1 ms after the tick → waits a full
+    # period for the next emission), measurably destabilising
+    # Pure Pursuit in tight corners (end-to-end actuator delay went
+    # from ~10 ms direct-publish to ~50-65 ms through the action
+    # chain — 2-3 control ticks of phase lag). The fix is to emit
+    # feedback synchronously from `_on_ctrl_cmd` so the relay tracks
+    # control_node's tick rate exactly, with no extra phase. The
+    # 40 Hz timer in _execute_runtime_control now only polls the
+    # termination flags.
     # ------------------------------------------------------------------
     def _on_ctrl_cmd(self, msg: ControlCommand) -> None:
         self._latest_ctrl_cmd = msg
+        # Immediate forward: if a RuntimeControl goal is active,
+        # emit the feedback frame now. This is the hot path in tight
+        # corners — every microsecond between control_node's publish
+        # and the bridge's setCarControls matters at v=3 m/s with
+        # κ ≈ 0.5 m⁻¹.
+        gh = self._active_runtime_goal_handle
+        if gh is not None and gh.is_active:
+            self._publish_runtime_feedback(gh)
 
     def _on_ctrl_emergency(self, msg: Bool) -> None:
         if msg.data and not self._latest_emergency:
@@ -341,6 +369,14 @@ class MissionControlNode(LifecycleNode):
         supervisor as RuntimeControl.Feedback frames until the
         mission terminates.
 
+        Feedback emission is *event-driven*: `_on_ctrl_cmd` publishes
+        a Feedback frame on every /ctrl/cmd_internal arrival
+        (40 Hz, same as control_node's tick rate, zero added phase).
+        This handler exists only to poll the termination flags and
+        keep the action alive until one fires. The poll cadence is
+        fast enough that an emergency/finished raised between ticks
+        is serviced within ~_RUNTIME_CONTROL_FEEDBACK_HZ⁻¹ s.
+
         Termination order (highest → lowest priority):
 
           1. `goal_handle.is_cancel_requested` — supervisor cancelled
@@ -355,39 +391,44 @@ class MissionControlNode(LifecycleNode):
              complete (lap-min distance + big-orange). Result
              outcome="finished".
 
-        Feedback cadence is fixed at _RUNTIME_CONTROL_FEEDBACK_HZ
-        (40 Hz). We don't gate on /ctrl/cmd_internal arrivals — if
-        control_node hasn't ticked yet (warm-up window after Phase 1
-        ready), we forward the zeroed fail-safe ControlCommand
-        initialised in __init__.
+        Previous version emitted feedback synchronously from this
+        loop's tick — that added up to 25 ms of phase lag (worst case)
+        between control_node's publish and the supervisor's receive,
+        which was destabilising Pure Pursuit in tight corners.
         """
         self.get_logger().info("runtime_control opened")
+        # Publish the seed frame with whatever's in cache so the
+        # supervisor doesn't have to wait for the first /ctrl/cmd_internal
+        # tick to receive anything. Same fail-safe ControlCommand the
+        # cache was initialised with.
+        self._active_runtime_goal_handle = goal_handle
+        self._publish_runtime_feedback(goal_handle)
 
         period = 1.0 / _RUNTIME_CONTROL_FEEDBACK_HZ
         result = RuntimeControl.Result()
 
         try:
             while rclpy.ok():
-                # Termination checks first so a flag that arrived
-                # mid-sleep gets serviced before the next feedback
-                # frame, not after.
                 if goal_handle.is_cancel_requested:
                     result.outcome = "cancelled"
                     result.message = "supervisor cancelled the goal"
                     self.get_logger().info(
                         "runtime_control: cancelled by supervisor")
+                    self._active_runtime_goal_handle = None
                     goal_handle.canceled()
                     return result
 
                 if self._latest_emergency:
-                    # Emit one last feedback frame with emergency=true
-                    # so the supervisor's bridge publishes /signal/ebs
-                    # before we close the action.
+                    # Force one last feedback frame with emergency=true
+                    # so the supervisor latches /signal/ebs before we
+                    # close (the regular _on_ctrl_cmd-driven path may
+                    # not fire again before the action closes).
                     self._publish_runtime_feedback(goal_handle)
                     result.outcome = "emergency"
                     result.message = "/ctrl/emergency true"
                     self.get_logger().warn(
                         "runtime_control: terminating on emergency")
+                    self._active_runtime_goal_handle = None
                     goal_handle.succeed()
                     return result
 
@@ -397,10 +438,10 @@ class MissionControlNode(LifecycleNode):
                     result.message = "/slam/finished true"
                     self.get_logger().info(
                         "runtime_control: terminating on finished")
+                    self._active_runtime_goal_handle = None
                     goal_handle.succeed()
                     return result
 
-                self._publish_runtime_feedback(goal_handle)
                 time.sleep(period)
 
             # rclpy.ok() turned false → process shutting down. Best
@@ -408,6 +449,7 @@ class MissionControlNode(LifecycleNode):
             # client doesn't hang on the future.
             result.outcome = "cancelled"
             result.message = "rclpy shutting down"
+            self._active_runtime_goal_handle = None
             goal_handle.canceled()
             return result
 
@@ -416,6 +458,7 @@ class MissionControlNode(LifecycleNode):
                 f"runtime_control: unexpected error: {ex!r}")
             result.outcome = "error"
             result.message = repr(ex)
+            self._active_runtime_goal_handle = None
             try:
                 goal_handle.abort()
             except Exception:  # noqa: BLE001

@@ -26,7 +26,7 @@
       },
       "transforms": {},
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -44,7 +44,7 @@
         "/path_planning/debug": { "visible": true },
         "/testing_only/track": { "visible": false },
         "/testing_only/odom": { "visible": true },
-        "/cone_slam/state": { "visible": true }
+        "/slam/pose": { "visible": true }
       },
       "layers": []
     },
@@ -60,7 +60,7 @@
       "xAxisVal": "timestamp",
       "paths": [
         {
-          "value": "/cone_slam/state.pose.pose.position.x",
+          "value": "/slam/pose.pose.pose.position.x",
           "enabled": true,
           "label": "SLAM x",
           "color": "#4488ff",
@@ -69,7 +69,7 @@
           "showLine": true
         },
         {
-          "value": "/cone_slam/state.pose.pose.position.y",
+          "value": "/slam/pose.pose.pose.position.y",
           "enabled": true,
           "label": "SLAM y",
           "color": "#88ff44",
@@ -135,7 +135,7 @@
       "minYValue": 0,
       "paths": [
         {
-          "value": "/cone_slam/state.twist.twist.linear.x",
+          "value": "/slam/pose.twist.twist.linear.x",
           "enabled": true,
           "label": "v actual (SLAM)",
           "color": "#4488ff",
@@ -222,7 +222,7 @@
     },
 
     "RawMessages!state": {
-      "topicPath": "/cone_slam/state"
+      "topicPath": "/slam/pose"
     }
   },
 

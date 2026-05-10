@@ -31,7 +31,7 @@
         "frame:base_link":   { "visible": false }
       },
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -99,7 +99,7 @@
         "frame:base_link":   { "visible": false }
       },
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",

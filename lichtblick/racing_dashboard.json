@@ -106,7 +106,7 @@
       },
       "transforms": {},
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -149,7 +149,7 @@
       },
       "transforms": {},
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -167,7 +167,7 @@
         "/path_planning/debug": { "visible": true },
         "/testing_only/track": { "visible": false },
         "/testing_only/odom": { "visible": true },
-        "/cone_slam/state": { "visible": true }
+        "/slam/pose": { "visible": true }
       },
       "layers": []
     },
@@ -194,7 +194,7 @@
       },
       "transforms": {},
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -221,7 +221,7 @@
       "xAxisVal": "timestamp",
       "paths": [
         {
-          "value": "/control_command.steering",
+          "value": "/ctrl/cmd_internal.steering",
           "enabled": true,
           "label": "Steering",
           "color": "#4488ff",
@@ -245,7 +245,7 @@
       "minYValue": 0,
       "paths": [
         {
-          "value": "/cone_slam/state.twist.twist.linear.x",
+          "value": "/slam/pose.twist.twist.linear.x",
           "enabled": true,
           "label": "vx (SLAM)",
           "color": "#ff8800",
@@ -254,7 +254,7 @@
           "showLine": true
         },
         {
-          "value": "/cone_slam/state.twist.twist.linear.y",
+          "value": "/slam/pose.twist.twist.linear.y",
           "enabled": true,
           "label": "vy (SLAM)",
           "color": "#ff4444",
@@ -279,7 +279,7 @@
       "maxYValue": 1,
       "paths": [
         {
-          "value": "/control_command.throttle",
+          "value": "/ctrl/cmd_internal.throttle",
           "enabled": true,
           "label": "Throttle",
           "color": "#00cc44",
@@ -288,7 +288,7 @@
           "showLine": true
         },
         {
-          "value": "/control_command.brake",
+          "value": "/ctrl/cmd_internal.brake",
           "enabled": true,
           "label": "Brake",
           "color": "#ff3333",
@@ -423,7 +423,7 @@
       "xAxisVal": "timestamp",
       "paths": [
         {
-          "value": "/cone_slam/state.pose.pose.position.x",
+          "value": "/slam/pose.pose.pose.position.x",
           "enabled": true,
           "label": "SLAM x",
           "color": "#4488ff",
@@ -432,7 +432,7 @@
           "showLine": true
         },
         {
-          "value": "/cone_slam/state.pose.pose.position.y",
+          "value": "/slam/pose.pose.pose.position.y",
           "enabled": true,
           "label": "SLAM y",
           "color": "#88ff44",
@@ -556,7 +556,7 @@
       "minYValue": 0,
       "paths": [
         {
-          "value": "/cone_slam/state.twist.twist.linear.x",
+          "value": "/slam/pose.twist.twist.linear.x",
           "enabled": true,
           "label": "vx",
           "color": "#ff8800",
@@ -565,7 +565,7 @@
           "showLine": true
         },
         {
-          "value": "/cone_slam/state.twist.twist.linear.y",
+          "value": "/slam/pose.twist.twist.linear.y",
           "enabled": true,
           "label": "vy",
           "color": "#ff4444",
@@ -578,7 +578,7 @@
     },
 
     "RawMessages!cmd": {
-      "topicPath": "/control_command"
+      "topicPath": "/ctrl/cmd_internal"
     },
 
     "RawMessages!conos": {
