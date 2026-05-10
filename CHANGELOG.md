@@ -14,6 +14,24 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **/odom Phase 2 — REP-105 TF restructure** (#382). `sim_supervisor_node`
+  now owns `odom→base_link` (broadcast at the 100 Hz filter publish
+  rate); `slam_node` stops broadcasting that edge and instead
+  publishes `map→odom` as the dynamic drift-correction transform
+  (computed at each scan tick as `slam_pose ⊖ latest /odom`, ~10 Hz).
+  The chain `map → odom → base_link` resolves to SLAM's absolute
+  pose at the leaf regardless of supervisor's dead-reckoning drift
+  between SLAM ticks. `/Conos` and `/Path` migrate from `odom` to
+  `map` frame; `path_planning_node`'s TF lookup becomes
+  `map→base_link`; `/cone_slam/state` is renamed to `/slam/pose`
+  (with frame_id `map`) so the topic name doesn't lock us into the
+  current iSAM2 backend. Pure-Python math in
+  `pipeline/cone_slam/cone_slam/tf_math.py` (`compute_map_to_odom`),
+  11 unit tests covering identity, translation/rotation drift,
+  yaw-wrap, and the round-trip identity `T_map_odom · T_odom_base ==
+  T_map_base`. `/tf_static` is no longer used by the autonomy stack.
+
+
 - **Mission Control session-start uses the action chain end-to-end**
   (#379, #381). `/api/event/start` now calls `StartMission` instead of
   writing `/pipeline_ctrl/enable` and sleeping 4.5 s; autonomy reaches

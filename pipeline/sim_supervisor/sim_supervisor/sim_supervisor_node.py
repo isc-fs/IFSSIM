@@ -51,9 +51,11 @@ from rclpy.qos import (
     DurabilityPolicy,
 )
 
+from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Empty as EmptyMsg, Float32
+from tf2_ros import TransformBroadcaster
 
 from fs_msgs.msg import ControlCommand
 from dv_msgs.action import StartMission, RuntimeControl
@@ -115,6 +117,12 @@ class SimSupervisorNode(LifecycleNode):
         self._odom_filter: OdometryFilter | None = None
         self._odom_pub = None
         self._odom_pub_timer = None
+        # Phase 2 (#382): supervisor owns the odom→base_link TF
+        # broadcast (slam_node stopped doing it in #382 and now
+        # publishes map→odom instead, computed from slam_pose ⊖
+        # latest /odom). Created in on_configure, used inside
+        # _publish_odom.
+        self._odom_tf_broadcaster: TransformBroadcaster | None = None
         self._sub_imu = None
         self._sub_rpm = None
         self._odom_first_publish_logged: bool = False
@@ -167,22 +175,21 @@ class SimSupervisorNode(LifecycleNode):
         # /odom infrastructure — created here, subscriptions and
         # timer come up in on_activate.
         #
-        # Phase 1 scope: topic only. We do NOT broadcast the
-        # odom→base_link TF here because slam_node still owns that
-        # broadcaster — two publishers writing to the same TF parent→
-        # child causes last-writer-wins flicker between dead-reckoning
-        # (us) and SLAM-corrected (slam_node). Phase 2 (separate
-        # branch) hands the TF to us and slam_node starts publishing
-        # map→odom drift correction instead. Until then, /odom.pose
-        # and the TF tree's odom→base_link describe slightly different
-        # things; consumers that care about absolute pose should keep
-        # using TF lookups (which see slam's estimate), and consumers
-        # that care about high-rate velocity should switch to
-        # /odom.twist (which we own).
+        # Phase 2 (#382): supervisor owns the odom→base_link TF.
+        # slam_node simultaneously publishes map→odom (drift
+        # correction) computed from its absolute pose ⊖ our
+        # supervisor /odom — together the chain
+        # map → odom → base_link gives SLAM's absolute pose at the
+        # leaf, with map→odom absorbing accumulated supervisor
+        # dead-reckoning drift between SLAM ticks. tf2 has no
+        # lifecycle TransformBroadcaster; the regular one is silent
+        # until on_activate's filter-calibration window completes
+        # and the timer fires.
         self._odom_filter = OdometryFilter()
         self._odom_pub = self.create_lifecycle_publisher(
             Odometry, "/odom", 50,
         )
+        self._odom_tf_broadcaster = TransformBroadcaster(self)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -267,6 +274,7 @@ class SimSupervisorNode(LifecycleNode):
             self.destroy_timer(self._odom_pub_timer)
             self._odom_pub_timer = None
         self._odom_pub = None
+        self._odom_tf_broadcaster = None
         self._odom_filter = None
         self._current_mission = None
         return TransitionCallbackReturn.SUCCESS
@@ -305,9 +313,12 @@ class SimSupervisorNode(LifecycleNode):
         self._odom_filter.push_rpm(time.monotonic(), float(msg.data))
 
     def _publish_odom(self) -> None:
-        """Timer-driven /odom emission. Skips while the filter is
-        still in stationary calibration (first ~3 s after activate)."""
-        if self._odom_filter is None or self._odom_pub is None:
+        """Timer-driven /odom topic + odom→base_link TF emission.
+        Skips while the filter is still in stationary calibration
+        (first ~3 s after activate)."""
+        if (self._odom_filter is None
+                or self._odom_pub is None
+                or self._odom_tf_broadcaster is None):
             return
         if not self._odom_filter.is_calibrated():
             return
@@ -320,6 +331,12 @@ class SimSupervisorNode(LifecycleNode):
                 "/odom first publish — IMU+RPM filter calibrated")
             self._odom_first_publish_logged = True
 
+        # 2D yaw → unit quaternion (axis-z) used by both the Odometry
+        # message and the TF broadcast.
+        half = 0.5 * s.yaw
+        qw = float(np.cos(half))
+        qz = float(np.sin(half))
+
         # nav_msgs/Odometry: pose in header.frame_id (odom),
         # twist in child_frame_id (base_link). REP-103 axes.
         msg = Odometry()
@@ -329,17 +346,31 @@ class SimSupervisorNode(LifecycleNode):
         msg.pose.pose.position.x = s.x
         msg.pose.pose.position.y = s.y
         msg.pose.pose.position.z = 0.0
-        # 2D yaw → quaternion
-        half = 0.5 * s.yaw
-        msg.pose.pose.orientation.w = float(np.cos(half))
+        msg.pose.pose.orientation.w = qw
         msg.pose.pose.orientation.x = 0.0
         msg.pose.pose.orientation.y = 0.0
-        msg.pose.pose.orientation.z = float(np.sin(half))
+        msg.pose.pose.orientation.z = qz
         msg.twist.twist.linear.x = s.vx
         msg.twist.twist.linear.y = s.vy
         msg.twist.twist.linear.z = 0.0
         msg.twist.twist.angular.z = s.yaw_rate
         self._odom_pub.publish(msg)
+
+        # odom → base_link TF (Phase 2 — #382). Same pose, broadcast
+        # at the 100 Hz publish rate so downstream TF lookups see a
+        # high-rate dead-reckoning leaf.
+        tf = TransformStamped()
+        tf.header.stamp = now
+        tf.header.frame_id = "odom"
+        tf.child_frame_id = "base_link"
+        tf.transform.translation.x = s.x
+        tf.transform.translation.y = s.y
+        tf.transform.translation.z = 0.0
+        tf.transform.rotation.w = qw
+        tf.transform.rotation.x = 0.0
+        tf.transform.rotation.y = 0.0
+        tf.transform.rotation.z = qz
+        self._odom_tf_broadcaster.sendTransform(tf)
 
     # ------------------------------------------------------------------
     # Action handlers (skeletons)
