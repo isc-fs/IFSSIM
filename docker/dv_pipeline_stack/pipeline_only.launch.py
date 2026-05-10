@@ -120,7 +120,9 @@ def generate_launch_description() -> LaunchDescription:
     # its OdometryFilter sees the bridge's sensor stream.
     actions += _auto_active(
         "sim_supervisor", "sim_supervisor_node", "sim_supervisor_node",
-        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE],
+        # See pipeline.launch.py for the REMAP_CMD rationale (#384).
+        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE,
+                    REMAP_CMD],
     )
 
     # Autonomy lifecycle nodes (unconfigured)
@@ -137,7 +139,9 @@ def generate_launch_description() -> LaunchDescription:
     ))
     actions.append(_autonomy_lifecycle(
         "control", "control_node", "control_node",
-        remappings=[REMAP_CMD],
+        # Post-#384: control_node publishes /ctrl/cmd_internal, not
+        # /fsds/control_command. See pipeline.launch.py.
+        remappings=[],
     ))
 
     return LaunchDescription(actions)
