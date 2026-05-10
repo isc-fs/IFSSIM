@@ -42,7 +42,7 @@ services:
       # stream sits around 35 %; LIDAR_VIZ_DECIMATION=4 drops it to
       # ~10 % at 1/4 spatial density, plenty for "is the autonomy
       # seeing what I think it's seeing" debugging.
-      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-0}
+      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-4}
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
       # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
       # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single
@@ -255,12 +255,44 @@ services:
       # python:3.12-slim base. 20 s start period gives that headroom.
       start_period: 20s
 
-  # Lichtblick — web-based ROS 2 visualizer, connects to Foxglove bridge at ws://localhost:8765
+  # Lichtblick — web-based ROS 2 visualizer, connects to Foxglove bridge
+  # at ws://localhost:8765.
+  #
+  # Built from upstream source (pinned tag) rather than pulling
+  # ghcr.io/lichtblick-suite/lichtblick:latest, because upstream's CI
+  # only publishes a linux/amd64 manifest. On Apple Silicon hosts that
+  # forced the container to run under Rosetta, which pinned ~1 full
+  # CPU core on the host and degraded the rest of the pipeline (the
+  # DV stack and the bridge are on the same host, so anything that
+  # melts a core eats LiDAR throughput). Building locally with no
+  # `platform:` override picks the host's native arch — arm64 on
+  # M-series, amd64 on x86 — automatically.
+  #
+  # Build is yarn-install-heavy (~3-5 min first time) but cached by
+  # the Docker layer cache and pinned by tag, so it only runs again
+  # when LICHTBLICK_VERSION below is bumped.
   lichtblick:
-    image: ghcr.io/lichtblick-suite/lichtblick:latest
-    platform: linux/amd64   # no arm64 image published; runs via Rosetta on Apple Silicon
+    build:
+      # Local Dockerfile that clones the pinned Lichtblick tag inside
+      # the build, runs yarn install + the webpack prod build with
+      # an 8 GB Node heap, then assembles a caddy-served static image.
+      # The original git-URL build context approach OOM'd on the
+      # webpack stage at 108 s — the upstream Dockerfile leaves the
+      # default 4 GB Node heap which isn't enough for the main chunk.
+      # See docker/lichtblick/Dockerfile for the full rationale + the
+      # LICHTBLICK_REF pin.
+      context: ./docker/lichtblick
+    # Bind to all interfaces so teammates / phones / tablets on the
+    # same LAN can hit the web UI at http://<host-ip>:8080. The
+    # original 127.0.0.1 binding kept it loopback-only — fine when
+    # the only user was the sim host itself, but the whole point of
+    # building Lichtblick natively (this PR) is also to let another
+    # device do the rendering and offload CPU. Lichtblick's web UI
+    # is pure static + a WebSocket client to /8765; opening it to
+    # the LAN doesn't widen the attack surface beyond what
+    # foxglove_bridge already does on the same host network.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8080:8080"
     restart: unless-stopped
 
   # Mission Control frontend — React/Tailwind dashboard
