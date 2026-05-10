@@ -351,12 +351,21 @@ def sim_reset():
         # `r.ok ? success : error` paths still work.
         return JSONResponse({"ok": False, "error": "sim not connected"}, status_code=503)
     with _state_lock:
-        # Stop pipeline so control node stops publishing commands
-        try:
-            os.remove(PIPELINE_CTL_FILE)
-        except FileNotFoundError:
-            pass
         _ensure_home_pose_captured()
+    # Stop the autonomy outside the state lock — the action call
+    # blocks for tens of ms while mode_manager fans out
+    # change_state(DEACTIVATE+CLEANUP), and we don't want to hold
+    # the state lock during DDS round-trips. Idempotent post-#379;
+    # a no-op if autonomy isn't active. Skipped entirely when
+    # ros_bridge isn't available (legacy flag-file path retired
+    # in #381).
+    if _ros_bridge_available:
+        try:
+            RosBridge.get().start_mission("")
+        except Exception as ex:
+            log_event("sim_reset",
+                      f"autonomy stop failed (continuing reset anyway): {ex}")
+    with _state_lock:
         # Snapshot the home pose under `_home_lock` (#327 B5) so the
         # three coordinates we pass to teleport_pos are consistent
         # with each other — a concurrent capture could otherwise
@@ -407,18 +416,33 @@ def event_set(setup: EventSetup):
 
 @app.post("/api/event/start", dependencies=[Depends(require_api_key)])
 def event_start(setup: EventSetup):
-    """Boot the autonomy pipeline from a clean slate.
+    """Boot the autonomy pipeline via the StartMission action chain.
 
-    Three phases:
-      1. Pre-sleep state mutations (under `_state_lock`): stop any
-         existing pipeline, RES-activate to park the car, set event
-         type, kick the launcher.
-      2. SLAM IMU bias-calibration window (NO LOCK): time.sleep(4.5).
-         Pre-#327 this was held under `_state_lock`, blocking every
-         other state-mutating endpoint and the WS telemetry tick for
-         the full window (B1).
-      3. Post-sleep state mutations (under `_state_lock`): release
-         RES, hand control to the autonomy.
+    Phases (post-#379):
+      1. Pre-flight (under `_state_lock`): connectivity check, cone
+         preflight, RES-activate to park the car, set event type,
+         resume sim.
+      2. Bring up autonomy (NO LOCK): call
+         `RosBridge.get().start_mission(mission)`. The action chain
+         (supervisor → mission_control → mode_manager) handles the
+         timing internally: configure + activate of each autonomy
+         LifecycleNode, the Numba JIT warmup window inside
+         cone_detection_node.on_configure (10–20 s on Apple Silicon
+         Docker), and the SLAM calibration window. Returns ready=true
+         only when control_node is `active` and ready to consume
+         /Path. Mode_manager's _drive_transition is idempotent so
+         calling start_mission on an already-active stack just
+         skips and succeeds.
+      3. Release EBS (under `_state_lock`): hand control to the
+         active autonomy. With autonomy already active, /control_command
+         starts flowing into the bridge the moment RES releases.
+
+    Pre-#379 this used `/pipeline_ctrl/enable` flag-file writes plus
+    a hard-coded `time.sleep(4.5)` for the SLAM calibration window.
+    The flag-file mechanism is retired (see #381). When ros_bridge
+    isn't available — unit-test envs without rclpy — the legacy
+    flag-file fallback is retained so existing tests don't have to
+    spin up DDS.
 
     Idempotency: `_session_starting` flag prevents double-click
     re-firing the boot sequence (B7). Returns 409 if a start is
@@ -456,86 +480,95 @@ def event_start(setup: EventSetup):
         _session_starting = True
 
     try:
-        # === Phase 1: pre-sleep mutations (held under _state_lock) ===
+        # === Phase 1: pre-flight sim-side setup (under _state_lock) ===
         with _state_lock:
             try:
-                # Stop any running pipeline so the launch sequence below
-                # starts the autonomy from a clean slate
-                # (cone_graph_slam, control, path_planning all
-                # relaunched → SLAM re-runs INIT_CALIBRATING).
-                try:
-                    os.remove(PIPELINE_CTL_FILE)
-                except FileNotFoundError:
-                    pass
-                # Park the car under EBS while the pipeline boots.
-                # cone_graph_slam requires 3 s of stationary IMU samples
-                # to estimate accel/gyro bias correctly; if the car
-                # moves during that window the bias estimate locks in
-                # the body-frame launch acceleration and every
-                # subsequent LiDAR scan trips DA-failure spikes. EBS
-                # holds the handbrake on all four wheels until we
-                # explicitly release it after SLAM is up.
+                # Park the car under EBS while the autonomy boots.
+                # Mode_manager's CONFIGURE step on cone_detection_node
+                # runs the Numba JIT compile (10–20 s); slam_node's
+                # on_activate resets the IMU+RPM filter for a fresh
+                # stationary calibration window (~3 s). Both rely on
+                # the car being motionless — EBS guarantees that.
                 sim.res_activate()
                 res_active = True
                 sim.set_event(setup.event_type, setup.num_laps)
                 sim.resume()
-                # Start the pipeline now (still EBS-locked). The control
-                # node publishes /signal/ebs_reset on init which clears
-                # the bridge's ebs_triggered_ flag from any prior
-                # session.
-                os.makedirs("/pipeline_ctrl", exist_ok=True)
-                open(PIPELINE_CTL_FILE, "w").close()
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-        # === Phase 2: SLAM IMU bias-calibration window (NO LOCK) ===
-        # Wait for cone_graph_slam to clear INIT_CALIBRATING. We don't
-        # have a status topic yet, so we wait the worst-case timing:
-        # ~1 s for the launch process to fork all nodes + 3 s for the
-        # IMU calibration window itself + 0.5 s margin. This is the
-        # ONLY moment in event_start where the car is guaranteed to be
-        # stationary, so any drift here corrupts the SLAM bias.
-        #
-        # CRITICAL — this `time.sleep` runs WITHOUT `_state_lock`.
-        # Pre-#327 (B1) the lock was held across the wait, so every
-        # other state-mutating endpoint (sim_reset, res_activate,
-        # res_release, event_set, track_load) blocked for 4.5 s, and
-        # the WS telemetry loop's RPC calls (which contend on
-        # `SimConnection._lock` already loaded with our Phase 1
-        # commands) went mute too. Releasing the lock here lets the
-        # operator interrupt the boot — clicking Reset or RES during
-        # the calibration window now actually does something. Phase 3
-        # detects that case via the pipeline-control-file check.
-        time.sleep(4.5)
-
-        # === Phase 3: post-sleep mutations (held under _state_lock) ===
-        with _state_lock:
-            # Honour an interrupt that landed during the calibration
-            # window. If the operator hit Reset or stopped the pipeline
-            # during the 4.5 s wait, the control file is gone — don't
-            # blindly release EBS and hand control to a pipeline that
-            # the operator just told us to shut down.
-            if not os.path.exists(PIPELINE_CTL_FILE):
+        # === Phase 2: bring up autonomy via the action chain (NO LOCK) ===
+        # The StartMission action returns ready=true only when all 4
+        # autonomy LifecycleNodes (cone_detection, slam, planning,
+        # control) reach `active`. No more time.sleep needed — the
+        # action's own heartbeats absorb the variable warmup window.
+        # The lock is released across this call so other endpoints
+        # (sim_reset, res_activate, telemetry WS) remain responsive
+        # during the 10–20 s autonomy boot.
+        if _ros_bridge_available:
+            mission = _EVENT_TO_MISSION.get(setup.event_type, "trackdrive")
+            if setup.event_type not in _EVENT_TO_MISSION:
                 log_event(
                     "event_start",
-                    "aborted post-sleep — pipeline no longer running (likely operator-reset during boot)",
+                    f"unknown event {setup.event_type!r}; defaulting mission "
+                    f"to 'trackdrive'",
+                )
+            log_event(
+                "event_start",
+                f"calling StartMission(mission={mission!r}) — autonomy "
+                f"configure+activate, can take 10–20 s",
+            )
+            outcome = RosBridge.get().start_mission(mission)
+            if not outcome.ready:
+                # Re-engage EBS defensively — if the autonomy boot
+                # failed, releasing EBS would just let the car drift
+                # under residual EMRAX idle torque.
+                with _state_lock:
+                    try:
+                        sim.res_activate()
+                        res_active = True
+                    except Exception:
+                        pass
+                log_event(
+                    "event_start",
+                    f"StartMission failed: {outcome.message}",
                 )
                 return JSONResponse(
-                    {"ok": False, "error": "session start aborted (pipeline stopped during boot)"},
-                    status_code=409,
+                    {
+                        "ok": False,
+                        "error": f"autonomy startup failed: {outcome.message}",
+                    },
+                    status_code=502,
                 )
+        else:
+            # ros_bridge unavailable — only happens when the backend
+            # is running outside the mission_control_backend container
+            # (e.g. local dev with no rclpy installed). The action
+            # chain is the canonical path post-#381; refuse with 503
+            # rather than fall back to the retired flag-file mechanism.
+            log_event(
+                "event_start",
+                "ros_bridge unavailable; autonomy bring-up requires "
+                "the action chain (the flag-file fallback was retired in #381)",
+            )
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "ros_bridge not initialised — autonomy bring-up unavailable",
+                },
+                status_code=503,
+            )
+
+        # === Phase 3: release EBS, autonomy takes over (under lock) ===
+        with _state_lock:
             try:
-                # SLAM is now SLAM_RUNNING with a clean bias. Release
-                # EBS, hand control to the autonomy, and let the
-                # velocity controller ramp the EMRAX from rest. The
-                # user-requested flow is: click Start Session → RES
-                # activates while SLAM calibrates → SLAM ready → RES
-                # auto-releases → car drives. Strict FS-DV T 14.8.4 /
-                # T 14.8.5 timings (≥5 s in AS_Ready before R2D, ≥3 s
-                # in AS_Driving before motion) are NOT enforced here —
-                # they belong in a proper state-machine implementation
-                # (issue #148) that publishes the AS_state on a
-                # CAN-equivalent topic.
+                # Autonomy is already `active` and control_node is
+                # publishing /control_command. Releasing EBS lets the
+                # bridge forward those commands to UE5. Strict FS-DV
+                # T 14.8.4 / T 14.8.5 timings (≥5 s in AS_Ready before
+                # R2D, ≥3 s in AS_Driving before motion) are NOT
+                # enforced here — they belong in a proper state-machine
+                # implementation (issue #148) that publishes the
+                # AS_state on a CAN-equivalent topic.
                 sim.res_release()
                 res_active = False
                 try:
@@ -557,7 +590,12 @@ def event_start(setup: EventSetup):
             except Exception:
                 actual_laps = setup.num_laps
             log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
-        return {"ok": True, "event": setup.event_type, "laps": actual_laps}
+        return {
+            "ok": True,
+            "event": setup.event_type,
+            "laps": actual_laps,
+            "autonomy_via": "ros_action" if _ros_bridge_available else "flag_file_legacy",
+        }
     finally:
         # Always clear the idempotency flag — success, exception,
         # interrupt-abort, or 5xx error from the inner try. Without
@@ -629,83 +667,119 @@ def res_status():
 
 @app.post("/api/pipeline/start", dependencies=[Depends(require_api_key)])
 def pipeline_start():
-    """Bring the autonomy pipeline to `active`.
+    """Bring the autonomy pipeline to `active` via StartMission.
 
-    Path of record (post-DV-pipeline-alignment): call
-    sim_supervisor_node.StartMission with the current event's mission.
-    The supervisor relays to mission_control_node, which calls
-    mode_manager.activate_mode, which fans out change_state across
-    every autonomy LifecycleNode. Blocks until the supervisor reports
-    ready/failed (typically 10–25 s, dominated by Numba JIT in
-    cone_detection_node's on_configure).
+    Calls sim_supervisor_node.StartMission with the current event's
+    mission. The supervisor relays to mission_control_node, which
+    calls mode_manager.activate_mode, which fans out change_state
+    across every autonomy LifecycleNode. Blocks until the supervisor
+    reports ready/failed (typically 10–25 s, dominated by Numba JIT
+    in cone_detection_node's on_configure).
 
-    Legacy fallback (when rclpy isn't available — e.g. running this
-    backend outside the Docker container, or when ros_bridge failed
-    to initialise on startup): write the /pipeline_ctrl/enable flag
-    file. entrypoint.sh polls that and forks the legacy
-    pipeline_only.launch.py. Behaviourally older but still wired to
-    the same set of (now lifecycle-managed) autonomy nodes.
+    Mode_manager's _drive_transition is idempotent post-#379 — calling
+    /api/pipeline/start when autonomy is already active is a no-op
+    that returns success immediately.
 
     Mission selection: derived from `current_event` via
     _EVENT_TO_MISSION. Defaults to "trackdrive" when the current
     event is unknown — matches the most common dev scenario.
+
+    Pre-#381 a flag-file fallback existed for envs without rclpy;
+    that path was retired alongside entrypoint.sh's polling loop.
     """
-    if _ros_bridge_available:
-        # Resolve mission name from the currently-set event.
-        with _state_lock:
-            event_snap = current_event
-        mission = _EVENT_TO_MISSION.get(event_snap, "trackdrive")
-        if event_snap not in _EVENT_TO_MISSION:
-            log_event("pipeline",
-                      f"unknown event {event_snap!r}; defaulting mission "
-                      f"to 'trackdrive'")
+    if not _ros_bridge_available:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "ros_bridge not initialised — autonomy bring-up requires "
+                "the StartMission action chain (the flag-file path was "
+                "retired in #381)"
+            ),
+        )
 
-        log_event("pipeline",
-                  f"calling StartMission(mission={mission!r}) — this can "
-                  f"take 10–25 s while autonomy configures+activates")
-        outcome = RosBridge.get().start_mission(mission)
+    with _state_lock:
+        event_snap = current_event
+    mission = _EVENT_TO_MISSION.get(event_snap, "trackdrive")
+    if event_snap not in _EVENT_TO_MISSION:
+        log_event(
+            "pipeline",
+            f"unknown event {event_snap!r}; defaulting mission "
+            f"to 'trackdrive'",
+        )
 
-        if not outcome.ready:
-            log_event("pipeline",
-                      f"StartMission failed: {outcome.message}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=outcome.message,
-            )
+    log_event(
+        "pipeline",
+        f"calling StartMission(mission={mission!r}) — this can take "
+        f"10–25 s while autonomy configures+activates",
+    )
+    outcome = RosBridge.get().start_mission(mission)
 
-        # Also touch the flag file so any tooling still reading it
-        # (foxglove panel toggles, etc.) sees a consistent state.
-        os.makedirs("/pipeline_ctrl", exist_ok=True)
-        open(PIPELINE_CTL_FILE, "w").close()
+    if not outcome.ready:
+        log_event("pipeline", f"StartMission failed: {outcome.message}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=outcome.message,
+        )
 
-        log_event("pipeline", f"StartMission ready (mission={mission!r})")
-        return {
-            "ok": True,
-            "pipeline": "started",
-            "mission": mission,
-            "via": "ros_action",
-            "message": outcome.message,
-        }
-
-    # Legacy fallback — flag file only. entrypoint.sh's polling loop
-    # picks it up and forks pipeline_only.launch.py.
-    os.makedirs("/pipeline_ctrl", exist_ok=True)
-    open(PIPELINE_CTL_FILE, "w").close()
-    log_event("pipeline", "Pipeline started (legacy flag-file path)")
-    return {"ok": True, "pipeline": "started", "via": "flag_file"}
+    log_event("pipeline", f"StartMission ready (mission={mission!r})")
+    return {
+        "ok": True,
+        "pipeline": "started",
+        "mission": mission,
+        "via": "ros_action",
+        "message": outcome.message,
+    }
 
 @app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
-    try:
-        os.remove(PIPELINE_CTL_FILE)
-    except FileNotFoundError:
-        pass
-    log_event("pipeline", "Pipeline stopped")
-    return {"ok": True, "pipeline": "stopped"}
+    """Tear down the autonomy via StartMission(mission='').
+
+    mode_manager handles the empty-mission case as a deactivate +
+    cleanup fan-out over the autonomy LifecycleNodes; the management
+    trio (supervisor / mission_control / mode_manager) stays
+    `active` to handle the next start. Idempotent — calling on an
+    already-torn-down stack is a no-op (post-#379 mode_manager
+    idempotency).
+    """
+    if not _ros_bridge_available:
+        # No flag-file fallback post-#381; nothing to stop if rclpy
+        # isn't available (the autonomy can only run via the action
+        # chain which requires ros_bridge).
+        log_event("pipeline", "Pipeline stop: ros_bridge unavailable; no-op")
+        return {"ok": True, "pipeline": "stopped", "via": "no_op"}
+
+    outcome = RosBridge.get().start_mission("")
+    if not outcome.ready:
+        log_event("pipeline", f"Pipeline stop failed: {outcome.message}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=outcome.message,
+        )
+    log_event("pipeline", "Pipeline stopped (autonomy torn down)")
+    return {"ok": True, "pipeline": "stopped", "via": "ros_action"}
+
 
 @app.get("/api/pipeline/status")
 def pipeline_status():
-    return {"enabled": os.path.exists(PIPELINE_CTL_FILE)}
+    """Report whether autonomy is currently active.
+
+    Reflects the actual lifecycle state of `control_node` — the leaf
+    consumer in the mode_manager bring-up order. If control_node is
+    `active`, everything upstream of it (cone_detection, slam,
+    planning) is too. Checking control_node alone is one rclpy call
+    instead of four; cached in ros_bridge for 500 ms so the 1 Hz
+    telemetry tick doesn't storm the get_state service.
+
+    Pre-#392 this checked `is_action_server_available()` instead,
+    which stayed True after a `Stop Session` tear-down (the
+    management trio remains active) and caused the UI's PIPELINE
+    RUNNING indicator to stick green forever.
+    """
+    if not _ros_bridge_available:
+        return {"enabled": False, "reason": "ros_bridge unavailable"}
+    return {
+        "enabled": RosBridge.get().is_pipeline_active(),
+    }
 
 
 # === Vehicle ===
@@ -838,12 +912,19 @@ def track_load(name: str):
             sim.set_event(event_type)
             current_event = event_type
             _save_state({"event": current_event})
-        # Stop pipeline on track load (stale SLAM map would be invalid for new track)
-        try:
-            os.remove(PIPELINE_CTL_FILE)
-        except FileNotFoundError:
-            pass
         log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
+
+    # Tear down any running autonomy outside the state lock — a stale
+    # SLAM map from the previous track is invalid for the new track.
+    # Idempotent post-#379 (no-op if autonomy isn't active). Skipped
+    # when ros_bridge isn't available — the action chain is the only
+    # path post-#381.
+    if _ros_bridge_available:
+        try:
+            RosBridge.get().start_mission("")
+        except Exception as ex:
+            log_event("track_load",
+                      f"autonomy teardown failed (track loaded anyway): {ex}")
     return {"result": result, "track": name, "event_type": event_type}
 
 
@@ -1122,7 +1203,18 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                         "fps": sim_status.get("fps", 0),
                         "paused": sim_status.get("paused", False),
                         "res_active": res_active_snap,
-                        "pipeline_enabled": os.path.exists(PIPELINE_CTL_FILE),
+                        # Reflects whether control_node is in lifecycle
+                        # state `active` — the accurate "autonomy is
+                        # running" signal. Cached in ros_bridge for
+                        # 500 ms so this 1 Hz tick doesn't storm
+                        # /control_node/get_state. Pre-#392 this used
+                        # action-server reachability, which stayed
+                        # true after Stop Session and stuck the UI
+                        # indicator green.
+                        "pipeline_enabled": (
+                            _ros_bridge_available
+                            and RosBridge.get().is_pipeline_active()
+                        ),
                     }
 
                     if not await _ws_safe_send(websocket, data):

@@ -12,6 +12,35 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Changed
+
+- **Mission Control session-start uses the action chain end-to-end**
+  (#379, #381). `/api/event/start` now calls `StartMission` instead of
+  writing `/pipeline_ctrl/enable` and sleeping 4.5 s; autonomy reaches
+  `active` via the supervisor → mission_control → mode_manager chain
+  before EBS releases. Single click in Mission Control →
+  configure+activate+release in 3–4 s with no manual
+  `/api/pipeline/start` needed. The legacy flag-file path
+  (`/pipeline_ctrl/enable` + `entrypoint.sh` polling loop) is retired;
+  the `pipeline_ctrl` volume mount is removed from `docker-compose.yml`.
+- **`mode_manager.activate_mode` is now idempotent** (#379). The
+  `_drive_transition` helper queries each node's current lifecycle
+  state via `/<node>/get_state` and skips transitions whose target
+  state is already reached. Calling `activate_mode("trackdrive")` on
+  an already-active stack succeeds as a no-op in ~300 ms instead of
+  failing with "transition X returned success=False" after the
+  invalid CONFIGURE-from-active call. Same idempotency on the
+  tear-down path: `activate_mode("")` against an unconfigured stack
+  is now also a no-op.
+- **`RPM_TO_MS` reverted to the doc-derived value `0.00821`** (#380).
+  Lap-drift bag analysis showed the 2026-04-28 empirical value
+  `0.00898` produced a +9.4 % vx overestimate on the current sim
+  build (per-sample ratio mean = 0.914 across 3324 samples,
+  spread p10..p90 = 0.05). The new value matches the pure-geometry
+  formula `(2π · WheelRadius / GearRatio) / 60` from
+  `docs/dv_pipeline_rebuild.md §3.5`. Both `OdometryFilter` and
+  `cone_graph_slam_node`'s velocity prior share the constant.
+
 ### Added
 
 - **DV pipeline diagram alignment** (#359) — five new ROS 2 packages
