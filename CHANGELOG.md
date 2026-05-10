@@ -14,6 +14,22 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **DV pipeline diagram alignment** (#359) — five new ROS 2 packages
+  under `pipeline/` (`dv_msgs`, `sim_supervisor`, `mission_control`,
+  `mode_manager`, `coche_urdf`); four existing autonomy nodes
+  (`cone_detection_node`, `slam_node`, `path_planning_node`,
+  `control_node`) converted from plain Node to LifecycleNode; full
+  StartMission action chain wired from web backend → supervisor →
+  mission_control → mode_manager → autonomy lifecycle. Mission
+  Control's `/api/pipeline/start` now drives the autonomy through the
+  ROS Action protocol (legacy flag-file path retained as fallback).
+- **DV pipeline `/odom` split** (#360, Phase 1 of `docs/autonomy_pipeline.md`
+  Q1 resolution) — `sim_supervisor_node` now owns `/odom` (100 Hz,
+  IMU+RPM complementary filter; no GSS, deliberately matching the
+  real IFS-08 input set). `slam_node` keeps `/cone_slam/state` for
+  absolute pose. `control_node` now reads pose from `/cone_slam/state`
+  and twist from `/odom` — severs the coupling between SLAM
+  data-association quality and the velocity estimate driving control.
 - **Dependabot** weekly updates for npm (frontend), pip (backend), and
   github-actions, with minor/patch updates grouped per ecosystem.
 - **PR template + issue templates** (bug report, feature request) under
