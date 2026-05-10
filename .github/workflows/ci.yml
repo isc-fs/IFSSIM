@@ -202,3 +202,93 @@ jobs:
             ./CHANGELOG.md
             ./docs/**/*.md
           fail: true
+
+  # ---------------------------------------------------------------
+  # Sticky PR comment — aggregate the five gating jobs above into a
+  # single status table that's edited in place on every push. Saves
+  # reviewers the tab-switch to the Checks page; one always-current
+  # comment shows the entire gate at a glance.
+  #
+  # `if: always()` runs the job even when a gating job fails, so a
+  # red gate still gets a comment listing which job is the blocker.
+  # The job is gated to pull_request events via the workflow-level
+  # trigger plus an event_name guard inside the github-script body —
+  # on push events to dev/main there's no PR to comment on.
+  #
+  # Implementation: actions/github-script (official) finds the
+  # existing comment by HTML-comment marker and PATCHes it, or
+  # creates a new one if none exists. Self-contained — no
+  # third-party action dependencies.
+  # ---------------------------------------------------------------
+  ci-summary:
+    name: CI summary
+    needs: [bridge-build, frontend, backend, tracks, links]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Upsert sticky CI status comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          BRIDGE_RESULT:   ${{ needs.bridge-build.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BACKEND_RESULT:  ${{ needs.backend.result }}
+          TRACKS_RESULT:   ${{ needs.tracks.result }}
+          LINKS_RESULT:    ${{ needs.links.result }}
+        with:
+          script: |
+            const MARKER = '<!-- ci-status-comment -->';
+            const glyph = (r) => ({
+              success:   '✅ pass',
+              failure:   '❌ failure',
+              cancelled: '🚫 cancelled',
+              skipped:   '⏭ skip',
+            }[r] || `⚠ ${r}`);
+
+            const headSha = context.payload.pull_request.head.sha;
+            const runUrl  = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const branch  = context.payload.pull_request.head.ref;
+
+            const body = [
+              MARKER,
+              `## CI status — last commit \`${headSha.slice(0, 7)}\``,
+              '',
+              '| Job | Result |',
+              '|---|---|',
+              `| Bridge — colcon build | ${glyph(process.env.BRIDGE_RESULT)} |`,
+              `| Mission Control — frontend | ${glyph(process.env.FRONTEND_RESULT)} |`,
+              `| Mission Control — backend | ${glyph(process.env.BACKEND_RESULT)} |`,
+              `| Tracks — CSV validator | ${glyph(process.env.TRACKS_RESULT)} |`,
+              `| Docs — markdown link checker | ${glyph(process.env.LINKS_RESULT)} |`,
+              '',
+              `<sub>Run [\`${context.runId}\`](${runUrl}) · workflow \`${context.workflow}\` · branch \`${branch}\`</sub>`,
+            ].join('\n');
+
+            // Find an existing sticky comment by marker
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info(`updated sticky comment ${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+              core.info('created sticky comment');
+            }
