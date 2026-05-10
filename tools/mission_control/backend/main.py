@@ -27,6 +27,24 @@ from pydantic import BaseModel
 
 from sim_client import SimConnection
 from scoring import compute_scoring
+from ros_bridge import RosBridge, StartMissionOutcome
+
+
+# Map the backend's event_type strings (sourced from BUILTIN_TRACKS
+# and the EventSetup model — "acceleration"/"skidpad"/"autocross"/
+# "trackdrive") to the action-spec mission names accepted by
+# mode_manager (VALID_MISSIONS = {trackdrive, autocross, accel,
+# skidpad}). The only translation is "acceleration" → "accel"; the
+# others pass through. Keeping this mapping at the backend boundary
+# rather than aligning the action spec means the user-facing event
+# type stays FS-Rules-canonical ("Acceleration") while the wire
+# protocol stays compact.
+_EVENT_TO_MISSION = {
+    "acceleration": "accel",
+    "skidpad":      "skidpad",
+    "autocross":    "autocross",
+    "trackdrive":   "trackdrive",
+}
 
 # Built-in tracks that ship with the simulator — not deletable, auto-configure event type
 BUILTIN_TRACKS = {
@@ -611,10 +629,70 @@ def res_status():
 
 @app.post("/api/pipeline/start", dependencies=[Depends(require_api_key)])
 def pipeline_start():
+    """Bring the autonomy pipeline to `active`.
+
+    Path of record (post-DV-pipeline-alignment): call
+    sim_supervisor_node.StartMission with the current event's mission.
+    The supervisor relays to mission_control_node, which calls
+    mode_manager.activate_mode, which fans out change_state across
+    every autonomy LifecycleNode. Blocks until the supervisor reports
+    ready/failed (typically 10–25 s, dominated by Numba JIT in
+    cone_detection_node's on_configure).
+
+    Legacy fallback (when rclpy isn't available — e.g. running this
+    backend outside the Docker container, or when ros_bridge failed
+    to initialise on startup): write the /pipeline_ctrl/enable flag
+    file. entrypoint.sh polls that and forks the legacy
+    pipeline_only.launch.py. Behaviourally older but still wired to
+    the same set of (now lifecycle-managed) autonomy nodes.
+
+    Mission selection: derived from `current_event` via
+    _EVENT_TO_MISSION. Defaults to "trackdrive" when the current
+    event is unknown — matches the most common dev scenario.
+    """
+    if _ros_bridge_available:
+        # Resolve mission name from the currently-set event.
+        with _state_lock:
+            event_snap = current_event
+        mission = _EVENT_TO_MISSION.get(event_snap, "trackdrive")
+        if event_snap not in _EVENT_TO_MISSION:
+            log_event("pipeline",
+                      f"unknown event {event_snap!r}; defaulting mission "
+                      f"to 'trackdrive'")
+
+        log_event("pipeline",
+                  f"calling StartMission(mission={mission!r}) — this can "
+                  f"take 10–25 s while autonomy configures+activates")
+        outcome = RosBridge.get().start_mission(mission)
+
+        if not outcome.ready:
+            log_event("pipeline",
+                      f"StartMission failed: {outcome.message}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=outcome.message,
+            )
+
+        # Also touch the flag file so any tooling still reading it
+        # (foxglove panel toggles, etc.) sees a consistent state.
+        os.makedirs("/pipeline_ctrl", exist_ok=True)
+        open(PIPELINE_CTL_FILE, "w").close()
+
+        log_event("pipeline", f"StartMission ready (mission={mission!r})")
+        return {
+            "ok": True,
+            "pipeline": "started",
+            "mission": mission,
+            "via": "ros_action",
+            "message": outcome.message,
+        }
+
+    # Legacy fallback — flag file only. entrypoint.sh's polling loop
+    # picks it up and forks pipeline_only.launch.py.
     os.makedirs("/pipeline_ctrl", exist_ok=True)
     open(PIPELINE_CTL_FILE, "w").close()
-    log_event("pipeline", "Pipeline started")
-    return {"ok": True, "pipeline": "started"}
+    log_event("pipeline", "Pipeline started (legacy flag-file path)")
+    return {"ok": True, "pipeline": "started", "via": "flag_file"}
 
 @app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
@@ -1112,14 +1190,45 @@ def generate_track_plot(cones):
         return None
 
 
-# === Startup ===
+# === Startup / shutdown ===
+
+# Whether the rclpy-backed RosBridge initialised successfully. The
+# backend tolerates a missing rclpy install (e.g. when running unit
+# tests outside Docker) by gracefully falling back to the legacy
+# flag-file-driven /api/pipeline/start path. In production
+# (mission_control_backend container, ROS 2 base image) this should
+# always be True.
+_ros_bridge_available = False
+
 
 @app.on_event("startup")
 def startup():
+    global _ros_bridge_available
     print(f"IFSSIM Mission Control | http://localhost:8000")
     print(f"Sim: {SIM_HOST}:{SIM_PORT}")
     print(f"Tracks: {TRACKS_DIR}")
     print(f"Docs: http://localhost:8000/docs")
+
+    # Spin up the rclpy bridge so /api/pipeline/start can call
+    # sim_supervisor_node.StartMission. Failure is non-fatal — we
+    # log and fall back to the flag-file path in pipeline_start().
+    try:
+        RosBridge.start()
+        _ros_bridge_available = True
+        print("ros_bridge: ready (StartMission action client active)")
+    except Exception as ex:
+        _ros_bridge_available = False
+        print(f"ros_bridge: NOT available ({ex.__class__.__name__}: {ex}); "
+              "/api/pipeline/start will use the legacy flag-file path")
+
+
+@app.on_event("shutdown")
+def shutdown():
+    if _ros_bridge_available:
+        try:
+            RosBridge.shutdown()
+        except Exception as ex:
+            print(f"ros_bridge shutdown error (ignored): {ex}")
 
 
 if __name__ == "__main__":
