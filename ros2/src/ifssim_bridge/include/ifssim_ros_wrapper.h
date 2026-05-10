@@ -164,6 +164,17 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr motor_rpm_pub_;
+    // /fsds/steering_angle — actual front-wheel angle in radians,
+    // converted from the SensorFrame.steering normalized field via
+    // max_steering_angle_rad_ at publish time. Phase 3 (#383) input
+    // to sim_supervisor's OdometryFilter for the kinematic-bicycle
+    // yaw cross-check.
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr steering_angle_pub_;
+    // /fsds/brake_pressure — commanded brake authority [0, 1],
+    // published from SensorFrame.brake (controls echo from UE5).
+    // Phase 3 (#383) input to OdometryFilter for slip detection
+    // (high brake → distrust RPM-derived vx).
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr brake_pressure_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr tire_loads_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_pub_;
@@ -277,6 +288,13 @@ private:
     double imu_accel_noise_std_ = 0.0;
     double imu_gyro_noise_std_ = 0.0;
     double gss_velocity_noise_std_ = 0.0;
+    // Maximum front-wheel angle (radians). The plugin sends steering
+    // as a normalized [-1, 1] axis input; we convert at publish time
+    // for /fsds/steering_angle so downstream consumers see SI units.
+    // 0.5 rad ≈ 28.6° matches the IFS-08 URDF rack limit in
+    // pipeline/coche_urdf/urdf/ifs_08.urdf and the typical FS-car
+    // steering range.
+    double max_steering_angle_rad_ = 0.5;
 
     void parseNoiseSettings(const std::string& settings_json);
 

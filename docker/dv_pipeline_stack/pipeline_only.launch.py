@@ -46,12 +46,14 @@ from lifecycle_msgs.msg import Transition
 # Topic remappings — same as pipeline.launch.py. See that file's
 # header for the rationale.
 # ---------------------------------------------------------------------
-REMAP_LIDAR = ("/fsds/lidar/Lidar1", "/lidar/Lidar1")
-REMAP_GSS   = ("/fsds/gss",          "/gss")
-REMAP_IMU   = ("/fsds/imu",          "/imu")
-REMAP_GT    = ("/fsds/testing_only/odom", "/testing_only/odom")
-REMAP_RPM   = ("/fsds/motor_rpm",    "/motor_rpm")
-REMAP_CMD   = ("/fsds/control_command", "/control_command")
+REMAP_LIDAR    = ("/fsds/lidar/Lidar1", "/lidar/Lidar1")
+REMAP_GSS      = ("/fsds/gss",          "/gss")
+REMAP_IMU      = ("/fsds/imu",          "/imu")
+REMAP_GT       = ("/fsds/testing_only/odom", "/testing_only/odom")
+REMAP_RPM      = ("/fsds/motor_rpm",    "/motor_rpm")
+REMAP_CMD      = ("/fsds/control_command", "/control_command")
+REMAP_STEERING = ("/fsds/steering_angle", "/steering_angle")
+REMAP_BRAKE    = ("/fsds/brake_pressure", "/brake_pressure")
 
 
 def _auto_active(package: str, executable: str, name: str,
@@ -118,7 +120,7 @@ def generate_launch_description() -> LaunchDescription:
     # its OdometryFilter sees the bridge's sensor stream.
     actions += _auto_active(
         "sim_supervisor", "sim_supervisor_node", "sim_supervisor_node",
-        remappings=[REMAP_IMU, REMAP_RPM],
+        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE],
     )
 
     # Autonomy lifecycle nodes (unconfigured)

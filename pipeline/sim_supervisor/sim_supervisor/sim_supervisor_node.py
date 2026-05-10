@@ -54,7 +54,7 @@ from rclpy.qos import (
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Empty as EmptyMsg, Float32
+from std_msgs.msg import Bool, Empty as EmptyMsg, Float32
 from tf2_ros import TransformBroadcaster
 
 from fs_msgs.msg import ControlCommand
@@ -117,6 +117,16 @@ class SimSupervisorNode(LifecycleNode):
         self._odom_filter: OdometryFilter | None = None
         self._odom_pub = None
         self._odom_pub_timer = None
+        # Phase 3 (#383) — steering + brake_pressure inputs from the
+        # bridge + diagnostic publishers for the OdometryFilter
+        # cross-check residuals. Subscriptions are bound to
+        # on_activate (they only need to flow when /odom is being
+        # published); diagnostic publishers are lifecycle-aware.
+        self._sub_steering = None
+        self._sub_brake = None
+        self._yaw_residual_pub = None
+        self._slip_flag_pub = None
+        self._effective_alpha_pub = None
         # Phase 2 (#382): supervisor owns the odom→base_link TF
         # broadcast (slam_node stopped doing it in #382 and now
         # publishes map→odom instead, computed from slam_pose ⊖
@@ -191,6 +201,20 @@ class SimSupervisorNode(LifecycleNode):
         )
         self._odom_tf_broadcaster = TransformBroadcaster(self)
 
+        # Phase 3 (#383) diagnostic publishers — emit cross-check
+        # residuals next to /odom so tuning consumers (Lichtblick
+        # plot panels, offline replay) can see filter state without
+        # re-deriving from raw sensors.
+        self._yaw_residual_pub = self.create_lifecycle_publisher(
+            Float32, "/odom_diag/yaw_residual_rad_s", 10,
+        )
+        self._slip_flag_pub = self.create_lifecycle_publisher(
+            Bool, "/odom_diag/slip_flag", 10,
+        )
+        self._effective_alpha_pub = self.create_lifecycle_publisher(
+            Float32, "/odom_diag/effective_alpha_vx", 10,
+        )
+
         return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
@@ -234,6 +258,19 @@ class SimSupervisorNode(LifecycleNode):
             callback_group=self._cb_group,
         )
 
+        # Phase 3 (#383) — steering + brake_pressure cross-check
+        # inputs. Same BEST_EFFORT QoS as RPM since they share the
+        # 100 Hz bridge cadence and consumers tolerate dropped
+        # samples (the filter just uses the latest cached value).
+        self._sub_steering = self.create_subscription(
+            Float32, "/steering_angle", self._on_steering, rpm_qos,
+            callback_group=self._cb_group,
+        )
+        self._sub_brake = self.create_subscription(
+            Float32, "/brake_pressure", self._on_brake, rpm_qos,
+            callback_group=self._cb_group,
+        )
+
         # Publish /odom on a fixed-rate timer rather than per-IMU-tick:
         # decouples publish rate from input rate, gives downstream
         # consumers a predictable cadence regardless of IMU jitter.
@@ -250,12 +287,14 @@ class SimSupervisorNode(LifecycleNode):
         if self._odom_pub_timer is not None:
             self.destroy_timer(self._odom_pub_timer)
             self._odom_pub_timer = None
-        if self._sub_imu is not None:
-            self.destroy_subscription(self._sub_imu)
-            self._sub_imu = None
-        if self._sub_rpm is not None:
-            self.destroy_subscription(self._sub_rpm)
-            self._sub_rpm = None
+        for sub in (self._sub_imu, self._sub_rpm,
+                    self._sub_steering, self._sub_brake):
+            if sub is not None:
+                self.destroy_subscription(sub)
+        self._sub_imu = None
+        self._sub_rpm = None
+        self._sub_steering = None
+        self._sub_brake = None
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
@@ -275,6 +314,9 @@ class SimSupervisorNode(LifecycleNode):
             self._odom_pub_timer = None
         self._odom_pub = None
         self._odom_tf_broadcaster = None
+        self._yaw_residual_pub = None
+        self._slip_flag_pub = None
+        self._effective_alpha_pub = None
         self._odom_filter = None
         self._current_mission = None
         return TransitionCallbackReturn.SUCCESS
@@ -311,6 +353,21 @@ class SimSupervisorNode(LifecycleNode):
         # header.stamp on /motor_rpm, so we mark received-time here.
         # Used for staleness inside the filter.
         self._odom_filter.push_rpm(time.monotonic(), float(msg.data))
+
+    def _on_steering(self, msg: Float32) -> None:
+        """Cache the latest front-wheel angle (rad). Used inside the
+        filter's push_imu step for the kinematic-bicycle yaw cross-
+        check (#383)."""
+        if self._odom_filter is None:
+            return
+        self._odom_filter.push_steering(time.monotonic(), float(msg.data))
+
+    def _on_brake(self, msg: Float32) -> None:
+        """Cache the latest brake authority [0, 1]. Used inside
+        push_rpm to scale α_vx during brake events (#383)."""
+        if self._odom_filter is None:
+            return
+        self._odom_filter.push_brake(time.monotonic(), float(msg.data))
 
     def _publish_odom(self) -> None:
         """Timer-driven /odom topic + odom→base_link TF emission.
@@ -371,6 +428,18 @@ class SimSupervisorNode(LifecycleNode):
         tf.transform.rotation.y = 0.0
         tf.transform.rotation.z = qz
         self._odom_tf_broadcaster.sendTransform(tf)
+
+        # Phase 3 (#383) diagnostics — emit the filter's cross-check
+        # residuals alongside /odom. Cheap (three Float32-ish topics
+        # at 100 Hz); off by default in subscribers, only the tuning
+        # plot panels open them.
+        diag = self._odom_filter.diagnostics
+        if self._yaw_residual_pub is not None:
+            self._yaw_residual_pub.publish(Float32(data=float(diag.yaw_residual_rad_s)))
+        if self._slip_flag_pub is not None:
+            self._slip_flag_pub.publish(Bool(data=bool(diag.slip_flag)))
+        if self._effective_alpha_pub is not None:
+            self._effective_alpha_pub.publish(Float32(data=float(diag.effective_alpha_vx)))
 
     # ------------------------------------------------------------------
     # Action handlers (skeletons)
