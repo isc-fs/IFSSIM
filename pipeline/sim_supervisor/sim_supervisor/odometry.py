@@ -502,24 +502,26 @@ class OdometryFilter:
         # orders of magnitude weaker — measured /odom.vy = 3.22 m/s
         # vs GT 0.025 m/s after a 41 s drive, see #391 body).
         #
-        # During slip events (yaw_residual > threshold), NHC is
-        # skipped — the car IS sliding sideways and forcing vy→0
-        # would lose the only signal we have about that. The IMU
-        # accel-y integration runs free, slip_flag stays sticky for
-        # downstream consumers via .diagnostics.
+        # An earlier draft of #391 skipped NHC when slip_flag was
+        # true, reasoning "the car IS sliding so don't force vy→0".
+        # Wrong: when slip fires (which it does on every aggressive
+        # steer command — kinematic-bicycle ω_pred ≫ actual IMU ω at
+        # high steering), the only fallback was the 1e-3 leak. With
+        # centripetal accel ay = vx·ω ≈ 3 m/s² during a corner, vy
+        # accumulated to ~7 m/s in one second, blowing up
+        # state.speed = √(vx² + vy²) past 5 m/s. The PI controller
+        # stopped throttling (thinks we're way over v_max), real
+        # motion stalled, SLAM cascaded. NHC now always applies.
+        # A real slide is brief (≲100 ms apex of a tight corner) and
+        # the 50 ms NHC time constant still leaves the leading edge
+        # of the slip event visible in vy before damping kicks in.
         #
-        # BETA_VY_LEAK is kept for unit tests / legacy override but
-        # contributes nothing additional when α_NHC > 0.
-        if self._diag.slip_flag:
-            self._state.vy = (
-                (1.0 - self._beta_vy_leak) * self._state.vy
-                + ay_body * dt
-            )
-        else:
-            self._state.vy = (
-                (1.0 - self._alpha_nhc_vy) * self._state.vy
-                + ay_body * dt
-            )
+        # BETA_VY_LEAK is kept as a tunable for unit tests / legacy
+        # override; the production knob is alpha_nhc_vy.
+        self._state.vy = (
+            (1.0 - self._alpha_nhc_vy) * self._state.vy
+            + ay_body * dt
+        )
 
         # Integrate position (rotate body velocity into world frame).
         c, s = math.cos(self._state.yaw), math.sin(self._state.yaw)

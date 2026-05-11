@@ -367,39 +367,44 @@ def test_nhc_drives_vy_to_zero_in_clean_rolling(stationary_filter):
     # (unphysical, but illustrates how weak the leak was).
 
 
-def test_nhc_skipped_under_slip(stationary_filter):
-    """When slip_flag is true the IMU integration runs free — NHC is
-    deliberately disabled because the car IS sliding sideways and
-    forcing vy→0 would lose the signal. We force a slip flag by
-    feeding steering ≠ 0 against gyro = 0 (kinematic-bicycle predicts
-    yaw rate but IMU says zero → residual ≫ threshold)."""
+def test_nhc_holds_even_under_slip(stationary_filter):
+    """NHC must apply every IMU tick, including when slip_flag fires.
+
+    First draft of #391 had an escape hatch ("skip NHC under slip,
+    let IMU integrate freely") that crashed live: centripetal
+    ay = vx·ω hit ~3 m/s² during tight corners, slip_flag fired the
+    moment steering went aggressive, NHC dropped out, the only
+    fallback was BETA_VY_LEAK=1e-3 (~3 orders of magnitude weaker),
+    vy integrated to ~7 m/s in 1 s of cornering, state.speed =
+    √(vx² + vy²) read ~7 m/s instead of ~3, the PI controller
+    stopped throttling (thought we were over v_max), the car coasted
+    off-line, SLAM cascaded. Asserts the fix: NHC applies under slip
+    too, so vy stays bounded near its NHC steady-state.
+    """
     f = stationary_filter
-    # Steering = 0.5 rad with vx ≈ 3.3 and L = 1.55:
-    #     ω_pred = 3.3/1.55 · tan(0.5) ≈ 1.16 rad/s
-    # IMU gyro_z = 0 → residual ≈ 1.16 ≫ 0.3 threshold → slip flag.
     f.push_steering(t=0.0, angle_rad=0.5)
-    # RPM needs to be applied continuously so the alpha-blended vx
-    # actually reaches the target (single push only pulls vx by 10%
-    # of the residual). Production behaviour matches this — RPM
-    # arrives at ~80 Hz, so we re-pin it every 5 IMU samples.
     target_rpm = 400.0  # → vx ≈ 3.28 m/s
     f.push_rpm(t=0.0, rpm=target_rpm)
-    accel = np.array([0.0, 1.0, G])
+    accel = np.array([0.0, 1.0, G])  # constant 1 m/s² body-frame ay
     gyro = np.zeros(3)
     t0 = f._t_imu_last
     dt = 0.0025
-    for i in range(1, 401):  # 1 s
+    for i in range(1, 401):  # 1 s @ 400 Hz
         if i % 5 == 0:
             f.push_rpm(t=t0 + i * dt, rpm=target_rpm)
         f.push_imu(t0 + i * dt, accel, gyro)
-    # Under slip, vy is allowed to grow much further than the NHC
-    # steady-state because the integrator runs free.
+    # Slip flag should still fire (this isn't about disabling slip
+    # detection — it's about NHC not abdicating during slip).
     assert f.diagnostics.slip_flag is True, (
         f"slip_flag should fire, got residual="
         f"{f.diagnostics.yaw_residual_rad_s:.3f}, vx={f.state.vx:.3f}"
     )
-    assert f.state.vy > 0.5, (
-        f"expected vy to grow when slip flag is set, got {f.state.vy}"
+    # The critical assertion: vy stays bounded near the NHC steady-
+    # state (ay·dt/α ≈ 0.05). Pre-fix this run produced vy ≈ 7 m/s.
+    # Anywhere below 0.5 is "NHC working through slip".
+    assert abs(f.state.vy) < 0.5, (
+        f"NHC should bound vy regardless of slip; got {f.state.vy} "
+        f"(pre-fix regression had this at ~7 m/s)"
     )
 
 
