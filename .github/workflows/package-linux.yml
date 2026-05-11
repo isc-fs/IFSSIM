@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Plugin cook needs LFS-tracked binary content (cone meshes,
           # vehicle textures, M_LiDARStencilEncoder.uasset).
