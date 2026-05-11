@@ -414,7 +414,7 @@ class MissionControlNode(LifecycleNode):
                     result.message = "supervisor cancelled the goal"
                     self.get_logger().info(
                         "runtime_control: cancelled by supervisor")
-                    self._active_runtime_goal_handle = None
+                    self._clear_active_if_owner(goal_handle)
                     goal_handle.canceled()
                     return result
 
@@ -428,7 +428,7 @@ class MissionControlNode(LifecycleNode):
                     result.message = "/ctrl/emergency true"
                     self.get_logger().warn(
                         "runtime_control: terminating on emergency")
-                    self._active_runtime_goal_handle = None
+                    self._clear_active_if_owner(goal_handle)
                     goal_handle.succeed()
                     return result
 
@@ -438,7 +438,7 @@ class MissionControlNode(LifecycleNode):
                     result.message = "/slam/finished true"
                     self.get_logger().info(
                         "runtime_control: terminating on finished")
-                    self._active_runtime_goal_handle = None
+                    self._clear_active_if_owner(goal_handle)
                     goal_handle.succeed()
                     return result
 
@@ -449,7 +449,7 @@ class MissionControlNode(LifecycleNode):
             # client doesn't hang on the future.
             result.outcome = "cancelled"
             result.message = "rclpy shutting down"
-            self._active_runtime_goal_handle = None
+            self._clear_active_if_owner(goal_handle)
             goal_handle.canceled()
             return result
 
@@ -458,12 +458,28 @@ class MissionControlNode(LifecycleNode):
                 f"runtime_control: unexpected error: {ex!r}")
             result.outcome = "error"
             result.message = repr(ex)
-            self._active_runtime_goal_handle = None
+            self._clear_active_if_owner(goal_handle)
             try:
                 goal_handle.abort()
             except Exception:  # noqa: BLE001
                 pass
             return result
+
+    def _clear_active_if_owner(self, goal_handle) -> None:
+        """Clear the active-goal pointer only if it still references
+        the goal_handle that's terminating. Prevents a stale cancel of
+        an old goal from wiping the pointer set by a newly opened goal
+        on the mission-switch path: the supervisor's pattern is
+        cancel(gh_old) → send_goal(gh_new) in immediate succession,
+        and the two execute() coroutines run concurrently on
+        MultiThreadedExecutor. Without this guard, gh_old's terminal
+        path would null _active_runtime_goal_handle even after
+        gh_new's execute() had already pointed it at gh_new, leaving
+        _on_ctrl_cmd silently dropping every frame thereafter (the
+        symptom: /control_command has no publisher; the car never
+        moves)."""
+        if self._active_runtime_goal_handle is goal_handle:
+            self._active_runtime_goal_handle = None
 
     def _publish_runtime_feedback(self, goal_handle) -> None:
         """Emit one RuntimeControl feedback frame from cached state."""

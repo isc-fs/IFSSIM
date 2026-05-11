@@ -589,7 +589,16 @@ class SimSupervisorNode(LifecycleNode):
             # control_node + slam_node start streaming actuator
             # commands back to us as Feedback. Idempotent: cancels
             # any previously-active goal first (mission switch path).
-            self._open_runtime_control()
+            #
+            # Skip on the tear-down path (mission==""): in that case
+            # mode_manager just reported "ready" because there was
+            # nothing to do (all autonomy nodes already at target
+            # state, see "already at/past target ... skipping"), and
+            # we have NO mission to drive. Opening RuntimeControl
+            # here against a torn-down lifecycle would race the
+            # cancel we already sent at the top of this method.
+            if mission:
+                self._open_runtime_control()
         else:
             self.get_logger().error(
                 f"StartMission relay: mission {mission!r} failed: "
