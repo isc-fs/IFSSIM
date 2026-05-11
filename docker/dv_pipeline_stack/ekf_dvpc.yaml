@@ -20,6 +20,13 @@
 ekf_filter_node:
   ros__parameters:
 
+    # Use /clock when replaying bags offline; harmless in live runs
+    # because no /clock publisher exists then so wall-clock is used.
+    # Required for `ros2 bag play --clock` replay, otherwise the
+    # EKF rejects every message with TF_OLD_DATA — the bag's stamps
+    # land hours-old relative to the system clock.
+    use_sim_time: true
+
     # Output rate. 100 Hz matches the closed-loop control sampling
     # rate and gives sub-millisecond freshness for SLAM at 10 Hz.
     frequency: 100.0
@@ -51,7 +58,7 @@ ekf_filter_node:
     imu0: /imu
     imu0_config: [
       # x      y      z   roll  pitch  yaw
-      false, false, false, false, false, false,
+      false, false, false, false, false, true,
       # vx     vy     vz   v_roll v_pitch v_yaw
       false, false, false, false, false, true,
       # ax     ay     az

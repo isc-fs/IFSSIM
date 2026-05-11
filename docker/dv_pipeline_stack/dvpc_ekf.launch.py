@@ -51,8 +51,16 @@ def generate_launch_description() -> LaunchDescription:
         # RPM → Odometry adapter — runs as a plain python3 process
         # since it's a single self-contained script (no setup.py
         # entry-point machinery needed for Phase 1 validation).
+        #
+        # use_sim_time forwarded through --ros-args so that during
+        # `ros2 bag play --clock` replays, get_clock().now() returns
+        # the /clock-driven time. Live, no /clock publisher exists
+        # so wall-clock is used naturally — flag is harmless.
         ExecuteProcess(
-            cmd=["python3", rpm_to_odom_script],
+            cmd=[
+                "python3", rpm_to_odom_script,
+                "--ros-args", "-p", "use_sim_time:=true",
+            ],
             name="rpm_to_odom",
             output="screen",
         ),
