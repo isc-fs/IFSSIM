@@ -6,8 +6,11 @@ Brings everything up in a single launch:
   Always-active (plain Nodes / launch includes):
     ifssim_bridge          — UE5 ↔ ROS bridge
     foxglove_bridge        — visualisation WebSocket
-    robot_state_publisher  — coche_urdf TF tree
-    joint_state_publisher  — default-zero joint states feeding RSP
+    (robot_state_publisher / joint_state_publisher were removed
+    2026-05-11 — pure-visualisation overhead. The autonomy's TF tree
+    is map → odom → base_link (slam_node + sim_supervisor) plus the
+    bridge's static sensor TFs rooted at base_link. The chassis
+    URDF wasn't consumed by any autonomy node.)
 
   Mission management (LifecycleNodes, auto-configured+activated at
   launch start so their action/service endpoints are ready):
@@ -43,16 +46,13 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     EmitEvent,
-    IncludeLaunchDescription,
     RegisterEventHandler,
 )
 from launch.events import matches_action
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
-from ament_index_python.packages import get_package_share_directory
 
 from lifecycle_msgs.msg import Transition
 
@@ -132,10 +132,6 @@ def _autonomy_lifecycle(package: str, executable: str, name: str,
 
 
 def generate_launch_description() -> LaunchDescription:
-    coche_urdf_share = get_package_share_directory("coche_urdf")
-    rsp_launch = os.path.join(
-        coche_urdf_share, "launch", "robot_state_publisher.launch.py")
-
     actions = [
         # ------------------ Launch arguments ------------------
         DeclareLaunchArgument("host",         default_value="host.docker.internal"),
@@ -214,16 +210,14 @@ def generate_launch_description() -> LaunchDescription:
                     "/move_base_simple/goal", "/track_overlay",
                     # TF is mandatory for the 3D panel
                     "/tf", "/tf_static",
-                    # URDF text for the robot model display
-                    "/robot_description",
+                    # /robot_description was removed 2026-05-11 along
+                    # with RSP/JSP — pure-visualisation overhead.
+                    # Lichtblick's 3D panel still works without it,
+                    # just no chassis mesh; cones + path + LiDAR
+                    # still render against the bare TF tree.
                 ],
                 "use_compression":   True,
             }],
-        ),
-
-        # ------------------ URDF + RSP/JSP ------------------
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(rsp_launch),
         ),
     ]
 
