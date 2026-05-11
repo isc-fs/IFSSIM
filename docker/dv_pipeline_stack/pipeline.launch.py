@@ -168,6 +168,56 @@ def generate_launch_description() -> LaunchDescription:
                 "address":           "0.0.0.0",
                 "send_buffer_limit": 64 * 1024 * 1024,
                 "use_sim_time":      False,
+                # ----- CPU hot-path mitigations (2026-05-11) -----
+                # Measured idle: foxglove_bridge at 53 % CPU before any
+                # Lichtblick client connected. Root cause: bridge
+                # subscribes to + serialises every ROS 2 topic visible
+                # on the graph (49 topics in this stack) regardless of
+                # client subscription state. The two knobs below cut
+                # that work to what the dashboards actually use:
+                #
+                #   * `topic_whitelist` — regex list; only topics
+                #     matching ≥1 entry get advertised + serialised.
+                #     Anything else stays invisible to Lichtblick.
+                #     The list is the union of topics referenced
+                #     across the four /lichtblick/*.json dashboards
+                #     (auto-extracted on 2026-05-11). Anything new
+                #     a dashboard needs has to land here too.
+                #   * `use_compression` — zstd-compresses WebSocket
+                #     frames. LiDAR PointCloud2 compresses ~3-5×;
+                #     trivial Float32s a couple of bytes. CPU cost is
+                #     small and worth it for the 1.5 MB/scan LiDAR
+                #     stream.
+                #
+                # `use_sim_time` stays false: ROS bag replay uses sim
+                # time but live runs don't, and the dashboards consume
+                # wall-clock stamps.
+                "topic_whitelist": [
+                    # Cone perception + map
+                    "/Conos", "/Conos_Orange", "/Conos_raw",
+                    # Planner output + debug
+                    "/Path", "/path_planning/debug",
+                    # SLAM
+                    "/slam/pose", "/cone_slam/gt_aligned",
+                    "/cone_slam/gt_error_m",
+                    # Controller diagnostics
+                    "/control/v_set_mps", "/control/kappa_max_per_m",
+                    "/ctrl/cmd_internal",
+                    # Sensors actually plotted (no full LiDAR — viz only)
+                    "/lidar/Lidar1/viz", "/imu", "/motor_rpm",
+                    # Diagnostic GT
+                    "/testing_only/odom", "/testing_only/track",
+                    # Lichtblick built-ins (clicked_point, initialpose,
+                    # move_base_simple/goal) — used by the panels for
+                    # interactive features. Cheap to advertise.
+                    "/clicked_point", "/initialpose",
+                    "/move_base_simple/goal", "/track_overlay",
+                    # TF is mandatory for the 3D panel
+                    "/tf", "/tf_static",
+                    # URDF text for the robot model display
+                    "/robot_description",
+                ],
+                "use_compression":   True,
             }],
         ),
 

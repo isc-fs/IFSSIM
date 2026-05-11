@@ -65,6 +65,24 @@ def generate_launch_description():
                 # well past any normal client-side stutter.
                 'send_buffer_limit': 64 * 1024 * 1024,
                 'use_sim_time': False,
+                # See pipeline.launch.py for the full rationale on
+                # topic_whitelist + use_compression. Same list here so
+                # the bridge-only launch (replay / debug flows) gets
+                # the same CPU-mitigated config.
+                'topic_whitelist': [
+                    "/Conos", "/Conos_Orange", "/Conos_raw",
+                    "/Path", "/path_planning/debug",
+                    "/slam/pose", "/cone_slam/gt_aligned",
+                    "/cone_slam/gt_error_m",
+                    "/control/v_set_mps", "/control/kappa_max_per_m",
+                    "/ctrl/cmd_internal",
+                    "/lidar/Lidar1/viz", "/imu", "/motor_rpm",
+                    "/testing_only/odom", "/testing_only/track",
+                    "/clicked_point", "/initialpose",
+                    "/move_base_simple/goal", "/track_overlay",
+                    "/tf", "/tf_static", "/robot_description",
+                ],
+                'use_compression': True,
             }],
         ),
     ])
