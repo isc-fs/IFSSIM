@@ -8,6 +8,13 @@
 # teams don't typically run CVE-scanned production loads against
 # this sim — daily would just be noise. Bump to "daily" later if a
 # CVE response time matters.
+#
+# target-branch: dev — without this, Dependabot opens PRs against
+# the GitHub repository default branch (main). main is a release
+# stub here (only README + branch-issue workflow) that doesn't
+# share history with dev, so PRs targeting it can't be merged into
+# the actual integration line. Hard-coding `dev` keeps Dependabot
+# in the same loop as the rest of the project.
 
 version: 2
 
@@ -20,6 +27,7 @@ updates:
   # ---------------------------------------------------------------
   - package-ecosystem: "npm"
     directory: "/tools/mission_control/frontend"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -38,6 +46,7 @@ updates:
   # ---------------------------------------------------------------
   - package-ecosystem: "pip"
     directory: "/tools/mission_control/backend"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -58,6 +67,7 @@ updates:
   # ---------------------------------------------------------------
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
       day: "monday"
