@@ -255,7 +255,7 @@
       "sidebarDimension": 200
     },
     "Plot!yaw_rate": {
-      "title": "Yaw rate",
+      "title": "Yaw rate (IMU vs filter; GT broken \u2014 bridge angular twist always 0)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -274,16 +274,39 @@
           "showLine": true
         },
         {
-          "value": "/testing_only/odom.twist.twist.angular.z",
+          "value": "/odom.twist.twist.angular.z",
           "enabled": true,
-          "label": "GT yaw rate (rad/s)",
-          "color": "#44ffaa",
-          "lineSize": 1.0,
+          "label": "Filter yaw rate (rad/s)",
+          "color": "#4488ff",
+          "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true
         }
       ],
       "sidebarDimension": 200
+    },
+    "Plot!slam_gt_error": {
+      "title": "SLAM-vs-GT position error [m]",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_slam/gt_error_m.data",
+          "enabled": true,
+          "label": "||SLAM - GT|| (m)",
+          "color": "#ff8844",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
     }
   },
   "globalVariables": {},
@@ -302,8 +325,13 @@
     "second": {
       "direction": "column",
       "first": "Plot!speed_rpm",
-      "second": "Plot!yaw_rate",
-      "splitPercentage": 50
+      "second": {
+        "direction": "column",
+        "first": "Plot!yaw_rate",
+        "second": "Plot!slam_gt_error",
+        "splitPercentage": 50
+      },
+      "splitPercentage": 33
     },
     "splitPercentage": 70
   }
