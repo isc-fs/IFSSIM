@@ -81,12 +81,12 @@ class GTPoseRelay(Node):
         self._aligned_vy_body: float = 0.0
         self._latest_gt_stamp = None
 
-        # Previous-tick state for finite-difference velocity. The bridge
-        # publishes /testing_only/odom with twist=0 (Cesium/UE5 doesn't
-        # fill the twist field), so we have to derive body-frame velocity
-        # ourselves from successive pose deltas. Without this, Control
-        # reads v=0 and floors the throttle while the car is already
-        # moving — observed once already as "the car went crazy".
+        # Previous-tick state for finite-difference velocity. /testing_only/
+        # odom now carries clean GT body-frame velocity in twist.linear
+        # (PR #315) and yaw rate in twist.angular.z, but this relay still
+        # finite-differences the *aligned* pose — the alignment transform
+        # is applied to position only, so we have to redo the velocity in
+        # the aligned frame ourselves rather than reuse the raw GT twist.
         self._prev_aligned_x: Optional[float] = None
         self._prev_aligned_y: Optional[float] = None
         self._prev_stamp_ns: Optional[int] = None

@@ -810,10 +810,18 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
             msg.twist.twist.linear.x = f.gt_vel_body_x;
             msg.twist.twist.linear.y = f.gt_vel_body_y;
             msg.twist.twist.linear.z = f.gt_vel_body_z;
+            // Clean GT yaw rate. Plugin already applied the UE→ROS sign
+            // flip; just copy. Roll/pitch rates aren't transported (flat
+            // track) — set explicitly to 0 so the field's meaning is
+            // unambiguous to consumers.
+            msg.twist.twist.angular.x = 0.0;
+            msg.twist.twist.angular.y = 0.0;
+            msg.twist.twist.angular.z = f.gt_ang_vel_body_z;
             constexpr double gt_var = 1e-9;
             msg.twist.covariance[0]  = gt_var;
             msg.twist.covariance[7]  = gt_var;
             msg.twist.covariance[14] = gt_var;
+            msg.twist.covariance[35] = gt_var;
             odom_pub_->publish(msg);
         }
     }

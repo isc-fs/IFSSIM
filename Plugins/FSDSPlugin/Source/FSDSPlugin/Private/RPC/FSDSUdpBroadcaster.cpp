@@ -226,10 +226,26 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	// UE5 returns body-frame Y in the right direction, so we negate it on
 	// the way out to match ROS / ENU's left-positive Y.
 	const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;          // cm/s → m/s
-	const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
+	const FQuat   ActorInv = VehiclePawn->GetActorQuat().Inverse();
+	const FVector BodyVel  = ActorInv.RotateVector(WorldVel);
 	Frame.GtVelBodyX =  BodyVel.X;
 	Frame.GtVelBodyY = -BodyVel.Y;
 	Frame.GtVelBodyZ =  BodyVel.Z;
+
+	// Ground-truth body-frame angular velocity. Source mirrors the IMU
+	// sensor (FSDSImuSensor.cpp): physics angular velocity in world frame,
+	// rotated into body frame by the actor's inverse rotation. Yaw rate
+	// only — pitch/roll are unused for FSD on flat ground. The Z sign is
+	// flipped here for the same reason the bridge flips gyro_z for /imu:
+	// angular velocity is a pseudovector, so the UE-left-handed → ROS-
+	// right-handed basis change picks up an extra det(R)=-1 factor on the
+	// axes parallel to the flipped basis vector (here, Z).
+	if (UPrimitiveComponent* RootPrim = VehiclePawn->GetMesh())
+	{
+		const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+		const FVector BodyAngVel  = ActorInv.RotateVector(WorldAngVel);
+		Frame.GtAngVelBodyZ = -BodyAngVel.Z;
+	}
 
 	auto CarState = VehiclePawn->GetCarState();
 	Frame.Speed = CarState.Speed;

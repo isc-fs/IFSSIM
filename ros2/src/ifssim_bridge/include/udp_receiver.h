@@ -48,6 +48,13 @@ struct SensorFrame
     // so the GT topic is symmetric (clean GT pose AND clean GT twist);
     // /gss continues to publish the noisy GSS sensor values.
     float gt_vel_body_x, gt_vel_body_y, gt_vel_body_z; // m/s, body frame
+
+    // Ground-truth body-frame yaw rate (rad/s). Companion to gt_vel_body_*
+    // — plugin pre-applies the UE→ROS sign flip, so the bridge can drop
+    // this straight into twist.angular.z. Pitch/roll rates omitted (flat
+    // FSD track; the IMU still carries the full 3-axis gyro for anyone
+    // who needs them).
+    float gt_ang_vel_body_z; // rad/s, body frame, ROS-convention sign
 };
 
 struct LidarChunkHeader

@@ -1568,11 +1568,22 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// remains the production sensor path. (LiDAR-over-TCP was
 		// retired in #322; sensors still ride the TCP push because the
 		// ~40 KB/s rate isn't bandwidth-bound.)
+		const FQuat   ActorInv = VehiclePawn->GetActorQuat().Inverse();
 		const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;
-		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
+		const FVector BodyVel  = ActorInv.RotateVector(WorldVel);
 		Frame.GtVelBodyX =  BodyVel.X;
 		Frame.GtVelBodyY = -BodyVel.Y;
 		Frame.GtVelBodyZ =  BodyVel.Z;
+
+		// Ground-truth body-frame yaw rate — same source/sign convention
+		// as FSDSUdpBroadcaster.cpp. Plugin pre-applies the UE→ROS Z flip
+		// so the bridge can assign directly into twist.angular.z.
+		if (UPrimitiveComponent* RootPrim = VehiclePawn->GetMesh())
+		{
+			const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+			const FVector BodyAngVel  = ActorInv.RotateVector(WorldAngVel);
+			Frame.GtAngVelBodyZ = -BodyAngVel.Z;
+		}
 
 		auto CarState = VehiclePawn->GetCarState();
 		Frame.Speed = CarState.Speed;

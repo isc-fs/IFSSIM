@@ -59,6 +59,16 @@ struct FFSDSSensorFrame
 	// fully ground-truth on both pose and twist; /fsds/gss keeps carrying
 	// the noisy GSS sensor values where the noise model belongs.
 	float GtVelBodyX = 0.f, GtVelBodyY = 0.f, GtVelBodyZ = 0.f; // m/s
+
+	// Ground-truth body-frame angular velocity (rad/s). Same source and
+	// axis convention as GtVelBody* — taken from the mesh's physics
+	// angular velocity, rotated into body frame, and sign-flipped on the
+	// axes that differ between UE5 (left-handed: X-fwd, Y-right, Z-up)
+	// and ROS REP-103 (right-handed: X-fwd, Y-left, Z-up). Only Z is
+	// populated; roll/pitch rates are unused on a flat FSD track.
+	// Bridge sources /testing_only/odom's twist.angular.z from this so
+	// the GT topic carries non-zero yaw rate during cornering.
+	float GtAngVelBodyZ = 0.f; // rad/s, body frame, ROS-convention sign
 };
 
 struct FFSDSLidarChunkHeader
