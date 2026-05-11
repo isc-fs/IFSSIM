@@ -36,7 +36,7 @@ jobs:
     container: ros:humble-ros-base
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Bridge build doesn't need LFS-tracked binary assets; skip
           # the large .uasset / mesh fetch.
@@ -81,12 +81,12 @@ jobs:
         working-directory: tools/mission_control/frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           lfs: false
 
       - name: Setup Node 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -124,7 +124,7 @@ jobs:
         working-directory: tools/mission_control/backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           lfs: false
 
@@ -158,7 +158,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Track CSVs are tiny text files (~kB each); LFS not used.
           lfs: false
@@ -182,7 +182,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           lfs: false
 
