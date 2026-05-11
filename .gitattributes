@@ -1,0 +1,7 @@
+*.uasset filter=lfs diff=lfs merge=lfs -text
+*.umap filter=lfs diff=lfs merge=lfs -text
+
+# Shell scripts must stay LF on every OS — core.autocrlf=true on Windows devs
+# otherwise converts to CRLF, breaking the shebang inside Linux containers.
+*.sh text eol=lf
+

@@ -1,0 +1,72 @@
+# Dependabot — weekly security + version updates for the parts of the
+# repo that pull from package registries (npm, pip, github-actions).
+# Out of scope: the UE5 plugin, FSDSPlugin Content, and the random
+# track generator — none of those have a package manifest Dependabot
+# can read.
+#
+# Cadence is weekly because the project's PR volume is low and FS
+# teams don't typically run CVE-scanned production loads against
+# this sim — daily would just be noise. Bump to "daily" later if a
+# CVE response time matters.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------
+  # Mission Control frontend (Vite + React 19 + TypeScript).
+  # Group minor/patch updates into a single PR so reviewers don't
+  # see five "bump @types/react" PRs every week. Major updates land
+  # one-per-PR — those genuinely warrant individual review.
+  # ---------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/tools/mission_control/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "deps"
+      - "frontend"
+    groups:
+      frontend-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------
+  # Mission Control backend (FastAPI + uvicorn + scoring + matplotlib).
+  # ---------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/tools/mission_control/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "deps"
+      - "backend"
+    groups:
+      backend-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------
+  # GitHub Actions — Dependabot bumps versions of @v4 actions etc.
+  # Important so we don't fall behind on actions/checkout / setup-node
+  # / setup-python deprecation cycles.
+  # ---------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "deps"
+      - "ci"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

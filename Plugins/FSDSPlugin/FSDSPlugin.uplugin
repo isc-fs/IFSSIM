@@ -1,0 +1,27 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "FSDS Plugin",
+	"Description": "Formula Student Driverless Simulator - UE5-native plugin with RPC server, vehicle control, and sensor simulation",
+	"Category": "Simulation",
+	"CreatedBy": "ISC Formula Student",
+	"CreatedByURL": "https://github.com/isc-fs/IFSSIM",
+	"EnabledByDefault": true,
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "FSDSPlugin",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ChaosVehiclesPlugin",
+			"Enabled": true
+		}
+	]
+}

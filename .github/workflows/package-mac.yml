@@ -1,0 +1,69 @@
+name: Package Mac Build
+
+# Triggers on version tags (e.g. v1.0.0) pushed to main,
+# or when a GitHub Release is manually created.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  release:
+    types: [created]
+
+jobs:
+  package:
+    # Requires a self-hosted runner on a Mac with UE5 installed.
+    # Register one at: Settings → Actions → Runners → New self-hosted runner.
+    # Set UE5_ROOT in the runner's env (e.g. /Users/Shared/Epic Games/UE_5.7).
+    runs-on: [self-hosted, macOS]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Resolve UE5 root
+        id: ue5
+        run: |
+          # Respect env override, fall back to default Epic install location
+          ROOT="${UE5_ROOT:-/Users/Shared/Epic Games/UE_5.7}"
+          if [ ! -f "$ROOT/Engine/Build/BatchFiles/RunUAT.sh" ]; then
+            echo "::error::UE5 not found at '$ROOT'. Set UE5_ROOT on the runner."
+            exit 1
+          fi
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Package (BuildCookRun)
+        run: |
+          "${{ steps.ue5.outputs.root }}/Engine/Build/BatchFiles/RunUAT.sh" \
+            BuildCookRun \
+            -project="$GITHUB_WORKSPACE/IFSSIM.uproject" \
+            -platform=Mac \
+            -clientconfig=Shipping \
+            -cook \
+            -build \
+            -stage \
+            -pak \
+            -archive \
+            -archivedirectory="$GITHUB_WORKSPACE/Packaged" \
+            -noP4 \
+            -utf8output
+
+      - name: Zip artifact
+        id: zip
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ZIPNAME="IFSSIM-${VERSION}-mac.zip"
+          cd "$GITHUB_WORKSPACE/Packaged/Mac"
+          zip -r "$GITHUB_WORKSPACE/$ZIPNAME" .
+          echo "name=$ZIPNAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Creates the release if triggered by a tag push;
+          # attaches to the existing release if triggered by release creation.
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.zip.outputs.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,246 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Dom/JsonObject.h"
+#include "FSDSPacejkaTireModel.h"
+
+/**
+ * FSDS Settings — Parses settings.json for vehicle, sensor, and camera configuration.
+ * Compatible with the original FSDS settings format.
+ */
+
+enum class EFSDSImageType : uint8
+{
+	Scene = 0,
+	DepthPlanner = 1,
+	DepthPerspective = 2,
+	DepthVis = 3,
+	DisparityNormalized = 4,
+	Segmentation = 5,
+	SurfaceNormals = 6,
+	Infrared = 7
+};
+
+struct FFSDSCaptureSettings
+{
+	EFSDSImageType ImageType = EFSDSImageType::Scene;
+	int32 Width = 785;
+	int32 Height = 785;
+	float FOV_Degrees = 90.f;
+
+	// Auto-exposure
+	float AutoExposureSpeed = 100.f;
+	float AutoExposureBias = 0.f;
+	float AutoExposureMaxBrightness = 0.64f;
+	float AutoExposureMinBrightness = 0.03f;
+
+	// Motion blur
+	float MotionBlurAmount = 0.f; // 0 = disabled (default for sim)
+
+	// Gamma
+	float TargetGamma = 1.0f;
+
+	// Projection
+	bool bOrthographic = false;
+	float OrthoWidth = 5.12f;
+};
+
+struct FFSDSGimbalSettings
+{
+	bool bEnabled = false;
+	float Stabilization = 0.f; // 0 = no stabilization, 1 = full
+	FRotator Rotation = FRotator::ZeroRotator;
+};
+
+struct FFSDSNoiseSettings
+{
+	bool bEnabled = false;
+	float RandContrib = 0.f;
+	float RandSpeed = 1.f;
+	float RandSize = 1.f;
+	float RandDensity = 1.f;
+	float HorzWaveContrib = 0.f;
+	float HorzWaveStrength = 0.f;
+	float HorzWaveVertSize = 0.f;
+	float HorzWaveScreenSize = 0.f;
+	float HorzNoiseLinesContrib = 0.f;
+	float HorzDistortionContrib = 0.f;
+	float HorzDistortionStrength = 0.f;
+};
+
+struct FFSDSCameraSettings
+{
+	FString Name;
+	FVector Position = FVector::ZeroVector; // meters
+	FRotator Rotation = FRotator::ZeroRotator;
+	TArray<FFSDSCaptureSettings> CaptureSettings;
+	FFSDSGimbalSettings Gimbal;
+	TMap<int32, FFSDSNoiseSettings> NoiseSettings; // per image type
+};
+
+struct FFSDSSensorSettings
+{
+	FString Name;
+	int32 SensorType = 0;
+	bool bEnabled = true;
+	FVector Position = FVector::ZeroVector;
+	FRotator Rotation = FRotator::ZeroRotator;
+
+	// LiDAR specific
+	int32 NumberOfChannels = 4;
+	int32 PointsPerSecond = 40960;
+	float RotationsPerSecond = 10.f;
+	float VerticalFOVUpper = 0.f;
+	float VerticalFOVLower = -25.f;
+	float HorizontalFOVStart = 0.f;
+	float HorizontalFOVEnd = 359.f;
+	float MaxRange = 100.f; // meters
+	bool bDrawDebugPoints = false;
+
+	// Per-channel max-range overrides (meters). Real LiDARs (e.g. Hesai
+	// ATX_S01 datasheet Appendix A.1.1) have per-beam laser-power
+	// variance — outer/edge channels typically reach shorter than the
+	// central beams. When this array is populated and its length
+	// matches NumberOfChannels, the LiDAR sensor uses ChannelMaxRange
+	// per-channel instead of the global MaxRange above. When empty
+	// (default), all channels fall back to MaxRange — preserves
+	// existing settings.json behaviour bit-for-bit.
+	//
+	// Length validation happens in FSDSLidarSensor::OnSettingsApplied:
+	// any mismatch logs a warning and falls back to the global value.
+	TArray<float> PerChannelMaxRangeM;
+
+	// LiDAR path: "cpu" (default, ParallelFor + Chaos line traces) or
+	// "gpu" (depth-render + compute decode, #223). Read by
+	// FSDSLidarSensor::BeginPlay; switching at runtime requires a PIE
+	// stop/start. Unknown values fall back to "cpu" with a warning log.
+	FString LidarPath = TEXT("cpu");
+
+	// Noise parameters (apply to all sensor types, 0 = no noise).
+	// All values are SI: m, m/s, m/s², rad/s. The plugin converts to its
+	// internal cm/s²-based accel signal when applying AccelNoiseStd /
+	// AccelBiasStd (see FSDSVehiclePawn::SetupSensorsFromSettings);
+	// the bridge receives accel in m/s² (UEVelocityToENU) so covariance
+	// uses these values as-is.
+	//
+	// Bias is modelled as an Ornstein–Uhlenbeck process: AccelBiasStd /
+	// GyroBiasStd are the *long-run* steady-state stddevs (the bound),
+	// AccelBiasTau / GyroBiasTau the correlation time in seconds. Defaults
+	// to a BMI088-class τ=100 s.
+	float GpsPositionNoiseStd = 0.f;  // m
+	float GpsVelocityNoiseStd = 0.f;  // m/s
+	float AccelNoiseStd = 0.f;        // m/s²
+	float GyroNoiseStd = 0.f;         // rad/s
+	float AccelBiasStd = 0.f;         // m/s² steady-state σ
+	float GyroBiasStd = 0.f;          // rad/s steady-state σ
+	float AccelBiasTau = 100.f;       // s
+	float GyroBiasTau = 100.f;        // s
+	float VelocityNoiseStd = 0.f;     // m/s (GSS)
+	float RangeNoiseStd = 0.f;        // m (LiDAR)
+	float DropoutRate = 0.f;          // [0,1] (LiDAR)
+};
+
+struct FFSDSVehiclePhysics
+{
+	float Mass = 290.f;
+	FString Drivetrain = TEXT("RWD"); // RWD, FWD, AWD
+	float WheelRadius = 0.200f;      // meters
+	float WheelWidth = 0.190f;       // meters
+	float MaxSteerAngle = 28.f;      // degrees
+	float MotorMaxTorque = 230.f;    // Nm (at motor)
+	float MotorMaxPower = 80000.f;   // Watts
+	// Regen braking limits. The IFS-08 has no hydraulic service brake —
+	// braking on the drive wheels is motor regen only, capped by the
+	// battery's max cell input current. MaxRegenTorque defaults to the
+	// same motor peak (no extra headroom on the negative-torque side);
+	// MaxRegenPower is the cell-limited cap and is the binding limit
+	// at typical driving speeds.
+	float MaxRegenTorque = 230.f;    // Nm (at motor, negative side)
+	float MaxRegenPower = 6000.f;    // Watts — cell input current limit
+	float GearRatio = 2.909f;
+	float DrivetrainEfficiency = 0.92f;
+	float CdA = 0.95f;              // drag
+	float ClA = 3.0f;               // downforce (positive = down)
+	float AeroBalanceFront = 0.45f;
+	float TireMu = 1.65f;
+	float WeightDistFront = 0.438f;
+	float CoGHeight = 0.344f;        // meters
+	float SuspensionDamping = 1.5f;
+	TArray<float> MotorRPM;          // RPM points
+	TArray<float> MotorTorque;       // Nm at motor for each RPM
+
+	// --- Vehicle dynamics (load transfer) ---
+	// Geometry + stiffness fields consumed by AFSDSVehiclePawn::
+	// ComputeTireLoadsParametric. Defaults are the IFS-08 values; can be
+	// overridden per-car via settings.json. See settings.json for the
+	// JSON keys (Wheelbase, TrackFront, TrackRear, RollCenter*,
+	// RollStiffness*, HeaveStiffness, PitchStiffness).
+	float Wheelbase = 1.627f;            // m
+	float TrackFront = 1.220f;           // m
+	float TrackRear = 1.190f;            // m
+	float RollCenterFront = 0.040f;      // m
+	float RollCenterRear = 0.060f;       // m
+	float RollStiffnessFront = 27000.f;  // Nm/rad
+	float RollStiffnessRear = 22000.f;   // Nm/rad
+	float HeaveStiffness = 227600.f;     // N/m (sum of 4 wheel rates)
+	float PitchStiffness = 155600.f;     // Nm/rad
+
+	// Pacejka Magic Formula '96 tire coefficients.
+	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.
+	// See FSDSPacejkaTireModel.h for coefficient definitions.
+	FFSDSPacejkaCoeffs Pacejka;
+};
+
+struct FFSDSVehicleSettings
+{
+	FString Name = TEXT("FSCar");
+	FString VehicleType = TEXT("PhysXCar");
+	bool bEnableCollisions = true;
+	bool bAllowAPIAlways = true;
+	bool bAutoCreate = true;
+
+	FFSDSVehiclePhysics Physics;
+	TMap<FString, FFSDSSensorSettings> Sensors;
+	TMap<FString, FFSDSCameraSettings> Cameras;
+};
+
+class FSDSPLUGIN_API FFSDSSettings
+{
+public:
+	static FFSDSSettings& Get();
+
+	/** Load settings from the given JSON string */
+	bool LoadFromString(const FString& JsonString);
+
+	/** Load settings from a file path */
+	bool LoadFromFile(const FString& FilePath);
+
+	/** Try to find and load settings.json from standard locations */
+	bool AutoLoad();
+
+	/** Get the raw JSON string */
+	const FString& GetSettingsString() const { return SettingsString; }
+
+	// --- Settings ---
+	float SettingsVersion = 1.2f;
+	FString SimMode = TEXT("Car");
+	FString ViewMode = TEXT("SpringArmChase");
+	float ClockSpeed = 1.0f;
+	FString SpectatorServerPassword;
+
+	TMap<FString, FFSDSVehicleSettings> Vehicles;
+
+	/** Get the first (default) vehicle settings */
+	const FFSDSVehicleSettings* GetDefaultVehicle() const;
+
+private:
+	FFSDSSettings() = default;
+
+	void ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> VehicleObj);
+	void ParseSensor(const FString& Name, TSharedPtr<FJsonObject> SensorObj, FFSDSVehicleSettings& Vehicle);
+	void ParseCamera(const FString& Name, TSharedPtr<FJsonObject> CameraObj, FFSDSVehicleSettings& Vehicle);
+
+	FString SettingsString;
+
+	static FFSDSSettings* Instance;
+};

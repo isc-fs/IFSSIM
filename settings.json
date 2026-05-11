@@ -1,0 +1,117 @@
+{
+  "SettingsVersion": 1.2,
+  "SimMode": "Car",
+  "ViewMode": "SpringArmChase",
+  "ClockSpeed": 1.0,
+  "Vehicles": {
+    "FSCar": {
+      "VehicleType": "ChaosCar",
+      "EnableCollisions": true,
+      "AllowAPIAlways": true,
+      "AutoCreate": true,
+      "VehiclePhysics": {
+        "_comment_motor": "MotorMaxTorque, MotorMaxPower, MotorRPM[], MotorTorque[] are vestigial. Drive torque comes from the dedicated UEmraxMotor class (EMRAX 228 MV at 400 V bus, see Plugins/FSDSPlugin/Source/FSDSPlugin/Public/EmraxMotor.h). The pawn silences Chaos's ICE-style engine each tick (SetThrottleInput(0)) and injects per-wheel torque via SetDriveTorque, so these fields feed only the silenced Chaos engine and have no effect on actual driving. Of the motor-side settings, only MaxRegenTorque/MaxRegenPower are forwarded to the EMRAX class. Kept here so existing tooling and external mirrors keep parsing; remove in a future pass.",
+        "Mass": 275,
+        "Drivetrain": "RWD",
+        "WheelRadius": 0.228,
+        "WheelWidth": 0.190,
+        "MaxSteerAngle": 28,
+        "MotorMaxTorque": 230,
+        "MotorMaxPower": 80000,
+        "GearRatio": 2.909,
+        "DrivetrainEfficiency": 0.92,
+        "CdA": 0.9,
+        "ClA": 1.8,
+        "AeroBalanceFront": 0.45,
+        "TireMu": 1.4,
+        "WeightDistFront": 0.438,
+        "CoGHeight": 0.300,
+        "SuspensionDamping": 1.5,
+        "MotorRPM": [0, 1000, 2000, 3000, 4000, 5000, 6000, 6500],
+        "MotorTorque": [230, 240, 240, 240, 240, 240, 200, 180],
+        "Wheelbase": 1.627,
+        "TrackFront": 1.220,
+        "TrackRear": 1.190,
+        "RollCenterFront": 0.040,
+        "RollCenterRear": 0.060,
+        "RollStiffnessFront": 27000.0,
+        "RollStiffnessRear": 22000.0,
+        "HeaveStiffness": 227600.0,
+        "PitchStiffness": 155600.0,
+        "Pacejka": {
+          "LatB": 10.0,
+          "LatC": 1.9,
+          "LatE": -1.5,
+          "LonB": 12.0,
+          "LonC": 1.7,
+          "LonE": -0.5
+        }
+      },
+      "Sensors": {
+        "_comment_imu": "BMI088-class noise model (the unit on the real IFS-08). Datasheet noise densities: accel 175 µg/√Hz, gyro 0.014 °/s/√Hz. At 400 Hz sample rate (200 Hz Nyquist BW) those become ~0.024 m/s² and ~0.0035 rad/s per-sample standard deviations. Bias drift is modelled as Ornstein–Uhlenbeck with a 100 s correlation time, a typical bench-test characteristic for a MEMS IMU at FS race-car operating temperatures.",
+        "Imu": {
+          "SensorType": 2, "Enabled": true,
+          "AccelNoiseStd": 0.024,
+          "GyroNoiseStd": 0.0035,
+          "AccelBiasStd": 0.01,
+          "GyroBiasStd": 0.0002,
+          "AccelBiasTau": 100.0,
+          "GyroBiasTau": 100.0
+        },
+        "Gps": {
+          "SensorType": 3, "Enabled": true,
+          "GpsPositionNoiseStd": 0.5,
+          "GpsVelocityNoiseStd": 0.1
+        },
+        "Lidar1": {
+          "SensorType": 6, "Enabled": true,
+          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond is the datasheet rate; the LiDAR stream is UDP-only since #322 (TCP and UDS senders retired — pre-#321 they existed to bypass macOS Docker Desktop's ~7 MB/s TCP loopback cap). The chunked, sender-paced UDP path holds ~7-8 Hz at the full datasheet rate; the remaining gap to nominal 10 Hz is in the DDS layer (1.4 MB BEST_EFFORT messages fragment-loss between publisher and subscriber) — tracked as a follow-up. Sensor packs only emit *hits*, so the wire rate is roughly 65 % of attempted rays (e.g. 1.14 M pts/s of valid range returns at 1.74 M attempted).",
+          "NumberOfChannels": 116, "PointsPerSecond": 1740000,
+          "RotationsPerSecond": 10,
+          "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
+          "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
+          "_comment_maxrange": "MaxRange in metres. Real Hesai ATX_S01 spec is 200 m. Set to 30 m for the sim because cones past 30 m don't matter for FS detection (max-corridor-width is well under that), and shrinking the per-ray broadphase distance is the cheapest UE5 CPU optimisation we have — Chaos walks the spatial hash for every actor along the ray's path, so a 7× shorter ray cuts the per-ray work by roughly that factor. Bump back to 200 for benchmarks against real-car captures or non-FS scenarios.",
+          "MaxRange": 30,
+          "_comment_mount": "Mount aligned with the IFS-08's actual LiDAR position: X=0 (CoG-aligned, just beneath the main hoop), Y=0 (centered), Z=1.10 m (main hoop crossbar height). Previously X=0.5 m / Z=0.9 m was a hood-mount approximation; correcting it shifts the sensor back ~50 cm and up ~20 cm, which changes both the cone-detection range envelope (cones at the rear become visible) and the time-to-first-detection for cones immediately ahead. Verify cone_detection still classifies cluster heights correctly after re-baselining.",
+          "X": 0.0, "Y": 0, "Z": 1.10,
+          "RangeNoiseStd": 0.03,
+          "DropoutRate": 0.01,
+          "_comment_lidarpath": "GPU path (#223). Production default. Three-stage pipeline: depth render at the LiDAR's spherical scan envelope (CaptureScene), async GPU→CPU readback ring, and the FSDSLidarDecode.usf compute pass that turns depth texels into LiDAR-frame xyz hits. Output is the same flat-float point cloud the CPU path emits — switch to 'cpu' only for parity testing or a Chaos LineTrace reference run.",
+          "LidarPath": "gpu",
+          "_comment_perchannelmaxrange": "Per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle = -12.4°, 115 = highest = +5.9°). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams: 60 m bottom rings, 198 m centre, 90 m top. The array below is derived from the datasheet (App. A.1.2 Sorted by Ring IDs) and linearly remapped [60-198 m] → [25-30 m] so it fits under the sim's MaxRange=30 m perf budget while preserving the relative shape. Regenerate with `python3 tools/gen_per_channel_range.py --pretty`. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this.",
+          "PerChannelMaxRangeM": [
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
+            25.00, 25.00, 25.01, 25.88, 26.09, 26.09, 26.30, 27.16,
+            27.17, 27.81, 28.26, 28.26, 28.26, 29.59, 30.00, 30.00,
+            30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00,
+            30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00, 30.00,
+            30.00, 30.00, 30.00, 30.00, 29.97, 28.59, 28.26, 27.84,
+            27.17, 27.17, 27.17, 27.17, 26.99, 26.56, 26.13, 26.09,
+            26.09, 26.09, 26.09, 26.09
+          ]
+        },
+        "GSS": {
+          "SensorType": 7, "Enabled": true,
+          "VelocityNoiseStd": 0.02
+        }
+      },
+      "Cameras": {
+        "cam1": {
+          "CaptureSettings": [{ "ImageType": 0, "Width": 785, "Height": 785, "FOV_Degrees": 90 }],
+          "X": 1.6, "Y": 0, "Z": 0.2, "Pitch": 0, "Roll": 0, "Yaw": 0
+        },
+        "cam2": {
+          "CaptureSettings": [{ "ImageType": 0, "Width": 785, "Height": 785, "FOV_Degrees": 90 }],
+          "X": 1.6, "Y": -0.15, "Z": 0.2, "Pitch": 0, "Roll": 0, "Yaw": -10
+        }
+      }
+    }
+  }
+}

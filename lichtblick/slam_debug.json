@@ -1,0 +1,264 @@
+{
+  "configById": {
+    "3D!slam": {
+      "cameraState": {
+        "distance": 60,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "odom",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": true,
+          "axisScale": 1
+        },
+        "background": { "color": "#111111" }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar/Lidar1/viz": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -0.5,
+          "maxValue": 1.5,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/Conos_raw": { "visible": true },
+        "/Conos": { "visible": true },
+        "/Conos_Orange": { "visible": true },
+        "/Path": { "visible": true },
+        "/path_planning/debug": { "visible": true },
+        "/testing_only/track": { "visible": false },
+        "/testing_only/odom": { "visible": true },
+        "/slam/pose": { "visible": true }
+      },
+      "layers": []
+    },
+
+    "Plot!pose_drift": {
+      "title": "Position (SLAM vs GT, both in SLAM-anchored frame)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/slam/pose.pose.pose.position.x",
+          "enabled": true,
+          "label": "SLAM x",
+          "color": "#4488ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/slam/pose.pose.pose.position.y",
+          "enabled": true,
+          "label": "SLAM y",
+          "color": "#88ff44",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/gt_aligned.pose.pose.position.x",
+          "enabled": true,
+          "label": "GT x (aligned)",
+          "color": "#ff4488",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/gt_aligned.pose.pose.position.y",
+          "enabled": true,
+          "label": "GT y (aligned)",
+          "color": "#ffaa44",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
+    "Plot!gt_error": {
+      "title": "Position error magnitude [m] (lower = less SLAM drift)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_slam/gt_error_m.data",
+          "enabled": true,
+          "label": "||SLAM - GT||",
+          "color": "#ff8844",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
+    "Plot!velocity": {
+      "title": "Velocity [m/s] — actual vs setpoint, with curvature ahead",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/slam/pose.twist.twist.linear.x",
+          "enabled": true,
+          "label": "v actual (SLAM)",
+          "color": "#4488ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/control/v_set_mps.data",
+          "enabled": true,
+          "label": "v setpoint",
+          "color": "#ff4488",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/control/kappa_max_per_m.data",
+          "enabled": true,
+          "label": "|κ| max ahead [1/m]",
+          "color": "#ffaa00",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
+    "Plot!yaw_drift": {
+      "title": "Yaw rate (IMU vs GT odom)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "label": "IMU yaw rate",
+          "color": "#aa44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/testing_only/odom.twist.twist.angular.z",
+          "enabled": true,
+          "label": "GT yaw rate",
+          "color": "#44ffaa",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
+    "Plot!cone_count": {
+      "title": "Mapped cones",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/Conos.markers[:]{id}.id",
+          "enabled": true,
+          "label": "Mapped cones",
+          "color": "#00cc88",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+
+    "RawMessages!state": {
+      "topicPath": "/slam/pose"
+    }
+  },
+
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": { "speed": 1 },
+
+  "layout": {
+    "direction": "row",
+    "first": "3D!slam",
+    "second": {
+      "direction": "column",
+      "first": "Plot!pose_drift",
+      "second": {
+        "direction": "column",
+        "first": "Plot!gt_error",
+        "second": {
+          "direction": "column",
+          "first": "Plot!velocity",
+          "second": {
+            "direction": "column",
+            "first": "Plot!yaw_drift",
+            "second": {
+              "direction": "column",
+              "first": "Plot!cone_count",
+              "second": "RawMessages!state",
+              "splitPercentage": 40
+            },
+            "splitPercentage": 50
+          },
+          "splitPercentage": 33
+        },
+        "splitPercentage": 25
+      },
+      "splitPercentage": 25
+    },
+    "splitPercentage": 65
+  }
+}

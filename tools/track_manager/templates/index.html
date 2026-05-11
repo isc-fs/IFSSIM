@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IFSSIM Track Manager</title>
+    <style>
+        :root { --gold: #ffb81c; --dark: #111; --panel: #1a1a1a; --border: #333; --text: #e0e0e0; --muted: #888; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--dark); color: var(--text); }
+        .header { background: #000; padding: 18px 30px; border-bottom: 3px solid var(--gold); display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { color: var(--gold); font-size: 22px; font-weight: 700; letter-spacing: 1px; }
+        .header h1 span { color: var(--text); font-weight: 400; }
+        .status { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .status.connected { background: #1a3a1a; color: #6ee7b7; border: 1px solid #2d5a2d; }
+        .status.disconnected { background: #3a1a1a; color: #fca5a5; border: 1px solid #5a2d2d; }
+        .container { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 30px; max-width: 1400px; margin: 0 auto; }
+        .panel { background: var(--panel); border-radius: 10px; padding: 18px; border: 1px solid var(--border); }
+        .panel h2 { color: var(--gold); margin-bottom: 14px; font-size: 16px; text-transform: uppercase; letter-spacing: 1px; }
+        .generator { grid-column: 1 / -1; }
+        .gen-controls { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+        .gen-controls label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .gen-controls input { background: var(--dark); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; width: 90px; font-size: 14px; }
+        .gen-controls input:focus { border-color: var(--gold); outline: none; }
+        button { background: var(--gold); color: #000; border: none; padding: 9px 18px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.2s; }
+        button:hover { background: #e6a619; transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
+        button.secondary { background: var(--border); color: var(--text); }
+        button.secondary:hover { background: #444; }
+        button.load { background: #1a3a1a; color: #6ee7b7; border: 1px solid #2d5a2d; }
+        button.load:hover { background: #2d5a2d; }
+        button.delete { background: transparent; color: #f87171; border: 1px solid #5a2d2d; padding: 6px 10px; font-size: 11px; }
+        button.delete:hover { background: #3a1a1a; }
+        .track-list { max-height: 420px; overflow-y: auto; }
+        .track-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; margin-bottom: 6px; background: var(--dark); border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; }
+        .track-item:hover { border-color: var(--gold); }
+        .track-item.active { border-color: var(--gold); background: #1a1a0a; }
+        .track-info { flex: 1; }
+        .track-name { font-weight: 600; font-size: 14px; }
+        .track-stats { font-size: 11px; color: var(--muted); margin-top: 3px; }
+        .track-stats span { margin-right: 10px; }
+        .cone-blue { color: #4488ff; }
+        .cone-yellow { color: var(--gold); }
+        .cone-orange { color: #ff6600; }
+        .track-actions { display: flex; gap: 6px; }
+        .preview { text-align: center; min-height: 300px; display: flex; align-items: center; justify-content: center; }
+        .preview img { max-width: 100%; border-radius: 8px; }
+        .preview .placeholder { color: #444; font-size: 13px; }
+        .loading { display: inline-block; width: 20px; height: 20px; border: 2px solid #333; border-top: 2px solid var(--gold); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; background: #1a3a1a; color: #6ee7b7; border: 1px solid #2d5a2d; font-size: 13px; opacity: 0; transition: opacity 0.3s; z-index: 100; }
+        .toast.error { background: #3a1a1a; color: #fca5a5; border-color: #5a2d2d; }
+        .toast.show { opacity: 1; }
+        .footer { text-align: center; padding: 15px; color: #444; font-size: 12px; border-top: 1px solid var(--border); margin-top: 20px; }
+        .footer a { color: var(--gold); text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>IFSSIM <span>Track Manager</span></h1>
+        <div id="simStatus" class="status disconnected">Checking...</div>
+    </div>
+
+    <div class="container">
+        <div class="panel generator">
+            <h2>Generate New Track</h2>
+            <div class="gen-controls">
+                <label>Points <input type="number" id="genPoints" value="50" min="10" max="200"></label>
+                <label>Regions <input type="number" id="genRegions" value="30" min="10" max="100"></label>
+                <label>Max Size (m) <input type="number" id="genSize" value="150" min="50" max="500"></label>
+                <label>Name <input type="text" id="genName" placeholder="auto" style="width:140px"></label>
+                <button onclick="generateTrack()">Generate</button>
+                <button class="secondary" onclick="refreshTracks()">Refresh</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Available Tracks</h2>
+            <div id="trackList" class="track-list">
+                <div class="placeholder">Loading...</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Track Preview</h2>
+            <div id="trackPreview" class="preview">
+                <div class="placeholder">Select a track to preview</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <a href="https://iscracingteam.com/formulastudent/" target="_blank">ISC Racing Team</a> | IFSSIM Formula Student Driverless Simulator
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        let selectedTrack = null;
+
+        function showToast(msg, isError = false) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show' + (isError ? ' error' : '');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        async function checkStatus() {
+            try {
+                const r = await fetch('/api/sim/status');
+                const d = await r.json();
+                const el = document.getElementById('simStatus');
+                el.textContent = d.connected ? 'Simulator Connected' : 'Simulator Disconnected';
+                el.className = 'status ' + (d.connected ? 'connected' : 'disconnected');
+            } catch { }
+        }
+
+        async function refreshTracks() {
+            const r = await fetch('/api/tracks');
+            const tracks = await r.json();
+            const list = document.getElementById('trackList');
+            list.innerHTML = '';
+
+            if (tracks.length === 0) {
+                list.innerHTML = '<div class="placeholder">No tracks found</div>';
+                return;
+            }
+
+            tracks.forEach(t => {
+                const div = document.createElement('div');
+                div.className = 'track-item' + (selectedTrack === t.name ? ' active' : '');
+                div.innerHTML = `
+                    <div class="track-info" onclick="selectTrack('${t.name}')">
+                        <div class="track-name">${t.name}</div>
+                        <div class="track-stats">
+                            <span class="cone-blue">${t.blue} blue</span>
+                            <span class="cone-yellow">${t.yellow} yellow</span>
+                            <span class="cone-orange">${t.orange} orange</span>
+                            <span>(${t.cones} total)</span>
+                        </div>
+                    </div>
+                    <div class="track-actions">
+                        <button class="load" onclick="event.stopPropagation(); loadTrack('${t.name}')">Load</button>
+                        <button class="delete" onclick="deleteTrack('${t.name}', event)">Del</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        async function selectTrack(name) {
+            selectedTrack = name;
+            refreshTracks();
+            const preview = document.getElementById('trackPreview');
+            preview.innerHTML = '<div class="loading"></div>';
+
+            const r = await fetch(`/api/track/${name}/preview`);
+            const d = await r.json();
+            if (d.image) {
+                preview.innerHTML = `<img src="data:image/png;base64,${d.image}" alt="${name}">`;
+            } else {
+                preview.innerHTML = '<div class="placeholder">Failed to load preview</div>';
+            }
+        }
+
+        async function loadTrack(name) {
+            showToast(`Loading ${name}...`);
+            try {
+                const r = await fetch(`/api/track/${name}/load`, { method: 'POST' });
+                const d = await r.json();
+                if (d.result && d.result.includes('error')) {
+                    showToast(`Error: ${d.result}`, true);
+                } else {
+                    showToast(`Loaded: ${name}`);
+                }
+            } catch (e) {
+                showToast(`Error: ${e.message}`, true);
+            }
+            selectTrack(name);
+        }
+
+        async function deleteTrack(name, event) {
+            if (event) { event.stopPropagation(); event.preventDefault(); }
+            if (!confirm(`Delete "${name}"?`)) return;
+            try {
+                const r = await fetch(`/api/track/${encodeURIComponent(name)}/delete`, { method: 'DELETE' });
+                const d = await r.json();
+                if (d.error) {
+                    showToast(`Error: ${d.error}`, true);
+                    return;
+                }
+                showToast(`Deleted: ${name}`);
+                if (selectedTrack === name) {
+                    selectedTrack = null;
+                    document.getElementById('trackPreview').innerHTML = '<div class="placeholder">Select a track</div>';
+                }
+                refreshTracks();
+            } catch (e) {
+                showToast(`Delete failed: ${e.message}`, true);
+            }
+        }
+
+        async function generateTrack() {
+            const btn = event.target;
+            btn.textContent = 'Generating...';
+            btn.disabled = true;
+
+            try {
+                const r = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        n_points: parseInt(document.getElementById('genPoints').value),
+                        n_regions: parseInt(document.getElementById('genRegions').value),
+                        max_bound: parseInt(document.getElementById('genSize').value),
+                        name: document.getElementById('genName').value || undefined
+                    })
+                });
+                const d = await r.json();
+                if (d.name) {
+                    showToast(`Generated: ${d.name} (${d.cones} cones)`);
+                    refreshTracks();
+                    selectTrack(d.name);
+                } else {
+                    showToast(`Error: ${d.error}`, true);
+                }
+            } catch (e) {
+                showToast(`Error: ${e.message}`, true);
+            }
+
+            btn.textContent = 'Generate';
+            btn.disabled = false;
+        }
+
+        checkStatus();
+        refreshTracks();
+        setInterval(checkStatus, 5000);
+    </script>
+</body>
+</html>

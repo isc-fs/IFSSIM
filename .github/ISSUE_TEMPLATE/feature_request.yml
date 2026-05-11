@@ -1,0 +1,67 @@
+name: Feature request
+description: Suggest a new capability, sensor, parameter, or quality-of-life improvement.
+title: "[feat] <short summary>"
+labels: ["feat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please check:
+        - **[FUNCTIONALITIES.md](https://github.com/isc-fs/IFSSIM/blob/dev/docs/FUNCTIONALITIES.md)** — the feature might already be there under a name you didn't search for.
+        - **Existing issues with the `feat` label** — someone may have already proposed this.
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: What's the use case?
+      description: |
+        Describe what you (or a teammate) are trying to do that's currently hard or impossible. Concrete is better than abstract — "I want to test cone-detection on rainy weather" beats "weather support".
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        Your best guess at how this could work. It's fine to be vague — proposals don't have to be implementation-ready. If there are multiple reasonable shapes, list them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Any workarounds you tried, or related features that almost-but-not-quite cover the use case. Helps reviewers understand the gap rather than re-investigate from scratch.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Best guess — we'll re-label if needed.
+      options:
+        - UE5 plugin / sim core
+        - Sensors (LiDAR / IMU / GPS / GSS / camera / new sensor)
+        - Vehicle / physics
+        - ROS 2 bridge
+        - Mission Control (frontend)
+        - Mission Control (backend / scoring / referee)
+        - Track system
+        - Shipping pipeline / CI
+        - Documentation
+        - Other / cross-cutting
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (your view)
+      description: How important is this for what you're trying to do?
+      options:
+        - "Nice-to-have — would improve life but I have a workaround"
+        - "Important — the workaround is painful or partial"
+        - "Blocker — I can't do what I need without it"
+    validations:
+      required: true

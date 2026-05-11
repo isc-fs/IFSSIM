@@ -1,0 +1,91 @@
+name: Package Linux Build
+
+# Mirrors package-mac.yml for Linux. Triggered on version tags
+# (e.g. v1.0.0) or when a GitHub Release is manually created.
+# The release artefact is uploaded to the corresponding tag's
+# Release page, alongside the Mac archive.
+#
+# Requires a self-hosted runner labelled "linux" with UE5 5.7
+# installed. UE5 5.7 supports cross-compile from a Linux host to
+# the same target — same RunUAT.sh BuildCookRun flow as Mac, just
+# different `-platform=Linux`.
+#
+# To register the runner: Settings → Actions → Runners → New
+# self-hosted runner → Linux. Set UE5_ROOT in its env (e.g.
+# /opt/UE_5.7).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  release:
+    types: [created]
+
+jobs:
+  package:
+    runs-on: [self-hosted, Linux]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Plugin cook needs LFS-tracked binary content (cone meshes,
+          # vehicle textures, M_LiDARStencilEncoder.uasset).
+          lfs: true
+
+      - name: Resolve UE5 root
+        id: ue5
+        run: |
+          # Respect env override, fall back to the conventional Linux install
+          # path (Epic doesn't ship a Linux installer; teams typically clone
+          # UnrealEngine from GitHub and build, then point at it via env).
+          ROOT="${UE5_ROOT:-/opt/UE_5.7}"
+          if [ ! -f "$ROOT/Engine/Build/BatchFiles/RunUAT.sh" ]; then
+            echo "::error::UE5 not found at '$ROOT'. Set UE5_ROOT on the runner."
+            exit 1
+          fi
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Package (BuildCookRun, Linux Shipping)
+        run: |
+          "${{ steps.ue5.outputs.root }}/Engine/Build/BatchFiles/RunUAT.sh" \
+            BuildCookRun \
+            -project="$GITHUB_WORKSPACE/IFSSIM.uproject" \
+            -platform=Linux \
+            -clientconfig=Shipping \
+            -cook \
+            -build \
+            -stage \
+            -pak \
+            -archive \
+            -archivedirectory="$GITHUB_WORKSPACE/Packaged" \
+            -noP4 \
+            -utf8output
+
+      - name: Stage tracks alongside binary
+        # Match what package_linux.sh does for local-dev runs — the
+        # archive output puts the binary at Packaged/Linux/IFSSIM/
+        # Binaries/Linux/...; copy track CSVs next to that root so
+        # FSDSConeSpawner finds them at runtime.
+        run: |
+          TRACKS_DST="$GITHUB_WORKSPACE/Packaged/Linux/tracks"
+          mkdir -p "$TRACKS_DST"
+          cp "$GITHUB_WORKSPACE/Content/tracks/"*.csv "$TRACKS_DST/"
+          ls "$TRACKS_DST"
+
+      - name: Tar artifact
+        id: tar
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ARCHIVE="IFSSIM-${VERSION}-linux.tar.gz"
+          cd "$GITHUB_WORKSPACE/Packaged/Linux"
+          tar czf "$GITHUB_WORKSPACE/$ARCHIVE" .
+          echo "name=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.tar.outputs.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
