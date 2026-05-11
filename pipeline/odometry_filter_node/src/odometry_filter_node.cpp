@@ -39,6 +39,7 @@
 #include <string>
 
 #include "odometry_filter/odometry_filter.hpp"
+#include "odometry_filter/odometry_ekf.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -65,6 +66,15 @@ class OdometryFilterNode : public LifecycleNode {
     declare_parameter<double>("publish_hz", 100.0);
     declare_parameter<std::string>("odom_frame", "odom");
     declare_parameter<std::string>("base_frame", "base_link");
+    // Filter algorithm: "complementary" (the original
+    // odometry_filter::OdometryFilter) or "ekf" (the 9-state
+    // odometry_filter::OdometryEkf with bias states — issue #447
+    // Phase 2). Default stays "complementary" until the EKF has
+    // a verified replay-bag win; flip the param to swap in production.
+    declare_parameter<std::string>("filter_kind", "complementary");
+    // EKF-only: enable NHC measurement updates (Phase 2b — once
+    // Phase 2a's predict + bias-tracking math is replay-validated).
+    declare_parameter<bool>("ekf_enable_nhc", false);
   }
 
   // ------------------------------------------------------------------
@@ -88,7 +98,23 @@ class OdometryFilterNode : public LifecycleNode {
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
-    filter_ = std::make_unique<odometry_filter::OdometryFilter>();
+    const auto kind = get_parameter("filter_kind").as_string();
+    if (kind == "ekf") {
+      odometry_filter::EkfParams ekf_params;
+      ekf_params.enable_nhc = get_parameter("ekf_enable_nhc").as_bool();
+      filter_ = std::make_unique<odometry_filter::OdometryEkf>(ekf_params);
+      RCLCPP_INFO(get_logger(),
+        "filter_kind=ekf (9-state, bias-tracking; nhc=%s)",
+        ekf_params.enable_nhc ? "on" : "off");
+    } else {
+      if (kind != "complementary") {
+        RCLCPP_WARN(get_logger(),
+          "unknown filter_kind=%s — defaulting to complementary",
+          kind.c_str());
+      }
+      filter_ = std::make_unique<odometry_filter::OdometryFilter>();
+      RCLCPP_INFO(get_logger(), "filter_kind=complementary");
+    }
     first_publish_logged_ = false;
 
     return CallbackReturn::SUCCESS;
@@ -266,7 +292,7 @@ class OdometryFilterNode : public LifecycleNode {
   // ------------------------------------------------------------------
   // Members
   // ------------------------------------------------------------------
-  std::unique_ptr<odometry_filter::OdometryFilter> filter_;
+  std::unique_ptr<odometry_filter::IOdometryFilter> filter_;
 
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::Float32>::SharedPtr yaw_residual_pub_;

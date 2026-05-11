@@ -35,6 +35,7 @@ find_package(Eigen3 REQUIRED)
 # -----------------------------------------------------------------------------
 add_library(${PROJECT_NAME} SHARED
   src/odometry_filter.cpp
+  src/odometry_ekf.cpp
 )
 target_include_directories(${PROJECT_NAME}
   PUBLIC
@@ -72,6 +73,13 @@ if(BUILD_TESTING)
     test/test_odometry_filter.cpp
   )
   target_link_libraries(test_odometry_filter ${PROJECT_NAME})
+
+  # 9-state EKF — sanity tests for the new filter alongside the
+  # complementary one (issue #447 Phase 2). Same gtest harness.
+  ament_add_gtest(test_odometry_ekf
+    test/test_odometry_ekf.cpp
+  )
+  target_link_libraries(test_odometry_ekf ${PROJECT_NAME})
 
   # Numeric-equivalence harness — see test/validate_vs_python.py
   # for the full story. Built and installed only under BUILD_TESTING

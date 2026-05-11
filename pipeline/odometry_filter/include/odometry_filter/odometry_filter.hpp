@@ -39,6 +39,8 @@
 #include <Eigen/Core>
 #include <optional>
 
+#include "odometry_filter/filter_interface.hpp"
+
 namespace odometry_filter {
 
 // ---------------------------------------------------------------------
@@ -182,7 +184,7 @@ struct Params {
 };
 
 
-class OdometryFilter {
+class OdometryFilter : public IOdometryFilter {
  public:
   // Default-constructed filter uses all module defaults.
   OdometryFilter() : OdometryFilter(Params{}) {}
@@ -192,12 +194,12 @@ class OdometryFilter {
   explicit OdometryFilter(const Params & params);
 
   // ----- Public read-only accessors -----
-  const OdometryState & state() const noexcept { return state_; }
-  const FilterDiagnostics & diagnostics() const noexcept { return diag_; }
-  bool is_calibrated() const noexcept { return calib_.completed; }
+  const OdometryState & state() const noexcept override { return state_; }
+  const FilterDiagnostics & diagnostics() const noexcept override { return diag_; }
+  bool is_calibrated() const noexcept override { return calib_.completed; }
 
   // Tear down all state. Use on lifecycle on_cleanup.
-  void reset();
+  void reset() override;
 
   // ----- Ingestion API (called from the ROS node) -----
 
@@ -210,18 +212,18 @@ class OdometryFilter {
   void push_imu(
     double t,
     const Eigen::Vector3d & accel,
-    const Eigen::Vector3d & gyro);
+    const Eigen::Vector3d & gyro) override;
 
   // One motor-RPM sample. Called from the RPM subscription (~80 Hz).
   // t is wall-clock seconds; stored for the rpm_stale_s check.
-  void push_rpm(double t, double rpm);
+  void push_rpm(double t, double rpm) override;
 
   // One steering-angle sample (rad). Cached for the next push_imu's
   // kinematic-bicycle cross-check.
-  void push_steering(double t, double angle_rad);
+  void push_steering(double t, double angle_rad) override;
 
   // One brake-pressure sample. Clamped to [0, 1] defensively.
-  void push_brake(double t, double brake);
+  void push_brake(double t, double brake) override;
 
   // ----- Internal-state access for unit tests only -----
   // Mirrors the Python test suite which pokes at _calib for the
