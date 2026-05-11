@@ -243,8 +243,29 @@ def generate_launch_description() -> LaunchDescription:
         # name human-readable in code while still landing on the
         # bridge's actual subscription. Post-#384 the supervisor is
         # the *only* publisher of this topic.
+        #
+        # IMU/RPM/steering/brake remaps stay even though the C++
+        # odometry_filter_node owns those subscriptions now — the
+        # supervisor's `use_external_odometry_filter` parameter
+        # defaults true so it skips creating those subs, but the
+        # remap is harmless when no subscriber asks for the topic.
+        # Keeping it lets a `--ros-args -p use_external_odometry_filter:=false`
+        # override at launch time fall back to the Python filter
+        # without also having to add the remaps.
         remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE,
                     REMAP_CMD],
+    )
+    # odometry_filter_node — C++ port of the Python OdometryFilter
+    # (was inside sim_supervisor_node pre-#431). Owns the /imu /motor_rpm
+    # /steering_angle /brake_pressure subscriptions, the /odom publish
+    # at 100 Hz, /odom_diag/*, and the odom→base_link TF broadcast.
+    # Same lifecycle pattern as the rest (auto-configure → activate at
+    # launch start). Same /fsds/* remaps so the C++ subs land on the
+    # bridge topics directly.
+    actions += _auto_active(
+        "odometry_filter_node", "odometry_filter_node",
+        "odometry_filter_node",
+        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE],
     )
 
     # ------------------ Autonomy lifecycle nodes (unconfigured) ------------------

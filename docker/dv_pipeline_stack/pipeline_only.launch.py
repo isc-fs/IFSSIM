@@ -111,9 +111,17 @@ def generate_launch_description() -> LaunchDescription:
     # its OdometryFilter sees the bridge's sensor stream.
     actions += _auto_active(
         "sim_supervisor", "sim_supervisor_node", "sim_supervisor_node",
-        # See pipeline.launch.py for the REMAP_CMD rationale (#384).
+        # See pipeline.launch.py for the REMAP_CMD rationale (#384)
+        # and the IMU-remap-still-here rationale (#432 Phase 2 — the
+        # supervisor's `use_external_odometry_filter` parameter
+        # defaults true; remaps stay for the override-to-Python case).
         remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE,
                     REMAP_CMD],
+    )
+    actions += _auto_active(
+        "odometry_filter_node", "odometry_filter_node",
+        "odometry_filter_node",
+        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE],
     )
 
     # Autonomy lifecycle nodes (unconfigured)

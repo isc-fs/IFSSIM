@@ -180,6 +180,23 @@ class SimSupervisorNode(LifecycleNode):
     def on_configure(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("on_configure: creating I/O")
 
+        # External filter opt-out (#431/Phase 2). When True, this node
+        # skips its own /odom publishing path entirely — no filter
+        # instance, no IMU/RPM/steering/brake subscriptions, no /odom
+        # publisher, no /odom_diag/* publishers, no odom→base_link TF
+        # broadcaster. The C++ `odometry_filter_node` owns those
+        # surfaces instead. Default True now that the C++ node is
+        # the production path; flip to False (or override at launch)
+        # to fall back to the Python OdometryFilter if needed.
+        self.declare_parameter("use_external_odometry_filter", True)
+        self._use_external_filter = (
+            self.get_parameter("use_external_odometry_filter").value
+        )
+        if self._use_external_filter:
+            self.get_logger().info(
+                "use_external_odometry_filter=True — /odom + /odom_diag/* "
+                "+ odom→base_link TF owned by odometry_filter_node (C++)")
+
         # Phase 1 server — mission_control_backend (web) is the client.
         self._start_mission_server = ActionServer(
             self,
@@ -220,37 +237,24 @@ class SimSupervisorNode(LifecycleNode):
         )
 
         # /odom infrastructure — created here, subscriptions and
-        # timer come up in on_activate.
-        #
-        # Phase 2 (#382): supervisor owns the odom→base_link TF.
-        # slam_node simultaneously publishes map→odom (drift
-        # correction) computed from its absolute pose ⊖ our
-        # supervisor /odom — together the chain
-        # map → odom → base_link gives SLAM's absolute pose at the
-        # leaf, with map→odom absorbing accumulated supervisor
-        # dead-reckoning drift between SLAM ticks. tf2 has no
-        # lifecycle TransformBroadcaster; the regular one is silent
-        # until on_activate's filter-calibration window completes
-        # and the timer fires.
-        self._odom_filter = OdometryFilter()
-        self._odom_pub = self.create_lifecycle_publisher(
-            Odometry, "/odom", 50,
-        )
-        self._odom_tf_broadcaster = TransformBroadcaster(self)
-
-        # Phase 3 (#383) diagnostic publishers — emit cross-check
-        # residuals next to /odom so tuning consumers (Lichtblick
-        # plot panels, offline replay) can see filter state without
-        # re-deriving from raw sensors.
-        self._yaw_residual_pub = self.create_lifecycle_publisher(
-            Float32, "/odom_diag/yaw_residual_rad_s", 10,
-        )
-        self._slip_flag_pub = self.create_lifecycle_publisher(
-            Bool, "/odom_diag/slip_flag", 10,
-        )
-        self._effective_alpha_pub = self.create_lifecycle_publisher(
-            Float32, "/odom_diag/effective_alpha_vx", 10,
-        )
+        # timer come up in on_activate. Skipped entirely when
+        # use_external_odometry_filter is True (odometry_filter_node
+        # owns the equivalent surface in C++).
+        if not self._use_external_filter:
+            self._odom_filter = OdometryFilter()
+            self._odom_pub = self.create_lifecycle_publisher(
+                Odometry, "/odom", 50,
+            )
+            self._odom_tf_broadcaster = TransformBroadcaster(self)
+            self._yaw_residual_pub = self.create_lifecycle_publisher(
+                Float32, "/odom_diag/yaw_residual_rad_s", 10,
+            )
+            self._slip_flag_pub = self.create_lifecycle_publisher(
+                Bool, "/odom_diag/slip_flag", 10,
+            )
+            self._effective_alpha_pub = self.create_lifecycle_publisher(
+                Float32, "/odom_diag/effective_alpha_vx", 10,
+            )
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -279,55 +283,46 @@ class SimSupervisorNode(LifecycleNode):
         if self._ebs_reset_pub is not None:
             self._ebs_reset_pub.publish(EmptyMsg())
 
-        # IMU subscription — BEST_EFFORT to match what the bridge
-        # publishes, deep queue (2000) so the predict step doesn't
-        # lose samples while RPM messages are being processed on the
-        # same executor. Same QoS choice slam_node makes for the same
-        # reason.
-        imu_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=2000,
-            durability=DurabilityPolicy.VOLATILE,
-        )
-        self._sub_imu = self.create_subscription(
-            Imu, "/imu", self._on_imu, imu_qos,
-            callback_group=self._cb_group,
-        )
-
-        # Motor RPM — 80 Hz from the bridge. BEST_EFFORT, shallow queue.
-        rpm_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10,
-            durability=DurabilityPolicy.VOLATILE,
-        )
-        self._sub_rpm = self.create_subscription(
-            Float32, "/motor_rpm", self._on_rpm, rpm_qos,
-            callback_group=self._cb_group,
-        )
-
-        # Phase 3 (#383) — steering + brake_pressure cross-check
-        # inputs. Same BEST_EFFORT QoS as RPM since they share the
-        # 100 Hz bridge cadence and consumers tolerate dropped
-        # samples (the filter just uses the latest cached value).
-        self._sub_steering = self.create_subscription(
-            Float32, "/steering_angle", self._on_steering, rpm_qos,
-            callback_group=self._cb_group,
-        )
-        self._sub_brake = self.create_subscription(
-            Float32, "/brake_pressure", self._on_brake, rpm_qos,
-            callback_group=self._cb_group,
-        )
-
-        # Publish /odom on a fixed-rate timer rather than per-IMU-tick:
-        # decouples publish rate from input rate, gives downstream
-        # consumers a predictable cadence regardless of IMU jitter.
-        self._odom_pub_timer = self.create_timer(
-            1.0 / ODOM_PUBLISH_HZ,
-            self._publish_odom,
-            callback_group=self._cb_group,
-        )
+        # IMU / RPM / steering / brake subscriptions + publish timer
+        # ALL skipped when the external C++ filter owns /odom — those
+        # callbacks are exactly the 93 %-CPU Python hot path the port
+        # was written to eliminate. Leaving the action-server /
+        # supervisor surface (StartMission, RuntimeControl client,
+        # bridge publishers) untouched.
+        if not self._use_external_filter:
+            imu_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=2000,
+                durability=DurabilityPolicy.VOLATILE,
+            )
+            self._sub_imu = self.create_subscription(
+                Imu, "/imu", self._on_imu, imu_qos,
+                callback_group=self._cb_group,
+            )
+            rpm_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=10,
+                durability=DurabilityPolicy.VOLATILE,
+            )
+            self._sub_rpm = self.create_subscription(
+                Float32, "/motor_rpm", self._on_rpm, rpm_qos,
+                callback_group=self._cb_group,
+            )
+            self._sub_steering = self.create_subscription(
+                Float32, "/steering_angle", self._on_steering, rpm_qos,
+                callback_group=self._cb_group,
+            )
+            self._sub_brake = self.create_subscription(
+                Float32, "/brake_pressure", self._on_brake, rpm_qos,
+                callback_group=self._cb_group,
+            )
+            self._odom_pub_timer = self.create_timer(
+                1.0 / ODOM_PUBLISH_HZ,
+                self._publish_odom,
+                callback_group=self._cb_group,
+            )
 
         return super().on_activate(state)
 
