@@ -803,17 +803,25 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
             msg.pose.covariance[21] = 1e-6;
             msg.pose.covariance[28] = 1e-6;
             msg.pose.covariance[35] = 1e-6;
-            // Clean ground-truth body-frame velocity (#315). Tiny
+            // Clean ground-truth body-frame velocity (#315) + angular
+            // velocity (closing the #315 follow-up gap). Same source —
+            // pawn root component, no sensor in the loop. Tiny
             // covariance — this is GT, not a measurement; downstream
             // consumers that weight by inverse covariance still see
             // a finite floor without claiming literal zero uncertainty.
-            msg.twist.twist.linear.x = f.gt_vel_body_x;
-            msg.twist.twist.linear.y = f.gt_vel_body_y;
-            msg.twist.twist.linear.z = f.gt_vel_body_z;
+            msg.twist.twist.linear.x  = f.gt_vel_body_x;
+            msg.twist.twist.linear.y  = f.gt_vel_body_y;
+            msg.twist.twist.linear.z  = f.gt_vel_body_z;
+            msg.twist.twist.angular.x = f.gt_ang_vel_body_x;
+            msg.twist.twist.angular.y = f.gt_ang_vel_body_y;
+            msg.twist.twist.angular.z = f.gt_ang_vel_body_z;
             constexpr double gt_var = 1e-9;
             msg.twist.covariance[0]  = gt_var;
             msg.twist.covariance[7]  = gt_var;
             msg.twist.covariance[14] = gt_var;
+            msg.twist.covariance[21] = gt_var;
+            msg.twist.covariance[28] = gt_var;
+            msg.twist.covariance[35] = gt_var;
             odom_pub_->publish(msg);
         }
     }

@@ -59,6 +59,16 @@ struct FFSDSSensorFrame
 	// fully ground-truth on both pose and twist; /fsds/gss keeps carrying
 	// the noisy GSS sensor values where the noise model belongs.
 	float GtVelBodyX = 0.f, GtVelBodyY = 0.f, GtVelBodyZ = 0.f; // m/s
+
+	// Ground-truth body-frame angular velocity, clean (no IMU bias / noise).
+	// Source: RootComponent->GetPhysicsAngularVelocityInRadians() rotated
+	// into body frame, identical math to FSDSImuSensor::Tick (so the GT
+	// gyro and the noisy IMU gyro live in exactly the same body-frame
+	// convention; downstream diagnostics can diff them directly to see
+	// the bias/noise the filter has to handle). Bridge sources
+	// /testing_only/odom's twist.angular from these — closes the gap left
+	// by #315 (which only populated twist.linear).
+	float GtAngVelBodyX = 0.f, GtAngVelBodyY = 0.f, GtAngVelBodyZ = 0.f; // rad/s
 };
 
 struct FFSDSLidarChunkHeader

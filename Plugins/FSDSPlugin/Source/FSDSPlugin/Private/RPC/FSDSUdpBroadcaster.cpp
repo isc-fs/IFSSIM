@@ -231,6 +231,30 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	Frame.GtVelBodyY = -BodyVel.Y;
 	Frame.GtVelBodyZ =  BodyVel.Z;
 
+	// Ground-truth body-frame angular velocity. Mirrors FSDSImuSensor::Tick
+	// exactly: physics-engine ω is already rad/s in RH convention, just
+	// rotate world → body via the actor's inverse quat. No sign flips
+	// needed (the IMU comment at FSDSImuSensor.cpp:30 confirms this
+	// convention empirically against Phase 2 drive tests). Falls back to
+	// zero if physics isn't simulating — vehicle pawn idling, PIE just
+	// started, etc. — same path the IMU sensor takes.
+	if (UPrimitiveComponent* RootPrim =
+			Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
+		RootPrim && RootPrim->IsSimulatingPhysics())
+	{
+		const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+		const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
+		Frame.GtAngVelBodyX = BodyAngVel.X;
+		Frame.GtAngVelBodyY = BodyAngVel.Y;
+		Frame.GtAngVelBodyZ = BodyAngVel.Z;
+	}
+	else
+	{
+		Frame.GtAngVelBodyX = 0.f;
+		Frame.GtAngVelBodyY = 0.f;
+		Frame.GtAngVelBodyZ = 0.f;
+	}
+
 	auto CarState = VehiclePawn->GetCarState();
 	Frame.Speed = CarState.Speed;
 	Frame.RPM = CarState.RPM;

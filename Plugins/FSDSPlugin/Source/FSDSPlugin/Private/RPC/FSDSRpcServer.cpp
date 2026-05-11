@@ -1574,6 +1574,27 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		Frame.GtVelBodyY = -BodyVel.Y;
 		Frame.GtVelBodyZ =  BodyVel.Z;
 
+		// Ground-truth body-frame angular velocity — same pattern as the
+		// UDP path. Mirrors FSDSImuSensor::Tick exactly so GT and noisy
+		// IMU live in the same body-frame convention, downstream can diff
+		// them directly to read off the bias/noise the filter has to bound.
+		if (UPrimitiveComponent* RootPrim =
+				Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
+			RootPrim && RootPrim->IsSimulatingPhysics())
+		{
+			const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+			const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
+			Frame.GtAngVelBodyX = BodyAngVel.X;
+			Frame.GtAngVelBodyY = BodyAngVel.Y;
+			Frame.GtAngVelBodyZ = BodyAngVel.Z;
+		}
+		else
+		{
+			Frame.GtAngVelBodyX = 0.f;
+			Frame.GtAngVelBodyY = 0.f;
+			Frame.GtAngVelBodyZ = 0.f;
+		}
+
 		auto CarState = VehiclePawn->GetCarState();
 		Frame.Speed = CarState.Speed;
 		Frame.RPM = CarState.RPM;
