@@ -13,7 +13,7 @@
         "near": 0.01,
         "far": 5000
       },
-      "followTf": "odom",
+      "followTf": "map",
       "followMode": "follow-none",
       "scene": {
         "syncCamera": false,
@@ -24,7 +24,16 @@
         },
         "background": { "color": "#111111" }
       },
-      "transforms": {},
+      "transforms": {
+        "frame:map": { "visible": true },
+        "frame:odom": { "visible": true },
+        "frame:base_link": { "visible": true },
+        "frame:fsds/FSCar": { "visible": false },
+        "frame:fsds/GPSr": { "visible": false },
+        "frame:fsds/Lidar": { "visible": false },
+        "frame:fsds/Imu": { "visible": false },
+        "frame:fsds/Camera": { "visible": false }
+      },
       "topics": {
         "/lidar/Lidar1/viz": {
           "visible": true,

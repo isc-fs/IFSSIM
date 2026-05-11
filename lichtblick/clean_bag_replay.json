@@ -5,15 +5,28 @@
         "distance": 35,
         "perspective": true,
         "phi": 60,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 0,
         "fovy": 0.7,
         "near": 0.5,
         "far": 5000
       },
-      "followTf": "fsds/FSCar",
+      "followTf": "base_link",
       "followMode": "follow-position",
       "scene": {
         "syncCamera": false,
@@ -22,13 +35,35 @@
           "showLabels": false,
           "axisScale": 1.5
         },
-        "background": { "color": "#0a0a14" }
+        "background": {
+          "color": "#0a0a14"
+        }
       },
       "transforms": {
-        "frame:odom":        { "visible": true },
-        "frame:fsds/FSCar":  { "visible": true },
-        "frame:fsds/Lidar":  { "visible": false },
-        "frame:base_link":   { "visible": false }
+        "frame:map": {
+          "visible": true
+        },
+        "frame:odom": {
+          "visible": true
+        },
+        "frame:base_link": {
+          "visible": true
+        },
+        "frame:fsds/FSCar": {
+          "visible": false
+        },
+        "frame:fsds/GPSr": {
+          "visible": false
+        },
+        "frame:fsds/Lidar": {
+          "visible": false
+        },
+        "frame:fsds/Imu": {
+          "visible": false
+        },
+        "frame:fsds/Camera": {
+          "visible": false
+        }
       },
       "topics": {
         "/lidar/Lidar1/viz": {
@@ -67,15 +102,27 @@
         "poseEstimateThetaDeviation": 0.26
       }
     },
-
     "3D!world": {
       "cameraState": {
         "distance": 120,
         "perspective": false,
         "phi": 0,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 0,
         "fovy": 45,
         "near": 0.5,
@@ -90,13 +137,35 @@
           "showLabels": false,
           "axisScale": 2.0
         },
-        "background": { "color": "#0a0a14" }
+        "background": {
+          "color": "#0a0a14"
+        }
       },
       "transforms": {
-        "frame:odom":        { "visible": true },
-        "frame:fsds/FSCar":  { "visible": true },
-        "frame:fsds/Lidar":  { "visible": false },
-        "frame:base_link":   { "visible": false }
+        "frame:map": {
+          "visible": true
+        },
+        "frame:odom": {
+          "visible": true
+        },
+        "frame:base_link": {
+          "visible": true
+        },
+        "frame:fsds/FSCar": {
+          "visible": false
+        },
+        "frame:fsds/GPSr": {
+          "visible": false
+        },
+        "frame:fsds/Lidar": {
+          "visible": false
+        },
+        "frame:fsds/Imu": {
+          "visible": false
+        },
+        "frame:fsds/Camera": {
+          "visible": false
+        }
       },
       "topics": {
         "/lidar/Lidar1/viz": {
@@ -126,7 +195,6 @@
         }
       }
     },
-
     "Plot!speed_rpm": {
       "title": "Speed: GT body-frame v_x vs RPM-derived",
       "isSynced": true,
@@ -150,7 +218,7 @@
         {
           "value": "/motor_rpm.data * 0.00898",
           "enabled": true,
-          "label": "RPM × 0.00898 (m/s)",
+          "label": "RPM \u00d7 0.00898 (m/s)",
           "color": "#aa44ff",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
@@ -159,7 +227,6 @@
       ],
       "sidebarDimension": 200
     },
-
     "Plot!yaw_rate": {
       "title": "Yaw rate",
       "isSynced": true,
@@ -192,11 +259,11 @@
       "sidebarDimension": 200
     }
   },
-
   "globalVariables": {},
   "userNodes": {},
-  "playbackConfig": { "speed": 1 },
-
+  "playbackConfig": {
+    "speed": 1
+  },
   "layout": {
     "direction": "row",
     "first": {
