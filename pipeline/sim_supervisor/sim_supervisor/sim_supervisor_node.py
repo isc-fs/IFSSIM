@@ -70,21 +70,25 @@ from sim_supervisor.odometry import OdometryFilter
 ODOM_PUBLISH_HZ: float = 100.0
 
 # Take every Nth IMU sample, discard the rest before pushing into the
-# OdometryFilter. The BMI088 publishes at ~400 Hz; the filter
-# integrates per push_imu call so consuming all 400 burns sim_supervisor
-# CPU. Quick CPU audit on 2026-05-11 showed sim_supervisor at 93 % CPU
-# pre-decimation (full 400 Hz consumption). With IMU_DECIMATION=4 we
-# integrate at 100 Hz, matching the /odom publish rate and the
-# controller's 40 Hz tick rate with plenty of margin.
+# OdometryFilter. Default 1 (= no decimation, integrate every sample
+# at the BMI088's native ~400 Hz rate) is the production setting —
+# matches what the uDV firmware does on the real IFS-08 and preserves
+# the sim/real algorithm equivalence the module docstring promises.
 #
-# This is the engineering call deferred by #385 (the "quantify
-# whether 100 Hz loses meaningful filter quality vs 400 Hz" question).
-# In practice: bias estimation during the 3 s stationary window still
-# averages over ~300 samples at 100 Hz — well above the noise floor.
-# Steady-state predict step doesn't benefit from sub-10 ms IMU samples
-# (controller dt is 25 ms). Bumping back up to 1 (full rate) is the
-# A/B test; #385 stays open for that quantification work.
-IMU_DECIMATION: int = 4
+# Earlier (briefly, in #426) we set this to 4 to drop sim_supervisor
+# CPU from 93 % to ~25 %, reasoning that the controller only ticks at
+# 40 Hz so 100 Hz integration was enough. That broke parity: the real
+# car's uDV consumes IMU at 400 Hz, so a sim filter integrating at
+# 100 Hz no longer mirrors the same dynamic. Revert.
+#
+# If sim_supervisor CPU becomes a real problem again, the right fix
+# is to port OdometryFilter to C++ (rclpy callback overhead at 400 Hz
+# is the dominant cost, not the integration math). #385 still tracks
+# the "quantify whether 100 Hz loses meaningful filter quality" A/B
+# question — if the answer is "no", we can re-enable decimation AND
+# match it on the real car for symmetric reduced rate. Until then,
+# stay at 1.
+IMU_DECIMATION: int = 1
 
 
 # Total time we'll wait for mission_control_node.start_mission_orchestration
