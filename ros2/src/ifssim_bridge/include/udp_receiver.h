@@ -48,6 +48,14 @@ struct SensorFrame
     // so the GT topic is symmetric (clean GT pose AND clean GT twist);
     // /gss continues to publish the noisy GSS sensor values.
     float gt_vel_body_x, gt_vel_body_y, gt_vel_body_z; // m/s, body frame
+
+    // Ground-truth body-frame angular velocity (rad/s). Plugin populates
+    // from RootComponent->GetPhysicsAngularVelocityInRadians() rotated
+    // into body frame — same math as the IMU sensor, so this is the
+    // noise-free, bias-free truth that the noisy IMU gyro tracks.
+    // Bridge writes these into /testing_only/odom's twist.angular,
+    // closing the gap left by #315 (twist.linear only).
+    float gt_ang_vel_body_x, gt_ang_vel_body_y, gt_ang_vel_body_z;
 };
 
 struct LidarChunkHeader
