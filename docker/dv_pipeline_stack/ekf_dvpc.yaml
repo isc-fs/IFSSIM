@@ -1,0 +1,130 @@
+# robot_localization ekf_localization_node config for the
+# DV-PC-resident state estimator (issue #447 Phase 1).
+#
+# Replaces the complementary-filter `OdometryFilter` for the
+# autonomy stack's /odom input. Sensors:
+#
+#   /imu (sensor_msgs/Imu, ~333 Hz from the bridge):
+#     - body-frame angular velocity (gyro), all axes
+#     - body-frame linear acceleration (accel), all axes
+#     - orientation NOT used — we don't trust the absolute orient
+#       from IMU integration alone
+#
+#   /wheel_odom (nav_msgs/Odometry, 100 Hz from rpm_to_odom.py):
+#     - body-frame vx only (twist.linear.x)
+#     - everything else carries huge covariance, will be ignored
+#
+# Output frame: `odom`. World frame = odom (REP-105). No `map` here —
+# slam_node owns `map → odom` separately and that's intentional.
+
+ekf_filter_node:
+  ros__parameters:
+
+    # Output rate. 100 Hz matches the closed-loop control sampling
+    # rate and gives sub-millisecond freshness for SLAM at 10 Hz.
+    frequency: 100.0
+
+    # 2D mode locks Z, pitch, roll, vz, ω_roll, ω_pitch to zero —
+    # FS-DV track is flat. Massive numerical stability win, kills
+    # ~half the state dimension we don't actually observe.
+    two_d_mode: true
+
+    # `publish_tf` is FALSE during the Phase 1 parallel-run validation
+    # period — sim_supervisor already writes `odom → base_link` and
+    # two TF publishers on the same edge produces last-writer-wins
+    # non-determinism. The EKF's pose lives on /odom_ekf only; consumers
+    # interested in evaluating it read the topic, not the TF tree.
+    # Flip to true once we cut over and disable sim_supervisor's
+    # OdometryFilter — see issue #447 Phase 1 → Phase 1.5 transition.
+    publish_tf: false
+    publish_acceleration: false
+
+    # Reference frames. world_frame=odom means the filter integrates
+    # in `odom` and publishes `odom → base_link`. No global anchor —
+    # slam_node closes that loop.
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # ----- Sensor 0: IMU (predict + orientation/angular updates) -----
+    imu0: /imu
+    imu0_config: [
+      # x      y      z   roll  pitch  yaw
+      false, false, false, false, false, false,
+      # vx     vy     vz   v_roll v_pitch v_yaw
+      false, false, false, false, false, true,
+      # ax     ay     az
+      true,  true,  false
+    ]
+    # The IMU's accel includes gravity; let the filter subtract it
+    # using its current orientation estimate. Critical — without
+    # this, the filter integrates ~9.81 m/s² of extra acceleration
+    # into vx every IMU sample.
+    imu0_remove_gravitational_acceleration: true
+    imu0_differential: false
+    imu0_relative: false
+    imu0_queue_size: 30
+    imu0_pose_rejection_threshold: 0.8
+    imu0_twist_rejection_threshold: 0.8
+    imu0_linear_acceleration_rejection_threshold: 0.8
+
+    # ----- Sensor 1: wheel odom (vx-only correction) -----
+    odom0: /wheel_odom
+    odom0_config: [
+      # x      y      z   roll  pitch  yaw
+      false, false, false, false, false, false,
+      # vx     vy     vz   v_roll v_pitch v_yaw
+      true,  false, false, false, false, false,
+      # ax     ay     az
+      false, false, false
+    ]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    # ----- Process noise (Q) — how fast we believe state evolves. -----
+    # Diagonal entries: x, y, z, roll, pitch, yaw, vx, vy, vz,
+    #                   v_roll, v_pitch, v_yaw, ax, ay, az.
+    # Smaller Q on yaw + vx (we predict those well from sensors);
+    # bigger Q on vy (we don't measure it but it has to be free to
+    # capture real cornering).
+    process_noise_covariance: [
+      0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015
+    ]
+
+    # ----- Initial state covariance (P_0) — how unsure we are at t=0. -----
+    # Sim spawns the car at a known origin so most pose elements
+    # start tight. Velocity / accel start at zero with a generous
+    # covariance so the first few IMU samples can move them.
+    initial_estimate_covariance: [
+      1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0
+    ]
