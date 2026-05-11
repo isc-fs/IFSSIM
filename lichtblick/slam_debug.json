@@ -5,15 +5,28 @@
         "distance": 60,
         "perspective": false,
         "phi": 0,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 0,
         "fovy": 45,
         "near": 0.01,
         "far": 5000
       },
-      "followTf": "odom",
+      "followTf": "map",
       "followMode": "follow-none",
       "scene": {
         "syncCamera": false,
@@ -22,9 +35,30 @@
           "showLabels": true,
           "axisScale": 1
         },
-        "background": { "color": "#111111" }
+        "background": {
+          "color": "#111111"
+        }
       },
-      "transforms": {},
+      "transforms": {
+        "frame:map": {
+          "visible": true
+        },
+        "frame:odom": {
+          "visible": true
+        },
+        "frame:base_link": {
+          "visible": true
+        },
+        "frame:fsds/GPS": {
+          "visible": false
+        },
+        "frame:fsds/IMU": {
+          "visible": false
+        },
+        "frame:fsds/Lidar": {
+          "visible": false
+        }
+      },
       "topics": {
         "/lidar/Lidar1/viz": {
           "visible": true,
@@ -37,18 +71,33 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/Conos_raw": { "visible": true },
-        "/Conos": { "visible": true },
-        "/Conos_Orange": { "visible": true },
-        "/Path": { "visible": true },
-        "/path_planning/debug": { "visible": true },
-        "/testing_only/track": { "visible": false },
-        "/testing_only/odom": { "visible": true },
-        "/slam/pose": { "visible": true }
+        "/Conos_raw": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/testing_only/track": {
+          "visible": false
+        },
+        "/testing_only/odom": {
+          "visible": true
+        },
+        "/slam/pose": {
+          "visible": true
+        }
       },
       "layers": []
     },
-
     "Plot!pose_drift": {
       "title": "Position (SLAM vs GT, both in SLAM-anchored frame)",
       "isSynced": true,
@@ -98,7 +147,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!gt_error": {
       "title": "Position error magnitude [m] (lower = less SLAM drift)",
       "isSynced": true,
@@ -122,9 +170,8 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!velocity": {
-      "title": "Velocity [m/s] — actual vs setpoint, with curvature ahead",
+      "title": "Velocity [m/s] \u2014 actual vs setpoint, with curvature ahead",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -155,7 +202,7 @@
         {
           "value": "/control/kappa_max_per_m.data",
           "enabled": true,
-          "label": "|κ| max ahead [1/m]",
+          "label": "|\u03ba| max ahead [1/m]",
           "color": "#ffaa00",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
@@ -164,9 +211,8 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!yaw_drift": {
-      "title": "Yaw rate (IMU vs GT odom)",
+      "title": "Yaw rate (IMU vs GT)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -187,7 +233,7 @@
         {
           "value": "/testing_only/odom.twist.twist.angular.z",
           "enabled": true,
-          "label": "GT yaw rate",
+          "label": "GT yaw rate (rad/s)",
           "color": "#44ffaa",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
@@ -196,7 +242,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!cone_count": {
       "title": "Mapped cones",
       "isSynced": true,
@@ -220,16 +265,43 @@
       ],
       "sidebarDimension": 240
     },
-
     "RawMessages!state": {
       "topicPath": "/slam/pose"
+    },
+    "Plot!map_to_odom_drift": {
+      "title": "||map \u2192 odom|| [m] \u2014 cumulative SLAM drift correction (low = healthy)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/map_to_odom_norm.data",
+          "enabled": true,
+          "label": "||map \u2192 odom|| (m)",
+          "color": "#ff44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
     }
   },
-
   "globalVariables": {},
-  "userNodes": {},
-  "playbackConfig": { "speed": 1 },
-
+  "userNodes": {
+    "map_to_odom_norm": {
+      "name": "map_to_odom_norm",
+      "sourceCode": "// Compute ||map \u2192 odom|| translation magnitude from /tf.\n//\n// `map \u2192 odom` is SLAM's drift-correction transform: how far it has had\n// to drag the odom frame to keep dead-reckoning agreeing with the cone\n// map. Magnitude grows whenever OdometryFilter accumulates error\n// faster than per-scan SLAM corrections can absorb. A healthy lap\n// stays sub-metre; tens of metres means dead-reckoning is the\n// upstream problem (#391 \u2014 vy contamination, gyro bias).\n//\n// Output: /studio_script/map_to_odom_norm (m, Float32-shaped).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nexport const inputs = [\"/tf\"];\nexport const output = \"/studio_script/map_to_odom_norm\";\n\nexport default function node(\n  event: Input<\"/tf\">,\n): Output | undefined {\n  for (const t of event.message.transforms) {\n    if (t.header.frame_id === \"map\" && t.child_frame_id === \"odom\") {\n      const tx = t.transform.translation.x;\n      const ty = t.transform.translation.y;\n      // 2D vehicle \u2014 z translation is essentially zero, omit it from\n      // the norm so the plot reads as planar drift.\n      return { data: Math.hypot(tx, ty) };\n    }\n  }\n  return undefined;\n}\n"
+    }
+  },
+  "playbackConfig": {
+    "speed": 1
+  },
   "layout": {
     "direction": "row",
     "first": "3D!slam",
@@ -238,7 +310,12 @@
       "first": "Plot!pose_drift",
       "second": {
         "direction": "column",
-        "first": "Plot!gt_error",
+        "first": {
+          "direction": "column",
+          "first": "Plot!gt_error",
+          "second": "Plot!map_to_odom_drift",
+          "splitPercentage": 50
+        },
         "second": {
           "direction": "column",
           "first": "Plot!velocity",
