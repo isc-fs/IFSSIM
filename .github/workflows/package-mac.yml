@@ -59,7 +59,7 @@ jobs:
           echo "name=$ZIPNAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Creates the release if triggered by a tag push;
           # attaches to the existing release if triggered by release creation.
