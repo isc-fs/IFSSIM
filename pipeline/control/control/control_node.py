@@ -313,8 +313,27 @@ class ControlNode(LifecycleNode):
         # hairpins between R ≈ 1.4 and 2.1 m unguarded — the cap was
         # silently re-floored back to L_min and Pure Pursuit overshot
         # the apex (test_submodule first hairpin, #260 follow-up).
-        self.declare_parameter("lookahead_min", 1.0)
-        self.declare_parameter("lookahead_k", 0.5)
+        #
+        # 2026-05-11: tried lookahead_min=1.5, lookahead_k=0.7,
+        # a_lat_max=2.0 to handle the last-hairpin bang-bang in
+        # #424. Result: Ld=3.6 m at v=3 was WAY too long for the
+        # FIRST corner — the lookahead point landed past the corner's
+        # exit, the controller cut wide and went off-line at corner 1.
+        # The pre-fix values (lookahead_min=1.0, lookahead_k=0.5)
+        # gave the ~187 m "almost a full lap" baseline, BUT only
+        # because state.speed = √(vx² + vy²) was inflated by 1.5–2.5×
+        # in corners due to /odom.vy drift (#391 / bag-replay analysis).
+        # That inflation extended the effective Ld in corners just
+        # enough to survive. With state.speed = |vx| now (see
+        # control/state.py), Ld at vx=3 with the old params would be
+        # 1.0 + 0.5·3 = 2.5 m — measured-too-short. Bumping to
+        # lookahead_min=1.2, lookahead_k=0.6 gives Ld=3.0 m at vx=3,
+        # which matches the pre-fix effective Ld and stays well clear
+        # of the 3.6 m "too long" failure mode. v=4 hits 3.6 m (the
+        # red line); the longitudinal cap at v_max=3 keeps us below
+        # that in practice.
+        self.declare_parameter("lookahead_min", 1.2)
+        self.declare_parameter("lookahead_k", 0.6)
         self.declare_parameter("kp_v", 0.5)
         self.declare_parameter("ki_v", 0.05)
         self.declare_parameter("deadband_v", 0.2)
