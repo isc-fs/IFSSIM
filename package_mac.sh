@@ -60,9 +60,17 @@ echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 #    -ExecCmds runs console commands at startup; t.MaxFPS is also baked
 #    into DefaultEngine.ini [SystemSettings] for future cooked builds,
 #    but -ExecCmds catches builds that predate that change.
+#
+#    FPS cap dropped 60 → 30. UE5's CPU+GPU work is proportional to
+#    frame rate; for autonomy testing (sensors run at their own rates,
+#    not tied to render FPS) 30 FPS is plenty smooth visually and
+#    halves the host load that was competing with the SLAM optimizer.
+#    Override via env: `IFSSIM_MAX_FPS=60 ./package_mac.sh` if you
+#    want the higher cap back for visual demos.
+IFSSIM_MAX_FPS="${IFSSIM_MAX_FPS:-30}"
 CMDLINE="$SCRIPT_DIR/Saved/StagedBuilds/Mac/UECommandLine.txt"
 PROJECT_ABS="$SCRIPT_DIR/IFSSIM.uproject"
-echo "-project=\"$PROJECT_ABS\" -windowed -ExecCmds=\"t.MaxFPS 60\"" > "$CMDLINE"
+echo "-project=\"$PROJECT_ABS\" -windowed -ExecCmds=\"t.MaxFPS $IFSSIM_MAX_FPS\"" > "$CMDLINE"
 echo "  UECommandLine.txt: $(cat "$CMDLINE")"
 
 echo ""
