@@ -74,8 +74,12 @@ Content/tracks/.ifssim_state.json
 # Documents (not source)
 *.pdf
 
-# Recorded ROS2 bags — large binary sqlite DBs, not source
+# Recorded ROS2 bags — large binary sqlite DBs, not source.
+# `tools/bags/` is the historical location; `bags/` (repo root) is the
+# 2026-05-11+ convention used by the offline analysis flow (the bag
+# captures land here when copied out of the dv_pipeline_stack container).
 tools/bags/
+bags/
 
 # Auto-generated tracks from tools/random-track-generator. Each run
 # overwrites Content/tracks/random_track.csv; staging an empty/stale
