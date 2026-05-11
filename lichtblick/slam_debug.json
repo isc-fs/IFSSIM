@@ -5,9 +5,22 @@
         "distance": 60,
         "perspective": false,
         "phi": 0,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 0,
         "fovy": 45,
         "near": 0.01,
@@ -22,17 +35,29 @@
           "showLabels": true,
           "axisScale": 1
         },
-        "background": { "color": "#111111" }
+        "background": {
+          "color": "#111111"
+        }
       },
       "transforms": {
-        "frame:map": { "visible": true },
-        "frame:odom": { "visible": true },
-        "frame:base_link": { "visible": true },
-        "frame:fsds/FSCar": { "visible": false },
-        "frame:fsds/GPSr": { "visible": false },
-        "frame:fsds/Lidar": { "visible": false },
-        "frame:fsds/Imu": { "visible": false },
-        "frame:fsds/Camera": { "visible": false }
+        "frame:map": {
+          "visible": true
+        },
+        "frame:odom": {
+          "visible": true
+        },
+        "frame:base_link": {
+          "visible": true
+        },
+        "frame:fsds/GPS": {
+          "visible": false
+        },
+        "frame:fsds/IMU": {
+          "visible": false
+        },
+        "frame:fsds/Lidar": {
+          "visible": false
+        }
       },
       "topics": {
         "/lidar/Lidar1/viz": {
@@ -46,18 +71,33 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/Conos_raw": { "visible": true },
-        "/Conos": { "visible": true },
-        "/Conos_Orange": { "visible": true },
-        "/Path": { "visible": true },
-        "/path_planning/debug": { "visible": true },
-        "/testing_only/track": { "visible": false },
-        "/testing_only/odom": { "visible": true },
-        "/slam/pose": { "visible": true }
+        "/Conos_raw": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/testing_only/track": {
+          "visible": false
+        },
+        "/testing_only/odom": {
+          "visible": true
+        },
+        "/slam/pose": {
+          "visible": true
+        }
       },
       "layers": []
     },
-
     "Plot!pose_drift": {
       "title": "Position (SLAM vs GT, both in SLAM-anchored frame)",
       "isSynced": true,
@@ -107,7 +147,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!gt_error": {
       "title": "Position error magnitude [m] (lower = less SLAM drift)",
       "isSynced": true,
@@ -131,9 +170,8 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!velocity": {
-      "title": "Velocity [m/s] — actual vs setpoint, with curvature ahead",
+      "title": "Velocity [m/s] \u2014 actual vs setpoint, with curvature ahead",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -164,7 +202,7 @@
         {
           "value": "/control/kappa_max_per_m.data",
           "enabled": true,
-          "label": "|κ| max ahead [1/m]",
+          "label": "|\u03ba| max ahead [1/m]",
           "color": "#ffaa00",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
@@ -173,7 +211,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!yaw_drift": {
       "title": "Yaw rate (IMU vs GT odom)",
       "isSynced": true,
@@ -205,7 +242,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!cone_count": {
       "title": "Mapped cones",
       "isSynced": true,
@@ -229,16 +265,15 @@
       ],
       "sidebarDimension": 240
     },
-
     "RawMessages!state": {
       "topicPath": "/slam/pose"
     }
   },
-
   "globalVariables": {},
   "userNodes": {},
-  "playbackConfig": { "speed": 1 },
-
+  "playbackConfig": {
+    "speed": 1
+  },
   "layout": {
     "direction": "row",
     "first": "3D!slam",

@@ -49,19 +49,13 @@
         "frame:base_link": {
           "visible": true
         },
-        "frame:fsds/FSCar": {
+        "frame:fsds/GPS": {
           "visible": false
         },
-        "frame:fsds/GPSr": {
+        "frame:fsds/IMU": {
           "visible": false
         },
         "frame:fsds/Lidar": {
-          "visible": false
-        },
-        "frame:fsds/Imu": {
-          "visible": false
-        },
-        "frame:fsds/Camera": {
           "visible": false
         }
       },
