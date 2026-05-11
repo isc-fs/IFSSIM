@@ -59,7 +59,7 @@ from tf2_ros import TransformBroadcaster
 
 from fs_msgs.msg import ControlCommand
 from dv_msgs.action import StartMission, RuntimeControl
-from dv_msgs.srv import ActivateMode
+from dv_msgs.srv import ActivateMode  # noqa: F401 — kept for future use
 
 from sim_supervisor.odometry import OdometryFilter
 
@@ -102,6 +102,16 @@ class SimSupervisorNode(LifecycleNode):
         self._ebs_pub = None
         self._ebs_reset_pub = None
         self._current_mission: str | None = None
+
+        # Active RuntimeControl goal handle (Phase 2 of #384). Opened
+        # against mission_control_node after Phase 1 reports ready;
+        # tracked here so a tear-down (StartMission with mission="")
+        # or a mission switch can cancel the in-flight action cleanly.
+        # `_runtime_ebs_latched` tracks whether we've already published
+        # the latched /signal/ebs Empty for this run — we want to fire
+        # it once on the rising edge, not every feedback frame.
+        self._runtime_goal_handle = None
+        self._runtime_ebs_latched: bool = False
 
         # Reentrant group so the StartMission action handler can wait
         # on the inner ActionClient future (against mission_control)
@@ -230,6 +240,18 @@ class SimSupervisorNode(LifecycleNode):
             self._odom_filter.reset()
         self._odom_first_publish_logged = False
 
+        # Latched /signal/ebs_reset (post-#384). On the real car the
+        # uDV firmware clears the EBS gate at power-up; in sim the
+        # supervisor does the same the moment its lifecycle goes
+        # active. Without this, the bridge's `ebs_triggered_` gate
+        # stays latched from any previous run and every relayed
+        # control command would be silently dropped. Pre-#384
+        # control_node owned this publish on its own on_activate;
+        # the topic is now exclusively supervisor-owned per the
+        # diagram contract in docs/autonomy_pipeline.md.
+        if self._ebs_reset_pub is not None:
+            self._ebs_reset_pub.publish(EmptyMsg())
+
         # IMU subscription — BEST_EFFORT to match what the bridge
         # publishes, deep queue (2000) so the predict step doesn't
         # lose samples while RPM messages are being processed on the
@@ -299,6 +321,10 @@ class SimSupervisorNode(LifecycleNode):
 
     def on_cleanup(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("on_cleanup: tearing down I/O")
+        # Cancel any in-flight RuntimeControl before destroying the
+        # client, otherwise the action's terminal callback fires
+        # against a dead handle.
+        self._cancel_runtime_control()
         if self._start_mission_server is not None:
             self._start_mission_server.destroy()
             self._start_mission_server = None
@@ -468,6 +494,15 @@ class SimSupervisorNode(LifecycleNode):
         self.get_logger().info(f"StartMission received: mission={mission!r}")
         self._current_mission = mission
 
+        # Tear-down path. mission="" is the web backend's signal that
+        # Stop Session was pressed (or the operator switched missions
+        # mid-run). Cancel the in-flight RuntimeControl *before*
+        # relaying to mission_control, otherwise the action server
+        # gets torn down (lifecycle deactivate) while the goal is
+        # still open, which logs noisy warnings on both sides.
+        if mission == "":
+            self._cancel_runtime_control()
+
         result = StartMission.Result()
 
         # Wait for mission_control_node's action server to come up.
@@ -549,6 +584,21 @@ class SimSupervisorNode(LifecycleNode):
             self.get_logger().info(
                 f"StartMission relay: mission {mission!r} ready")
             goal_handle.succeed()
+            # Phase 2 — once mission_control reports the autonomy
+            # lifecycle is active, open RuntimeControl against it so
+            # control_node + slam_node start streaming actuator
+            # commands back to us as Feedback. Idempotent: cancels
+            # any previously-active goal first (mission switch path).
+            #
+            # Skip on the tear-down path (mission==""): in that case
+            # mode_manager just reported "ready" because there was
+            # nothing to do (all autonomy nodes already at target
+            # state, see "already at/past target ... skipping"), and
+            # we have NO mission to drive. Opening RuntimeControl
+            # here against a torn-down lifecycle would race the
+            # cancel we already sent at the top of this method.
+            if mission:
+                self._open_runtime_control()
         else:
             self.get_logger().error(
                 f"StartMission relay: mission {mission!r} failed: "
@@ -556,6 +606,128 @@ class SimSupervisorNode(LifecycleNode):
             goal_handle.abort()
 
         return result
+
+    # ------------------------------------------------------------------
+    # Phase 2 — RuntimeControl client + tear-down
+    # ------------------------------------------------------------------
+    def _open_runtime_control(self) -> None:
+        """Open the RuntimeControl action against mission_control_node.
+
+        Called from _execute_start_mission once Phase 1 reports ready.
+        Cancels any previously-active goal first so a mission switch
+        (e.g. operator runs trackdrive after autocross) doesn't leak
+        two clients on the same server.
+
+        The action is fire-and-forget from the supervisor's
+        perspective — feedback frames trigger _on_runtime_feedback,
+        which republishes them onto the bridge topics. Termination
+        is handled in _on_runtime_result.
+        """
+        if self._runtime_control_client is None:
+            self.get_logger().error(
+                "_open_runtime_control: action client not configured")
+            return
+
+        # Cancel any prior goal first. This is the mission-switch path
+        # (Phase 1 ran twice in one session); fresh tear-down goes
+        # through _cancel_runtime_control directly.
+        if self._runtime_goal_handle is not None:
+            self.get_logger().info(
+                "_open_runtime_control: cancelling prior goal before "
+                "opening new one")
+            self._cancel_runtime_control()
+
+        # Reset the rising-edge latch so a new run can publish
+        # /signal/ebs again if its own emergency arrives.
+        self._runtime_ebs_latched = False
+
+        if not self._runtime_control_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error(
+                "_open_runtime_control: mission_control runtime_control "
+                "server not available; actuator chain will be silent")
+            return
+
+        send_future = self._runtime_control_client.send_goal_async(
+            RuntimeControl.Goal(),
+            feedback_callback=self._on_runtime_feedback,
+        )
+        send_future.add_done_callback(self._on_runtime_goal_accepted)
+
+    def _on_runtime_goal_accepted(self, send_future) -> None:
+        """send_goal_async done-callback — stash the goal handle."""
+        gh = send_future.result()
+        if gh is None or not gh.accepted:
+            self.get_logger().error(
+                "RuntimeControl goal rejected by mission_control_node")
+            self._runtime_goal_handle = None
+            return
+        self._runtime_goal_handle = gh
+        self.get_logger().info("RuntimeControl goal accepted; streaming")
+        # Wire the terminal callback to capture result + clear state.
+        gh.get_result_async().add_done_callback(self._on_runtime_result)
+
+    def _on_runtime_feedback(self, fb_msg) -> None:
+        """Republish each RuntimeControl Feedback onto the bridge.
+
+        - throttle/steering → /fsds/control_command (ControlCommand).
+        - emergency rising edge → latched /signal/ebs (Empty).
+        - finished is informational here; the terminal action result
+          will close out the run via _on_runtime_result.
+        """
+        fb = fb_msg.feedback
+        if self._control_pub is not None:
+            cmd = ControlCommand()
+            cmd.header.stamp = fb.stamp
+            cmd.throttle = float(fb.throttle)
+            cmd.steering = float(fb.steering)
+            # ControlCommand.brake isn't carried on RuntimeControl
+            # (negative throttle = regen on the real car); leave 0.
+            cmd.brake = 0.0
+            self._control_pub.publish(cmd)
+
+        if fb.emergency and not self._runtime_ebs_latched:
+            self.get_logger().warn(
+                "RuntimeControl feedback emergency=true — "
+                "publishing latched /signal/ebs")
+            if self._ebs_pub is not None:
+                self._ebs_pub.publish(EmptyMsg())
+            self._runtime_ebs_latched = True
+
+    def _on_runtime_result(self, result_future) -> None:
+        """Terminal callback when the action closes (finished /
+        emergency / cancelled / error). Clears state so the next
+        StartMission can open a fresh run."""
+        try:
+            wrapper = result_future.result()
+            outcome = wrapper.result.outcome if wrapper else "(none)"
+            msg = wrapper.result.message if wrapper else ""
+        except Exception as ex:  # noqa: BLE001
+            outcome = "error"
+            msg = repr(ex)
+        self.get_logger().info(
+            f"RuntimeControl terminated: outcome={outcome!r} msg={msg!r}")
+        self._runtime_goal_handle = None
+
+    def _cancel_runtime_control(self) -> None:
+        """Cancel the in-flight RuntimeControl goal (if any).
+
+        Called when the operator hits Stop Session (StartMission goal
+        arrives with mission="") or before opening a new run. Fire-
+        and-forget: we don't block on the cancel_async future because
+        mission_control's cancel_callback accepts unconditionally and
+        the action's terminal callback will fire on its own.
+        """
+        gh = self._runtime_goal_handle
+        if gh is None:
+            return
+        try:
+            gh.cancel_goal_async()
+            self.get_logger().info(
+                "_cancel_runtime_control: sent cancel request")
+        except Exception as ex:  # noqa: BLE001
+            self.get_logger().warn(
+                f"_cancel_runtime_control: cancel_goal_async failed: {ex!r}")
+        self._runtime_goal_handle = None
 
 
 def main(args=None) -> None:

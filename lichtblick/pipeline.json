@@ -26,7 +26,7 @@
       },
       "transforms": {},
       "topics": {
-        "/lidar/Lidar1": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -42,7 +42,7 @@
         "/Conos_Orange": { "visible": true },
         "/Path": { "visible": true },
         "/path_planning/debug": { "visible": true },
-        "/cone_slam/state": { "visible": true },
+        "/slam/pose": { "visible": true },
         "/testing_only/track": { "visible": false }
       },
       "layers": []
@@ -61,7 +61,7 @@
       "maxYValue": 12,
       "paths": [
         {
-          "value": "/cone_slam/state.twist.twist.linear.x",
+          "value": "/slam/pose.twist.twist.linear.x",
           "enabled": true,
           "label": "vx (SLAM, m/s)",
           "color": "#00cc88",
@@ -70,7 +70,7 @@
           "showLine": true
         },
         {
-          "value": "/control_command.throttle",
+          "value": "/ctrl/cmd_internal.throttle",
           "enabled": true,
           "label": "Throttle",
           "color": "#ffaa00",
@@ -79,7 +79,7 @@
           "showLine": true
         },
         {
-          "value": "/control_command.brake",
+          "value": "/ctrl/cmd_internal.brake",
           "enabled": true,
           "label": "Brake",
           "color": "#ff4444",
@@ -104,7 +104,7 @@
       "maxYValue": 1,
       "paths": [
         {
-          "value": "/control_command.steering",
+          "value": "/ctrl/cmd_internal.steering",
           "enabled": true,
           "label": "Steering [-1…1]",
           "color": "#4488ff",

@@ -190,7 +190,17 @@ def generate_launch_description() -> LaunchDescription:
     # the /odom split — feat/360).
     actions += _auto_active(
         "sim_supervisor", "sim_supervisor_node", "sim_supervisor_node",
-        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE],
+        # REMAP_CMD: the supervisor's internal name is `/fsds/control_command`
+        # (matches the topic-table contract in
+        # docs/autonomy_pipeline.md §"Topics the submodule publishes back"),
+        # but the bridge's subscriber is bound to the unnamespaced
+        # `/control_command` since the bridge does its own /fsds-prefix
+        # mapping internally. Remap keeps the supervisor's published
+        # name human-readable in code while still landing on the
+        # bridge's actual subscription. Post-#384 the supervisor is
+        # the *only* publisher of this topic.
+        remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE,
+                    REMAP_CMD],
     )
 
     # ------------------ Autonomy lifecycle nodes (unconfigured) ------------------
@@ -210,7 +220,12 @@ def generate_launch_description() -> LaunchDescription:
     ))
     actions.append(_autonomy_lifecycle(
         "control", "control_node", "control_node",
-        remappings=[REMAP_CMD],
+        # Post-#384 control_node no longer publishes /fsds/control_command
+        # directly — its output flows on /ctrl/cmd_internal to
+        # mission_control_node, which surfaces it via the
+        # RuntimeControl action's Feedback frames for the supervisor
+        # to relay onto the bridge. No bridge-facing remap needed.
+        remappings=[],
     ))
 
     return LaunchDescription(actions)
