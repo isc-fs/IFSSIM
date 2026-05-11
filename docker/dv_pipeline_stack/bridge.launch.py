@@ -80,7 +80,7 @@ def generate_launch_description():
                     "/testing_only/odom", "/testing_only/track",
                     "/clicked_point", "/initialpose",
                     "/move_base_simple/goal", "/track_overlay",
-                    "/tf", "/tf_static", "/robot_description",
+                    "/tf", "/tf_static",
                 ],
                 'use_compression': True,
             }],
