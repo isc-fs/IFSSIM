@@ -340,3 +340,141 @@ def test_reset_clears_phase3_state(stationary_filter):
     assert f.diagnostics.effective_alpha_vx == ALPHA_VX        # default
     assert f.diagnostics.slip_flag is False
     assert math.isclose(f.diagnostics.yaw_residual_rad_s, 0.0, abs_tol=1e-9)
+
+
+# ---------------------------------------------------------------------
+# #391 — ZUPT + NHC
+# ---------------------------------------------------------------------
+def test_nhc_drives_vy_to_zero_in_clean_rolling(stationary_filter):
+    """Constant body-frame lateral accel + no slip flag → NHC should
+    bound the integrated vy. Without NHC the leak-only filter let vy
+    grow to 3.22 m/s in 41 s; with NHC at α=0.05 / 400 Hz IMU the
+    steady state for a 1 m/s² lateral accel is ~ay·dt/α ≈ 0.05 m/s."""
+    f = stationary_filter
+    # Drive a constant 1 m/s² body-frame lateral accel for 5 s.
+    # Steering=0 keeps slip_flag false (kinematic-bicycle pred ω = 0,
+    # IMU gyro_z = 0 → no residual, no slip).
+    accel = np.array([0.0, 1.0, G])
+    gyro = np.zeros(3)
+    t0 = f._t_imu_last
+    dt = 0.0025
+    for i in range(1, 2001):  # 5 s @ 400 Hz
+        f.push_imu(t0 + i * dt, accel, gyro)
+    # Steady-state vy should be ~ay·dt / α_NHC ≈ 1.0 · 0.0025 / 0.05 = 0.05
+    assert abs(f.state.vy) < 0.10, f"expected vy bounded by NHC, got {f.state.vy}"
+    # And NOT what the legacy leak would give. Leak-only with
+    # β=1e-3 over 2000 ticks would land vy near ay/β = 1000 m/s
+    # (unphysical, but illustrates how weak the leak was).
+
+
+def test_nhc_skipped_under_slip(stationary_filter):
+    """When slip_flag is true the IMU integration runs free — NHC is
+    deliberately disabled because the car IS sliding sideways and
+    forcing vy→0 would lose the signal. We force a slip flag by
+    feeding steering ≠ 0 against gyro = 0 (kinematic-bicycle predicts
+    yaw rate but IMU says zero → residual ≫ threshold)."""
+    f = stationary_filter
+    # Steering = 0.5 rad with vx ≈ 3.3 and L = 1.55:
+    #     ω_pred = 3.3/1.55 · tan(0.5) ≈ 1.16 rad/s
+    # IMU gyro_z = 0 → residual ≈ 1.16 ≫ 0.3 threshold → slip flag.
+    f.push_steering(t=0.0, angle_rad=0.5)
+    # RPM needs to be applied continuously so the alpha-blended vx
+    # actually reaches the target (single push only pulls vx by 10%
+    # of the residual). Production behaviour matches this — RPM
+    # arrives at ~80 Hz, so we re-pin it every 5 IMU samples.
+    target_rpm = 400.0  # → vx ≈ 3.28 m/s
+    f.push_rpm(t=0.0, rpm=target_rpm)
+    accel = np.array([0.0, 1.0, G])
+    gyro = np.zeros(3)
+    t0 = f._t_imu_last
+    dt = 0.0025
+    for i in range(1, 401):  # 1 s
+        if i % 5 == 0:
+            f.push_rpm(t=t0 + i * dt, rpm=target_rpm)
+        f.push_imu(t0 + i * dt, accel, gyro)
+    # Under slip, vy is allowed to grow much further than the NHC
+    # steady-state because the integrator runs free.
+    assert f.diagnostics.slip_flag is True, (
+        f"slip_flag should fire, got residual="
+        f"{f.diagnostics.yaw_residual_rad_s:.3f}, vx={f.state.vx:.3f}"
+    )
+    assert f.state.vy > 0.5, (
+        f"expected vy to grow when slip flag is set, got {f.state.vy}"
+    )
+
+
+def test_zupt_engages_when_stationary(stationary_filter):
+    """Feed the filter post-calibration stationary samples + zero RPM.
+    ZUPT should engage after ZUPT_HOLD_N_SAMPLES (40) sustained
+    stationary IMU ticks and zero vx/vy."""
+    f = stationary_filter
+    # Pre-bump vx to a non-zero value so we can witness ZUPT zeroing it.
+    f._state.vx = 2.0
+    f._state.vy = 0.3
+    accel = np.array([0.0, 0.0, G])
+    gyro = np.zeros(3)
+    t0 = f._t_imu_last
+    dt = 0.0025
+    f.push_rpm(t=0.0, rpm=0.0)
+    # Feed 100 samples (> 40-sample hold). Each is a perfect stationary tick.
+    for i in range(1, 101):
+        f.push_imu(t0 + i * dt, accel, gyro)
+    assert f.diagnostics.zupt_active is True, "ZUPT should engage after hold window"
+    assert f.diagnostics.zupt_count >= 1
+    assert abs(f.state.vx) < 1e-9, f"ZUPT should snap vx to zero, got {f.state.vx}"
+    assert abs(f.state.vy) < 1e-9, f"ZUPT should snap vy to zero, got {f.state.vy}"
+
+
+def test_zupt_disengages_on_motion(stationary_filter):
+    """When the vehicle starts moving (gyro spike OR RPM > threshold),
+    ZUPT should disengage so the integrator is free to track real
+    motion. We engage ZUPT first with stationary samples, then push a
+    motion tick and verify the flag clears."""
+    f = stationary_filter
+    accel_still = np.array([0.0, 0.0, G])
+    gyro_still = np.zeros(3)
+    t0 = f._t_imu_last
+    dt = 0.0025
+    f.push_rpm(t=0.0, rpm=0.0)
+    # Engage ZUPT
+    for i in range(1, 101):
+        f.push_imu(t0 + i * dt, accel_still, gyro_still)
+    assert f.diagnostics.zupt_active is True
+    # Now feed a motion tick — RPM > threshold is sufficient.
+    f.push_rpm(t=0.1, rpm=500.0)
+    # The streak halves on each failing sample; need ~6-7 failing
+    # samples to drop below the engage threshold (40 → 20 → 10 → 5 < 40).
+    for i in range(101, 110):
+        f.push_imu(t0 + i * dt, accel_still, gyro_still)
+    assert f.diagnostics.zupt_active is False, (
+        "ZUPT should disengage when RPM is non-zero"
+    )
+
+
+def test_zupt_refines_gyro_bias(stationary_filter):
+    """During engaged ZUPT, the raw gyro reading is presumed to be all
+    bias. The filter should pull gyro_bias toward the observed gyro on
+    each ZUPT-engaged tick. With a consistent +0.01 rad/s offset and
+    the configured 0.05 pull factor, bias should converge."""
+    f = stationary_filter
+    # Apply a consistent gyro_z offset that the calibration didn't
+    # see (because the calibration was on clean zeros).
+    bias_offset = 0.01  # rad/s, well below the 0.02 ZUPT threshold
+    accel = np.array([0.0, 0.0, G])
+    gyro = np.array([0.0, 0.0, bias_offset])
+    initial_bias_z = f._calib.gyro_bias[2]
+    t0 = f._t_imu_last
+    dt = 0.0025
+    f.push_rpm(t=0.0, rpm=0.0)
+    # 500 samples should give the bias plenty of time to converge.
+    for i in range(1, 501):
+        f.push_imu(t0 + i * dt, accel, gyro)
+    # Bias should have moved from initial 0 toward observed 0.01.
+    final_bias_z = f._calib.gyro_bias[2]
+    assert final_bias_z > initial_bias_z + 1e-4, (
+        f"gyro_z bias should refine toward observed value, "
+        f"got {initial_bias_z} → {final_bias_z}"
+    )
+    # And meaningfully close to the actual offset (within 10% after
+    # 500 samples at α=0.05 — should be > 99.99 % converged).
+    assert math.isclose(final_bias_z, bias_offset, abs_tol=1e-3)

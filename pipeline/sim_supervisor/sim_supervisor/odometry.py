@@ -143,11 +143,56 @@ SLIP_YAW_RESIDUAL_THRESHOLD: float = 0.3
 # pulls vy toward zero, with the IMU accel-y prediction term still
 # free to track real lateral accel during yaw maneuvers. 1e-3 per
 # IMU sample at 400 Hz → ~2.5 s time constant.
+#
+# Superseded in practice by NHC (#391) — the hard pseudo-measurement
+# `vy_body ≈ 0` with σ=0.05 m/s does the same job ~3 orders of
+# magnitude harder. Kept as a fallback knob for unit tests that
+# disable NHC; defaults to 0 (NHC dominates).
 BETA_VY_LEAK: float = 1e-3
 
 # Gravity magnitude (sim's BMI088 model uses standard gravity for
 # the accel offset; the real BMI088 reads ~9.806).
 G: float = 9.81
+
+# ---------------------------------------------------------------------
+# #391 — Zero-Velocity Update + Non-Holonomic Constraint.
+#
+# Two INS-aiding techniques to bound the two principal drift modes
+# observed in lap tests pre-#391:
+#   * yaw drift +37° / 41 s motion (#378 lap analysis, #386)
+#   * vy_body accumulating to 3.22 m/s vs GT 0.025 m/s (#390 lap)
+#
+# ZUPT — Zero-Velocity Update.
+#   When the vehicle is detected stationary (low gyro, accel ≈ g,
+#   negligible motor RPM), we hard-snap vx,vy to zero AND refine the
+#   gyro_bias estimate toward the current gyro mean. Every pause
+#   between corners / pit-in / launch wait pulls drift back to zero
+#   and tightens the gyro bias. The detection thresholds are tuned
+#   for the BMI088 noise floor; ZUPT_HOLD_N_SAMPLES requires
+#   sustained stillness so a momentary yaw-rate zero-crossing during
+#   a lane-change doesn't trigger.
+# ---------------------------------------------------------------------
+ZUPT_GYRO_NORM_THRESHOLD: float = 0.02      # rad/s — BMI088 σ ≈ 0.003 rad/s, 7σ margin
+ZUPT_ACCEL_RESIDUAL_THRESHOLD: float = 0.05  # m/s² — |a - g_body| less than this
+ZUPT_RPM_THRESHOLD: float = 10.0             # raw RPM — drive shaft idle
+ZUPT_HOLD_N_SAMPLES: int = 40                # ~100 ms at 400 Hz IMU rate
+ZUPT_GYRO_BIAS_PULL: float = 0.05            # complementary blend toward observed gyro
+
+# ---------------------------------------------------------------------
+# NHC — Non-Holonomic Constraint.
+#
+# For a ground vehicle in clean rolling (no sliding, no flight), the
+# body-frame lateral and vertical velocities are ≈ 0. This is the
+# canonical Formula-Student INS aiding. We implement it as a
+# complementary-blend pseudo-measurement applied each IMU step:
+#     vy_body ← (1 - α_nhc) · vy_body
+# α_nhc=0.05 at 400 Hz gives a ~50 ms time constant — fast enough
+# that integration noise stays bounded, soft enough that genuine
+# lateral acceleration during cornering still shows up in vy briefly
+# before being damped. Skipped under the slip_flag (slipping = NHC
+# assumption violated, integrate IMU honestly).
+# ---------------------------------------------------------------------
+ALPHA_NHC_VY: float = 0.05
 
 
 @dataclass
@@ -185,6 +230,18 @@ class FilterDiagnostics:
     # Effective α_vx applied to the most recent RPM correction. Drops
     # toward ALPHA_VX_BRAKE when brake_pressure > threshold.
     effective_alpha_vx: float = ALPHA_VX
+
+    # #391 — ZUPT engagement flag. True iff the ZUPT detector reports
+    # the vehicle stationary on the latest IMU tick. Surfaced as a
+    # diagnostic topic so /odom_diag/zupt_active can be plotted next
+    # to v_set for tuning launches and pit-in events.
+    zupt_active: bool = False
+
+    # #391 — Cumulative number of ZUPT engagements since the filter
+    # was last reset. Lets the bridge tab show "we've banked N stops
+    # of bias refinement", which is the visible currency for trusting
+    # /odom yaw at hour-long endurance runs.
+    zupt_count: int = 0
 
 
 @dataclass
@@ -234,6 +291,15 @@ class OdometryFilter:
         brake_lockup_threshold: float = BRAKE_LOCKUP_THRESHOLD,
         alpha_vx_brake: float = ALPHA_VX_BRAKE,
         slip_yaw_residual_threshold: float = SLIP_YAW_RESIDUAL_THRESHOLD,
+        # #391 ZUPT + NHC knobs. All overridable so unit tests can
+        # poke specific edge cases (disable NHC, force ZUPT off, etc.)
+        # without touching the module-level defaults.
+        zupt_gyro_norm_threshold: float = ZUPT_GYRO_NORM_THRESHOLD,
+        zupt_accel_residual_threshold: float = ZUPT_ACCEL_RESIDUAL_THRESHOLD,
+        zupt_rpm_threshold: float = ZUPT_RPM_THRESHOLD,
+        zupt_hold_n_samples: int = ZUPT_HOLD_N_SAMPLES,
+        zupt_gyro_bias_pull: float = ZUPT_GYRO_BIAS_PULL,
+        alpha_nhc_vy: float = ALPHA_NHC_VY,
     ) -> None:
         self._rpm_to_ms = rpm_to_ms
         self._rpm_stale_s = rpm_stale_s
@@ -244,6 +310,12 @@ class OdometryFilter:
         self._brake_lockup_threshold = brake_lockup_threshold
         self._alpha_vx_brake = alpha_vx_brake
         self._slip_yaw_residual_threshold = slip_yaw_residual_threshold
+        self._zupt_gyro_norm_threshold = zupt_gyro_norm_threshold
+        self._zupt_accel_residual_threshold = zupt_accel_residual_threshold
+        self._zupt_rpm_threshold = zupt_rpm_threshold
+        self._zupt_hold_n_samples = zupt_hold_n_samples
+        self._zupt_gyro_bias_pull = zupt_gyro_bias_pull
+        self._alpha_nhc_vy = alpha_nhc_vy
 
         self._state = OdometryState()
         self._calib = _Calibration()
@@ -262,6 +334,19 @@ class OdometryFilter:
         # have arrived yet (straight-ahead, no brake).
         self._latest_steering_rad: float = 0.0
         self._latest_brake: float = 0.0
+
+        # #391 — ZUPT engagement counter. Counts consecutive IMU
+        # samples that pass the stationary tests; ZUPT engages when
+        # the count crosses _zupt_hold_n_samples and stays engaged
+        # while the count exceeds the threshold. Decrements (not
+        # resets) on a single failing sample so a brief gyro spike
+        # during a stationary window doesn't disengage immediately.
+        self._zupt_streak: int = 0
+        # Latest raw RPM (units: RPM, not m/s) — needed by the ZUPT
+        # detector. The existing _latest_rpm_vx is the unit-converted
+        # body-frame velocity; ZUPT wants to know "is the drive
+        # shaft physically turning" so it gates on raw RPM directly.
+        self._latest_rpm_raw: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -289,6 +374,8 @@ class OdometryFilter:
         self._latest_rpm_vx = None
         self._latest_steering_rad = 0.0
         self._latest_brake = 0.0
+        self._zupt_streak = 0
+        self._latest_rpm_raw = 0.0
 
     def push_imu(
         self,
@@ -322,6 +409,67 @@ class OdometryFilter:
         a_body = accel - self._calib.accel_bias
         w_body = gyro - self._calib.gyro_bias
 
+        # ---------- #391 ZUPT detector ----------
+        # Stationary iff: gyro norm low AND |accel - g_body| low AND
+        # raw RPM near zero. Sustained: bump streak counter; engages
+        # at hold-N-samples. Single bad sample halves the streak (a
+        # transient gyro tick during a parked window shouldn't
+        # disengage instantly, but a real start-of-motion certainly
+        # should).
+        gyro_norm = float(np.linalg.norm(w_body))
+        # The bias-corrected accel during stationary upright reads
+        # ~(0, 0, +g). Subtract that and check magnitude.
+        accel_residual = float(
+            np.linalg.norm(a_body - np.array([0.0, 0.0, G]))
+        )
+        stationary_now = (
+            gyro_norm < self._zupt_gyro_norm_threshold
+            and accel_residual < self._zupt_accel_residual_threshold
+            and abs(self._latest_rpm_raw) < self._zupt_rpm_threshold
+        )
+        # Asymmetric latch: engage only after sustained stillness
+        # (debouncing — a brief stationary moment during a lane-change
+        # zero-crossing shouldn't trigger), but disengage instantly on
+        # the FIRST non-stationary sample. Holding ZUPT for an extra
+        # IMU tick after motion starts would erase the launch transient
+        # in vx/vy (the very thing we need to track). Cap the engage
+        # counter at 2·hold so a long stop doesn't take forever to drop
+        # below the threshold after motion resumes.
+        if stationary_now:
+            self._zupt_streak = min(
+                self._zupt_streak + 1, 2 * self._zupt_hold_n_samples
+            )
+            zupt_engaged = self._zupt_streak >= self._zupt_hold_n_samples
+        else:
+            self._zupt_streak = 0
+            zupt_engaged = False
+
+        if zupt_engaged:
+            # Hard-reset velocity to zero. This is the entire point of
+            # ZUPT — vx/vy integration drift accumulated since the last
+            # stationary window gets discarded.
+            self._state.vx = 0.0
+            self._state.vy = 0.0
+            # Refine gyro bias toward the current observation. The
+            # raw gyro reading is whatever the IMU sees right now; if
+            # we're truly stationary, that's all bias. Complementary
+            # blend (small pull factor) so a one-sample anomaly can't
+            # corrupt the bias estimate.
+            self._calib.gyro_bias = (
+                (1.0 - self._zupt_gyro_bias_pull) * self._calib.gyro_bias
+                + self._zupt_gyro_bias_pull * gyro
+            )
+            # Re-derive w_body with the freshly nudged bias so the
+            # rest of this tick uses the corrected value.
+            w_body = gyro - self._calib.gyro_bias
+            if not self._diag.zupt_active:
+                # Rising edge — increment lifetime counter so the diag
+                # tab can show "we've banked N ZUPT engagements".
+                self._diag.zupt_count += 1
+            self._diag.zupt_active = True
+        else:
+            self._diag.zupt_active = False
+
         # Yaw rate is gyro-z directly (no integration step needed —
         # we read instantaneous angular velocity from the gyro).
         self._state.yaw_rate = float(w_body[2])
@@ -345,13 +493,33 @@ class OdometryFilter:
         # push_rpm() asynchronously.
         self._state.vx += ax_body * dt
 
-        # vy prediction with kinematic-bicycle decay toward zero.
-        # Real lateral accel during a yaw maneuver still shows up;
-        # the leak just keeps integration noise from accumulating.
-        self._state.vy = (
-            (1.0 - self._beta_vy_leak) * self._state.vy
-            + ay_body * dt
-        )
+        # vy prediction.
+        #
+        # #391 — NHC. The body-frame lateral velocity is ≈ 0 in clean
+        # rolling regimes; we apply a hard complementary blend toward
+        # zero each IMU step. This is the canonical FS-INS aid and
+        # supersedes the previous BETA_VY_LEAK leak (which was 3
+        # orders of magnitude weaker — measured /odom.vy = 3.22 m/s
+        # vs GT 0.025 m/s after a 41 s drive, see #391 body).
+        #
+        # During slip events (yaw_residual > threshold), NHC is
+        # skipped — the car IS sliding sideways and forcing vy→0
+        # would lose the only signal we have about that. The IMU
+        # accel-y integration runs free, slip_flag stays sticky for
+        # downstream consumers via .diagnostics.
+        #
+        # BETA_VY_LEAK is kept for unit tests / legacy override but
+        # contributes nothing additional when α_NHC > 0.
+        if self._diag.slip_flag:
+            self._state.vy = (
+                (1.0 - self._beta_vy_leak) * self._state.vy
+                + ay_body * dt
+            )
+        else:
+            self._state.vy = (
+                (1.0 - self._alpha_nhc_vy) * self._state.vy
+                + ay_body * dt
+            )
 
         # Integrate position (rotate body velocity into world frame).
         c, s = math.cos(self._state.yaw), math.sin(self._state.yaw)
@@ -384,6 +552,7 @@ class OdometryFilter:
         latest correction target).
         """
         self._t_rpm_last = t
+        self._latest_rpm_raw = float(rpm)
         self._latest_rpm_vx = float(rpm) * self._rpm_to_ms
 
         if not self._calib.completed:

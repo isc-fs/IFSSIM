@@ -137,6 +137,9 @@ class SimSupervisorNode(LifecycleNode):
         self._yaw_residual_pub = None
         self._slip_flag_pub = None
         self._effective_alpha_pub = None
+        # #391 ZUPT diagnostics — engagement flag + lifetime counter.
+        self._zupt_active_pub = None
+        self._zupt_count_pub = None
         # Phase 2 (#382): supervisor owns the odom→base_link TF
         # broadcast (slam_node stopped doing it in #382 and now
         # publishes map→odom instead, computed from slam_pose ⊖
@@ -223,6 +226,20 @@ class SimSupervisorNode(LifecycleNode):
         )
         self._effective_alpha_pub = self.create_lifecycle_publisher(
             Float32, "/odom_diag/effective_alpha_vx", 10,
+        )
+
+        # #391 ZUPT diagnostics — engagement flag (Bool) + lifetime
+        # counter (Float32, integer-valued so consumers can plot it
+        # without a special msg type). The active flag is useful for
+        # validating that ZUPT actually triggers during launches /
+        # pit-in events; the count is the visible "we've banked N
+        # bias refinements" for trusting /odom yaw at endurance run
+        # durations.
+        self._zupt_active_pub = self.create_lifecycle_publisher(
+            Bool, "/odom_diag/zupt_active", 10,
+        )
+        self._zupt_count_pub = self.create_lifecycle_publisher(
+            Float32, "/odom_diag/zupt_count", 10,
         )
 
         return TransitionCallbackReturn.SUCCESS
@@ -343,6 +360,8 @@ class SimSupervisorNode(LifecycleNode):
         self._yaw_residual_pub = None
         self._slip_flag_pub = None
         self._effective_alpha_pub = None
+        self._zupt_active_pub = None
+        self._zupt_count_pub = None
         self._odom_filter = None
         self._current_mission = None
         return TransitionCallbackReturn.SUCCESS
@@ -466,6 +485,11 @@ class SimSupervisorNode(LifecycleNode):
             self._slip_flag_pub.publish(Bool(data=bool(diag.slip_flag)))
         if self._effective_alpha_pub is not None:
             self._effective_alpha_pub.publish(Float32(data=float(diag.effective_alpha_vx)))
+        # #391 ZUPT diagnostics.
+        if self._zupt_active_pub is not None:
+            self._zupt_active_pub.publish(Bool(data=bool(diag.zupt_active)))
+        if self._zupt_count_pub is not None:
+            self._zupt_count_pub.publish(Float32(data=float(diag.zupt_count)))
 
     # ------------------------------------------------------------------
     # Action handlers (skeletons)
