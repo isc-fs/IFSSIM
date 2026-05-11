@@ -84,6 +84,21 @@
         "/track_overlay": {
           "visible": true,
           "type": "visualization_msgs/msg/MarkerArray"
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/slam/pose": {
+          "visible": true
         }
       },
       "publish": {
@@ -180,6 +195,21 @@
         "/track_overlay": {
           "visible": true,
           "type": "visualization_msgs/msg/MarkerArray"
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/slam/pose": {
+          "visible": true
         }
       }
     },
@@ -204,10 +234,19 @@
           "showLine": true
         },
         {
-          "value": "/motor_rpm.data * 0.00898",
+          "value": "/motor_rpm.data * 0.00821",
           "enabled": true,
-          "label": "RPM \u00d7 0.00898 (m/s)",
+          "label": "RPM \u00d7 0.00821 (m/s)",
           "color": "#aa44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.twist.twist.linear.x",
+          "enabled": true,
+          "label": "Filter v_body_x (m/s)",
+          "color": "#4488ff",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true
