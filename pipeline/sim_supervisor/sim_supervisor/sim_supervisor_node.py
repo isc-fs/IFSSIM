@@ -69,6 +69,23 @@ from sim_supervisor.odometry import OdometryFilter
 # from the IMU subscription rate (which is the BMI088's native ~400 Hz).
 ODOM_PUBLISH_HZ: float = 100.0
 
+# Take every Nth IMU sample, discard the rest before pushing into the
+# OdometryFilter. The BMI088 publishes at ~400 Hz; the filter
+# integrates per push_imu call so consuming all 400 burns sim_supervisor
+# CPU. Quick CPU audit on 2026-05-11 showed sim_supervisor at 93 % CPU
+# pre-decimation (full 400 Hz consumption). With IMU_DECIMATION=4 we
+# integrate at 100 Hz, matching the /odom publish rate and the
+# controller's 40 Hz tick rate with plenty of margin.
+#
+# This is the engineering call deferred by #385 (the "quantify
+# whether 100 Hz loses meaningful filter quality vs 400 Hz" question).
+# In practice: bias estimation during the 3 s stationary window still
+# averages over ~300 samples at 100 Hz — well above the noise floor.
+# Steady-state predict step doesn't benefit from sub-10 ms IMU samples
+# (controller dt is 25 ms). Bumping back up to 1 (full rate) is the
+# A/B test; #385 stays open for that quantification work.
+IMU_DECIMATION: int = 4
+
 
 # Total time we'll wait for mission_control_node.start_mission_orchestration
 # to come back. Mission_control's own timeout on activate_mode is 240 s;
@@ -112,6 +129,12 @@ class SimSupervisorNode(LifecycleNode):
         # it once on the rising edge, not every feedback frame.
         self._runtime_goal_handle = None
         self._runtime_ebs_latched: bool = False
+
+        # IMU sample counter, modulo IMU_DECIMATION. Pre-decimation
+        # the supervisor was integrating ~400 IMU samples/s on a
+        # single CPU; counting + dropping in the callback is the
+        # cheapest possible throttle.
+        self._imu_sample_idx: int = 0
 
         # Reentrant group so the StartMission action handler can wait
         # on the inner ActionClient future (against mission_control)
@@ -355,8 +378,19 @@ class SimSupervisorNode(LifecycleNode):
     # /odom — IMU + RPM → dead-reckoning Odometry
     # ------------------------------------------------------------------
     def _on_imu(self, msg: Imu) -> None:
-        """Drive the filter's predict step."""
+        """Drive the filter's predict step.
+
+        Decimates the 400 Hz IMU stream by IMU_DECIMATION before
+        pushing into the filter — see the module-level constant for
+        the CPU rationale (#385). Bridge subscription stays at full
+        depth so the unused samples flow through DDS at zero cost
+        to us; we just skip the np.array construction + push_imu
+        call for the dropped 3 of 4.
+        """
         if self._odom_filter is None:
+            return
+        self._imu_sample_idx += 1
+        if self._imu_sample_idx % IMU_DECIMATION:
             return
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         accel = np.array([
