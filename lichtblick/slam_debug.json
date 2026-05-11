@@ -267,10 +267,38 @@
     },
     "RawMessages!state": {
       "topicPath": "/slam/pose"
+    },
+    "Plot!map_to_odom_drift": {
+      "title": "||map \u2192 odom|| [m] \u2014 cumulative SLAM drift correction (low = healthy)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/map_to_odom_norm.data",
+          "enabled": true,
+          "label": "||map \u2192 odom|| (m)",
+          "color": "#ff44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
     }
   },
   "globalVariables": {},
-  "userNodes": {},
+  "userNodes": {
+    "map_to_odom_norm": {
+      "name": "map_to_odom_norm",
+      "sourceCode": "// Compute ||map \u2192 odom|| translation magnitude from /tf.\n//\n// `map \u2192 odom` is SLAM's drift-correction transform: how far it has had\n// to drag the odom frame to keep dead-reckoning agreeing with the cone\n// map. Magnitude grows whenever OdometryFilter accumulates error\n// faster than per-scan SLAM corrections can absorb. A healthy lap\n// stays sub-metre; tens of metres means dead-reckoning is the\n// upstream problem (#391 \u2014 vy contamination, gyro bias).\n//\n// Output: /studio_script/map_to_odom_norm (m, Float32-shaped).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nexport const inputs = [\"/tf\"];\nexport const output = \"/studio_script/map_to_odom_norm\";\n\nexport default function node(\n  event: Input<\"/tf\">,\n): Output | undefined {\n  for (const t of event.message.transforms) {\n    if (t.header.frame_id === \"map\" && t.child_frame_id === \"odom\") {\n      const tx = t.transform.translation.x;\n      const ty = t.transform.translation.y;\n      // 2D vehicle \u2014 z translation is essentially zero, omit it from\n      // the norm so the plot reads as planar drift.\n      return { data: Math.hypot(tx, ty) };\n    }\n  }\n  return undefined;\n}\n"
+    }
+  },
   "playbackConfig": {
     "speed": 1
   },
@@ -282,7 +310,12 @@
       "first": "Plot!pose_drift",
       "second": {
         "direction": "column",
-        "first": "Plot!gt_error",
+        "first": {
+          "direction": "column",
+          "first": "Plot!gt_error",
+          "second": "Plot!map_to_odom_drift",
+          "splitPercentage": 50
+        },
         "second": {
           "direction": "column",
           "first": "Plot!velocity",
