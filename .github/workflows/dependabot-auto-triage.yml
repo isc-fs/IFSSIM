@@ -1,0 +1,174 @@
+name: Dependabot auto-triage
+
+# Drop-in replacement for the manual "look at every dependabot PR, merge
+# the green ones, close the failing ones" chore. Runs in three places:
+#
+#   1. workflow_run on CI completion — real-time triage. The moment the
+#      CI workflow finishes on a dependabot PR, this fires and decides
+#      whether to merge or close. No waiting around for the weekly tick.
+#
+#   2. schedule (weekly cron, Monday morning UTC) — safety net. Picks up
+#      anything that slipped past the workflow_run path (CI changes,
+#      cancelled runs, PRs created while this workflow was disabled).
+#      Also processes PRs whose CI was pending when (1) fired and
+#      completed later via a re-run we didn't catch.
+#
+#   3. workflow_dispatch — manual fire-now from the Actions tab. Useful
+#      after editing this workflow itself, after re-enabling
+#      Dependabot, or when triaging a big backlog by hand.
+#
+# Decision rules (per open Dependabot PR):
+#
+#   • All required checks PASS  → squash-merge + delete branch
+#   • Any required check FAIL   → close with a comment, leave branch
+#                                 (Dependabot will re-open on its next
+#                                 update cycle if the dep version still
+#                                 needs bumping)
+#   • Any check PENDING         → skip, let the next trigger handle it
+#   • Merge conflict            → skip + comment "needs rebase"
+#
+# What this deliberately does NOT do:
+#
+#   • Gate on major-vs-minor bumps. The repo has been treating all
+#     green Dependabot PRs as safe-to-merge in practice; if a major
+#     version is ABI-incompatible, CI catches it (frontend tsc errors,
+#     backend pytest failures, etc.) and the "any check FAIL → close"
+#     branch fires. The closed PR is also the signal that a major
+#     bump needs manual review — Dependabot will keep re-opening it
+#     against the latest dep version until someone handles the
+#     breakage.
+#   • Touch non-Dependabot PRs. Human-authored bumps stay manual.
+#   • Approve PRs. GitHub's auto-merge requires an approval on
+#     branches with branch protection; this repo is on the free plan
+#     so branch protection is unavailable and approvals aren't
+#     required. If the repo upgrades to GH Pro, add an approval step
+#     here before the merge.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  schedule:
+    # 08:00 UTC every Monday — a few hours after Dependabot's typical
+    # weekly run (configured to Monday in .github/dependabot.yml).
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write       # needed to squash-merge into dev
+  pull-requests: write  # needed for `gh pr close` + merge
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+
+    # On workflow_run, only proceed if the upstream CI ran on a
+    # pull_request event. Skip pushes to dev (CI also runs there but
+    # there's no PR to triage).
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+
+    steps:
+      - name: Triage all open Dependabot PRs targeting dev
+        env:
+          # Use the workflow's default token. It has the
+          # contents:write + pull-requests:write scopes we asked for
+          # above, and as a side-effect, merges made with this token
+          # do NOT trigger other workflows — which is exactly what we
+          # want here so the workflow_run loop terminates.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Repo passed via env so the script reads from a single
+          # source rather than hardcoding the org/repo string.
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # ----- Pull open Dependabot PRs targeting dev -----
+          # `gh pr list --author "app/dependabot"` returns PRs opened
+          # by the dependabot[bot] GitHub App. --base dev filters to
+          # the integration line — Dependabot is configured to target
+          # dev (see .github/dependabot.yml) but defending against a
+          # config drift costs nothing.
+          mapfile -t PRS < <(
+            gh pr list \
+              --repo "$REPO" \
+              --author "app/dependabot" \
+              --state open \
+              --base dev \
+              --limit 100 \
+              --json number \
+              --jq '.[].number'
+          )
+
+          if [ ${#PRS[@]} -eq 0 ]; then
+            echo "No open Dependabot PRs targeting dev. Nothing to do."
+            exit 0
+          fi
+
+          echo "Triaging ${#PRS[@]} Dependabot PR(s): ${PRS[*]}"
+
+          for PR in "${PRS[@]}"; do
+            echo ""
+            echo "==================== PR #$PR ===================="
+
+            # Pull the full status snapshot in one API call. The JSON
+            # query gives us:
+            #   .mergeable      — MERGEABLE / CONFLICTING / UNKNOWN
+            #   .statusCheckRollup — array of { name, conclusion }
+            STATUS=$(
+              gh pr view "$PR" --repo "$REPO" \
+                --json mergeable,mergeStateStatus,statusCheckRollup,title
+            )
+
+            TITLE=$(echo "$STATUS" | jq -r '.title')
+            MERGEABLE=$(echo "$STATUS" | jq -r '.mergeable')
+            echo "  title:     $TITLE"
+            echo "  mergeable: $MERGEABLE"
+
+            # ----- Check-state classification -----
+            # Treat empty-string conclusion as PENDING (a check that
+            # exists but hasn't reported a final state yet — usually
+            # mid-run). statusCheckRollup combines GH Actions check
+            # runs + commit-status posts; we don't distinguish.
+            CHECKS=$(echo "$STATUS" | jq -r '.statusCheckRollup[]?.conclusion')
+            N_FAIL=$(echo "$CHECKS" | grep -cE '^(FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED)$' || true)
+            N_PEND=$(echo "$CHECKS" | grep -cE '^$' || true)
+            N_OK=$(echo "$CHECKS" | grep -cE '^(SUCCESS|NEUTRAL|SKIPPED)$' || true)
+
+            echo "  checks: ok=$N_OK fail=$N_FAIL pend=$N_PEND"
+
+            # ----- Decision matrix -----
+            if [ "$N_FAIL" -gt 0 ]; then
+              echo "  → CLOSE (CI failing)"
+              gh pr close "$PR" --repo "$REPO" \
+                --comment "Auto-triage: closing because one or more required CI checks failed.
+
+Dependabot will re-open this bump on its next update cycle if the package version still needs to advance. If the failure is a real incompatibility (e.g. a major-version breaking change), investigate manually and either fix the breakage on dev or pin the dep below the breaking version in the manifest." \
+                || echo "  WARN: gh pr close failed (continuing)"
+              continue
+            fi
+
+            if [ "$N_PEND" -gt 0 ]; then
+              echo "  → SKIP (CI still pending — next trigger will revisit)"
+              continue
+            fi
+
+            if [ "$N_OK" -eq 0 ]; then
+              echo "  → SKIP (no checks recorded yet)"
+              continue
+            fi
+
+            if [ "$MERGEABLE" != "MERGEABLE" ]; then
+              echo "  → SKIP (mergeable=$MERGEABLE — likely a conflict, needs rebase)"
+              # Don't close it; Dependabot has a `@dependabot rebase`
+              # command that humans can fire if the rebase is
+              # warranted. Letting it sit is the safe default.
+              continue
+            fi
+
+            echo "  → MERGE (CI green, no conflicts)"
+            gh pr merge "$PR" --repo "$REPO" --squash --delete-branch \
+              || echo "  WARN: gh pr merge failed (continuing)"
+          done
+
+          echo ""
+          echo "Triage complete."
