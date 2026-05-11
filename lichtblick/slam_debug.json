@@ -212,7 +212,7 @@
       "sidebarDimension": 240
     },
     "Plot!yaw_drift": {
-      "title": "Yaw rate (IMU vs GT odom)",
+      "title": "Yaw rate (IMU vs GT, finite-diff from /testing_only/odom)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -231,9 +231,9 @@
           "showLine": true
         },
         {
-          "value": "/testing_only/odom.twist.twist.angular.z",
+          "value": "/studio_script/gt_yaw_rate.data",
           "enabled": true,
-          "label": "GT yaw rate",
+          "label": "GT yaw rate (rad/s, finite-diff)",
           "color": "#44ffaa",
           "lineSize": 1.0,
           "timestampMethod": "receiveTime",
@@ -270,7 +270,12 @@
     }
   },
   "globalVariables": {},
-  "userNodes": {},
+  "userNodes": {
+    "gt_yaw_rate": {
+      "name": "gt_yaw_rate",
+      "sourceCode": "// Derive GT yaw rate from /testing_only/odom by finite-differencing\n// the pose orientation quaternion. The bridge does not currently\n// populate /testing_only/odom.twist.angular.z (it always reads 0 \u2014\n// FSDSUdpBroadcaster.h:54-61 added GtVelBodyX/Y/Z in PR #315 but no\n// GtAngVelBodyZ field). Until that bridge gap is closed, this user\n// node provides the GT yaw rate so IMU-bias diagnostics can compare\n// against truth.\n//\n// Output: /studio_script/gt_yaw_rate (Float32, rad/s)\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nexport const inputs = [\"/testing_only/odom\"];\nexport const output = \"/studio_script/gt_yaw_rate\";\n\n// Per-script state (Lichtblick re-uses the function across messages).\nlet prevYaw: number | null = null;\nlet prevStamp: number | null = null;\n\nexport default function node(\n  event: Input<\"/testing_only/odom\">,\n): Output | undefined {\n  const q = event.message.pose.pose.orientation;\n  // ZYX yaw from quaternion (same formula slam uses).\n  const siny = 2.0 * (q.w * q.z + q.x * q.y);\n  const cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);\n  const yaw = Math.atan2(siny, cosy);\n\n  const s = event.message.header.stamp;\n  const stamp = s.sec + s.nanosec * 1e-9;\n\n  if (prevYaw === null || prevStamp === null) {\n    prevYaw = yaw;\n    prevStamp = stamp;\n    return undefined;\n  }\n  const dt = stamp - prevStamp;\n  if (dt <= 0) {\n    return undefined;\n  }\n\n  // Wrap-aware difference.\n  let dyaw = yaw - prevYaw;\n  while (dyaw > Math.PI) dyaw -= 2 * Math.PI;\n  while (dyaw < -Math.PI) dyaw += 2 * Math.PI;\n\n  prevYaw = yaw;\n  prevStamp = stamp;\n\n  return { data: dyaw / dt };\n}\n"
+    }
+  },
   "playbackConfig": {
     "speed": 1
   },
