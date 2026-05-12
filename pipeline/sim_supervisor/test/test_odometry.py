@@ -274,7 +274,7 @@ def test_yaw_residual_nonzero_under_steering(stationary_filter):
     target_rpm = 556.0  # ≈ 5 m/s at RPM_TO_MS = 0.00821
     for i in range(200):
         f.push_rpm(t=i * 0.0125, rpm=target_rpm)
-    # Steer at +0.3 rad (~17°) — kinematic predicts ω = (5/1.55)·tan(0.3) ≈ 1.0 rad/s
+    # Steer at +0.3 rad (~17°) — kinematic predicts ω = (5/1.570)·tan(0.3) ≈ 0.98 rad/s
     f.push_steering(t=0.0, angle_rad=0.3)
     t0 = 1500 * 0.0025
     for i in range(20):
