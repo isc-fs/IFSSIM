@@ -20,6 +20,7 @@
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 
+#include "lws_steering_sensor.h"
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
 
@@ -164,12 +165,21 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr motor_rpm_pub_;
-    // /fsds/steering_angle — actual front-wheel angle in radians,
-    // converted from the SensorFrame.steering normalized field via
-    // max_steering_angle_rad_ at publish time. Phase 3 (#383) input
-    // to sim_supervisor's OdometryFilter for the kinematic-bicycle
-    // yaw cross-check.
+    // /fsds/steering_angle — actual front-wheel angle in radians.
+    // Post-#462: this is the Bosch-LWS-modelled steering wheel angle
+    // (with quantization, nonlinearity bias, hysteresis, 100 Hz
+    // cadence) divided by `steering_ratio_` to recover the road-wheel
+    // angle that consumers expect. The "perfect commanded δ × max_rad"
+    // path is gone — the autonomy now sees a sensor-faithful signal.
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr steering_angle_pub_;
+    // /fsds/lws/steering_wheel_angle_rad — sensor-faithful steering
+    // wheel angle (NOT the road-wheel angle). Mirrors what uDV would
+    // forward off the Bosch LWS CAN frame; the road-wheel-angle topic
+    // above is the post-conversion view of the same measurement.
+    // Both topics publish from the same 100 Hz timer with the same
+    // underlying LwsSteeringSensor::measure() call to guarantee
+    // they're consistent.
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr lws_steering_wheel_pub_;
     // /fsds/brake_pressure — commanded brake authority [0, 1],
     // published from SensorFrame.brake (controls echo from UE5).
     // Phase 3 (#383) input to OdometryFilter for slip detection
@@ -292,9 +302,40 @@ private:
     // as a normalized [-1, 1] axis input; we convert at publish time
     // for /fsds/steering_angle so downstream consumers see SI units.
     // 0.5 rad ≈ 28.6° matches the IFS-08 URDF rack limit in
-    // pipeline/coche_urdf/urdf/ifs_08.urdf and the typical FS-car
-    // steering range.
+    // pipeline/coche_urdf/urdf/ifs_08.urdf.
+    //
+    // TODO(braking-steering): authoritative ISC_IFS_08.xlsx MONO sheet
+    // gives turning radius 4.5 m + wheelbase 1.570 m → max δ ≈ 0.336
+    // rad. Changing this default will reduce controller authority —
+    // held until Sandra confirms + controller speed/lookahead is
+    // re-tuned. Tracked in issue #462.
     double max_steering_angle_rad_ = 0.5;
+
+    // Steering ratio (steering wheel angle / road-wheel angle). The
+    // Bosch LWS measures the wheel column rotation; the
+    // OdometryFilter consumes a road-wheel angle δ. This ratio bridges
+    // them on both publish paths.
+    // TODO(braking-steering): no explicit ratio in the IFS-08 model
+    // package. 9.35 is derived from ±180° lock-to-lock at the wheel +
+    // max road δ = 0.336 rad (quick-rack motorsport convention).
+    // Update when Sandra confirms the rack design.
+    double steering_ratio_ = 9.35;
+
+    // LWS sensor model — frozen per-session bias + hysteresis state.
+    // Constructed in initializePublishers() once parameters are read.
+    std::unique_ptr<ifssim_bridge::LwsSteeringSensor> lws_sensor_;
+
+    // Latest commanded steering δ_road (rad) cached from the sensor
+    // stream. The 100 Hz LWS publish timer reads this, applies the
+    // LWS error model, and publishes both /lws/* and /steering_angle.
+    // Decoupling lets the LWS topics keep their 10 ms cadence even if
+    // the underlying UDP SensorFrame is slow / bursty.
+    std::atomic<double> latest_steering_cmd_rad_{0.0};
+
+    // 100 Hz LWS publish timer. Kept as a member so the destructor
+    // can release the rclcpp::Timer cleanly.
+    rclcpp::TimerBase::SharedPtr lws_publish_timer_;
+    void lwsPublishTimerCb();
 
     void parseNoiseSettings(const std::string& settings_json);
 

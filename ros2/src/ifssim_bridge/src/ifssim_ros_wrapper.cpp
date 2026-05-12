@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <limits>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -42,6 +43,44 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // the plugin's max-axis-to-angle mapping changes.
     max_steering_angle_rad_ = node_->declare_parameter<double>(
         "max_steering_angle_rad", 0.5);
+
+    // ----- LWS (Bosch Steering Wheel Angle Sensor) model — #462 -----
+    // The bridge publishes the post-decode floating-point view that
+    // DV-PC would see after uDV forwards the CAN frame. Parameters
+    // expose every datasheet figure so a yaml override can match
+    // healthy / faulty sensor scenarios without recompiling.
+    steering_ratio_ = node_->declare_parameter<double>(
+        "steering_ratio", 9.35);
+    const double lws_publish_hz = node_->declare_parameter<double>(
+        "lws_publish_hz", ifssim_bridge::kLwsRateHz);  // 100 Hz default
+    {
+        ifssim_bridge::LwsParams lp;
+        lp.nonlinearity_deg = node_->declare_parameter<double>(
+            "lws_nonlinearity_deg", ifssim_bridge::kLwsNonlinearityDeg);
+        lp.hysteresis_deg = node_->declare_parameter<double>(
+            "lws_hysteresis_deg", ifssim_bridge::kLwsHysteresisDeg);
+        lp.noise_std_deg = node_->declare_parameter<double>(
+            "lws_noise_std_deg", 0.02);
+        lp.resolution_deg = node_->declare_parameter<double>(
+            "lws_resolution_deg", ifssim_bridge::kLwsResolutionDeg);
+        // NaN sentinel = "draw randomly within ±nonlinearity_deg".
+        lp.fixed_nonlinearity_bias_deg = node_->declare_parameter<double>(
+            "lws_fixed_nonlinearity_bias_deg",
+            std::numeric_limits<double>::quiet_NaN());
+        const int seed_param = node_->declare_parameter<int>("lws_seed", 0);
+        lp.seed = static_cast<uint32_t>(seed_param);
+        lws_sensor_ = std::make_unique<ifssim_bridge::LwsSteeringSensor>(lp);
+        RCLCPP_INFO(node_->get_logger(),
+            "LWS sensor model: ratio=%.2f, frozen bias=%.3f deg, %.0f Hz",
+            steering_ratio_, lws_sensor_->nonlinearity_bias_deg(),
+            lws_publish_hz);
+    }
+    // Period clamp: parameters out of plausible range are bugs.
+    const auto lws_period_ms = std::chrono::milliseconds(
+        static_cast<int>(std::round(1000.0 / std::max(1.0, lws_publish_hz))));
+    lws_publish_timer_ = node_->create_wall_timer(
+        lws_period_ms,
+        std::bind(&IFSSIMRosWrapper::lwsPublishTimerCb, this));
     // `lidar_transport` and `lidar_uds_path` parameters were removed in
     // #322. LiDAR is now always UDP via UdpReceiver — #321 marked the
     // TCP and UDS paths soft-deprecated, this PR follows through.
@@ -260,15 +299,19 @@ void IFSSIMRosWrapper::initializePublishers()
     //   v_x = rpm × (2π × WheelRadius / GearRatio) / 60
     // For IFS-08 (WheelRadius=0.228 m, GearRatio=2.909): v ≈ rpm × 0.00821 m/s.
     motor_rpm_pub_ = node_->create_publisher<std_msgs::msg::Float32>("motor_rpm", sensor_qos);
-    // /steering_angle — actual front-wheel angle (rad), converted at
-    // publish time from the SensorFrame.steering normalized [-1, 1]
-    // axis input. Phase 3 (#383) input to sim_supervisor's
-    // OdometryFilter — the kinematic-bicycle yaw prediction
-    //     ω_pred = (v_x / wheelbase) · tan(δ)
-    // gives a cross-check on IMU gyro_z and a slip-detection signal
-    // when residual > threshold.
+    // /steering_angle — front-wheel angle (rad), post-LWS sensor model.
+    // Now driven by the 100 Hz lws_publish_timer_ rather than the
+    // per-UDP-frame path so the cadence matches the real CAN sensor
+    // (datasheet "100 Hz / 10 ms"). The underlying signal is the
+    // commanded δ cached in latest_steering_cmd_rad_ from the sensor
+    // stream; the timer multiplies it by steering_ratio_ to get the
+    // steering wheel angle the LWS would see, runs the sensor model,
+    // then publishes both the road-wheel-angle view here and the
+    // sensor-faithful wheel-angle view on /lws/*. See #462.
     steering_angle_pub_ = node_->create_publisher<std_msgs::msg::Float32>(
         "steering_angle", sensor_qos);
+    lws_steering_wheel_pub_ = node_->create_publisher<std_msgs::msg::Float32>(
+        "lws/steering_wheel_angle_rad", sensor_qos);
     // /brake_pressure — commanded brake authority [0, 1], echoed from
     // the autonomy's last ControlCommand.brake. Phase 3 (#383) input
     // to OdometryFilter — when brake > threshold, RPM-derived v_x is
@@ -743,18 +786,15 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
             motor_rpm_pub_->publish(msg);
         }
 
-        // /steering_angle — front-wheel angle (rad). SensorFrame.steering
-        // is the normalized [-1, 1] axis value the autonomy commanded
-        // through ControlCommand; UE5's vehicle controller renders it
-        // by multiplying with the rack limit. We convert here so
-        // downstream consumers see SI units. Real-car parity: the
-        // IFS-08 reads steering-rack potentiometer on CAN; bridge
-        // publishes the same SI value either way. #383.
-        {
-            std_msgs::msg::Float32 msg;
-            msg.data = static_cast<float>(f.steering * max_steering_angle_rad_);
-            steering_angle_pub_->publish(msg);
-        }
+        // Cache the latest commanded steering δ (road-wheel angle, rad).
+        // The 100 Hz lws_publish_timer_ reads this, runs it through the
+        // LWS sensor model, and publishes both /lws/* and /steering_angle.
+        // Decoupling the sensor cadence from the UDP frame cadence
+        // matches the real car (CAN @ 100 Hz independent of whatever
+        // IMU/RPM rates uDV forwards). See #462.
+        latest_steering_cmd_rad_.store(
+            static_cast<double>(f.steering) * max_steering_angle_rad_,
+            std::memory_order_relaxed);
 
         // /brake_pressure — commanded brake authority [0, 1] echoed
         // from SensorFrame.brake. Proxy for hydraulic line pressure
@@ -971,6 +1011,37 @@ void IFSSIMRosWrapper::goSignalTimerCb()
     msg.mission = mission_name_;
     msg.track = track_name_;
     go_signal_pub_->publish(msg);
+}
+
+void IFSSIMRosWrapper::lwsPublishTimerCb()
+{
+    // 100 Hz LWS publish — runs the cached commanded δ_road through
+    // the Bosch LWS sensor model and emits two views of the same
+    // measurement:
+    //   * /lws/steering_wheel_angle_rad — sensor-faithful column angle
+    //     (what uDV would forward off CAN, in rad rather than the raw
+    //     LWS bit layout).
+    //   * /steering_angle — road-wheel angle (= LWS / steering_ratio),
+    //     consumer contract for OdometryFilter and any future EKF.
+    //
+    // Both publish from the SAME measure() call so they stay
+    // bit-consistent — a downstream EKF that uses both can't get them
+    // out of sync. See #462.
+    if (!lws_sensor_) return;
+    const double cmd_road_rad =
+        latest_steering_cmd_rad_.load(std::memory_order_relaxed);
+    const double cmd_sw_rad = cmd_road_rad * steering_ratio_;
+    const double meas_sw_rad = lws_sensor_->measure(cmd_sw_rad);
+    {
+        std_msgs::msg::Float32 m;
+        m.data = static_cast<float>(meas_sw_rad);
+        lws_steering_wheel_pub_->publish(m);
+    }
+    {
+        std_msgs::msg::Float32 m;
+        m.data = static_cast<float>(meas_sw_rad / steering_ratio_);
+        steering_angle_pub_->publish(m);
+    }
 }
 
 void IFSSIMRosWrapper::tireLoadsTimerCb()
