@@ -244,9 +244,16 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	{
 		const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
 		const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
-		Frame.GtAngVelBodyX = BodyAngVel.X;
-		Frame.GtAngVelBodyY = BodyAngVel.Y;
-		Frame.GtAngVelBodyZ = BodyAngVel.Z;
+		// Convert UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
+		// Angular velocity is a pseudo-vector — under the Y-axis reflection
+		// that maps the two frames, it transforms as (X, Y, Z) → (-X, Y, -Z).
+		// Matches the existing convention applied to /imu in the bridge
+		// (ifssim_ros_wrapper.cpp lines 704-706) so that GT and IMU yaw_rate
+		// are directly comparable; without this they sit perfectly mirrored
+		// around zero (bag-confirmed lap_cascade_assoc0_20260512_143514).
+		Frame.GtAngVelBodyX = -BodyAngVel.X;
+		Frame.GtAngVelBodyY =  BodyAngVel.Y;
+		Frame.GtAngVelBodyZ = -BodyAngVel.Z;
 	}
 	else
 	{
