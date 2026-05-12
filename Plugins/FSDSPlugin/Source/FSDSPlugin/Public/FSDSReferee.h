@@ -179,8 +179,27 @@ private:
 		UPrimitiveComponent* OtherComp, int32 OtherBodyIndex,
 		bool bFromSweep, const FHitResult& SweepResult);
 
-	/** Track cone original positions for displacement detection */
+	/** Track cone original positions for displacement detection.
+	 *
+	 * UPROPERTY() is **load-bearing**, not cosmetic. The TMap and TSet hold
+	 * raw AActor* pointers; without the macro UE5's garbage collector has
+	 * no idea these references exist. When loadTrack destroys the old
+	 * cones (FSDSRpcServer.cpp ~line 1273) and respawns new ones, the
+	 * destroyed actors' memory is GC'd and recycled into the new spawns.
+	 * The TMap still holds the old addresses — now pointing at freshly-
+	 * reused memory — and Tick's `IsValid(Pair.Key)` dereferences a wild
+	 * pointer → shipping SIGSEGV in `AFSDSReferee::Tick(float)+960`.
+	 *
+	 * Editor PIE doesn't reclaim that memory aggressively (asset editor,
+	 * undo, outliner all hold refs), so the bug is shipping-only and
+	 * timing-dependent on the allocator. See issue #471. Sibling
+	 * FSDSConeSpawner.h marks its `SpawnedCones` TArray correctly; this
+	 * container was the missed case.
+	 */
+	UPROPERTY()
 	TMap<AActor*, FVector> ConeOriginalPositions;
+
+	UPROPERTY()
 	TSet<AActor*> HitCones; // Already counted cones (avoid double-counting)
 
 	/** Lap timing */
