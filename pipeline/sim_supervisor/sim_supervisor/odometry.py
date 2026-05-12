@@ -108,10 +108,12 @@ ALPHA_VX: float = 0.10
 # prediction:
 #     ω_pred = (v_x / wheelbase) · tan(δ)
 # Compared against IMU gyro_z to publish a yaw residual diagnostic +
-# detect lateral-slip events. 1.55 m matches the IFS-08 URDF
-# (pipeline/coche_urdf/urdf/ifs_08.urdf rear-axle-midpoint origin to
-# front-axle midpoint via the steer-link positions).
-WHEELBASE_M: float = 1.55
+# detect lateral-slip events. 1.570 m is the authoritative IFS-08 spec
+# (docs/MODEL_IFS_08/DYNAMIC_MOD/Cooling/BR_regenerativeBR.m: `L=1.570`
+# + docs/MODEL_IFS_08/ISC_IFS_08.xlsx MONO sheet BQ64: `L=1570 mm`).
+# Previous value 1.55 was URDF-sourced (approximate). See issue #462.
+# Kept in sync with kWheelbaseM in odometry_filter.hpp (C++ port).
+WHEELBASE_M: float = 1.570
 
 # Brake-pressure threshold above which RPM is considered unreliable
 # (drive wheels potentially locked). When exceeded the complementary
