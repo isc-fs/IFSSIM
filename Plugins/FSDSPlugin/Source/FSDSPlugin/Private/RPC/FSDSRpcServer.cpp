@@ -1584,9 +1584,15 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		{
 			const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
 			const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
-			Frame.GtAngVelBodyX = BodyAngVel.X;
-			Frame.GtAngVelBodyY = BodyAngVel.Y;
-			Frame.GtAngVelBodyZ = BodyAngVel.Z;
+			// UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
+			// Angular velocity is an axial vector; under the Y-reflection
+			// between the two frames it transforms (X, Y, Z) → (-X, Y, -Z).
+			// Matches the bridge's /imu gyro convention so GT and IMU yaw_rate
+			// are directly comparable. See sibling fix in FSDSUdpBroadcaster.cpp
+			// and issue #466 (historical PR #454 landed on main, not dev).
+			Frame.GtAngVelBodyX = -BodyAngVel.X;
+			Frame.GtAngVelBodyY =  BodyAngVel.Y;
+			Frame.GtAngVelBodyZ = -BodyAngVel.Z;
 		}
 		else
 		{
