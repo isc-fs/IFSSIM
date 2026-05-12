@@ -8,7 +8,7 @@ Monitor a trackdrive run end-to-end:
   - Tail the controller's DIAG lines from the bridge container so we can see
     what xte / yaw_err / Stanley / target velocity were doing each tick
 
-Usage: python3 tools/monitor_trackdrive.py [duration_s]
+Usage: python3 tools/dev/monitor_trackdrive.py [duration_s]
 """
 import json
 import math

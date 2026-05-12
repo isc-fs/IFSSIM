@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/diff_cone_detection.py — Phase 5 acceptance test for #223.
+"""tools/dev/diff_cone_detection.py — Phase 5 acceptance test for #223.
 
 Captures /Conos_raw cone-detection MarkerArrays under each LiDAR backend
 and computes 2D centroid NN distance between them. The actually-load-

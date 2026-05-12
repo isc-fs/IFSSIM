@@ -12,7 +12,7 @@ ROS pipeline does NOT need to be enabled.
 
 Output:
 - Console table of (steer_cmd, target_v, observed_v, R_obs, R_kinematic, a_lat)
-- /tmp/circle_test.png (or tools/circle_test.png on host) with two plots:
+- /tmp/circle_test.png (or tools/dev/circle_test.png on host) with two plots:
     * R observed vs commanded steer for each target speed
     * a_lat vs target speed (the headline plot — where the chassis caps out)
 """

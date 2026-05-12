@@ -20,12 +20,12 @@ Why this exists:
   This is intentionally a smoke test, not a path-quality regression.
   We're asserting "Plan_Path publishes paths," not "the path is good".
   Path quality is downstream of cone_slam quality, which is already
-  guarded by tools/test_slam_regression.py.
+  guarded by tools/smoke/test_slam_regression.py.
 
 Usage:
-    tools/test_path_planning_smoke.py
-    tools/test_path_planning_smoke.py --bag <other_bag_name>
-    tools/test_path_planning_smoke.py --no-replay   # parse existing recording
+    tools/smoke/test_path_planning_smoke.py
+    tools/smoke/test_path_planning_smoke.py --bag <other_bag_name>
+    tools/smoke/test_path_planning_smoke.py --no-replay   # parse existing recording
 
 Exit code 0 = pass, 1 = regression detected, 2 = harness/parse error.
 """
@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Tuple
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # tools/smoke/X.py → repo root
 DEFAULT_BAG = "trackA_manual_001602"
 REPLAY_DURATION_S = 145
 
@@ -103,7 +103,7 @@ def count_path_messages(rec_dir: Path) -> Tuple[int, int]:
         ["docker", "cp", str(db_host), f"{container}:{db_in_container}"],
         check=True)
     script_src = (
-        REPO_ROOT / "tools" / "_count_path_msgs.py")
+        REPO_ROOT / "tools" / "smoke" / "_count_path_msgs.py")
     subprocess.run(
         ["docker", "cp", str(script_src), f"{container}:{script_in_container}"],
         check=True)

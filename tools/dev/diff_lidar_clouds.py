@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/diff_lidar_clouds.py — Phase 4 dual-path validation for #223.
+"""tools/dev/diff_lidar_clouds.py — Phase 4 dual-path validation for #223.
 
 Captures /lidar/Lidar1 scans under each LiDAR backend and computes the
 per-point KD-tree NN-distance distribution between them. The acceptance
@@ -13,7 +13,7 @@ script is meant to be copied in and invoked there):
 
   # 1. Park the car at a stable scene.
   # 2. Confirm settings.json LidarPath: "cpu" and Play.
-  docker cp tools/diff_lidar_clouds.py ifssim-dv_pipeline_stack-1:/tmp/
+  docker cp tools/dev/diff_lidar_clouds.py ifssim-dv_pipeline_stack-1:/tmp/
   docker exec ifssim-dv_pipeline_stack-1 \\
       python3 /tmp/diff_lidar_clouds.py record /tmp/cpu.npz --count 5
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Record a ROS 2 bag of the sensor + GT + cone topics that tools/replay.sh
 # expects. Output goes to tools/bags/<name>/ and is the canonical fixture
-# format consumed by tools/replay.sh and tools/pose_cmp.py.
+# format consumed by tools/replay.sh and tools/dev/pose_cmp.py.
 #
 # Topics captured:
 #   /imu                  — bridge IMU stream (~400 Hz BMI088 model)

@@ -21,17 +21,17 @@ Usage (inside the dv_pipeline_stack container, where fsd_path_planning
 is installed):
 
     docker compose exec dv_pipeline_stack \
-        python3 /workspace/tools/replay_planner.py \
+        python3 /workspace/tools/dev/replay_planner.py \
         /tmp/planner.jsonl --worst --out /tmp/replay.png
 
 To capture a session: set DV_PLANNER_CAPTURE on the Plan_Path node, drive
 to the failure, then replay the resulting JSONL with --worst (the tick
 where n_path is smallest non-zero), or --tick N for a specific frame.
 
-    tools/replay_planner.py /tmp/planner.jsonl                # last tick
-    tools/replay_planner.py /tmp/planner.jsonl --tick 412
-    tools/replay_planner.py /tmp/planner.jsonl --worst
-    tools/replay_planner.py /tmp/planner.jsonl --out plot.png
+    tools/dev/replay_planner.py /tmp/planner.jsonl                # last tick
+    tools/dev/replay_planner.py /tmp/planner.jsonl --tick 412
+    tools/dev/replay_planner.py /tmp/planner.jsonl --worst
+    tools/dev/replay_planner.py /tmp/planner.jsonl --out plot.png
 
 Exit code 0 = ok. Failures print to stderr.
 """
