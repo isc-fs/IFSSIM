@@ -124,11 +124,16 @@ def cascade_spike_triggered(
       * **Percentage gate**: ``n_new / total > pct_threshold`` once
         ``total >= pct_min_obs``. Catches "everything looks new" bursts
         — the historical cascade signature, see #441.
-      * **Count gate**: ``n_new >= count_threshold``. Catches the
-        absolute-count bursts that slipped through the percentage
-        gate post-#441 (5-of-14 at 36 %, 8-of-13 at 62 % both
-        observed; the latter triggered the legacy gate, the former
-        didn't). Set ``count_threshold = 0`` to disable.
+      * **Count gate**: ``n_new >= count_threshold`` AND
+        ``n_associated == 0`` (i.e. ``total == n_new``). The zero-
+        association requirement is what discriminates a true cascade
+        (pose has drifted off the map → nothing matches) from
+        legitimate cornering discovery (new cones swing into the LiDAR
+        FoV but several previously-mapped ones still associate). The
+        2026-05-12 live test of the initial assoc-agnostic count gate
+        showed it firing on `obs=12 new=7 assoc=5` during the first
+        turn and starving SLAM into IMU-only drift → off-track. Set
+        ``count_threshold = 0`` to disable.
 
     Both gates are AND'd with the discovery-step floor.
     Extracted from cone_graph_slam_node._on_cones for unit-testability
@@ -139,8 +144,8 @@ def cascade_spike_triggered(
     reasons: list[str] = []
     if total >= pct_min_obs and n_new > int(pct_threshold * total):
         reasons.append(f"pct>{int(pct_threshold * 100)}%")
-    if count_threshold > 0 and n_new >= count_threshold:
-        reasons.append(f"n_new≥{count_threshold}")
+    if count_threshold > 0 and n_new >= count_threshold and n_new == total:
+        reasons.append(f"n_new≥{count_threshold}&assoc=0")
     return bool(reasons), reasons
 
 
