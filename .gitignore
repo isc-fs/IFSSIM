@@ -74,6 +74,17 @@ Content/tracks/.ifssim_state.json
 # Documents (not source)
 *.pdf
 
+# IFS-08 spec source-of-truth dumps from internal teams (vehicle
+# dynamics master sheet, autonomous steering design docs, SolidWorks
+# CAD models, FEA results). Each ~30-170 MB of binary content;
+# committing would explode the repo. Local-only: re-drop into docs/
+# from the team's shared drive when needed. PR comments and
+# docs/archive/ summaries cite the relevant numbers (wheelbase,
+# turning radius, pinion radius, etc.) so the reference content is
+# discoverable without the binaries themselves.
+docs/MODEL_IFS_08/
+docs/Steering_DV_Sandra/
+
 # Recorded ROS2 bags — large binary sqlite DBs, not source.
 # `tools/bags/` is the historical location; `bags/` (repo root) is the
 # 2026-05-11+ convention used by the offline analysis flow (the bag
