@@ -1,4 +1,4 @@
-"""Helper for tools/test_control_smoke.py.
+"""Helper for tools/smoke/test_control_smoke.py.
 
 Run inside the dv_pipeline_stack container — needs rclpy, fs_msgs.
 

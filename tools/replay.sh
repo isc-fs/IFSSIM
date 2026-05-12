@@ -75,7 +75,7 @@ docker run --rm \
     --name "ifssim-replay-$$" \
     -v "$HOST_BAG_DIR:/replay/bag:ro" \
     -v "$HOST_BAG_DIR:/replay/out" \
-    -v "$REPO/tools/pose_cmp.py:/replay/pose_cmp.py:ro" \
+    -v "$REPO/tools/dev/pose_cmp.py:/replay/pose_cmp.py:ro" \
     -e ROS_DOMAIN_ID=42 \
     -e "SLAM_TOPIC=$SLAM_TOPIC" \
     -e "DURATION=$DURATION" \

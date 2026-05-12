@@ -30,9 +30,9 @@ Why this exists:
   firing) need a different test — this one only guards the wiring.
 
 Usage:
-    tools/test_control_smoke.py
-    tools/test_control_smoke.py --bag <other_bag_name>
-    tools/test_control_smoke.py --no-replay   # parse existing recording
+    tools/smoke/test_control_smoke.py
+    tools/smoke/test_control_smoke.py --bag <other_bag_name>
+    tools/smoke/test_control_smoke.py --no-replay   # parse existing recording
 
 Exit code 0 = pass, 1 = regression, 2 = harness/parse error.
 """
@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Tuple
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # tools/smoke/X.py → repo root
 DEFAULT_BAG = "trackA_manual_001602"
 REPLAY_DURATION_S = 145
 
@@ -109,7 +109,7 @@ def count_control_messages(rec_dir: Path) -> Tuple[int, int, int]:
     subprocess.run(
         ["docker", "cp", str(db_host), f"{container}:{db_in_container}"],
         check=True)
-    script_src = REPO_ROOT / "tools" / "_count_control_msgs.py"
+    script_src = REPO_ROOT / "tools" / "smoke" / "_count_control_msgs.py"
     subprocess.run(
         ["docker", "cp", str(script_src), f"{container}:{script_in_container}"],
         check=True)

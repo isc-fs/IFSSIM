@@ -9,7 +9,7 @@ pipeline. Run BEFORE starting the session so the trajectory captures from t=0:
     docker exec -it ifssim-dv_pipeline_stack-1 bash -c \
       "source /opt/ros/humble/setup.bash && \
        source /dv_pipeline_stack_ws/install/setup.bash && \
-       python3 /dv_pipeline_stack_ws/src/tools/trajectory_record.py --duration 30"
+       python3 /dv_pipeline_stack_ws/src/tools/dev/trajectory_record.py --duration 30"
 
 Or attach for a fixed duration with --duration N (seconds), or stop early
 with Ctrl-C — either way a PNG drops at /tmp/trajectory.png.

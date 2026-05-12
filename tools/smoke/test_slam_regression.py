@@ -31,9 +31,9 @@ through the front 75 s of the lap"; back-stretch is a known limit
 until loop closure or proper covariance-aware DA lands.
 
 Usage:
-    tools/test_slam_regression.py
-    tools/test_slam_regression.py --quiet
-    tools/test_slam_regression.py --bag <other_bag_name>
+    tools/smoke/test_slam_regression.py
+    tools/smoke/test_slam_regression.py --quiet
+    tools/smoke/test_slam_regression.py --bag <other_bag_name>
 
 Exit code 0 = pass, 1 = regression detected, 2 = harness/parse error.
 """
@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Dict
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent  # tools/smoke/X.py → repo root
 DEFAULT_BAG = "trackA_manual_001602"
 REPLAY_DURATION_S = 145   # full lap incl. loop closure (~t=137s).
                           # Bag is 151 s; we stop a few seconds short of the
