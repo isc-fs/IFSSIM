@@ -5,3 +5,22 @@
 # otherwise converts to CRLF, breaking the shebang inside Linux containers.
 *.sh text eol=lf
 
+# Dockerfiles must stay LF — Windows clones with core.autocrlf=true otherwise
+# get CRLF inside RUN-built strings, which then leak into the image. We hit
+# this on docker/lichtblick/Dockerfile where Caddy's port spec became "8080\r"
+# inside the container and the lichtblick service refused to start. Forcing
+# LF here prevents the regression on every future Windows checkout.
+Dockerfile        text eol=lf
+*.Dockerfile      text eol=lf
+
+# docker-compose YAMLs: compose itself tolerates CRLF, but the same files
+# sometimes get baked into image layers or shipped to ROS launch sub-procs
+# that don't. Cheap to normalise.
+docker-compose*.yml text eol=lf
+
+# Mission-critical config: settings.json + UE Default*.ini get read by both
+# the cooked sim (Windows) and the ROS pipeline inside the Linux container.
+# LF avoids one-side-CRLF parser surprises.
+settings.json     text eol=lf
+Default*.ini      text eol=lf
+

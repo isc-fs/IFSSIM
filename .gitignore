@@ -98,3 +98,11 @@ bags/
 # phantom track in package_mac.sh's CSV copy). Real generated tracks
 # are renamed by the operator before commit.
 Content/tracks/random_track.csv
+
+# Per-developer docker-compose override. The committed docker-compose.yml
+# uses `network_mode: host` (Linux), but on Windows + Docker Desktop
+# `host` shares the WSL2 distro's network, not the Windows host's, which
+# breaks foxglove_bridge → Lichtblick and the sim's UDP sensor stream.
+# The local override flips dv_pipeline_stack back to bridge mode with
+# explicit port forwards. Each developer owns their own copy.
+docker-compose.override.yml
