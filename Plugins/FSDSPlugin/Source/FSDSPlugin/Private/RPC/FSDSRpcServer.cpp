@@ -212,6 +212,18 @@ void FFSDSRpcServer::ServerThreadFunc()
 
 			if (ClientSocket)
 			{
+				// Disable Nagle's algorithm. Without this, the sensor-
+				// stream loop (small ~200-byte frames sent every 2.5 ms)
+				// suffers Windows TCP Nagle batching — frames buffer for
+				// 40-200 ms before transmission, capping /imu at ~12 Hz
+				// regardless of how fast we Sleep between sends. With
+				// NoDelay, each Send goes on the wire immediately and
+				// the loop is paced purely by the FPlatformProcess::Sleep
+				// call (which now relies on timeBeginPeriod(1) from
+				// FSDSPlugin::StartupModule to actually hit sub-15.6ms
+				// granularity on Windows).
+				ClientSocket->SetNoDelay(true);
+
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
 
 				// Pre-#322 we bumped SO_SNDBUF to 32 MB here so the
