@@ -91,18 +91,29 @@ void AFSDSGameMode::StartPlay()
 
 	// UDP broadcaster — pushes sensor + LiDAR frames over UDP to the
 	// bridge. Started here unconditionally. The bridge consumes the
-	// LiDAR UDP stream on port 51453 (LiDAR is UDP-only since #322).
+	// LiDAR UDP stream on port 41500 (LiDAR is UDP-only since #322).
 	// Sensor UDP is currently benign-but-unused — sensors still ride
 	// the TCP push.
 	//
 	// Targeting 127.0.0.1: on macOS Docker Desktop the bridge sits inside
-	// the Linux VM; the docker-compose.yml UDP port forwards (41452/41453)
+	// the Linux VM; the docker-compose.yml UDP port forwards (41452/41500)
 	// route host-loopback datagrams into the container's listener. On
 	// Linux hosts the same port forward works natively. Broadcast/multicast
 	// would force the host to multicast across interfaces unnecessarily.
+	//
+	// Why 41500 (not 41453 nor 51453):
+	//   - Adjacent ports (41452/41453) hit macOS Docker Desktop's UDP-
+	//     range-proxying bug where only ONE port of a contiguous range
+	//     gets forwarded. So we want a non-adjacent port.
+	//   - High ports (≥49152) collide with Windows' dynamic/ephemeral
+	//     port range (`netsh int ipv4 show dynamicportrange udp`), where
+	//     Docker Desktop UDP forwards silently fail (the earlier choice
+	//     of 51453 broke Windows live LiDAR for exactly this reason —
+	//     SendTo returned ok=1 but packets never reached the container).
+	//   - 41500 is non-adjacent to 41452 AND below 49152: works on both.
 	UdpBroadcaster.SetVehiclePawn(VehiclePawn);
 	UdpBroadcaster.SetReferee(RefereeActor);
-	UdpBroadcaster.Start(TEXT("127.0.0.1"), 41452, 51453);
+	UdpBroadcaster.Start(TEXT("127.0.0.1"), 41452, 41500);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)

@@ -468,11 +468,16 @@ void IFSSIMRosWrapper::startStreaming()
         });
     // sensor_port=0 disables the sensor listener thread (sensors stay
     // on TCP — the ~40 KB/s sensor stream isn't bandwidth-bound).
-    // Port 51453 is intentionally non-adjacent to the sensor stream
+    // Port 41500 is intentionally non-adjacent to the sensor stream
     // port (41452) — Docker Desktop on macOS sometimes only proxies
-    // one port of a contiguous UDP range. See docker-compose.yml.
-    udp_receiver_.start(0, 51453);
-    RCLCPP_INFO(node_->get_logger(), "LiDAR transport: UDP (listening on 51453)");
+    // one port of a contiguous UDP range. The previous choice of
+    // 51453 also satisfied non-adjacency but landed inside Windows'
+    // dynamic port range (49152-65535) where Docker Desktop's UDP
+    // forwarder silently fails. 41500 is non-adjacent AND below
+    // 49152, so it works on both platforms. See FSDSGameMode.cpp:105
+    // for the full reasoning + the failure-mode diagnosis.
+    udp_receiver_.start(0, 41500);
+    RCLCPP_INFO(node_->get_logger(), "LiDAR transport: UDP (listening on 41500)");
 
     streaming_ = true;
 
