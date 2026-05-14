@@ -105,7 +105,13 @@ COPY pipeline/ src/
 # under src/ are live without re-running colcon).
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
 
-# Copy launch files, teleop, and entrypoint
+# Copy launch files, teleop, entrypoint, and DDS profile.
+# fastdds_profile.xml used to be bind-mounted at runtime so we could
+# tweak DDS settings without rebuilding the image; #490 moved it into
+# the image to eliminate one more bind mount (Docker Desktop's
+# virtiofs/9p makes mount overhead non-trivial). To iterate on DDS
+# settings now, edit the file and `docker compose build`.
+COPY docker/dv_pipeline_stack/fastdds_profile.xml     /dv_pipeline_stack_ws/fastdds_profile.xml
 COPY docker/dv_pipeline_stack/bridge.launch.py        /dv_pipeline_stack_ws/bridge.launch.py
 COPY docker/dv_pipeline_stack/pipeline.launch.py      /dv_pipeline_stack_ws/pipeline.launch.py
 COPY docker/dv_pipeline_stack/pipeline_only.launch.py /dv_pipeline_stack_ws/pipeline_only.launch.py
