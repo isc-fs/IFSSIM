@@ -219,6 +219,23 @@ def generate_launch_description() -> LaunchDescription:
                 "use_compression":   True,
             }],
         ),
+        # ------------------ Bag recorder service (#465) ------------------
+        # Always-on plain Node that hosts /bag_recorder/start +
+        # /bag_recorder/stop services. The MC web backend's
+        # bag_recorder.py is the client; the actual `ros2 bag record`
+        # subprocess runs HERE (inside dv_pipeline_stack) so it shares
+        # the SHM-tuned DDS context with the publishers — full-fidelity
+        # 10 Hz LiDAR capture, no UDP-fragmentation drops.
+        #
+        # See pipeline/bag_recorder_node/bag_recorder_node/node.py for
+        # the service handlers and pipeline/bag_recorder_node/
+        # bag_recorder_node/recorder.py for the subprocess management.
+        Node(
+            package="bag_recorder_node",
+            executable="bag_recorder_node",
+            name="bag_recorder_node",
+            output="screen",
+        ),
     ]
 
     # ------------------ Mission management (auto-active) ------------------

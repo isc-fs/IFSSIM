@@ -159,8 +159,19 @@ services:
       - ./pipeline/control:/dv_pipeline_stack_ws/src/control
       - ./pipeline/path_planning:/dv_pipeline_stack_ws/src/path_planning
       - ./pipeline/cone_detection:/dv_pipeline_stack_ws/src/cone_detection
+      # #465 — bag_recorder_node hosts /bag_recorder/{start,stop}
+      # services so MC's web backend can record from inside this
+      # container (where the DDS context is SHM-tuned for full-
+      # fidelity LiDAR capture). See pipeline/bag_recorder_node/.
+      - ./pipeline/bag_recorder_node:/dv_pipeline_stack_ws/src/bag_recorder_node
       - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
       - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
+      # #465 — host-visible landing dir for finalised bags. The
+      # recorder writes its mcap to /tmp/ifssim_bag_active (fast
+      # container ext4) and moves it here on StopBag; bind-mounting
+      # to the repo-root `bags/` means the operator finds it on the
+      # host with no docker cp step.
+      - ./bags:/bags
       # /tmp/ifssim_streams bind-mount removed: it existed to share an
       # AF_UNIX LiDAR socket between the host plugin and the bridge
       # container. The UDS LiDAR sender was retired in #322 and the
@@ -242,6 +253,11 @@ services:
       # `pipeline_ctrl` shared-volume mount removed in #381 — flag-file
       # path retired; autonomy bring-up is via StartMission action chain.
       - ./tools/random-track-generator:/track_gen:ro
+      # /bags bind mount removed from mc_backend: bag recording moved
+      # to dv_pipeline_stack via the /bag_recorder/{start,stop}
+      # services (#465 v2). mc_backend is now a pure ROS service
+      # client for recording — no /bags, no ros2bag CLI, no mcap
+      # storage plugin needed here. See pipeline/bag_recorder_node/.
     mem_limit: 512m
     memswap_limit: 512m
     restart: unless-stopped

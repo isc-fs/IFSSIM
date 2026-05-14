@@ -18,6 +18,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Header, HTTPException, Depends, status
@@ -27,6 +28,11 @@ from pydantic import BaseModel
 
 from sim_client import SimConnection
 from scoring import compute_scoring
+
+# #465 — bag-record helpers. Pure-Python, no FastAPI coupling, so the
+# test suite can drive subprocess calls with mocks. See bag_recorder.py
+# for the orchestration contract this module relies on.
+import bag_recorder as _bag
 from ros_bridge import RosBridge, StartMissionOutcome
 
 
@@ -287,12 +293,38 @@ def _save_state(data: dict):
 
 current_event = _load_state().get("event", "unknown")
 
+# #465 — last-loaded track name (basename), updated by track_load.
+# The bag-record name builder consumes it; "no-track" is the safe
+# fallback (which also gates the existing "refuse start with no
+# track" check in event_start, so we never compose a name from
+# stale data after a fresh sim boot).
+current_track: Optional[str] = None
+
+# #465 — live bag-record state. None when no recording is active;
+# otherwise a dict with keys `name`, `state`, `path`, `error`. Mutated
+# only under _state_lock so concurrent endpoints (event_start from
+# one HTTP worker + pipeline_stop from another) can't race the
+# lifecycle transitions.
+#
+# Note: the actual `ros2 bag record` subprocess lives in
+# dv_pipeline_stack now (#465 v2). The backend interacts with it
+# only through the /bag_recorder/{start,stop} services; this dict
+# holds the latest service-response snapshot, NOT process state.
+_active_recording: Optional[dict] = None
+
 
 # === Pydantic Models ===
 
 class EventSetup(BaseModel):
     event_type: str
     num_laps: int = 10
+    # #465 — optional bag-record toggle. Default False so a missing or
+    # legacy client (UI without the checkbox, or a script call) never
+    # silently fills disk. When True, event_start kicks off
+    # `ros2 bag record -s mcap -a -o /bags/<name>` inside the dv
+    # pipeline container after autonomy is up, and pipeline_stop /
+    # any equivalent session-stop tears it down + copies the bag out.
+    record_bag: bool = False
 
 class TrackGenerate(BaseModel):
     n_points: int = 50
@@ -451,9 +483,25 @@ def sim_reset():
 @app.get("/api/event/state")
 def event_state():
     try:
-        return sim.get_referee_state()
+        state = sim.get_referee_state() or {}
     except Exception:
-        return {}
+        state = {}
+    # #465 — surface live bag-record state alongside the referee
+    # state. Both serialise cheap fields only — no subprocess on the
+    # hot path; the recorder's PID and bag path are populated exactly
+    # once (at start / stop) by the lifecycle handlers.
+    with _state_lock:
+        rec = _active_recording
+        if rec:
+            state["bag_name"] = rec.get("name")
+            state["bag_state"] = rec.get("state")
+            if rec.get("path"):
+                state["bag_path"] = rec["path"]
+            if rec.get("error"):
+                state["bag_error"] = rec["error"]
+        else:
+            state["bag_state"] = "none"
+    return state
 
 @app.post("/api/event/set", dependencies=[Depends(require_api_key)])
 def event_set(setup: EventSetup):
@@ -643,12 +691,68 @@ def event_start(setup: EventSetup):
             except Exception:
                 actual_laps = setup.num_laps
             log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
-        return {
+
+            # #465 — optional bag-record. Strictly post-autonomy-up so
+            # the recording window matches the lap, not the
+            # autonomy-warmup phase. The actual `ros2 bag record`
+            # process lives inside dv_pipeline_stack now (#465 v2);
+            # we just call /bag_recorder/start over DDS. _state_lock
+            # serialises against pipeline_stop's matching teardown.
+            global _active_recording
+            bag_info = None
+            if setup.record_bag:
+                if _active_recording and _active_recording.get("state") == "recording":
+                    log_event(
+                        "record_bag",
+                        f"prior recording {_active_recording.get('name')} "
+                        "still active — closing before new start",
+                    )
+                    try:
+                        _bag.request_stop(RosBridge.get())
+                    except Exception as ex:
+                        log_event("record_bag", f"prior-stop failed: {ex}")
+                    _active_recording = None
+
+                bag_name = _bag.compose_bag_name(setup.event_type, current_track)
+                start_resp = _bag.request_start(RosBridge.get(), bag_name)
+                if start_resp.get("ok"):
+                    _active_recording = {
+                        "name": bag_name,
+                        "state": start_resp.get("state", "recording"),
+                        "path": start_resp.get("path", ""),
+                    }
+                    bag_info = {
+                        "name": bag_name,
+                        "state": _active_recording["state"],
+                    }
+                    log_event(
+                        "record_bag",
+                        f"started {bag_name} → {start_resp.get('path')}",
+                    )
+                else:
+                    # Service-call failed or recorder refused (disk full,
+                    # spawn error, …). Do NOT fail the session —
+                    # autonomy is already running and the operator can
+                    # decide whether to retry.
+                    _active_recording = None
+                    bag_info = {
+                        "error": start_resp.get("error", "start failed"),
+                        "state": "failed",
+                    }
+                    log_event(
+                        "record_bag",
+                        f"start failed: {start_resp.get('error')}",
+                    )
+
+        response = {
             "ok": True,
             "event": setup.event_type,
             "laps": actual_laps,
             "autonomy_via": "ros_action" if _ros_bridge_available else "flag_file_legacy",
         }
+        if bag_info is not None:
+            response["bag"] = bag_info
+        return response
     finally:
         # Always clear the idempotency flag — success, exception,
         # interrupt-abort, or 5xx error from the inner try. Without
@@ -808,8 +912,50 @@ def pipeline_stop():
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=outcome.message,
         )
+
+    # #465 — tear down any in-flight recording before reporting back.
+    # Done AFTER the autonomy stop so any final messages flushed by
+    # cone_detection/slam/control during their on_deactivate land in
+    # the bag rather than getting cut off mid-tick. Stop is best-
+    # effort — pipeline stop's success is not contingent on it.
+    global _active_recording
+    bag_info = None
+    with _state_lock:
+        if _active_recording and _active_recording.get("state") in (
+            "recording", "starting",
+        ):
+            name = _active_recording.get("name")
+            stop_resp = _bag.request_stop(RosBridge.get())
+            _active_recording = {
+                "name": name,
+                "state": stop_resp.get("state", "failed"),
+                "path": stop_resp.get("path", _active_recording.get("path", "")),
+            }
+            if stop_resp.get("error"):
+                _active_recording["error"] = stop_resp["error"]
+            bag_info = {
+                "name": name,
+                "state": _active_recording["state"],
+                "path": _active_recording.get("path", ""),
+            }
+            if _active_recording.get("error"):
+                bag_info["error"] = _active_recording["error"]
+                log_event(
+                    "record_bag", f"stop failed for {name}: {bag_info['error']}",
+                )
+            else:
+                log_event(
+                    "record_bag",
+                    f"stopped {name} → {bag_info['path']}",
+                )
+            # Keep the dict around with its terminal state so the
+            # next /api/event/state response can still surface the
+            # final bag path — cleared by the next event_start.
     log_event("pipeline", "Pipeline stopped (autonomy torn down)")
-    return {"ok": True, "pipeline": "stopped", "via": "ros_action"}
+    response = {"ok": True, "pipeline": "stopped", "via": "ros_action"}
+    if bag_info is not None:
+        response["bag"] = bag_info
+    return response
 
 
 @app.get("/api/pipeline/status")
@@ -949,7 +1095,7 @@ def track_preview(name: str):
 
 @app.post("/api/track/{name}/load", dependencies=[Depends(require_api_key)])
 def track_load(name: str):
-    global current_event
+    global current_event, current_track
     name = _validate_track_name(name)
     filepath = _resolve_track_path(name)
     if not os.path.exists(filepath):
@@ -965,6 +1111,11 @@ def track_load(name: str):
             sim.set_event(event_type)
             current_event = event_type
             _save_state({"event": current_event})
+        # #465 — record the basename so a subsequent record_bag start
+        # composes a name that says which track this lap was on.
+        # Cleared only on track-load failure; a fresh sim boot leaves
+        # it None and the bag-name builder falls back to "no-track".
+        current_track = name
         log_event("track_load", f"Loaded {name}" + (f" (event: {event_type})" if event_type else ""))
 
     # Tear down any running autonomy outside the state lock — a stale
@@ -1225,6 +1376,16 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                     with _state_lock:
                         res_active_snap = res_active
                         current_event_snap = current_event
+                        # #465 — bag-record state. WS pushes it on
+                        # every 1 Hz tick so the UI can swap its
+                        # badge between "recording" / "stopped" /
+                        # "failed" as the lifecycle moves.
+                        if _active_recording:
+                            bag_name_snap = _active_recording.get("name")
+                            bag_state_snap = _active_recording.get("state", "none")
+                        else:
+                            bag_name_snap = None
+                            bag_state_snap = "none"
 
                     data = {
                         "speed": vehicle.get("speed", 0),
@@ -1268,6 +1429,10 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                             _ros_bridge_available
                             and RosBridge.get().is_pipeline_active()
                         ),
+                        # #465 — bag-record live state for the UI's
+                        # "● RECORDING" badge.
+                        "bag_name": bag_name_snap,
+                        "bag_state": bag_state_snap,
                     }
 
                     if not await _ws_safe_send(websocket, data):

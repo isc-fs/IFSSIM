@@ -27,6 +27,22 @@ export interface TelemetryData {
   paused: boolean;
   res_active: boolean;
   pipeline_enabled: boolean;
+  // #465 — optional bag-record status pushed on every WS tick when
+  // recording is wired through Mission Control's session UX.
+  //
+  //   bag_state:
+  //     "none"        — no recording active (default)
+  //     "starting"    — `ros2 bag record` spawned, awaiting first scan
+  //     "recording"   — recorder PID confirmed alive
+  //     "stopped"     — clean SIGINT shutdown, mcap closed
+  //     "failed"      — start refused (disk-full / mcap plugin missing)
+  //                     or stop errored (see logs)
+  //
+  // bag_name is the directory name under the host `bags/` landing
+  // zone (bind-mounted into mc_backend as /bags); null while recording
+  // / unset on legacy backends.
+  bag_state?: 'none' | 'starting' | 'recording' | 'stopped' | 'failed';
+  bag_name?: string | null;
   error?: string;
 }
 
@@ -39,6 +55,7 @@ const defaultTelemetry: TelemetryData = {
   doo: 0, oc: 0, laps: 0, required_laps: 0,
   finished: false, event: 'unknown',
   fps: 0, paused: false, res_active: false, pipeline_enabled: false,
+  bag_state: 'none', bag_name: null,
 };
 
 // Reconnect tuning. Capped at 30 s — long enough to spare a slow-restart
