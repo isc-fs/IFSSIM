@@ -12,6 +12,20 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Planned for v0.1.1
+
+- **Cone-floor clipping fix.** Spline-spawned cones currently sit a
+  few cm into the asphalt on every track because the spline control
+  points are at world Z=+100 but the ground mesh's local-bbox top
+  sits a few cm higher. Diagnosis + per-probe evidence in
+  `docs/cone_floor_clipping_fix.md`; fix is a line-trace ground-snap
+  in the `spline_cones*` BP construction script (~1 h editor work).
+  Visual + LiDAR-perf impact (bottom rings of close cones get
+  occluded by the floor mesh). Deferred from v0.1.0 because the
+  autonomy logic isn't affected.
+
+## [0.1.0] — 2026-05-14 (first release)
+
 ### Added
 
 - **/odom Phase 3 — steering_angle + brake_pressure filter inputs**
@@ -107,16 +121,84 @@ shipping pipeline, documentation.
   validator, repo hygiene (trailing whitespace, EOL, large-file
   guard). Setup instructions in README.
 
+#### Windows-port + release-prep series (2026-05-13 → 2026-05-14)
+
+- **LiDAR UDP port out of Windows' dynamic range** (#477). Moved the
+  legacy chunked-UDP LiDAR port from 51453 → 41500. 51453 lives
+  inside Windows' dynamic / ephemeral port range (49152–65535) where
+  Docker Desktop's UDP forwarder silently drops bindings — `SendTo`
+  returns `ok=1, bytesSent=8032` while zero packets reach the
+  container. 41500 is below 49152 AND non-adjacent to 41452 (the
+  latter avoids a macOS Docker-Desktop UDP-range-proxy quirk on
+  contiguous ports). Same fix applies to both platforms.
+- **Plugin Windows-runtime fixes** (#478). Two paired changes guarded
+  by `#if PLATFORM_WINDOWS`: `timeBeginPeriod(1)` in
+  `FFSDSPluginModule::StartupModule` drops the Windows scheduler tick
+  from 15.6 ms → 1 ms so `FPlatformProcess::Sleep` sub-2ms calls
+  actually achieve their target cadence; `FSocket::SetNoDelay(true)`
+  on per-client RPC sockets kills TCP Nagle so the 400 Hz sensor
+  stream doesn't get coalesced into 40-200 ms batches on Win64.
+  Brought `/imu` from 12 Hz → 430 Hz on Windows. Mac/Linux unaffected.
+- **Windows build tooling** (#479). New `package_windows.sh` mirroring
+  `package_mac.sh`: RunUAT.bat-driven Win64 Shipping cook, stages
+  tracks + settings.json + GameUserSettings.ini, rewrites
+  UECommandLine.txt with absolute -project + windowed + ResX/ResY +
+  -ForceRes + FPS cap. New `Config/DefaultGameUserSettings.ini` seeds
+  `FullscreenMode=2` (windowed, 1280×720) so a fresh cook doesn't land
+  in WindowedFullscreen on first run. `.gitattributes` LF rules for
+  `Dockerfile`, `docker-compose*.yml`, `settings.json`, `Default*.ini`
+  so Windows clones with `core.autocrlf=true` don't bake CRLF into
+  shipping images (the `lichtblick` Caddy port `8080\r` regression
+  that bit during testing).
+- **Reset button restores start-gate orientation** (#480). `/api/sim/reset`
+  now reads the plugin's authoritative start-gate pose via the
+  `getStartGatePose` RPC (same data `loadTrack` aligns the car to)
+  and teleports with the full 7-tuple `(x, y, z, qw, qx, qy, qz)`.
+  Previously dropped the captured quaternion and used position-only
+  teleport, leaving the pawn at the spawn XY with whatever yaw it
+  had at reset time. Verified: post-reset pose matches post-loadTrack
+  pose to 1 mm position / 1.0 quat-dot product.
+- **LiDAR TCP transport** (#482). Moved the LiDAR wire path from
+  chunked UDP (introduced in #322) to streaming TCP on the existing
+  RPC port. New `FFSDSRpcServer::StreamLidar` method mirrors the
+  sensor-stream pattern; bridge gains `lidarStreamThread()` that
+  reads a fixed 24-byte stream header + total_points×16-byte
+  payload. Solves two cross-platform wedge modes the chunked-UDP
+  path could not avoid: Docker Desktop's userspace UDP proxy losing
+  port bindings under sustained fragmented load (#286, observable
+  on Mac without the host-networking toggle AND on Windows
+  regardless of toggle), and WSL2 kernel UDP `rcvbuf` overflow
+  dropping 28 % of LiDAR chunks on Windows. The original #322
+  rationale (~7 MB/s macOS Docker Desktop TCP loopback cap) was
+  fixed upstream over the 6+ Docker Desktop releases since then.
+  Env-var fallback `IFSSIM_LIDAR_TRANSPORT=udp` preserves the
+  chunked-UDP path. Sim's UDP broadcaster is gated off by default —
+  bridges using the UDP fallback toggle it on via the new
+  `enableLidarUdpBroadcast` / `disableLidarUdpBroadcast` RPCs.
+  Verified on Mac (10.021 Hz steady) and Windows (10.0–10.4 Hz over
+  sustained 30 s, ~95 k pts/scan).
+- **`package_windows.sh` + `package_mac.sh` produce versioned zips**
+  (this PR). Both scripts read `ProjectVersion` from
+  `Config/DefaultGame.ini` and produce
+  `dist/IFSSIM-v<X.Y.Z>-{Mac,Windows-x64}.zip` after staging.
+  `dist/` is gitignored. Skip with `SKIP_ARCHIVE=1` during iterative
+  cooking.
+
 ---
 
-## [0.1.0] — first release
+The above accumulator (Added / Changed since v0.1.0 scaffolding) and
+the scaffolded feature list below both ship in this same v0.1.0 tag.
+Reader can think of v0.1.0 as "everything since the first commit of
+IFSSIM as a public project, up to 2026-05-14". Treating it as one
+release rather than splitting into 0.0.x increments keeps the SemVer
+history honest — the project hadn't been tagged before today.
+
+### Added (scaffolded feature list)
 
 The first cut intended for use outside the ISC Racing Team's internal
 dev loop. The sim is feature-complete for FS-DV mission practice; the
 items in **Known limitations** below are real but not blockers for
 that use case. See `docs/QUICKSTART.md` for first-run instructions.
-
-### Added
 
 #### Sensors and vehicle model
 
@@ -142,11 +224,15 @@ that use case. See `docs/QUICKSTART.md` for first-run instructions.
 #### Wire layer
 
 - **TCP RPC server** on port 41451 — commands, queries, camera
-  request/response.
-- **UDP broadcaster** on 41452 (sensor frames) + 41453 (LiDAR chunks).
-  LiDAR-over-UDP is the only LiDAR transport (TCP and UDS variants
-  were retired in #322 — UDP turned out to be reliable on every
-  supported host).
+  request/response, sensor stream, and (post-#482) LiDAR stream
+  all multiplexed on this single port.
+- **UDP broadcaster** on 41452 (sensor frames) + 41500 (LiDAR
+  chunks, fallback only). Sensor UDP fanout is benign-but-unused
+  at runtime (sensors ride the TCP RPC push). LiDAR UDP is the
+  legacy path retained as an escape hatch via
+  `IFSSIM_LIDAR_TRANSPORT=udp` on the bridge — production runs
+  use TCP because UDP's chunked-fragmentation path has unreliable
+  proxy behaviour on every Docker Desktop backend (#286, #482).
 - **Optional `/lidar/Lidar1/viz` subsampled cloud** for browser-based
   viewers. Off by default; opt in with
   `LIDAR_VIZ_DECIMATION=4 ./tools/refresh-bridge.sh` to drop the
@@ -203,12 +289,15 @@ that use case. See `docs/QUICKSTART.md` for first-run instructions.
 - **`package_mac.sh`** — produces `IFSSIM-Mac-Shipping.app`, signed
   with sandbox entitlements (network.server for RPC port 41451),
   with `tracks/` sibling, `settings.json` staged to UserSettingsDir,
-  and `UECommandLine.txt` patched for windowed mode + 60 FPS cap.
-- **`package_linux.sh`** — Linux Shipping, native or cross-compile
-  from a Mac dev box (with Epic's Linux Clang Toolchain).
-- **`package_windows.ps1`** — Win64 Shipping, requires a Windows host
-  with VS 2022 (UE5 cannot cross-compile to Windows from any other
-  platform).
+  and `UECommandLine.txt` patched for windowed mode + 30 FPS cap.
+  Zips into `dist/IFSSIM-v<X.Y.Z>-Mac.zip` at release time.
+- **`package_windows.sh`** — Win64 Shipping, runs from Git Bash with
+  RunUAT.bat, requires a Windows host with VS 2022 (UE5 cannot
+  cross-compile to Windows from any other platform). Same set of
+  side-effects as the Mac script: tracks/, settings.json,
+  GameUserSettings.ini, UECommandLine.txt with absolute -project +
+  windowed + ResX/ResY + FPS cap. Zips into
+  `dist/IFSSIM-v<X.Y.Z>-Windows-x64.zip` at release time.
 
 #### Continuous integration
 
@@ -267,10 +356,14 @@ aware of them; none block first-release usage.
 ### Platform support
 
 - **macOS 14+** with UE5 5.7 — first-class. Tested on Apple Silicon.
-- **Linux** — release pipeline scripted but not yet exercised on a
-  self-hosted runner; cross-compile from macOS works.
-- **Windows** — release pipeline scripted but requires a Windows
-  host (UE5 cannot cross-compile to Windows from other platforms).
+  Live LiDAR verified at the Hesai datasheet rate (10 Hz).
+- **Windows 10/11** with UE5 5.7 — first-class. Verified end-to-end
+  on Docker Desktop (WSL2 backend): live LiDAR + sensor stream both
+  at nominal rates, Lichtblick reachable, autonomy pipeline drives.
+- **Linux** — not in scope for v0.1.0. The build scripts can be
+  adapted (RunUAT supports Linux Shipping cooks) but the release
+  pipeline isn't wired up and the platform isn't on the tested
+  matrix. Tracked for a future release.
 
 [Unreleased]: https://github.com/isc-fs/IFSSIM/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/isc-fs/IFSSIM/releases/tag/v0.1.0

@@ -99,10 +99,18 @@ bags/
 # are renamed by the operator before commit.
 Content/tracks/random_track.csv
 
-# Per-developer docker-compose override. The committed docker-compose.yml
-# uses `network_mode: host` (Linux), but on Windows + Docker Desktop
-# `host` shares the WSL2 distro's network, not the Windows host's, which
-# breaks foxglove_bridge → Lichtblick and the sim's UDP sensor stream.
-# The local override flips dv_pipeline_stack back to bridge mode with
-# explicit port forwards. Each developer owns their own copy.
+# Per-developer docker-compose override. Compose auto-merges this on
+# top of docker-compose.yml when present. The committed compose is
+# the source of truth and should work on every supported OS as-is
+# (PR-#482 brought TCP-LiDAR back, so no per-OS override is needed).
+# This entry exists so individual developers can keep local-only
+# tweaks — bind-mounting an unreleased ROS package, tightening a
+# memory limit on a smaller dev machine, alternate host IPs —
+# without committing them.
 docker-compose.override.yml
+
+# Release archives produced by package_mac.sh / package_windows.sh
+# (Saved/StagedBuilds/ zipped up). Multi-hundred-MB binary blobs,
+# not source; uploaded to GitHub Releases via `gh release create`
+# at tag time.
+dist/

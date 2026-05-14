@@ -6,9 +6,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="$SCRIPT_DIR/Saved/StagedBuilds/Mac/IFSSIM-Mac-Shipping.app"
 ENTITLEMENTS="$SCRIPT_DIR/Build/Mac/Resources/Sandbox.Server.entitlements"
 TRACKS_SRC="$SCRIPT_DIR/Content/tracks"
-TRACKS_DST="$SCRIPT_DIR/Saved/StagedBuilds/Mac/tracks"
+STAGED_DIR="$SCRIPT_DIR/Saved/StagedBuilds/Mac"
+TRACKS_DST="$STAGED_DIR/tracks"
 
-echo "=== IFSSIM Mac post-build ==="
+# Project version — read from Config/DefaultGame.ini's ProjectVersion
+# field so the build artifact name tracks the in-binary version UE5
+# stamps into the cooked .app's Info.plist. Bump in DefaultGame.ini;
+# this script picks it up automatically.
+PROJECT_VERSION="$(grep -E '^ProjectVersion=' "$SCRIPT_DIR/Config/DefaultGame.ini" \
+    | head -1 | cut -d= -f2 | tr -d '\r\n ')"
+if [ -z "$PROJECT_VERSION" ]; then
+    echo "ERROR: ProjectVersion not found in Config/DefaultGame.ini" >&2
+    exit 1
+fi
+
+echo "=== IFSSIM Mac post-build (v$PROJECT_VERSION) ==="
 
 # 1. BuildCookRun
 echo "[1/3] Building..."
@@ -77,3 +89,35 @@ echo ""
 echo "=== Done — distribution in Saved/StagedBuilds/Mac/ ==="
 echo "  App:    IFSSIM-Mac-Shipping.app"
 echo "  Tracks: tracks/ ($(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') CSV files)"
+
+# 5. Archive the staged directory into a release zip. macOS ships
+#    `zip` everywhere, no extra tooling needed. Skip with
+#    SKIP_ARCHIVE=1 for iterative cooking where the compress step
+#    is wasted effort.
+DIST_DIR="$SCRIPT_DIR/dist"
+ARCHIVE_NAME="IFSSIM-v${PROJECT_VERSION}-Mac.zip"
+ARCHIVE_PATH="$DIST_DIR/$ARCHIVE_NAME"
+
+if [ "${SKIP_ARCHIVE:-0}" = "1" ]; then
+    echo ""
+    echo "[skip] SKIP_ARCHIVE=1 — distribution archive not created."
+else
+    echo ""
+    echo "[4/4] Archiving → $ARCHIVE_NAME"
+    mkdir -p "$DIST_DIR"
+    rm -f "$ARCHIVE_PATH"
+    # cd into the stage dir so the zip's top-level entries are the
+    # .app + tracks/ + UECommandLine.txt, not a "Mac/" wrapper. -y
+    # preserves symlinks inside the .app bundle (critical: Mach-O
+    # codesign symlinks would otherwise be copied as their targets
+    # and break the signature).
+    ( cd "$STAGED_DIR" && zip -ryq "$ARCHIVE_PATH" . )
+    if [ -f "$ARCHIVE_PATH" ]; then
+        SIZE=$(stat -f %z "$ARCHIVE_PATH" 2>/dev/null || stat -c %s "$ARCHIVE_PATH" 2>/dev/null || echo "?")
+        SIZE_MB=$((SIZE / 1024 / 1024))
+        echo "       OK — ${SIZE_MB} MB at $ARCHIVE_PATH"
+    else
+        echo "       FAILED — archive not produced" >&2
+        exit 1
+    fi
+fi
