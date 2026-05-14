@@ -276,6 +276,14 @@ def generate_launch_description() -> LaunchDescription:
         "cone_detection", "cone_detection_node", "cone_detection_node",
         remappings=[REMAP_LIDAR],
     ))
+    # KISS-ICP scan-to-map odometry (#485, Pattern A). Lives before
+    # slam_node in the bring-up order so /odom_lidar is publishing by
+    # the time slam_node's PriorFactorPose3 consumer activates.
+    # Consumes the same remapped /lidar/Lidar1 as cone_detection.
+    actions.append(_autonomy_lifecycle(
+        "kiss_icp_wrapper", "kiss_icp_node", "kiss_icp_node",
+        remappings=[REMAP_LIDAR],
+    ))
     actions.append(_autonomy_lifecycle(
         "cone_slam", "slam_node", "slam_node",
         remappings=[REMAP_IMU, REMAP_RPM, REMAP_GT],

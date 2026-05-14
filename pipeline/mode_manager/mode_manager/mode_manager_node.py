@@ -82,6 +82,10 @@ _TRANSITION_SKIP_STATES: dict[int, frozenset[int]] = {
 # transitions.
 AUTONOMY_LIFECYCLE_NODES: tuple[tuple[str, bool], ...] = (
     ("cone_detection_node", True),
+    # kiss_icp_node before slam_node so /odom_lidar is being published
+    # by the time slam_node activates and starts looking for it
+    # (issue #485, Pattern A — cascade fix).
+    ("kiss_icp_node",        True),
     ("slam_node",            True),
     ("path_planning_node",   True),
     ("control_node",         True),

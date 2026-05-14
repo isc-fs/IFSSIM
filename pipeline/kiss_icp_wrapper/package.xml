@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>kiss_icp_wrapper</name>
+  <version>0.0.1</version>
+  <description>
+    Thin ROS 2 LifecycleNode wrapping the upstream kiss-icp Python pipeline
+    (PRBonn/kiss-icp). Consumes /lidar/Lidar1 (PointCloud2), runs scan-to-map
+    point-to-point ICP with adaptive thresholding, and publishes the integrated
+    pose on /odom_lidar (nav_msgs/Odometry). Intended as a global-anchor pose
+    source for cone_slam to remove the cone-only DA cascade documented in
+    docs/archive/2026-05-06_slam-phase2-cascade-frozen.md.
+
+    See issue #485 for the integration plan (Pattern A).
+  </description>
+  <maintainer email="raul@isc-fs.com">Raul Moran</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

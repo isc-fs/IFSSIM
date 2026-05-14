@@ -159,6 +159,10 @@ services:
       - ./pipeline/control:/dv_pipeline_stack_ws/src/control
       - ./pipeline/path_planning:/dv_pipeline_stack_ws/src/path_planning
       - ./pipeline/cone_detection:/dv_pipeline_stack_ws/src/cone_detection
+      # kiss_icp_wrapper — issue #485 Pattern A. Lifecycle node consuming
+      # /lidar/Lidar1, publishing /odom_lidar for cone_slam to consume as
+      # a global-anchor pose source.
+      - ./pipeline/kiss_icp_wrapper:/dv_pipeline_stack_ws/src/kiss_icp_wrapper
       - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
       - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
       # /tmp/ifssim_streams bind-mount removed: it existed to share an

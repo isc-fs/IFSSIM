@@ -75,6 +75,24 @@ RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /t
 # upstream's compatibility shim.
 RUN pip install --no-cache-dir "gtsam==4.3a0"
 
+# KISS-ICP — point-to-point ICP scan-to-map odometry (PRBonn/kiss-icp).
+# Consumed by pipeline/kiss_icp_wrapper/ as a global-anchor pose source
+# for cone_slam (issue #485, Pattern A — cascade fix for the cone-only
+# DA divergence documented in
+# docs/archive/2026-05-06_slam-phase2-cascade-frozen.md).
+#
+# Pure Python install — pulls in numpy / scipy / typer / rich / natsort
+# / matplotlib but no native deps (the C++ kernels ship as a precompiled
+# manylinux wheel, no compile step in the image build).
+#
+# --no-deps would be cleaner (everything except the kiss_icp wheel
+# itself is already satisfied above) but the upstream package marks
+# its own bound numba/scipy versions strictly, and the resolver
+# happens to converge cleanly with our numpy==1.24 pin. Re-pinning
+# numpy below covers the edge case where kiss-icp's resolver pulls
+# in a numpy bump transitively.
+RUN pip install --no-cache-dir "kiss-icp"
+
 # Re-pin numpy after all installs to prevent any dependency from upgrading it
 RUN pip install --no-cache-dir "numpy==1.24.*"
 
