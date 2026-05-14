@@ -93,6 +93,38 @@ struct FFSDSLidarChunkHeader
 	// physically-grounded model. Stride was 3 floats pre-#255.
 };
 
+// Wire header for the TCP LiDAR stream (PR-#482). One header per scan,
+// sent over the streaming TCP connection the bridge opens by sending
+// "streamLidar\n" on port IFSSIM_PORT. Followed immediately by
+// `TotalPoints * 4 * sizeof(float)` bytes of (x, y, z, intensity)
+// floats — no chunking, no fragmentation handling at the application
+// level (TCP is a byte stream; SendAll/readExact handle partial
+// progress on either side).
+//
+// Why a separate struct from FFSDSLidarChunkHeader: the chunked-UDP
+// header carried ChunkIndex / TotalChunks / PointsInChunk fields the
+// bridge needed for reassembly. TCP doesn't need any of that — one
+// header is the whole scan. Carrying the unused fields would bloat
+// the wire format and confuse future readers into thinking TCP also
+// chunks. Same Magic ("LIDR") so the bridge's first-bytes-magic check
+// is recognisable from either path; FrameID / Channels / TotalPoints
+// / LagNs semantics match the chunked header so all downstream code
+// (lidar_cb_, onLidarFrame, ROS stamp recovery via LagNs) is
+// transport-agnostic.
+struct FFSDSLidarStreamHeader
+{
+	uint32 Magic = 0x4C494452; // "LIDR"
+	uint32 FrameID = 0;
+	int32  Channels = 0;
+	int32  TotalPoints = 0;
+	int64  LagNs = 0;
+};
+static_assert(sizeof(FFSDSLidarStreamHeader) == 24,
+	"FFSDSLidarStreamHeader is the on-wire LiDAR-stream header — "
+	"its size is part of the bridge↔sim ABI. If you grow or shrink "
+	"this struct, bump a wire-version field instead of expecting "
+	"old bridges to keep parsing.");
+
 #pragma pack(pop)
 
 /**

@@ -69,13 +69,18 @@ private:
     void startStreaming();
     void triggerReconnect();  // Called by stream threads on disconnect
 
-    // Streaming threads. `lidarStreamThread` was the TCP recv loop and
-    // was removed in #322 along with the TCP-LiDAR sender on the
-    // plugin side. UdpReceiver delivers frames directly into
-    // `lidar_pending_` via the callback set in startStreaming(); the
-    // publish thread is unchanged.
+    // Streaming threads. The TCP `lidarStreamThread` was removed in
+    // #322 (LiDAR moved to chunked UDP via UdpReceiver) and
+    // reinstated in PR-#482: the UDP path's wedge modes (userspace
+    // UDP proxy losing port bindings, WSL2 kernel rcvbuf overflow
+    // for fragmented datagrams) are structurally unfixable cross-
+    // platform on Docker Desktop, and TCP avoids both problems by
+    // construction. UdpReceiver is still in the tree as an
+    // env-var-gated fallback (IFSSIM_LIDAR_TRANSPORT=udp) — see
+    // startStreaming() for the switch.
     void sensorStreamThread();
     void sensorPublishThread();  // Drains the single-slot buffer, calls onSensorFrame
+    void lidarStreamThread();    // PR-#482: TCP recv loop, reads stream-header + payload
     void lidarPublishThread();   // Drains the single-slot buffer, calls onLidarFrame
 
     // Stream data handlers
@@ -106,13 +111,24 @@ private:
     std::unique_ptr<TcpClient> client_camera_;   // Camera image requests
 
     // Streaming sockets (raw, not TcpClient — held open).
-    // No `lidar_stream_fd_` / `lidar_thread_` — see comment on
-    // `lidarStreamThread` removal above (#322). The UdpReceiver owns
-    // its own listener thread internally.
+    // `lidar_stream_fd_` + `lidar_thread_` are populated only when
+    // IFSSIM_LIDAR_TRANSPORT=tcp (default, see startStreaming). The
+    // fallback path (=udp) leaves both at default and starts
+    // udp_receiver_ instead. Sensors always ride TCP — they don't
+    // have the fragmentation pathology LiDAR did.
     std::atomic<int> sensor_stream_fd_{-1};
+    std::atomic<int> lidar_stream_fd_{-1};
     std::thread sensor_thread_;
+    std::thread lidar_thread_;
     std::atomic<bool> streaming_{false};
     std::mutex reconnect_mutex_;  // Ensures only one thread reconnects at a time
+
+    // Which LiDAR transport this bridge instance is using. Set once
+    // at startStreaming() from IFSSIM_LIDAR_TRANSPORT and never
+    // changed. Plumbed to triggerReconnect() so it knows whether to
+    // reopen the TCP LiDAR socket or leave the UDP receiver running.
+    enum class LidarTransport { Tcp, Udp };
+    LidarTransport lidar_transport_ = LidarTransport::Tcp;
 
     // Sensor producer-consumer split — same pattern as the LiDAR split
     // below. Before this, the 400 Hz sensor recv thread published IMU

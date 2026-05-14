@@ -291,11 +291,23 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 					StreamSensors(ClientSocket);
 					return; // Connection used for streaming, done
 				}
-				// `streamLidar` (TCP push) was removed in #322 — LiDAR
-				// is UDP-only now via FSDSUdpBroadcaster. A bridge that
-				// still sends `streamLidar` will fall through to the
-				// command-not-recognised path below and the connection
-				// will close shortly after.
+				if (Request == TEXT("streamLidar"))
+				{
+					// PR-#482: TCP LiDAR re-introduced. See StreamLidar
+					// docs for the failure-mode trail that motivated
+					// undoing #322. Connection is held open and used
+					// for streaming until the client disconnects.
+					StreamLidar(ClientSocket);
+					return;
+				}
+				// History note: `streamLidar` was originally retired in
+				// #322 (LiDAR moved to chunked UDP via
+				// FSDSUdpBroadcaster) and re-introduced in PR-#482 (the
+				// UDP path has structural wedges on Docker Desktop
+				// Mac/Windows that TCP transparently avoids). The UDP
+				// broadcaster path is still wired in
+				// FSDSUdpBroadcaster::BroadcastLidarFrame; it just no
+				// longer has a consumer once bridges switch to TCP.
 
 				// Check if this is a binary request
 				if (ProcessBinaryRequest(Request, ClientSocket))
@@ -1645,5 +1657,162 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 
 		// Pace at ~400Hz — matches BMI088 IMU rate
 		FPlatformProcess::Sleep(0.0025f);
+	}
+}
+
+// =============================================================================
+// StreamLidar (PR-#482)
+// =============================================================================
+//
+// TCP push of full LiDAR scans, one frame per scan. Mirrors StreamSensors'
+// architectural pattern: hold the per-connection socket open, ACK "OK\n",
+// loop sending wire frames until the bridge disconnects.
+//
+// Why we re-introduced this after #322 deleted the original TCP path:
+//
+//   The chunked-UDP transport #322 replaced it with hits two unrelated
+//   wedges on Docker Desktop:
+//     1. Userspace UDP proxy (com.docker.backend) loses its socket
+//        binding for the LiDAR port under sustained load — the proxy
+//        keeps a stale port reservation but datagrams hit
+//        "port unreachable" silently. Originally documented on macOS
+//        in #286; same wedge is observable on Windows Docker Desktop
+//        too, regardless of whether "Use host networking" is on.
+//     2. WSL2 kernel UDP recv buffer caps small (`net.core.rmem_max`
+//        is locked, can't be raised from inside the container without
+//        privileged + sysctl).  Drops ~28 % of LiDAR chunks under
+//        burst load on Windows.
+//
+//   The `network_mode: host` workaround that fixed #286 on Mac with
+//   Docker Desktop ≥4.34 + "Use host networking" enabled doesn't apply
+//   on Windows (WSL2 backend) and is a per-machine setup step. The
+//   team's release-readiness review rejected per-OS user configuration
+//   as a viable solution.
+//
+//   TCP avoids both wedges: it's a byte stream (no fragmentation
+//   concerns; the kernel handles segmentation transparently), and
+//   Docker Desktop's TCP proxy / WSL2 grpc-fuse path are reliable.
+//   The original throughput cap that motivated #322 (~7 MB/s macOS
+//   Docker Desktop TCP loopback) was fixed upstream over the 6+
+//   Docker Desktop minor releases between #322 and PR-#482.
+//
+// Scan production is async (GPU readback ring); we sit in a tight
+// short-sleep loop polling GetTimestamp() and emit a frame whenever
+// it advances. Loop sleep is 1 ms — well below the 100 ms scan
+// interval, gives the kernel plenty of game-thread slack.
+void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started"));
+
+	// Send "OK\n" to confirm streaming mode (same handshake the
+	// sensor stream uses; bridge's openStreamSocket reads exactly 3
+	// bytes here and then reads payload bytes, so we MUST send these
+	// 3 bytes and no more before the first frame).
+	{
+		FString Ack = TEXT("OK\n");
+		FTCHARToUTF8 AckConv(*Ack);
+		int32 Sent = 0;
+		ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
+	}
+
+	// Track which scan we last sent so we don't re-send the same
+	// PointCloudBuffer between GPU readbacks. LastTimestamp is the
+	// game-tick-stamp the LiDAR sensor records on each successful
+	// readback; it advances strictly monotonically.
+	uint64 LastSentTimestamp = 0;
+
+	// Reusable wire buffer. Sized for the worst-case scan plus a 64 KB
+	// safety margin so single-scan resizes don't churn the allocator
+	// every iteration. The actual send length is computed per-scan
+	// from header + total_points * 4 floats.
+	TArray<uint8> WireBuf;
+	WireBuf.Reserve(2 * 1024 * 1024);
+
+	while (bRunning)
+	{
+		if (!IsValid(VehiclePawn) || !VehiclePawn->LidarSensor)
+		{
+			// Same idle-wait pattern as StreamSensors when the pawn
+			// hasn't spawned yet (sim still loading the level, for
+			// example). Aggressive enough to pick up the pawn within
+			// one tick of it becoming valid.
+			FPlatformProcess::Sleep(0.1f);
+			continue;
+		}
+
+		const uint64 NowSensorTs = VehiclePawn->LidarSensor->GetTimestamp();
+		if (NowSensorTs == 0 || NowSensorTs == LastSentTimestamp)
+		{
+			// No new scan ready yet. 1 ms poll — finer than the
+			// 100 ms scan interval but coarse enough that we're not
+			// pegging a core on game-thread polling. timeBeginPeriod(1)
+			// from FSDSPlugin::StartupModule ensures this Sleep
+			// actually achieves ~1 ms on Windows; on Mac/Linux the
+			// default scheduler tick is already finer than 1 ms.
+			FPlatformProcess::Sleep(0.001f);
+			continue;
+		}
+
+		// Snapshot the cloud + timestamp atomically (GetPointCloud
+		// takes PointCloudLock; the matching timestamp we just read
+		// can race in principle but the LiDAR sensor only updates
+		// LastTimestamp AFTER PointCloudBuffer is fully written, so
+		// the ordering is safe — if we observed a newer timestamp
+		// then the cloud we read here corresponds to that scan).
+		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
+		const int32 TotalPoints = Points.Num() / 4;
+		if (TotalPoints <= 0)
+		{
+			// Edge case: timestamp advanced but the buffer is empty
+			// (e.g. a scan with zero valid hits — possible if the
+			// vehicle drove off the world or all rays hit beyond
+			// MaxRange). Don't send a frame with no payload; just
+			// roll the timestamp forward so we don't re-poll this
+			// same empty scan forever.
+			LastSentTimestamp = NowSensorTs;
+			continue;
+		}
+
+		// Header: capture-to-send lag in ns (#238) — same semantics
+		// as the UDP chunked header so all downstream code (bridge
+		// onLidarFrame, ROS stamp recovery) is transport-agnostic.
+		FFSDSLidarStreamHeader Header;
+		Header.Magic = 0x4C494452;
+		Header.FrameID = LidarStreamFrameCounter++;
+		Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
+		Header.TotalPoints = TotalPoints;
+		{
+			const uint64 NowCycles = FPlatformTime::Cycles64();
+			Header.LagNs = 0;
+			if (NowSensorTs > 0 && NowCycles >= NowSensorTs)
+			{
+				const double LagSeconds =
+					(double)(NowCycles - NowSensorTs) *
+					FPlatformTime::GetSecondsPerCycle64();
+				Header.LagNs = (int64)(LagSeconds * 1e9);
+			}
+		}
+
+		// Pack header + payload into the wire buffer in a single
+		// allocation. We could SendAll(header) then SendAll(payload),
+		// but a single contiguous send avoids two syscalls per scan
+		// AND avoids the bridge needing two recvs (the bridge's
+		// readExact already handles partial-recv internally).
+		const int32 PayloadBytes = TotalPoints * 4 * (int32)sizeof(float);
+		const int32 WireBytes = (int32)sizeof(FFSDSLidarStreamHeader) + PayloadBytes;
+		WireBuf.SetNumUninitialized(WireBytes, EAllowShrinking::No);
+		FMemory::Memcpy(WireBuf.GetData(), &Header, sizeof(FFSDSLidarStreamHeader));
+		FMemory::Memcpy(
+			WireBuf.GetData() + sizeof(FFSDSLidarStreamHeader),
+			Points.GetData(),
+			PayloadBytes);
+
+		if (!SendAll(ClientSocket, WireBuf.GetData(), WireBytes))
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR stream client disconnected"));
+			return;
+		}
+
+		LastSentTimestamp = NowSensorTs;
 	}
 }
