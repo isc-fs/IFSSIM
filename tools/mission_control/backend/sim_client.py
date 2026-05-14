@@ -237,6 +237,29 @@ class SimConnection:
     def get_vehicle_pose(self) -> dict:
         return self._json_cmd("simGetVehiclePose")
 
+    def get_start_gate_pose(self) -> dict | None:
+        """Return the start-gate pose stored by the last loadTrack call,
+        in ENU coordinates.
+
+        The plugin's loadTrack handler computes the start-gate position
+        via ComputeStartGatePose, teleports the car to it, and stores
+        the result in `LastStartGateLoc_UE` / `LastStartGateRot_UE`.
+        This RPC reads those stored values back (converted to ENU), so
+        callers can ask "where IS the start gate?" without re-running
+        the spawner. Returns the same canonical pose loadTrack aligned
+        the car to — which is what /api/sim/reset wants when restoring
+        the car to its "fresh load" pose.
+
+        Returns None if no track has been loaded since the sim came up
+        (the plugin's `bHasStartGate` flag is false). Callers should
+        fall back to a captured `home_pose` or refuse the reset in
+        that case.
+        """
+        res = self._json_cmd("getStartGatePose")
+        if not isinstance(res, dict) or "error" in res or "x" not in res:
+            return None
+        return res
+
     def teleport(self, x: float, y: float, z: float,
                  qw: float = 1.0, qx: float = 0.0,
                  qy: float = 0.0, qz: float = 0.0):
