@@ -14,6 +14,18 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Project relicensed to GPL-3.0-or-later.** Top-level `LICENSE`
+  added with the full GPL-3.0 text. All `package.xml` files under
+  `pipeline/` and `ros2/src/` updated from their previous mix of
+  MIT (7 packages), Apache-2.0 (4 packages), and GPLv2 (2 packages —
+  fs_msgs + ifssim_bridge inherited from upstream FSDS-Sim) to a
+  uniform `GPL-3.0-or-later`. Motivation: incoming LiDAR-Inertial
+  SLAM dependency (LIMOncello) ships under GPL-3.0 and is contagious
+  for derivative works; unifying the stack on GPL-3-or-later
+  preserves the option to link against it without licence-conflict
+  worry. Apache-2.0 contributions remain attributable through git
+  history; the relicense reflects forward distribution only.
+
 - **Documentation overhaul** (#492). Consolidated the three setup
   entry points (`readme.md` → `QUICKSTART.md` → `GETTING_STARTED_DOCKER.md`)
   into one unified path:
