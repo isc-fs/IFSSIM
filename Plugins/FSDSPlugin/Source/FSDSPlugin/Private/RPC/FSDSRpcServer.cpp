@@ -226,18 +226,41 @@ void FFSDSRpcServer::ServerThreadFunc()
 
 				UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Client connected from %s"), *RemoteAddr->ToString(true));
 
-				// Pre-#322 we bumped SO_SNDBUF to 32 MB here so the
-				// per-client TCP send buffer could hold an entire
-				// LiDAR scan at the Hesai datasheet rate without
-				// partial-sends. With #322 the LiDAR streaming RPC
-				// is gone — production runs LiDAR over UDP via
-				// FSDSUdpBroadcaster::BroadcastLidarFrame — and the
-				// remaining RPC clients (camera images at most a
-				// few MB, the sensor stream at ~40 KB/s, command
-				// req/resp) all fit comfortably in the kernel
-				// default. So this block is removed; if a future
-				// per-client RPC ever pushes >2 MB synchronously,
-				// reintroduce SetSendBufferSize scoped to that path.
+				// SO_SNDBUF bump — reinstated PR-#482-follow-up
+				// (2026-05-14, Mac TCP-LiDAR validation).
+				//
+				// PR #322 retired LiDAR-over-TCP and removed this bump
+				// because the remaining RPC clients (camera images,
+				// ~40 KB/s sensor stream, command req/resp) all fit
+				// comfortably in the kernel default ~128 KB send
+				// buffer. PR #482 brought TCP-LiDAR back (1.5 MB
+				// scans at 10 Hz) but did NOT re-add the bump —
+				// which "worked" on the Windows verification because
+				// Windows' default winsock SO_SNDBUF is much larger
+				// than Mac's. On macOS Docker Desktop the small
+				// default + the single SendAll(1.5MB) per scan
+				// pattern produces immediate disconnects (each
+				// payload Send returns failure inside SendAll →
+				// StreamLidar exits → bridge sees FIN → "payload
+				// recv failed", repeated ~10× / second).
+				//
+				// SetSendBufferSize takes the requested size and
+				// returns the actually-applied size in NewSize. We
+				// log when the kernel caps us below request so the
+				// operator notices if rmem_max-equivalent limits
+				// bite again on a different host.
+				{
+					int32 NewSize = 0;
+					const int32 RequestedSnd = 32 * 1024 * 1024;
+					ClientSocket->SetSendBufferSize(RequestedSnd, NewSize);
+					if (NewSize < RequestedSnd) {
+						UE_LOG(LogTemp, Warning,
+							TEXT("FSDS RPC: SO_SNDBUF capped at %d bytes "
+							     "(requested %d) — TCP-LiDAR may stall under "
+							     "sustained load"),
+							NewSize, RequestedSnd);
+					}
+				}
 
 				// Handle each client in its own thread. Store it so Stop()
 				// can join the full set before the server is destroyed —
