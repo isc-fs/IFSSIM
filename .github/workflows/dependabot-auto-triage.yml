@@ -82,6 +82,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Comment posted on closed Dependabot PRs. Defined via $'...'
+          # (ANSI-C quoting) so the whole string is one YAML line — a
+          # multi-line literal inside the block scalar with a non-indented
+          # continuation will silently terminate the `run: |` block and
+          # fail workflow parsing at load time.
+          CLOSE_COMMENT=$'Auto-triage: closing because one or more required CI checks failed.\n\nDependabot will re-open this bump on its next update cycle if the package version still needs to advance. If the failure is a real incompatibility (e.g. a major-version breaking change), investigate manually and either fix the breakage on dev or pin the dep below the breaking version in the manifest.'
+
           # ----- Pull open Dependabot PRs targeting dev -----
           # `gh pr list --author "app/dependabot"` returns PRs opened
           # by the dependabot[bot] GitHub App. --base dev filters to
@@ -139,10 +146,7 @@ jobs:
             # ----- Decision matrix -----
             if [ "$N_FAIL" -gt 0 ]; then
               echo "  → CLOSE (CI failing)"
-              gh pr close "$PR" --repo "$REPO" \
-                --comment "Auto-triage: closing because one or more required CI checks failed.
-
-Dependabot will re-open this bump on its next update cycle if the package version still needs to advance. If the failure is a real incompatibility (e.g. a major-version breaking change), investigate manually and either fix the breakage on dev or pin the dep below the breaking version in the manifest." \
+              gh pr close "$PR" --repo "$REPO" --comment "$CLOSE_COMMENT" \
                 || echo "  WARN: gh pr close failed (continuing)"
               continue
             fi
