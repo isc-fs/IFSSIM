@@ -33,6 +33,20 @@ export MSYS2_ARG_CONV_EXCL="*"
 UE_ROOT="${UE_ROOT:-/c/Program Files/Epic Games/UE_5.7}"
 RUN_UAT="$UE_ROOT/Engine/Build/BatchFiles/RunUAT.bat"
 
+# Project version — read from Config/DefaultGame.ini's ProjectVersion
+# field so the build artifact name tracks the in-binary version that
+# UE5 stamps into the cooked .exe's VERSIONINFO resource. Bump the
+# version in DefaultGame.ini; this script picks it up automatically.
+# `tr -d '\r'` strips Windows CRLF if anyone re-saves the ini with
+# autocrlf and we're reading from Git Bash.
+PROJECT_VERSION="$(grep -E '^ProjectVersion=' "$SCRIPT_DIR/Config/DefaultGame.ini" \
+    | head -1 | cut -d= -f2 | tr -d '\r\n ')"
+if [ -z "$PROJECT_VERSION" ]; then
+    echo "ERROR: ProjectVersion not found in Config/DefaultGame.ini" >&2
+    echo "Add `ProjectVersion=X.Y.Z` under [/Script/EngineSettings.GeneralProjectSettings]." >&2
+    exit 1
+fi
+
 if [ ! -f "$RUN_UAT" ]; then
     echo "ERROR: RunUAT.bat not found at $RUN_UAT" >&2
     echo "Set UE_ROOT=/path/to/UE_5.7 (drive letter via /c/, /d/, etc.) if installed elsewhere." >&2
@@ -146,3 +160,39 @@ echo "=== Done — distribution in $STAGED_DIR ==="
 echo "    Exe:    IFSSIM.exe (root of staged dir)"
 echo "    Tracks: tracks/ ($N_TRACKS CSV files)"
 echo "    Run:    \"$STAGED_DIR/IFSSIM.exe\""
+
+# 5. Archive the staged directory into a release zip. PowerShell's
+#    Compress-Archive is the only cross-Windows zip tool we can rely
+#    on (no `zip`/`7z` in the default Git Bash PATH). The .ZipFile
+#    .NET API would also work but Compress-Archive is the most
+#    readable. Skipped automatically when SKIP_ARCHIVE=1 is set —
+#    handy during iterative cooking where the 1.5 GB compress step
+#    is wasted effort.
+DIST_DIR="$SCRIPT_DIR/dist"
+ARCHIVE_NAME="IFSSIM-v${PROJECT_VERSION}-Windows-x64.zip"
+ARCHIVE_PATH="$DIST_DIR/$ARCHIVE_NAME"
+
+if [ "${SKIP_ARCHIVE:-0}" = "1" ]; then
+    echo ""
+    echo "[skip] SKIP_ARCHIVE=1 — distribution archive not created."
+    echo "       To build it manually: bash package_windows.sh (without SKIP_ARCHIVE)."
+else
+    echo ""
+    echo "[4/4] Archiving → $ARCHIVE_NAME"
+    mkdir -p "$DIST_DIR"
+    rm -f "$ARCHIVE_PATH"
+    # Compress-Archive's -Path takes a single source dir's contents.
+    # Native Windows path required.
+    STAGED_WIN="$(cygpath -w "$STAGED_DIR" 2>/dev/null || echo "$STAGED_DIR")"
+    ARCHIVE_WIN="$(cygpath -w "$ARCHIVE_PATH" 2>/dev/null || echo "$ARCHIVE_PATH")"
+    powershell -NoProfile -Command \
+        "Compress-Archive -Path '$STAGED_WIN\\*' -DestinationPath '$ARCHIVE_WIN' -CompressionLevel Optimal -Force"
+    if [ -f "$ARCHIVE_PATH" ]; then
+        SIZE=$(stat -c %s "$ARCHIVE_PATH" 2>/dev/null || stat -f %z "$ARCHIVE_PATH" 2>/dev/null || echo "?")
+        SIZE_MB=$((SIZE / 1024 / 1024))
+        echo "       OK — ${SIZE_MB} MB at $ARCHIVE_PATH"
+    else
+        echo "       FAILED — archive not produced" >&2
+        exit 1
+    fi
+fi
