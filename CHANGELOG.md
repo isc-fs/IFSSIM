@@ -12,7 +12,7 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
-### Planned for v0.1.1
+### Planned for v0.1.2
 
 - **Cone-floor clipping fix.** Spline-spawned cones currently sit a
   few cm into the asphalt on every track because the spline control
@@ -21,8 +21,103 @@ shipping pipeline, documentation.
   `docs/cone_floor_clipping_fix.md`; fix is a line-trace ground-snap
   in the `spline_cones*` BP construction script (~1 h editor work).
   Visual + LiDAR-perf impact (bottom rings of close cones get
-  occluded by the floor mesh). Deferred from v0.1.0 because the
-  autonomy logic isn't affected.
+  occluded by the floor mesh). Deferred from v0.1.0 / v0.1.1 because
+  the autonomy logic isn't affected. Tracking: #483.
+
+## [0.1.1] — 2026-05-14
+
+Small follow-up to v0.1.0 covering one new operator-facing feature
+(record MCAP bags from Mission Control), one autonomy observability
+improvement (granular lifecycle progress for the StartMission action),
+and a meaningful Docker performance win on Windows + macOS hosts.
+
+### Added
+
+- **Record bag on session start** (#486, closes #465). New "Record
+  bag (mcap)" checkbox in Mission Control's EventSetup. When ticked,
+  the autonomy bring-up triggers a `ros2 bag record -s mcap -a`
+  process inside `dv_pipeline_stack` (so it shares the SHM-tuned DDS
+  context with the publishers — recording mc_backend-side dropped
+  ~96 % of `/lidar/Lidar1` scans because mc_backend forces
+  `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` for cross-container action calls).
+  The recorder lives in a new `pipeline/bag_recorder_node/` colcon
+  package and exposes `/bag_recorder/{start,stop}` services
+  (`dv_msgs/srv/{StartBag,StopBag}`). Live state surfaces through
+  `/api/referee/state` (`bag_name`, `bag_state`, `bag_path`,
+  `bag_error`). Stops automatically on session end; the mcap is
+  closed and renamed on the SIGINT path.
+
+- **Granular lifecycle progress** (#489, closes #387). `mode_manager`
+  now publishes a `/mode_manager/progress` topic emitting one message
+  per change_state transition across the autonomy fan-out
+  (cone_detection, slam_node, path_planning, control). Mission
+  Control's session-start spinner can now show per-node progress
+  ("activating cone_detection_node…") instead of the previous opaque
+  "bringing up autonomy" wait. Pre-#489 the long
+  cone_detection_node configure step (numba JIT, ~10-20 s) looked
+  indistinguishable from a hang.
+
+### Changed
+
+- **Docker bag flow: bind mount → named volume** (#490 Part 1).
+  `/bags` inside `dv_pipeline_stack` was a host bind mount to
+  `./bags/`; on macOS Docker Desktop (virtiofs) and Windows + WSL2
+  (9p), the cross-fs `shutil.move` from the in-container `/tmp`
+  staging dir to the host-side `/bags` took 20-40 s for multi-GB
+  bags, blocking the StopBag service callback and visibly stalling
+  the session-stop click. Now a named docker volume `ifssim_bags`
+  keeps the move on the container's local ext4; finalisation is
+  <1 s. To pull a finalised bag onto the host:
+
+      tools/list-bags.sh                # enumerate bags in the volume
+      tools/pull-bag.sh <bag_name>      # docker cp it onto ./bags/<name>/
+
+  `docker cp` uses Docker Desktop's vmcompute stdio pipe (not the
+  bind-mount layer) so even the explicit pull beats the implicit
+  move it replaced.
+
+- **Source bind mounts removed + `.dockerignore`** (#490 Part 2).
+  Pre-#490 every ROS package under `pipeline/` and `ros2/src/` was
+  bind-mounted into `dv_pipeline_stack`'s workspace, plus
+  `fastdds_profile.xml` and `tools/random-track-generator`. On
+  Docker Desktop those traversed 9p / virtiofs on every Python
+  import → 30-90 s container startup on Windows. Worse, `docker
+  compose build` shipped the full 33 GB working tree (bags + UE5
+  artifacts + .git) as build context every time.
+
+  Fix: source is COPY'd into the image at build time (no runtime
+  bind-mount); a new repo-wide `.dockerignore` cuts the build
+  context to ~200 MB. To pick up a source edit:
+
+      tools/refresh-bridge.sh   # = docker compose build + up -d --force-recreate
+
+  Performance impact reported in PR #490 (smoke-tested macOS, cache-hot):
+
+  - `docker compose build dv_pipeline_stack`: **24 s** (was minutes)
+  - `docker compose build mission_control_backend`: **5 s**
+
+  Bind mount **kept**: `./Content/tracks:/tracks` on `mc_backend`,
+  because UE5 (the host process, not in a container) reads track
+  CSVs from there via the loadTrack RPC — both sides need the same
+  physical files.
+
+  `DV_REBUILD_ON_STARTUP` env flag deprecated. It used to trigger
+  a `colcon build` against the bind-mounted source on container
+  start; not needed any more.
+
+### Notes
+
+- The `random-track-generator` submodule must be initialised
+  (`git submodule update --init --recursive tools/random-track-generator`)
+  on a clean clone. Pre-#490 the empty bind-mount silently hid the
+  issue. Now `mission_control_backend`'s build fails-soft: the COPY
+  succeeds with an empty dir and track-generation endpoints 500 at
+  runtime.
+
+- For maximum Windows perf, clone the repo inside WSL2's native ext4
+  (`~/IFSSIM`) instead of `/mnt/c/Users/<user>/IFSSIM`. Every Docker
+  filesystem operation then runs at native Linux speed. No code change
+  required — just a `git clone` in a different place.
 
 ## [0.1.0] — 2026-05-14 (first release)
 
