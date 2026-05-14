@@ -79,30 +79,44 @@ RUN pip install --no-cache-dir "gtsam==4.3a0"
 RUN pip install --no-cache-dir "numpy==1.24.*"
 
 
-# === Build deps for ifssim_bridge (C++) ===
-# cone_slam is pure Python (gtsam wheel, numpy, scipy) so the only
-# native build is the bridge. cmake + build-essential + git are enough.
-# Earlier revisions of this Dockerfile carried PCL/Eigen/fmt for the
-# fast_LIMO C++ build; that toolchain has been dropped along with all
-# legacy SLAM approaches (GLIM → FAST_LIO2 → fast_LIMO) which never
-# tracked our cone-only LiDAR scenes cleanly. cone_slam (PR A+) is the
-# single SLAM path the stack ships with.
+# === Build deps for ifssim_bridge + LIMOncello (C++) ===
+# ifssim_bridge needs: cmake, build-essential, git.
+#
+# LIMOncello (the LiDAR-Inertial SLAM at ros2/src/limoncello) needs:
+#   - libeigen3-dev          header-only linear algebra
+#   - libtbb-dev             oneTBB; LIMOncello uses
+#                            `std::execution::par_unseq` in the
+#                            point-cloud processing path
+#   - libboost-system-dev    LIMOncello CMakeLists asks for
+#                            Boost.system COMPONENTS
+#   - ros-humble-pcl-conversions  sensor_msgs ↔ pcl::PointCloud glue
+#
+# Livox dependencies (livox_interfaces / livox_ros_driver /
+# livox_ros_driver2) are NOT installed — our LiDAR is type=2 (Hesai),
+# so the Livox CustomMsg code paths (type=4/5/6) are unreachable. The
+# submodule points at our fork (isc-fs/LIMOncello, branch ifssim-main)
+# where the Livox find_package calls are gated behind the CMake
+# option `LIMONCELLO_BUILD_LIVOX` (default OFF). Anyone who wants
+# Livox flips the option on and installs the three packages
+# separately.
 RUN apt-get update && apt-get install -y \
       cmake build-essential git \
+      libeigen3-dev libtbb-dev libboost-system-dev \
+      ros-humble-pcl-conversions \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /dv_pipeline_stack_ws
 
-# Copy bridge packages (fs_msgs + ifssim_bridge)
+# Copy bridge packages (fs_msgs + ifssim_bridge + limoncello submodule).
 RUN mkdir -p src
 COPY ros2/src/ src/
 
-# Copy pipeline packages (slam, cone_slam, path_planning, control)
+# Copy pipeline packages (slam, cone_slam, path_planning, control, …)
 COPY pipeline/ src/
 
-# Build everything. With fast_LIMO removed, this is just the bridge
-# C++ + a handful of Python packages (--symlink-install means edits
-# under src/ are live without re-running colcon).
+# Build everything. LIMONCELLO_BUILD_LIVOX stays OFF (the default in
+# our fork's CMakeLists.txt) so the build skips the 3 Livox
+# find_package calls.
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
 
 # Copy launch files, teleop, entrypoint, and DDS profile.

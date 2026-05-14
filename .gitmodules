@@ -1,3 +1,7 @@
 [submodule "tools/random-track-generator"]
 	path = tools/random-track-generator
 	url = https://github.com/MITMotorsports/random-track-generator
+[submodule "ros2/src/limoncello"]
+	path = ros2/src/limoncello
+	url = https://github.com/isc-fs/LIMOncello.git
+	branch = ifssim-main
