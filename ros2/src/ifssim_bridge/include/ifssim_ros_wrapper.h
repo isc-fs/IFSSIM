@@ -216,6 +216,14 @@ private:
     // 0 (default) = disabled, no viz publisher created. >= 2 = publish
     // every Nth point on /lidar/Lidar1/viz alongside the full cloud.
     uint32_t lidar_viz_decimation_ = 0;
+    // Companion topic for SLAM consumers that expect REP-103 (Y-left)
+    // axis convention. /lidar/Lidar1 publishes UE5 left-handed (Y=right)
+    // for cone_detection compatibility; this republishes the same scan
+    // with Y negated so LIMOncello (which integrates an /imu already
+    // converted to REP-103) sees consistent body axes between sensors.
+    // The full unification to REP-103 across the bridge is tracked
+    // separately; this is the smoke-test entry point.
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_rep103_pub_;
     std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
     rclcpp::Publisher<fs_msgs::msg::GoSignal>::SharedPtr go_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_pub_;

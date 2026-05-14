@@ -343,6 +343,13 @@ void IFSSIMRosWrapper::initializePublishers()
     // best-effort stream — drops are fine, backpressure is not.
     auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(50)).best_effort();
     lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", lidar_qos);
+    // Companion topic in REP-103 axis convention for SLAM consumers
+    // that follow ROS standards (LIMOncello etc). Same QoS, same
+    // payload, only difference is the Y axis is negated per point.
+    // See the long-form note on /lidar/Lidar1's publish path for the
+    // mixed-convention rationale.
+    lidar_rep103_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "lidar/Lidar1_rep103", lidar_qos);
     if (lidar_viz_decimation_ >= 2) {
         // Same QoS as the full cloud — BEST_EFFORT lets a slow tab drop
         // frames instead of backpressuring the bridge.
@@ -1149,6 +1156,32 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     }
 
     lidar_pub_->publish(msg);
+
+    // REP-103 companion: same scan with Y negated per point. Built
+    // from `msg` (already populated above) by deep-copying the byte
+    // buffer and flipping every point's Y in place. Keeps the
+    // PointField list / point_step / header identical so consumers
+    // see structurally the same cloud; only the geometry sign on Y
+    // is corrected to ROS standard.
+    //
+    // Cost: a separate ~24·N B alloc + a per-point uint32 write
+    // (Y field at offset 4, FLOAT32). Same order-of-magnitude as
+    // the main publish path; happens on the same publisher thread,
+    // so no extra synchronisation.
+    if (lidar_rep103_pub_) {
+        sensor_msgs::msg::PointCloud2 rep103 = msg;
+        // sensor_msgs::msg::PointCloud2 is copyable; the `data` vector
+        // is deep-copied so subsequent in-place edits don't affect
+        // the original `msg` (which already shipped via `publish`
+        // above, but the publisher may still hold a reference under
+        // intra-process comms).
+        uint8_t* rdst = rep103.data.data();
+        for (int i = 0; i < total_points; ++i) {
+            float* yptr = reinterpret_cast<float*>(rdst + i * 24 + 4);
+            *yptr = -(*yptr);
+        }
+        lidar_rep103_pub_->publish(rep103);
+    }
 
     // Optional /lidar/Lidar1/viz — every Nth point as a separate cloud
     // for browser-based visualisers (Foxglove web, Lichtblick web) that

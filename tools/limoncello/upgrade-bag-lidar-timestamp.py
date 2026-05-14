@@ -59,13 +59,27 @@ from sensor_msgs.msg import PointCloud2, PointField
 
 
 LIDAR_TOPIC = "/lidar/Lidar1"
+LIDAR_REP103_TOPIC = "/lidar/Lidar1_rep103"
+
+
+# Common PointField layout for the post-#497 cloud — five fields,
+# 24-byte stride, FLOAT64 timestamp at offset 16.
+def _post497_fields():
+    return [
+        PointField(name="x",         offset=0,  datatype=PointField.FLOAT32, count=1),
+        PointField(name="y",         offset=4,  datatype=PointField.FLOAT32, count=1),
+        PointField(name="z",         offset=8,  datatype=PointField.FLOAT32, count=1),
+        PointField(name="intensity", offset=12, datatype=PointField.FLOAT32, count=1),
+        PointField(name="timestamp", offset=16, datatype=PointField.FLOAT64, count=1),
+    ]
 
 
 def upgrade_pointcloud(msg: PointCloud2) -> PointCloud2:
     """Return a new PointCloud2 with the FLOAT64 `timestamp` field.
 
     Idempotent: if `msg` already has a 24-byte stride with a
-    `timestamp` field, return it unchanged.
+    `timestamp` field, return it unchanged. Axis convention is
+    preserved — see `flip_y` for the REP-103 variant.
     """
     has_timestamp = any(f.name == "timestamp" for f in msg.fields)
     if msg.point_step == 24 and has_timestamp:
@@ -101,14 +115,44 @@ def upgrade_pointcloud(msg: PointCloud2) -> PointCloud2:
     new_msg.is_dense = msg.is_dense
     new_msg.point_step = 24
     new_msg.row_step = 24 * msg.width
-    new_msg.fields = [
-        PointField(name="x",         offset=0,  datatype=PointField.FLOAT32, count=1),
-        PointField(name="y",         offset=4,  datatype=PointField.FLOAT32, count=1),
-        PointField(name="z",         offset=8,  datatype=PointField.FLOAT32, count=1),
-        PointField(name="intensity", offset=12, datatype=PointField.FLOAT32, count=1),
-        PointField(name="timestamp", offset=16, datatype=PointField.FLOAT64, count=1),
-    ]
+    new_msg.fields = _post497_fields()
     new_msg.data = dst.tobytes()
+    return new_msg
+
+
+def flip_y(msg: PointCloud2) -> PointCloud2:
+    """Return a deep copy of `msg` with every point's Y negated.
+
+    Use to produce the /lidar/Lidar1_rep103 companion from a
+    post-#497-layout /lidar/Lidar1 message (matches what
+    ifssim_bridge does live for the REP-103 publisher). Per-point
+    layout is preserved — only the Y field (FLOAT32 at offset 4) is
+    sign-flipped. Header, fields, point_step, row_step copied
+    verbatim.
+    """
+    n = msg.width * msg.height
+    if n == 0 or msg.point_step != 24:
+        return msg
+
+    new_data = bytearray(msg.data)
+    # View as (n, 6) float32 — point_step 24 = 6 × float32 worth of
+    # space, with the trailing 8 bytes being a single float64. Slicing
+    # column 1 gives every point's Y; we negate in place. The float64
+    # at columns 4-5 stays untouched because we never write to those
+    # columns.
+    view = np.frombuffer(new_data, dtype=np.float32).reshape(n, 6)
+    view[:, 1] = -view[:, 1]
+
+    new_msg = PointCloud2()
+    new_msg.header = msg.header
+    new_msg.height = msg.height
+    new_msg.width = msg.width
+    new_msg.is_bigendian = msg.is_bigendian
+    new_msg.is_dense = msg.is_dense
+    new_msg.point_step = msg.point_step
+    new_msg.row_step = msg.row_step
+    new_msg.fields = list(msg.fields)
+    new_msg.data = bytes(new_data)
     return new_msg
 
 
@@ -139,11 +183,26 @@ def rewrite_bag(src: Path, dst: Path) -> None:
     for t in topic_types:
         writer.create_topic(t)
 
-    # Walk every message; rewrite /lidar/Lidar1, pass everything else
-    # through verbatim. rosbag2_py returns (topic_name, raw_bytes,
-    # timestamp_ns) tuples — for non-LiDAR topics we don't even
-    # deserialize, just re-serialize the same bytes.
+    # Also create the REP-103 companion topic. Need a TopicMetadata
+    # object with the same QoS profile as /lidar/Lidar1 so consumers
+    # don't see QoS mismatch on replay.
+    src_lidar_meta = next((t for t in topic_types if t.name == LIDAR_TOPIC), None)
+    if src_lidar_meta is not None:
+        rep103_meta = rosbag2_py.TopicMetadata(
+            name=LIDAR_REP103_TOPIC,
+            type=src_lidar_meta.type,
+            serialization_format=src_lidar_meta.serialization_format,
+            offered_qos_profiles=src_lidar_meta.offered_qos_profiles,
+        )
+        writer.create_topic(rep103_meta)
+
+    # Walk every message; rewrite /lidar/Lidar1 in place AND emit a
+    # Y-flipped /lidar/Lidar1_rep103 companion. Everything else
+    # passes through verbatim. rosbag2_py returns (topic_name,
+    # raw_bytes, timestamp_ns) tuples — for non-LiDAR topics we
+    # don't even deserialize, just re-serialize the same bytes.
     n_lidar = 0
+    n_rep103 = 0
     n_other = 0
     while reader.has_next():
         topic, data, t_ns = reader.read_next()
@@ -156,11 +215,19 @@ def rewrite_bag(src: Path, dst: Path) -> None:
             msg = upgrade_pointcloud(msg)
             writer.write(topic, serialize_message(msg), t_ns)
             n_lidar += 1
+            # REP-103 companion: same scan with Y negated. Bridge
+            # publishes both topics live; we synthesize the same
+            # pairing post-hoc here so LIMOncello sees identical
+            # inputs in replay vs live.
+            rep103 = flip_y(msg)
+            writer.write(LIDAR_REP103_TOPIC, serialize_message(rep103), t_ns)
+            n_rep103 += 1
         else:
             writer.write(topic, data, t_ns)
             n_other += 1
 
-    print(f"==> {n_lidar} /lidar/Lidar1 msgs rewritten")
+    print(f"==> {n_lidar} {LIDAR_TOPIC} msgs rewritten")
+    print(f"==> {n_rep103} {LIDAR_REP103_TOPIC} msgs synthesised (Y-flipped)")
     print(f"==> {n_other} other msgs passed through")
     print(f"==> output: {dst}")
 
