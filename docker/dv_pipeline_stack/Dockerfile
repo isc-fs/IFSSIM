@@ -134,6 +134,14 @@ COPY docker/dv_pipeline_stack/teleop.sh          /dv_pipeline_stack_ws/teleop.sh
 COPY docker/dv_pipeline_stack/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh /dv_pipeline_stack_ws/teleop.sh
 
+# LIMOncello smoke-test tooling. Currently just the bag rewriter
+# that adds the per-point `timestamp` field to pre-#497 bags so they
+# can be replayed through LIMOncello. Lives under /tools/limoncello/
+# inside the container; ROS Python bindings (rclpy + rosbag2_py +
+# sensor_msgs) are already available from the base image.
+COPY tools/limoncello /tools/limoncello
+RUN chmod +x /tools/limoncello/*.py 2>/dev/null || true
+
 # UDP sensor ports (UE5 pushes to these)
 EXPOSE 41452/udp
 EXPOSE 41453/udp
