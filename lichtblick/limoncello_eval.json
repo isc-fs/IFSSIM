@@ -1,0 +1,237 @@
+{
+  "configById": {
+    "3D!compare": {
+      "cameraState": {
+        "perspective": false,
+        "distance": 80,
+        "phi": 0,
+        "thetaOffset": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 0.7853981633974483,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followTf": "map",
+      "followMode": "follow-none",
+      "scene": {
+        "transforms": { "enablePreloading": true }
+      },
+      "transforms": {},
+      "topics": {
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Conos_raw": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/lidar/Lidar1_rep103": {
+          "visible": true,
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": 0,
+          "maxValue": 0.1,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "decayTime": 0.5
+        },
+        "/limoncello/full_pcl": {
+          "visible": false,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "viridis",
+          "minValue": -0.5,
+          "maxValue": 1.5,
+          "pointSize": 1,
+          "pointShape": "circle",
+          "decayTime": 10
+        },
+        "/testing_only/odom": {
+          "visible": true
+        },
+        "/limoncello/state": {
+          "visible": true
+        }
+      },
+      "layers": []
+    },
+    "Plot!xy_compare": {
+      "title": "xy position — GT (red/orange) vs LIMOncello (blue/green)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/testing_only/odom.pose.pose.position.x",
+          "enabled": true,
+          "label": "GT x",
+          "color": "#ff4444",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/testing_only/odom.pose.pose.position.y",
+          "enabled": true,
+          "label": "GT y",
+          "color": "#ffaa44",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/limoncello/state.pose.pose.position.x",
+          "enabled": true,
+          "label": "LIM x",
+          "color": "#4488ff",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/limoncello/state.pose.pose.position.y",
+          "enabled": true,
+          "label": "LIM y",
+          "color": "#44dd88",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!yaw_rate_compare": {
+      "title": "Yaw rate [rad/s] — IMU vs LIMOncello body-frame ω_z",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "label": "IMU gyro_z",
+          "color": "#888888",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/limoncello/state.twist.twist.angular.z",
+          "enabled": true,
+          "label": "LIM ω_z (body)",
+          "color": "#4488ff",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!vel_compare": {
+      "title": "Forward velocity [m/s] — GT vs LIMOncello body-frame v_x",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/testing_only/odom.twist.twist.linear.x",
+          "enabled": true,
+          "label": "GT v_x",
+          "color": "#ff4444",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/limoncello/state.twist.twist.linear.x",
+          "enabled": true,
+          "label": "LIM v_x",
+          "color": "#4488ff",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!gt_vs_lim_distance": {
+      "title": "||GT − LIM|| separation [m] — anchor-free, NOT alignment-corrected",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/limoncello_gt_separation",
+          "enabled": true,
+          "label": "||GT − LIM||",
+          "color": "#ee44ee",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "RawMessages!lim_state": {
+      "topicPath": "/limoncello/state"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {
+    "limoncello_gt_separation": {
+      "name": "limoncello_gt_separation",
+      "sourceCode": "// Per-tick raw separation between LIMOncello's pose and the GT pose.\n//\n// IMPORTANT: this is the absolute-frame distance with NO alignment\n// applied. LIMOncello bootstraps its `map` frame from the IMU's\n// initial orientation (gravity-aligned, but yaw is arbitrary), while\n// /testing_only/odom uses the sim's world frame. They almost always\n// differ by a yaw + translation offset, which inflates this number\n// regardless of how well LIMOncello is actually tracking. Use\n// tools/limoncello/compare-pose-rmse.py for the SE(2)-aligned RMSE\n// that's the real signal.\n//\n// What this plot IS useful for: spotting sudden jumps in the\n// separation (cascade detonations, lost-track events), and\n// confirming the trend (growing = drift accumulating, flat =\n// LIMOncello holding the same relative offset from GT).\n//\n// Subscribes to /limoncello/state; holds the latest /testing_only/odom\n// in node-local state. Emits /studio_script/limoncello_gt_separation\n// (Float32-shaped) on every LIMOncello sample.\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nexport const inputs = [\"/limoncello/state\", \"/testing_only/odom\"];\nexport const output = \"/studio_script/limoncello_gt_separation\";\n\n// Module-level state: last GT pose seen. Persists across script\n// invocations because Lichtblick re-uses the same module instance\n// for each tick.\nlet lastGtX: number | undefined;\nlet lastGtY: number | undefined;\n\nexport default function script(\n  event:\n    | Input<\"/limoncello/state\">\n    | Input<\"/testing_only/odom\">,\n): Output | undefined {\n  // Cache the most recent GT pose. We don't emit on GT samples\n  // because LIMOncello is the higher-rate stream (~315 Hz vs ~80 Hz)\n  // and we want one separation reading per LIMOncello pose.\n  if (event.topic === \"/testing_only/odom\") {\n    lastGtX = event.message.pose.pose.position.x;\n    lastGtY = event.message.pose.pose.position.y;\n    return undefined;\n  }\n\n  // Skip until we've seen at least one GT sample.\n  if (lastGtX === undefined || lastGtY === undefined) {\n    return undefined;\n  }\n\n  const lx = event.message.pose.pose.position.x;\n  const ly = event.message.pose.pose.position.y;\n  const dx = lx - lastGtX;\n  const dy = ly - lastGtY;\n  return { data: Math.sqrt(dx * dx + dy * dy) };\n}\n"
+    }
+  },
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": "3D!compare",
+    "second": {
+      "direction": "column",
+      "first": "Plot!xy_compare",
+      "second": {
+        "direction": "column",
+        "first": "Plot!gt_vs_lim_distance",
+        "second": {
+          "direction": "column",
+          "first": "Plot!vel_compare",
+          "second": {
+            "direction": "column",
+            "first": "Plot!yaw_rate_compare",
+            "second": "RawMessages!lim_state",
+            "splitPercentage": 65
+          },
+          "splitPercentage": 50
+        },
+        "splitPercentage": 33
+      },
+      "splitPercentage": 25
+    },
+    "splitPercentage": 60
+  }
+}
