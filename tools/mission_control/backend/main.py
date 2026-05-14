@@ -301,25 +301,16 @@ current_event = _load_state().get("event", "unknown")
 current_track: Optional[str] = None
 
 # #465 — live bag-record state. None when no recording is active;
-# otherwise the dict returned by bag_recorder.start_recording with
-# state in {"starting", "recording", "stopped", "failed"}. Mutated
-# only while holding _state_lock so concurrent endpoints (event_start
-# from one HTTP worker + pipeline_stop from another) can't race on
-# the lifecycle transitions.
+# otherwise a dict with keys `name`, `state`, `path`, `error`. Mutated
+# only under _state_lock so concurrent endpoints (event_start from
+# one HTTP worker + pipeline_stop from another) can't race the
+# lifecycle transitions.
+#
+# Note: the actual `ros2 bag record` subprocess lives in
+# dv_pipeline_stack now (#465 v2). The backend interacts with it
+# only through the /bag_recorder/{start,stop} services; this dict
+# holds the latest service-response snapshot, NOT process state.
 _active_recording: Optional[dict] = None
-
-# Container name + host-side landing directory for the bag-record
-# feature. Both env-overridable so a non-default compose project name
-# (or a dev moving bags to an external disk) doesn't need a code edit.
-# The default container name comes from `docker-compose.yml`'s pin
-# (`image: ifssim-dv_pipeline_stack:latest`); the host dir matches
-# the convention already used by the operator's offline-analysis
-# scripts under `bags/` at the repo root (PR #475 reorg).
-_DV_CONTAINER = os.environ.get("DV_PIPELINE_CONTAINER", "ifssim-dv_pipeline_stack-1")
-_HOST_BAGS_DIR = Path(os.environ.get(
-    "HOST_BAGS_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "bags"),
-)).resolve()
 
 
 # === Pydantic Models ===
@@ -496,16 +487,16 @@ def event_state():
     except Exception:
         state = {}
     # #465 — surface live bag-record state alongside the referee
-    # state. Both serialise cheap fields only — no docker exec on
-    # the hot path; the recorder's PID and host_path are populated
-    # exactly once (at start / stop) by the lifecycle handlers.
+    # state. Both serialise cheap fields only — no subprocess on the
+    # hot path; the recorder's PID and bag path are populated exactly
+    # once (at start / stop) by the lifecycle handlers.
     with _state_lock:
         rec = _active_recording
         if rec:
             state["bag_name"] = rec.get("name")
             state["bag_state"] = rec.get("state")
-            if rec.get("host_path"):
-                state["bag_host_path"] = rec["host_path"]
+            if rec.get("path"):
+                state["bag_path"] = rec["path"]
             if rec.get("error"):
                 state["bag_error"] = rec["error"]
         else:
@@ -703,54 +694,55 @@ def event_start(setup: EventSetup):
 
             # #465 — optional bag-record. Strictly post-autonomy-up so
             # the recording window matches the lap, not the
-            # autonomy-warmup phase. We hold _state_lock here so a
-            # concurrent pipeline_stop can't race the lifecycle
-            # transition — _active_recording reads and the start that
-            # mutates it are both serialised behind it.
+            # autonomy-warmup phase. The actual `ros2 bag record`
+            # process lives inside dv_pipeline_stack now (#465 v2);
+            # we just call /bag_recorder/start over DDS. _state_lock
+            # serialises against pipeline_stop's matching teardown.
             global _active_recording
             bag_info = None
             if setup.record_bag:
                 if _active_recording and _active_recording.get("state") == "recording":
-                    # A prior session left a recorder running. Stop it
-                    # cleanly before starting a new one so we don't
-                    # orphan a /bags/<name> dir + a docker process.
                     log_event(
                         "record_bag",
                         f"prior recording {_active_recording.get('name')} "
                         "still active — closing before new start",
                     )
                     try:
-                        _bag.stop_recording(_active_recording, _HOST_BAGS_DIR)
+                        _bag.request_stop(RosBridge.get())
                     except Exception as ex:
                         log_event("record_bag", f"prior-stop failed: {ex}")
                     _active_recording = None
 
                 bag_name = _bag.compose_bag_name(setup.event_type, current_track)
-                try:
-                    _active_recording = _bag.start_recording(
-                        _DV_CONTAINER, bag_name,
-                    )
+                start_resp = _bag.request_start(RosBridge.get(), bag_name)
+                if start_resp.get("ok"):
+                    _active_recording = {
+                        "name": bag_name,
+                        "state": start_resp.get("state", "recording"),
+                        "path": start_resp.get("path", ""),
+                    }
                     bag_info = {
                         "name": bag_name,
-                        "state": _active_recording.get("state", "starting"),
+                        "state": _active_recording["state"],
                     }
                     log_event(
                         "record_bag",
-                        f"started {bag_name} "
-                        f"(state={_active_recording.get('state')}, "
-                        f"pid={_active_recording.get('pid')})",
+                        f"started {bag_name} → {start_resp.get('path')}",
                     )
-                except _bag.DiskFullError as ex:
-                    # Surface to the response but DO NOT fail the
-                    # session — autonomy is already running and the
-                    # operator can manually record if they free space.
+                else:
+                    # Service-call failed or recorder refused (disk full,
+                    # spawn error, …). Do NOT fail the session —
+                    # autonomy is already running and the operator can
+                    # decide whether to retry.
                     _active_recording = None
-                    bag_info = {"error": str(ex), "state": "failed"}
-                    log_event("record_bag", f"refused: {ex}")
-                except _bag.BagRecorderError as ex:
-                    _active_recording = None
-                    bag_info = {"error": str(ex), "state": "failed"}
-                    log_event("record_bag", f"start failed: {ex}")
+                    bag_info = {
+                        "error": start_resp.get("error", "start failed"),
+                        "state": "failed",
+                    }
+                    log_event(
+                        "record_bag",
+                        f"start failed: {start_resp.get('error')}",
+                    )
 
         response = {
             "ok": True,
@@ -933,20 +925,29 @@ def pipeline_stop():
             "recording", "starting",
         ):
             name = _active_recording.get("name")
-            try:
-                _bag.stop_recording(_active_recording, _HOST_BAGS_DIR)
-                bag_info = {
-                    "name": name,
-                    "state": _active_recording.get("state"),
-                    "host_path": _active_recording.get("host_path"),
-                }
+            stop_resp = _bag.request_stop(RosBridge.get())
+            _active_recording = {
+                "name": name,
+                "state": stop_resp.get("state", "failed"),
+                "path": stop_resp.get("path", _active_recording.get("path", "")),
+            }
+            if stop_resp.get("error"):
+                _active_recording["error"] = stop_resp["error"]
+            bag_info = {
+                "name": name,
+                "state": _active_recording["state"],
+                "path": _active_recording.get("path", ""),
+            }
+            if _active_recording.get("error"):
+                bag_info["error"] = _active_recording["error"]
+                log_event(
+                    "record_bag", f"stop failed for {name}: {bag_info['error']}",
+                )
+            else:
                 log_event(
                     "record_bag",
-                    f"stopped {name} → {_active_recording.get('host_path')}",
+                    f"stopped {name} → {bag_info['path']}",
                 )
-            except Exception as ex:
-                bag_info = {"name": name, "state": "failed", "error": str(ex)}
-                log_event("record_bag", f"stop failed for {name}: {ex}")
             # Keep the dict around with its terminal state so the
             # next /api/event/state response can still surface the
             # final bag path — cleared by the next event_start.

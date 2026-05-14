@@ -1,17 +1,19 @@
-"""Unit tests for tools/mission_control/backend/bag_recorder.py (#465).
+"""Unit tests for tools/mission_control/backend/bag_recorder.py (#465 v2).
 
-Pure-Python tests — mock subprocess so the suite runs anywhere, no
-docker on the runner required. Covers the three public helpers
-(`compose_bag_name`, `check_free_disk`, `start_recording`,
-`stop_recording`) at the contracts MC's session lifecycle depends on.
+bag_recorder is now a thin client over the /bag_recorder/{start,stop}
+ROS services hosted by dv_pipeline_stack's bag_recorder_node. The
+tests mock out the rclpy plumbing so the suite stays pure-Python.
+
+Subprocess management lives in pipeline/bag_recorder_node/recorder.py
+and has its own test suite there. This file tests just the
+ROS-service-client wrapper.
 """
 from __future__ import annotations
 
-import sys
 import os
-import subprocess
+import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,8 +32,6 @@ def test_compose_bag_name_sanitises_and_orders_segments():
 
 
 def test_compose_bag_name_strips_csv_extension():
-    # The track name MC sees is the CSV filename — must NOT end up
-    # with `.csv` in the bag dir.
     when = datetime(2026, 5, 14, 15, 30, 22, tzinfo=timezone.utc)
     out = br.compose_bag_name("trackdrive", "track_20260512_151240.csv", now=when)
     assert out == "trackdrive_track_20260512_151240_20260514_153022"
@@ -41,7 +41,6 @@ def test_compose_bag_name_strips_csv_extension():
 def test_compose_bag_name_replaces_unsafe_chars():
     when = datetime(2026, 5, 14, 15, 30, 22, tzinfo=timezone.utc)
     out = br.compose_bag_name("track drive!", "../etc/passwd", now=when)
-    # No spaces, slashes, dots, exclamation marks in the result.
     assert " " not in out
     assert "/" not in out
     assert ".." not in out
@@ -60,214 +59,188 @@ def test_compose_bag_name_fallback_when_event_unknown():
     assert out == "unknown_TrainingMap_20260514_153022"
 
 
-# ----- check_free_disk ---------------------------------------------------
+# ----- request_start / request_stop --------------------------------------
+#
+# These exercise the rclpy service-client path. We monkey-patch the
+# lazy-init `_ensure_clients` to drop in mocks that match the rclpy
+# service-client surface (wait_for_service, call_async, the response
+# fields the wrapper reads). _reset_clients_for_test clears the module
+# globals between tests so each one starts from a clean slate.
 
-def _df_output(avail_gib: int) -> str:
-    """Synthesise a `df -PB1G` row matching the real format."""
-    return (
-        "Filesystem 1G-blocks Used Available Capacity Mounted on\n"
-        f"/dev/sdX     500    100  {avail_gib}      40%       /bags\n"
+
+def _make_fake_bridge():
+    """Return a stand-in for the RosBridge singleton."""
+    bridge = MagicMock()
+    bridge._node = MagicMock()
+    return bridge
+
+
+def _install_fake_clients(monkeypatch, start_resp, stop_resp,
+                          start_reachable=True, stop_reachable=True,
+                          start_call_returns_none=False,
+                          stop_call_returns_none=False):
+    """Monkey-patch bag_recorder's lazy client init to inject mocks.
+
+    `start_resp`/`stop_resp` are SimpleNamespace objects with the
+    response fields the wrapper reads (ok / state / bag_path / error).
+    None on `*_call_returns_none` simulates a future that timed out.
+    """
+    br._reset_clients_for_test()
+
+    fake_start_client = MagicMock()
+    fake_start_client.wait_for_service = MagicMock(return_value=start_reachable)
+    fake_stop_client = MagicMock()
+    fake_stop_client.wait_for_service = MagicMock(return_value=stop_reachable)
+
+    # Stand-in Srv types whose .Request() returns a settable object.
+    class _FakeStartReq:
+        def __init__(self):
+            self.bag_name = ""
+
+    class _FakeStopReq:
+        pass
+
+    class _FakeStartSrv:
+        Request = _FakeStartReq
+
+    class _FakeStopSrv:
+        Request = _FakeStopReq
+
+    def _ensure(_bridge):
+        br._start_client = fake_start_client
+        br._stop_client = fake_stop_client
+        br._start_srv_type = _FakeStartSrv
+        br._stop_srv_type = _FakeStopSrv
+
+    monkeypatch.setattr(br, "_ensure_clients", _ensure)
+
+    # `_call_sync` does the future-wait dance. Mock it directly — the
+    # actual rclpy future plumbing is library-internal, not interesting
+    # for the wrapper's contract.
+    def _fake_call_sync(client, request, timeout_s):
+        if client is fake_start_client:
+            return None if start_call_returns_none else start_resp
+        if client is fake_stop_client:
+            return None if stop_call_returns_none else stop_resp
+        raise AssertionError("unexpected client passed to _call_sync")
+
+    monkeypatch.setattr(br, "_call_sync", _fake_call_sync)
+
+
+def test_request_start_happy_path(monkeypatch):
+    start_resp = SimpleNamespace(
+        ok=True, state="recording",
+        bag_path="/bags/trackdrive_X_20260514_153022",
+        error="",
     )
+    _install_fake_clients(monkeypatch, start_resp, stop_resp=None)
+
+    out = br.request_start(_make_fake_bridge(), "trackdrive_X_20260514_153022")
+
+    assert out["ok"] is True
+    assert out["state"] == "recording"
+    assert out["name"] == "trackdrive_X_20260514_153022"
+    assert out["path"] == "/bags/trackdrive_X_20260514_153022"
+    assert out["error"] == ""
 
 
-def _run_mock(returncode=0, stdout="", stderr=""):
-    """Return a callable suitable to inject as `_run`."""
-    def _fn(cmd, **kw):
-        result = MagicMock()
-        result.returncode = returncode
-        result.stdout = stdout
-        result.stderr = stderr
-        return result
-    return _fn
-
-
-def test_check_free_disk_above_floor():
-    ok, free = br.check_free_disk(
-        "ifssim-dv_pipeline_stack-1",
-        path="/bags",
-        min_gib=10,
-        _run=_run_mock(stdout=_df_output(avail_gib=42)),
+def test_request_start_propagates_disk_full(monkeypatch):
+    # bag_recorder_node returns ok=False, state="failed", with an error
+    # explaining the disk situation. The client must surface that
+    # verbatim so the UI can show it.
+    start_resp = SimpleNamespace(
+        ok=False, state="failed", bag_path="",
+        error="only 3 GiB free on /bags (need ≥10 GiB)",
     )
-    assert ok is True
-    assert free == 42
+    _install_fake_clients(monkeypatch, start_resp, stop_resp=None)
 
+    out = br.request_start(_make_fake_bridge(), "x_y_20260514_153022")
 
-def test_check_free_disk_below_floor():
-    ok, free = br.check_free_disk(
-        "ifssim-dv_pipeline_stack-1",
-        path="/bags",
-        min_gib=10,
-        _run=_run_mock(stdout=_df_output(avail_gib=3)),
-    )
-    assert ok is False
-    assert free == 3
-
-
-def test_check_free_disk_docker_exec_failure_raises():
-    with pytest.raises(br.DockerExecError):
-        br.check_free_disk(
-            "ifssim-dv_pipeline_stack-1",
-            _run=_run_mock(returncode=1, stderr="No such container"),
-        )
-
-
-def test_check_free_disk_unparseable_output_raises():
-    with pytest.raises(br.DockerExecError):
-        br.check_free_disk(
-            "ifssim-dv_pipeline_stack-1",
-            _run=_run_mock(stdout="something weird\n"),
-        )
-
-
-# ----- start_recording ---------------------------------------------------
-
-def _multi_run(*responses):
-    """Sequence of mock responses for successive `_run` calls."""
-    iterator = iter(responses)
-
-    def _fn(cmd, **kw):
-        try:
-            spec = next(iterator)
-        except StopIteration:
-            spec = {"returncode": 0, "stdout": "", "stderr": ""}
-        result = MagicMock()
-        result.returncode = spec.get("returncode", 0)
-        result.stdout = spec.get("stdout", "")
-        result.stderr = spec.get("stderr", "")
-        # Capture the cmd for assertion if the test needs it
-        _fn.last_cmd = cmd
-        return result
-    _fn.last_cmd = None
-    return _fn
-
-
-def test_start_recording_refuses_when_disk_full():
-    runner = _run_mock(stdout=_df_output(avail_gib=3))
-    with pytest.raises(br.DiskFullError):
-        br.start_recording(
-            "ifssim-dv_pipeline_stack-1", "trackdrive_X_20260514_153022",
-            min_free_gib=10, _run=runner,
-        )
-
-
-def test_start_recording_returns_state_dict_with_pid():
-    # Three calls: df (free), docker exec -d (start), pgrep (find pid).
-    runner = _multi_run(
-        {"returncode": 0, "stdout": _df_output(avail_gib=42)},
-        {"returncode": 0, "stdout": ""},
-        {"returncode": 0, "stdout": "12345\n"},
-    )
-    state = br.start_recording(
-        "ifssim-dv_pipeline_stack-1", "trackdrive_X_20260514_153022",
-        min_free_gib=10, _run=runner,
-    )
-    assert state["name"] == "trackdrive_X_20260514_153022"
-    assert state["container"] == "ifssim-dv_pipeline_stack-1"
-    assert state["pid"] == 12345
-    assert state["state"] == "recording"
-    assert state["path_in_container"] == "/bags/trackdrive_X_20260514_153022"
-
-
-def test_start_recording_docker_exec_failure_raises():
-    runner = _multi_run(
-        {"returncode": 0, "stdout": _df_output(avail_gib=42)},
-        {"returncode": 125, "stderr": "Error: No such container"},
-    )
-    with pytest.raises(br.DockerExecError):
-        br.start_recording(
-            "ifssim-dv_pipeline_stack-1", "x_y_20260514_153022",
-            min_free_gib=10, _run=runner,
-        )
-
-
-def test_start_recording_pid_not_found_marks_state_starting():
-    # All pgrep polls return rc=1 (no match). start_recording should
-    # still return a state dict but with state="starting" so the
-    # caller can surface the partial start to the operator.
-    runner = _multi_run(
-        {"returncode": 0, "stdout": _df_output(avail_gib=42)},
-        {"returncode": 0, "stdout": ""},
-        # 15 successive pgrep calls all empty
-        *[{"returncode": 1, "stdout": ""} for _ in range(15)],
-    )
-    state = br.start_recording(
-        "ifssim-dv_pipeline_stack-1", "x_y_20260514_153022",
-        min_free_gib=10, _run=runner,
-    )
-    assert state["pid"] is None
-    assert state["state"] == "starting"
-
-
-# ----- stop_recording ----------------------------------------------------
-
-def test_stop_recording_skips_terminal_state():
-    state = {"state": "stopped", "name": "x"}
-    out = br.stop_recording(state, Path("/tmp/never"), _run=lambda *a, **k: None)
-    assert out["state"] == "stopped"  # unchanged
-
-
-def test_stop_recording_sigints_pid_then_copies_bag(tmp_path: Path):
-    state = {
-        "name": "trackdrive_X_20260514_153022",
-        "path_in_container": "/bags/trackdrive_X_20260514_153022",
-        "container": "ifssim-dv_pipeline_stack-1",
-        "pid": 12345,
-        "state": "recording",
-    }
-    # Sequence of mocked calls:
-    #   1. docker exec kill -INT 12345   -> ok
-    #   2. docker exec pgrep ...         -> rc=1 (gone)
-    #   3. docker cp ...                 -> ok
-    runner = _multi_run(
-        {"returncode": 0},
-        {"returncode": 1},
-        {"returncode": 0},
-    )
-    out = br.stop_recording(state, tmp_path, _run=runner, _sleep=lambda s: None)
-    assert out["state"] == "stopped"
-    assert "stopped_at" in out
-    assert out["host_path"].startswith(str(tmp_path))
-
-
-def test_stop_recording_falls_back_to_pkill_when_no_pid(tmp_path: Path):
-    state = {
-        "name": "trackdrive_X_20260514_153022",
-        "path_in_container": "/bags/trackdrive_X_20260514_153022",
-        "container": "ifssim-dv_pipeline_stack-1",
-        "pid": None,
-        "state": "starting",
-    }
-    captured_cmds = []
-
-    def _fn(cmd, **kw):
-        captured_cmds.append(cmd)
-        result = MagicMock()
-        # First call: pkill — ok. Second: pgrep — empty (gone). Third: cp — ok.
-        result.returncode = 1 if "pgrep" in cmd else 0
-        result.stdout = ""
-        result.stderr = ""
-        return result
-
-    out = br.stop_recording(state, tmp_path, _run=_fn, _sleep=lambda s: None)
-    # The first call must be pkill -INT -f (not kill PID).
-    assert "pkill" in captured_cmds[0]
-    assert "-INT" in captured_cmds[0]
-    assert out["state"] == "stopped"
-
-
-def test_stop_recording_docker_cp_failure_marks_failed(tmp_path: Path):
-    state = {
-        "name": "x_y_20260514_153022",
-        "path_in_container": "/bags/x_y_20260514_153022",
-        "container": "ifssim-dv_pipeline_stack-1",
-        "pid": 99999,
-        "state": "recording",
-    }
-    runner = _multi_run(
-        {"returncode": 0},                       # kill -INT
-        {"returncode": 1},                       # pgrep — gone
-        {"returncode": 1, "stderr": "No such container:path"},  # cp fails
-    )
-    out = br.stop_recording(state, tmp_path, _run=runner, _sleep=lambda s: None)
+    assert out["ok"] is False
     assert out["state"] == "failed"
-    assert "error" in out
+    assert "3 GiB" in out["error"]
+
+
+def test_request_start_handles_unreachable_service(monkeypatch):
+    _install_fake_clients(
+        monkeypatch, start_resp=None, stop_resp=None,
+        start_reachable=False,
+    )
+
+    out = br.request_start(
+        _make_fake_bridge(), "x_y_20260514_153022", timeout_s=0.1,
+    )
+
+    assert out["ok"] is False
+    assert out["state"] == "failed"
+    assert "not reachable" in out["error"]
+
+
+def test_request_start_handles_timeout(monkeypatch):
+    _install_fake_clients(
+        monkeypatch, start_resp=None, stop_resp=None,
+        start_call_returns_none=True,
+    )
+
+    out = br.request_start(
+        _make_fake_bridge(), "x_y_20260514_153022", timeout_s=0.1,
+    )
+
+    assert out["ok"] is False
+    assert out["state"] == "failed"
+    assert "timed out" in out["error"]
+
+
+def test_request_stop_happy_path(monkeypatch):
+    stop_resp = SimpleNamespace(
+        ok=True, state="stopped",
+        bag_path="/bags/trackdrive_X_20260514_153022",
+        error="",
+    )
+    _install_fake_clients(monkeypatch, start_resp=None, stop_resp=stop_resp)
+
+    out = br.request_stop(_make_fake_bridge())
+
+    assert out["ok"] is True
+    assert out["state"] == "stopped"
+    assert out["path"] == "/bags/trackdrive_X_20260514_153022"
+    assert out["error"] == ""
+
+
+def test_request_stop_idempotent_when_nothing_active(monkeypatch):
+    stop_resp = SimpleNamespace(ok=True, state="none", bag_path="", error="")
+    _install_fake_clients(monkeypatch, start_resp=None, stop_resp=stop_resp)
+
+    out = br.request_stop(_make_fake_bridge())
+
+    assert out["ok"] is True
+    assert out["state"] == "none"
+    assert out["path"] == ""
+
+
+def test_request_stop_surfaces_failure(monkeypatch):
+    stop_resp = SimpleNamespace(
+        ok=False, state="failed",
+        bag_path="/tmp/ifssim_bag_active/x_y_20260514_153022",
+        error="staging→final move failed: cross-device link not permitted",
+    )
+    _install_fake_clients(monkeypatch, start_resp=None, stop_resp=stop_resp)
+
+    out = br.request_stop(_make_fake_bridge())
+
+    assert out["ok"] is False
+    assert out["state"] == "failed"
+    assert "move failed" in out["error"]
+
+
+def test_request_stop_handles_timeout(monkeypatch):
+    _install_fake_clients(
+        monkeypatch, start_resp=None, stop_resp=None,
+        stop_call_returns_none=True,
+    )
+
+    out = br.request_stop(_make_fake_bridge(), timeout_s=0.1)
+
+    assert out["ok"] is False
+    assert out["state"] == "failed"
+    assert "timed out" in out["error"]

@@ -32,13 +32,15 @@ export interface TelemetryData {
   //
   //   bag_state:
   //     "none"        — no recording active (default)
-  //     "starting"    — `docker exec -d` issued, awaiting PID
+  //     "starting"    — `ros2 bag record` spawned, awaiting first scan
   //     "recording"   — recorder PID confirmed alive
-  //     "stopped"     — clean shutdown, bag copied to host
-  //     "failed"      — start refused or stop errored (see logs)
+  //     "stopped"     — clean SIGINT shutdown, mcap closed
+  //     "failed"      — start refused (disk-full / mcap plugin missing)
+  //                     or stop errored (see logs)
   //
   // bag_name is the directory name under the host `bags/` landing
-  // zone post-stop; null while recording / unset on legacy backends.
+  // zone (bind-mounted into mc_backend as /bags); null while recording
+  // / unset on legacy backends.
   bag_state?: 'none' | 'starting' | 'recording' | 'stopped' | 'failed';
   bag_name?: string | null;
   error?: string;

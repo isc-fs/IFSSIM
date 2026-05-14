@@ -1,48 +1,41 @@
-"""Bag-recording helpers for the Mission Control session UX (#465).
+"""Bag-recording client for the Mission Control session UX (#465).
 
-The Mission Control session-start endpoint accepts an optional
-`record_bag` flag. When set, this module:
+Calls /bag_recorder/start + /bag_recorder/stop on the dv_pipeline_stack
+DDS graph. The actual `ros2 bag record` subprocess lives inside the
+dv_pipeline_stack container (see pipeline/bag_recorder_node/) where
+it shares the SHM-tuned Fast DDS context with the publishers — that's
+the only way to get full-fidelity 10 Hz LiDAR + camera capture, since
+mc_backend is forced to UDPv4-only for its StartMission action client.
 
-  1. Composes a safe bag name from event_type + track + timestamp.
-  2. Pre-checks the dv_pipeline_stack container's `/bags` mount for
-     ≥10 GiB free (refuses to start otherwise — silent disk fills
-     during long test sessions used to be a thing).
-  3. Spawns `ros2 bag record -s mcap -a -o /bags/<name>` inside
-     dv_pipeline_stack via `docker exec -d`.
-  4. On session-stop, sends SIGINT to the recorder PID and copies the
-     bag out to the host `bags/` directory (next to the
-     analyze_*.py scripts the team uses for offline post-mortems).
+## Wire-format contract
 
-Pure helpers — no FastAPI / no ros_bridge import — so the test suite
-can exercise the docker plumbing with `subprocess` mocked. The session
-handler in `main.py` orchestrates the lifecycle and stores the live
-state dict in a module-level slot.
+  compose_bag_name(event_type, track) → str   (kept here — name
+      synthesis is a backend concern, the ROS node accepts whatever
+      string the backend hands it)
 
-Wire-format contract:
+  request_start(ros_bridge, bag_name) → dict:
+      ok          — bool
+      state       — "recording" | "failed"
+      name        — bag_name (echoed)
+      path        — absolute host path of final bag dir
+      error       — diagnostic on ok=false
 
-  start_recording(...)  →  state dict with keys:
-      name        — bag dir name (no host path)
-      container   — docker container the recorder runs in
-      pid         — ros2-bag-record PID inside the container
-      started_at  — UTC unix timestamp at exec time
-      state       — "recording"
+  request_stop(ros_bridge) → dict:
+      ok          — bool
+      state       — "stopped" | "failed" | "none"
+      path        — absolute host path of finalised bag dir
+      error       — diagnostic on ok=false
 
-  stop_recording(state, host_bags_dir)  →  same dict, mutated:
-      state       — "stopped" or "failed"
-      host_path   — absolute path of the copied-out bag (only on success)
-      error       — string (only on failure)
-
-The session handler is expected to call `stop_recording` exactly once
-per `start_recording` and to never mutate the state dict directly.
+Returns plain dicts (not ROS response objects) so main.py's lifecycle
+code can store + serialise them without re-importing rclpy. The
+ros_bridge handle is the existing one from `ros_bridge.py` — this
+module just borrows its rclpy.Node to host two service clients.
 """
 from __future__ import annotations
 
 import logging
 import re
-import shutil
-import subprocess
-import time
-from dataclasses import dataclass
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -50,33 +43,10 @@ from typing import Optional
 _LOG = logging.getLogger(__name__)
 
 
-# Minimum free space (GiB) we require on the container's /bags mount
-# before agreeing to start recording. An ATX-S01 scan @ 10 Hz with the
-# full /imu /testing_only/odom /Conos /Conos_raw /odom /Path /slam/pose
-# /control_command set lands around 800 MB / minute in mcap. A 30-min
-# test session is ~24 GB; 10 GiB free is the floor below which we
-# assume the operator will get cut off mid-lap. Tunable per-call but
-# the default has been empirically right for ~6 months.
-DEFAULT_MIN_FREE_GIB = 10
-
-
-class BagRecorderError(Exception):
-    """Base for any failure that should bubble back to the API."""
-
-
-class DiskFullError(BagRecorderError):
-    """Free space below the configured floor."""
-
-
-class DockerExecError(BagRecorderError):
-    """`docker exec` itself failed (container down, command bad, etc.)."""
-
-
-# Sanitiser for the track segment of the bag name. Compose into a
-# filesystem-safe form; the source can be "track_20260512_151240.csv"
-# (a generated track) or "trackdrive" (the event name) — we strip
-# extensions, replace non-[A-Za-z0-9_-] with "_", and clamp length so
-# the final path stays well under PATH_MAX on every host.
+# Name sanitisation lives here (not in the ROS node) because it's a
+# pure function and the mc_backend is the only producer of bag names.
+# Keeping it on this side means the test suite can drive it without
+# spinning up rclpy.
 _NAME_BAD = re.compile(r"[^A-Za-z0-9_-]+")
 
 
@@ -90,11 +60,11 @@ def compose_bag_name(
     track: Optional[str],
     now: Optional[datetime] = None,
 ) -> str:
-    """Return a directory name suitable for `ros2 bag record -o`.
+    """Return a filesystem-safe bag dir name.
 
     Shape: `<event>_<track>_<YYYYMMDD_HHMMSS>`. Either segment may be
-    absent (we fall back to "unknown") but the timestamp is always
-    present so two consecutive recordings can never collide.
+    absent (we fall back to "unknown" / "no-track"). The timestamp is
+    always present so consecutive recordings can't collide.
     """
     when = (now or datetime.now(timezone.utc)).strftime("%Y%m%d_%H%M%S")
     event = _sanitize(event_type) or "unknown"
@@ -102,205 +72,170 @@ def compose_bag_name(
     return f"{event}_{trk}_{when}"
 
 
-def check_free_disk(
-    container: str,
-    path: str = "/bags",
-    min_gib: int = DEFAULT_MIN_FREE_GIB,
-    *,
-    _run: callable = subprocess.run,
-) -> tuple[bool, int]:
-    """Return (ok, free_gib). Uses `df -P` inside the container.
-
-    `_run` is injectable so the test suite can drive synthetic df output
-    without touching docker.
-    """
-    proc = _run(
-        ["docker", "exec", container, "df", "-PB1G", path],
-        capture_output=True, text=True, check=False, timeout=10,
-    )
-    if proc.returncode != 0:
-        raise DockerExecError(f"df failed: {proc.stderr.strip() or 'no output'}")
-    # df -P prints a header then exactly one row for the queried path.
-    # Block-1G output: "Filesystem 1G-blocks Used Available Capacity Mounted on"
-    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
-    if len(lines) < 2:
-        raise DockerExecError(f"df output unparseable: {proc.stdout!r}")
-    cols = lines[-1].split()
-    try:
-        avail_gib = int(cols[3])
-    except (IndexError, ValueError):
-        raise DockerExecError(f"df row unparseable: {lines[-1]!r}") from None
-    return avail_gib >= min_gib, avail_gib
+# Service client cache — created lazily on the FIRST request_start /
+# request_stop call so the import path stays cheap when ROS isn't
+# present (CI, unit tests). Re-used across calls because creating a
+# rclpy service client involves DDS discovery.
+_clients_lock = threading.Lock()
+_start_client = None
+_stop_client = None
+_start_srv_type = None
+_stop_srv_type = None
 
 
-def start_recording(
-    container: str,
-    bag_name: str,
-    *,
-    container_bags_dir: str = "/bags",
-    min_free_gib: int = DEFAULT_MIN_FREE_GIB,
-    _run: callable = subprocess.run,
-) -> dict:
-    """Spawn `ros2 bag record` inside `container`, return state dict.
-
-    Pre-checks free disk; raises `DiskFullError` if below floor.
-    On success the recorder runs detached (`docker exec -d`) and we
-    capture its PID for the matching stop. The caller is responsible
-    for persisting the returned dict.
-    """
-    ok, free_gib = check_free_disk(
-        container, path=container_bags_dir, min_gib=min_free_gib, _run=_run,
-    )
-    if not ok:
-        raise DiskFullError(
-            f"only {free_gib} GiB free on {container}:{container_bags_dir} "
-            f"(need ≥{min_free_gib} GiB) — refusing to start recording"
+def _ensure_clients(ros_bridge) -> None:
+    """Lazy-init StartBag + StopBag service clients on the bridge's node."""
+    global _start_client, _stop_client, _start_srv_type, _stop_srv_type
+    with _clients_lock:
+        if _start_client is not None and _stop_client is not None:
+            return
+        from dv_msgs.srv import StartBag, StopBag
+        _start_srv_type = StartBag
+        _stop_srv_type = StopBag
+        _start_client = ros_bridge._node.create_client(
+            StartBag, "/bag_recorder/start",
+        )
+        _stop_client = ros_bridge._node.create_client(
+            StopBag, "/bag_recorder/stop",
         )
 
-    # ros2 bag record needs the workspace sourced for the storage
-    # plugin (mcap) to be discoverable, and the ROS distro sourced for
-    # rclpy. The container's normal entrypoint sources these; we
-    # replicate that here so a `docker exec -d` recording doesn't
-    # depend on the calling shell's environment.
-    bag_path = f"{container_bags_dir}/{bag_name}"
-    cmd_in_container = (
-        "source /opt/ros/humble/setup.bash && "
-        "source /dv_pipeline_stack_ws/install/setup.bash && "
-        f"mkdir -p {container_bags_dir} && "
-        f"cd {container_bags_dir} && "
-        # `setsid` puts the recorder in its own process group so our
-        # eventual SIGINT reaches `ros2 bag record` itself, not just
-        # the bash wrapper. The `echo $!` is captured separately
-        # below via the PID poll — we use `pgrep` rather than parsing
-        # docker-exec's own stdout because `docker exec -d` returns
-        # immediately and discards the child's output.
-        f"exec ros2 bag record -s mcap -a -o {bag_name} "
-        f"> /tmp/{bag_name}.log 2>&1"
-    )
 
-    # `-d` detaches; subprocess returns as soon as docker exec
-    # confirms the child started.
-    proc = _run(
-        ["docker", "exec", "-d", container, "bash", "-lc", cmd_in_container],
-        capture_output=True, text=True, check=False, timeout=10,
-    )
-    if proc.returncode != 0:
-        raise DockerExecError(
-            f"docker exec failed (rc={proc.returncode}): "
-            f"{proc.stderr.strip() or 'no output'}"
-        )
-
-    # Poll for the PID via pgrep. The recorder is a python3 process
-    # whose args contain the bag name (we use it as a unique tag) so
-    # pgrep -f matches reliably even with multiple bags ever recorded.
-    pid: Optional[int] = None
-    deadline = time.time() + 3.0
-    while time.time() < deadline:
-        pid_proc = _run(
-            ["docker", "exec", container, "pgrep", "-f", f"ros2 bag record .* {bag_name}"],
-            capture_output=True, text=True, check=False, timeout=5,
-        )
-        if pid_proc.returncode == 0:
-            for line in pid_proc.stdout.splitlines():
-                line = line.strip()
-                if line.isdigit():
-                    pid = int(line)
-                    break
-        if pid is not None:
-            break
-        time.sleep(0.2)
-
-    state = {
-        "name": bag_name,
-        "path_in_container": bag_path,
-        "container": container,
-        "pid": pid,
-        "started_at": time.time(),
-        "state": "recording" if pid is not None else "starting",
-    }
-    if pid is None:
-        # Treat as starting — the next state poll can promote to
-        # "recording" once pgrep finds it, or to "failed" if the
-        # recorder died on startup.
+def _wait_service(client, name: str, timeout_s: float) -> bool:
+    """Block until the service server is reachable, or timeout."""
+    if not client.wait_for_service(timeout_sec=timeout_s):
         _LOG.warning(
-            "bag_recorder: %s started but pgrep didn't find PID within 3s "
-            "(may have failed; check /tmp/%s.log inside %s)",
-            bag_name, bag_name, container,
+            "bag_recorder: %s server not reachable within %.1fs", name, timeout_s,
         )
-    return state
+        return False
+    return True
 
 
-def stop_recording(
-    state: dict,
-    host_bags_dir: Path,
-    *,
-    _run: callable = subprocess.run,
-    _sleep: callable = time.sleep,
-) -> dict:
-    """SIGINT the recorder, wait for clean close, copy bag to host.
+def _call_sync(client, request, timeout_s: float):
+    """Send a service request synchronously via rclpy's spin executor.
 
-    `state` is the dict returned by `start_recording`. Mutated in-place
-    with the result and returned for caller convenience.
+    ros_bridge spins its node on a dedicated thread, so we can just
+    fire-and-wait on the future. Returns the response or None on
+    timeout / failure.
     """
-    if state.get("state") in ("stopped", "failed", "none"):
-        return state
+    future = client.call_async(request)
+    # ros_bridge's executor will tick this future on its own thread.
+    # We block here for up to timeout_s.
+    deadline = threading.Event()
 
-    container = state["container"]
-    name = state["name"]
-    pid = state.get("pid")
+    def _on_done(_fut):
+        deadline.set()
 
-    # SIGINT triggers ros2 bag record's clean-shutdown path (close
-    # current mcap chunk, write the index, exit). SIGKILL would leave
-    # a truncated final chunk. If pid is None we never found one, so
-    # fall back to pkill -f for the same arg pattern start_recording
-    # used to discover it.
-    if pid is not None:
-        _run(
-            ["docker", "exec", container, "kill", "-INT", str(pid)],
-            capture_output=True, text=True, check=False, timeout=5,
-        )
-    else:
-        _run(
-            ["docker", "exec", container, "pkill", "-INT", "-f",
-             f"ros2 bag record .* {name}"],
-            capture_output=True, text=True, check=False, timeout=5,
-        )
+    future.add_done_callback(_on_done)
+    if not deadline.wait(timeout_s):
+        return None
+    if future.exception() is not None:
+        _LOG.warning("bag_recorder: service raised: %s", future.exception())
+        return None
+    return future.result()
 
-    # Wait up to 5 s for the recorder to disappear. ros2 bag's close
-    # path is typically <500 ms; the long tail is just the final
-    # chunk flush on a big bag.
-    deadline = time.time() + 5.0
-    while time.time() < deadline:
-        check = _run(
-            ["docker", "exec", container, "pgrep", "-f",
-             f"ros2 bag record .* {name}"],
-            capture_output=True, text=True, check=False, timeout=5,
-        )
-        if check.returncode != 0:
-            break
-        _sleep(0.2)
 
-    # Copy out. The host dir is the operator's offline-analysis
-    # landing zone (`bags/` next to `tools/bags/`). `docker cp -L`
-    # follows symlinks; mcap files aren't symlinked but the bag
-    # directory could be on some setups.
-    host_path = host_bags_dir / name
-    host_bags_dir.mkdir(parents=True, exist_ok=True)
-    if host_path.exists():
-        # Should not happen (the timestamp-named bag is unique) but
-        # be defensive: never overwrite a finished bag.
-        shutil.rmtree(host_path)
-    cp = _run(
-        ["docker", "cp", f"{container}:{state['path_in_container']}",
-         str(host_path)],
-        capture_output=True, text=True, check=False, timeout=120,
-    )
-    if cp.returncode != 0:
-        state["state"] = "failed"
-        state["error"] = f"docker cp failed: {cp.stderr.strip() or 'no output'}"
-        return state
+def request_start(ros_bridge, bag_name: str, *, timeout_s: float = 5.0) -> dict:
+    """Ask bag_recorder_node to start a recording.
 
-    state["state"] = "stopped"
-    state["host_path"] = str(host_path)
-    state["stopped_at"] = time.time()
-    return state
+    Returns a state dict (ok / state / name / path / error). On any
+    failure to reach the service, ok=false with a diagnostic.
+    """
+    try:
+        _ensure_clients(ros_bridge)
+    except Exception as ex:
+        return {
+            "ok": False,
+            "state": "failed",
+            "name": bag_name,
+            "path": "",
+            "error": f"bag_recorder service client init failed: {ex}",
+        }
+
+    if not _wait_service(_start_client, "/bag_recorder/start", timeout_s):
+        return {
+            "ok": False,
+            "state": "failed",
+            "name": bag_name,
+            "path": "",
+            "error": (
+                "/bag_recorder/start not reachable — is the "
+                "dv_pipeline_stack container running and healthy?"
+            ),
+        }
+
+    req = _start_srv_type.Request()
+    req.bag_name = bag_name
+
+    resp = _call_sync(_start_client, req, timeout_s)
+    if resp is None:
+        return {
+            "ok": False,
+            "state": "failed",
+            "name": bag_name,
+            "path": "",
+            "error": f"/bag_recorder/start timed out after {timeout_s:.1f}s",
+        }
+
+    return {
+        "ok": bool(resp.ok),
+        "state": resp.state or ("recording" if resp.ok else "failed"),
+        "name": bag_name,
+        "path": resp.bag_path,
+        "error": resp.error,
+    }
+
+
+def request_stop(ros_bridge, *, timeout_s: float = 15.0) -> dict:
+    """Ask bag_recorder_node to stop the active recording.
+
+    Idempotent: returns state="none" if nothing was recording. Timeout
+    is intentionally generous (15 s default) because the server side
+    has to SIGINT the recorder, wait for mcap to flush its chunk
+    index, then move the staged dir into the bind-mounted output
+    directory — the move can be a couple of seconds for a multi-GB
+    bag on macOS virtiofs.
+    """
+    try:
+        _ensure_clients(ros_bridge)
+    except Exception as ex:
+        return {
+            "ok": False,
+            "state": "failed",
+            "path": "",
+            "error": f"bag_recorder service client init failed: {ex}",
+        }
+
+    if not _wait_service(_stop_client, "/bag_recorder/stop", timeout_s=2.0):
+        return {
+            "ok": False,
+            "state": "failed",
+            "path": "",
+            "error": "/bag_recorder/stop not reachable",
+        }
+
+    req = _stop_srv_type.Request()
+    resp = _call_sync(_stop_client, req, timeout_s)
+    if resp is None:
+        return {
+            "ok": False,
+            "state": "failed",
+            "path": "",
+            "error": f"/bag_recorder/stop timed out after {timeout_s:.1f}s",
+        }
+
+    return {
+        "ok": bool(resp.ok),
+        "state": resp.state or ("stopped" if resp.ok else "failed"),
+        "path": resp.bag_path,
+        "error": resp.error,
+    }
+
+
+def _reset_clients_for_test() -> None:
+    """Test-only: drop the cached clients so a new ros_bridge mock is picked up."""
+    global _start_client, _stop_client, _start_srv_type, _stop_srv_type
+    with _clients_lock:
+        _start_client = None
+        _stop_client = None
+        _start_srv_type = None
+        _stop_srv_type = None

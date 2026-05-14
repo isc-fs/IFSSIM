@@ -26,6 +26,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-colcon-common-extensions \
         ros-humble-rosidl-default-generators \
     && rm -rf /var/lib/apt/lists/*
+# Note: ros-humble-ros2bag / rosbag2-transport / rosbag2-storage-mcap
+# are NOT installed here — bag recording was moved to dv_pipeline_stack
+# in #465 v2 (the recorder needs to share the publisher's SHM-tuned
+# DDS context to capture full-fidelity LiDAR). mc_backend is now a
+# pure service client; the recorder bits live in
+# pipeline/bag_recorder_node/.
 
 # ---------------------------------------------------------------------
 # Build dv_msgs + fs_msgs in their own little workspace under /msgs_ws.
