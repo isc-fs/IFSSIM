@@ -56,12 +56,15 @@ services:
       - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
-      # Re-run `colcon build --symlink-install` at container startup. Default
-      # off — Python edits to existing files go live via --symlink-install
-      # without any rebuild. Set to "true" only when you've changed setup.py,
-      # added a new package, edited a .msg, or touched C++ source. See #176
-      # for the bind-mount story this flag completes.
-      - DV_REBUILD_ON_STARTUP=${DV_REBUILD_ON_STARTUP:-false}
+      # DV_REBUILD_ON_STARTUP removed in #490. The flag used to re-run
+      # `colcon build` against the bind-mounted source on every
+      # container start; now the source is COPY'd into the image and
+      # built at image-build time. To pick up an edit, run
+      # `tools/refresh-bridge.sh` (or `docker compose build
+      # dv_pipeline_stack && docker compose up -d --force-recreate
+      # dv_pipeline_stack`). entrypoint.sh still consults the env var
+      # for legacy local overrides but its default codepath is now a
+      # no-op.
       # When set to a writable file path, the path_planning node dumps
       # one JSON line per planner callback (cones, pose, n_path,
       # rejections). Used for offline replay against real failing
@@ -136,36 +139,37 @@ services:
       # retired in favour of the StartMission action chain (sup ↔ mcn
       # ↔ mode_manager). Mission Control's /api/event/start and
       # /api/pipeline/start now use rclpy actions exclusively.
-      # Bind-mount each ROS package over the image's COPY'd baseline so host
-      # source is the source of truth at runtime. Image-time `colcon build
-      # --symlink-install` produced an install/ tree whose Python entries are
-      # symlinks back to /dv_pipeline_stack_ws/src/<pkg>/...; with these
-      # bind-mounts those symlinks now resolve to live host code. Edit a
-      # Python file, restart the container, and the change is in effect —
-      # no `docker cp`, no image rebuild.
       #
-      # Caveats (set DV_REBUILD_ON_STARTUP=true or run colcon build via
-      # `docker compose exec dv_pipeline_stack` for these):
-      #   - C++ source changes (ifssim_bridge): need recompile.
-      #   - .msg file changes (fs_msgs): need regeneration.
-      #   - setup.py changes (new entry_points, new packages): need re-link.
+      # ----------------------------------------------------------------
+      # #490 — source bind mounts removed.
+      # ----------------------------------------------------------------
+      # We used to bind-mount each ROS package over the image's COPY'd
+      # baseline so a Python edit on the host went live with a
+      # `docker compose restart` — see `tools/refresh-bridge.sh`. On
+      # Docker Desktop (macOS virtiofs / Windows + WSL2 9p) those bind
+      # mounts traversed a slow filesystem every time Python imported
+      # a module on container start, and `docker compose build`
+      # transferred the full 33 GB working tree as build context.
+      # Net cost on Windows with the repo on /mnt/c: 30-90 s startup
+      # + minutes per rebuild.
       #
-      # Mounted per-package, not as a single tree, because ros2/src/ and
-      # pipeline/ collapse into one src/ inside the container — a single
-      # bind-mount of either parent would hide the other.
-      # Fast DDS profile — see FASTRTPS_DEFAULT_PROFILES_FILE in `environment:`.
-      - ./docker/dv_pipeline_stack/fastdds_profile.xml:/dv_pipeline_stack_ws/fastdds_profile.xml:ro
-      - ./pipeline/cone_slam:/dv_pipeline_stack_ws/src/cone_slam
-      - ./pipeline/control:/dv_pipeline_stack_ws/src/control
-      - ./pipeline/path_planning:/dv_pipeline_stack_ws/src/path_planning
-      - ./pipeline/cone_detection:/dv_pipeline_stack_ws/src/cone_detection
-      # #465 — bag_recorder_node hosts /bag_recorder/{start,stop}
-      # services so MC's web backend can record from inside this
-      # container (where the DDS context is SHM-tuned for full-
-      # fidelity LiDAR capture). See pipeline/bag_recorder_node/.
-      - ./pipeline/bag_recorder_node:/dv_pipeline_stack_ws/src/bag_recorder_node
-      - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
-      - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
+      # Now the image is the source of truth: `colcon build` runs at
+      # image build time (see Dockerfile) against COPY'd source. To
+      # iterate on ROS code, edit the host source then run:
+      #
+      #     docker compose build dv_pipeline_stack
+      #     docker compose up -d --force-recreate dv_pipeline_stack
+      #
+      # …or just `tools/refresh-bridge.sh`, which now wraps both
+      # steps. A `.dockerignore` cuts the build context to ~200 MB so
+      # the rebuild is still fast on Windows.
+      #
+      # ifssim_bridge (C++) used to need DV_REBUILD_ON_STARTUP=true
+      # to recompile after a source edit; that's also rolled into
+      # the image build now.
+      #
+      # Fast DDS profile — same story, COPY'd at image build time
+      # (see Dockerfile) so this mount is no longer needed either.
       # #465 v3 — landing dir for finalised bags. Used to be a bind
       # mount to ./bags, but on macOS Docker Desktop (virtiofs) and
       # Windows + WSL2 (9p) the cross-fs `shutil.move` from the
@@ -261,10 +265,25 @@ services:
       - IFSSIM_MC_API_KEY=${IFSSIM_MC_API_KEY:-}
       - IFSSIM_MC_CORS_ORIGINS=${IFSSIM_MC_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     volumes:
+      # Tracks dir: STAYS as a bind mount on purpose. mc_backend's
+      # track_generate writes a CSV here; UE5 (the host process,
+      # NOT in a container) reads the same CSV via the loadTrack
+      # RPC. Both sides need to see the same physical directory, so
+      # this can't be a docker-only volume. The path itself is small
+      # (~few KB CSVs, infrequent writes) so the 9p/virtiofs cost is
+      # negligible vs. its essential role bridging container ↔ host.
       - ./Content/tracks:/tracks
       # `pipeline_ctrl` shared-volume mount removed in #381 — flag-file
       # path retired; autonomy bring-up is via StartMission action chain.
-      - ./tools/random-track-generator:/track_gen:ro
+      #
+      # #490 — random-track-generator bind mount removed. It's a git
+      # submodule that rarely changes; we COPY it into the image at
+      # build time (see Dockerfile) so there's no per-startup 9p cost
+      # and no need to bind-mount a read-only path. Re-running
+      # `git submodule update` now requires a `docker compose build`
+      # of mission_control_backend — acceptable for a tool that gets
+      # updated maybe once a quarter.
+      #
       # /bags bind mount removed from mc_backend: bag recording moved
       # to dv_pipeline_stack via the /bag_recorder/{start,stop}
       # services (#465 v2). mc_backend is now a pure ROS service

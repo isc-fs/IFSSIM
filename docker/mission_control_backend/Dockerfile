@@ -59,6 +59,14 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY tools/mission_control/backend/ .
 
+# Random-track-generator submodule, baked into the image at /track_gen
+# (matches TRACK_GEN_PATH in docker-compose.yml). Used to be a
+# read-only bind mount; #490 moved it in to cut one more 9p/virtiofs
+# hit on Windows + macOS. Updating the submodule (rare — once a
+# quarter at most) now requires a `docker compose build
+# mission_control_backend`.
+COPY tools/random-track-generator/ /track_gen/
+
 ENV IFSSIM_HOST=host.docker.internal
 ENV IFSSIM_PORT=41451
 

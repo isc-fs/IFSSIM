@@ -1,6 +1,7 @@
 #!/bin/bash
-# Refresh the dv_pipeline_stack container after editing bridge code, the
-# launch file, the entrypoint, or the Fast DDS profile.
+# Refresh the dv_pipeline_stack container after editing bridge code,
+# any pipeline ROS source, the launch files, the entrypoint, or the
+# Fast DDS profile.
 #
 # `docker compose restart` is NOT enough — Docker Desktop on macOS
 # accumulates UDP proxy state and Fast DDS leaves SHM segments around;
@@ -9,38 +10,38 @@
 # internally. Only a full container teardown + recreate consistently
 # recovers (verified by an afternoon of chasing this).
 #
-# What this script does, in order:
-#   1. `docker compose down dv_pipeline_stack` — destroys the container
-#      (and with it: the host-side UDP proxy, /dev/shm tmpfs, any wedged
-#      Fast DDS daemon state, the rw fs layer).
-#   2. `docker compose up -d dv_pipeline_stack` — recreates from image,
-#      remounts /dev/shm, rebinds host UDP proxies for 41452 and 51453.
-#      LiDAR is UDP-only as of #322; the LIDAR_TRANSPORT env var is gone.
-#   3. Wait for the container to report healthy.
-#   4. Copy the host's current launch.py and entrypoint.sh into the
-#      container — they're COPY'd into the image at build time, not
-#      bind-mounted, so any edits since the last image build only
-#      reach a fresh container if we paste them in.
-#   5. `colcon build --packages-select ifssim_bridge --symlink-install`
-#      from the bind-mounted source so any C++ edits land.
-#   6. `docker compose restart dv_pipeline_stack` so the bridge process
-#      picks up the freshly built install/ tree + the new launch +
-#      entrypoint /dev/shm cleanup.
+# #490 — pipeline source is no longer bind-mounted. We rebuild the
+# image so the new source is baked in, then recreate the container.
+# A repo-wide .dockerignore keeps the build context small (~200 MB
+# vs. the unbounded ~33 GB it used to be) so the rebuild stays fast
+# even on Windows + WSL2 with the repo on /mnt/c.
 #
-# Anything not under ifssim_bridge (e.g. cone_slam, control,
-# path_planning) is Python and lives via --symlink-install — those
-# pick up host edits without needing this script. Run this script
-# only when the bridge or its container plumbing has changed.
+# What this script does, in order:
+#   1. `docker compose build dv_pipeline_stack` — rebuild the image
+#      against the current host source. BuildKit's layer cache makes
+#      this fast for incremental Python edits (only the final COPY
+#      + colcon build layers re-run).
+#   2. `docker compose up -d --force-recreate dv_pipeline_stack` —
+#      destroys + recreates the container, drops any wedged DDS SHM
+#      / UDP proxy state, mounts the new image.
+#   3. Wait for the container to report healthy.
+#
+# Run this any time you edit:
+#   - pipeline/* ROS Python or C++ source
+#   - ros2/src/* (fs_msgs / ifssim_bridge)
+#   - docker/dv_pipeline_stack/{bridge,pipeline,pipeline_only}.launch.py
+#   - docker/dv_pipeline_stack/entrypoint.sh
+#   - docker/dv_pipeline_stack/fastdds_profile.xml
 
 set -euo pipefail
 
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
-echo "→ docker compose down dv_pipeline_stack"
-docker compose down dv_pipeline_stack 2>&1 | tail -3
+echo "→ docker compose build dv_pipeline_stack"
+docker compose build dv_pipeline_stack 2>&1 | tail -3
 
-echo "→ docker compose up -d dv_pipeline_stack"
-docker compose up -d dv_pipeline_stack 2>&1 | tail -3
+echo "→ docker compose up -d --force-recreate dv_pipeline_stack"
+docker compose up -d --force-recreate dv_pipeline_stack 2>&1 | tail -3
 
 echo "→ waiting for healthy..."
 for _ in $(seq 1 30); do
@@ -53,21 +54,6 @@ for _ in $(seq 1 30); do
     fi
     sleep 1
 done
-
-echo "→ rebuilding ifssim_bridge from host source"
-docker compose exec -T dv_pipeline_stack bash -lc \
-    'cd /dv_pipeline_stack_ws && source /opt/ros/humble/setup.bash && colcon build --packages-select ifssim_bridge --symlink-install' \
-    2>&1 | tail -3
-
-echo "→ copying launch + entrypoint into container"
-docker compose cp docker/dv_pipeline_stack/bridge.launch.py        dv_pipeline_stack:/dv_pipeline_stack_ws/bridge.launch.py        >/dev/null
-docker compose cp docker/dv_pipeline_stack/pipeline.launch.py      dv_pipeline_stack:/dv_pipeline_stack_ws/pipeline.launch.py      >/dev/null
-docker compose cp docker/dv_pipeline_stack/pipeline_only.launch.py dv_pipeline_stack:/dv_pipeline_stack_ws/pipeline_only.launch.py >/dev/null
-docker compose cp docker/dv_pipeline_stack/entrypoint.sh           dv_pipeline_stack:/entrypoint.sh                                >/dev/null
-docker exec ifssim-dv_pipeline_stack-1 chmod +x /entrypoint.sh
-
-echo "→ docker compose restart dv_pipeline_stack"
-docker compose restart dv_pipeline_stack 2>&1 | tail -2
 
 echo
 echo "✓ bridge refreshed. Tail logs with:"
