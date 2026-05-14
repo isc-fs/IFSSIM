@@ -166,12 +166,24 @@ services:
       - ./pipeline/bag_recorder_node:/dv_pipeline_stack_ws/src/bag_recorder_node
       - ./ros2/src/fs_msgs:/dv_pipeline_stack_ws/src/fs_msgs
       - ./ros2/src/ifssim_bridge:/dv_pipeline_stack_ws/src/ifssim_bridge
-      # #465 — host-visible landing dir for finalised bags. The
-      # recorder writes its mcap to /tmp/ifssim_bag_active (fast
-      # container ext4) and moves it here on StopBag; bind-mounting
-      # to the repo-root `bags/` means the operator finds it on the
-      # host with no docker cp step.
-      - ./bags:/bags
+      # #465 v3 — landing dir for finalised bags. Used to be a bind
+      # mount to ./bags, but on macOS Docker Desktop (virtiofs) and
+      # Windows + WSL2 (9p) the cross-fs `shutil.move` from the
+      # /tmp staging dir to /bags took ~30 s for a multi-GB bag
+      # — the move blocked the StopBag service and visibly stalled
+      # Mission Control's session-stop click.
+      #
+      # Named docker volume keeps the bag on the container's local
+      # storage driver (real Linux ext4 / overlayfs), so the move
+      # is single-fs and finishes in <1 s. To pull a finalised bag
+      # onto the host filesystem:
+      #
+      #     tools/pull-bag.sh <bag_name>
+      #     tools/list-bags.sh                # enumerate available
+      #
+      # (Lichtblick reads from the host-side ./bags as before; the
+      # pull step is the only added handle.)
+      - ifssim_bags:/bags
       # /tmp/ifssim_streams bind-mount removed: it existed to share an
       # AF_UNIX LiDAR socket between the host plugin and the bridge
       # container. The UDS LiDAR sender was retired in #322 and the
@@ -337,3 +349,8 @@ volumes:
   # comments above for context. Existing `pipeline_ctrl` volumes on
   # developer machines can be reclaimed with `docker volume rm
   # ifssim_pipeline_ctrl` after this commit lands; harmless if left.
+  # #465 v3 — landing volume for finalised bags. See the mount-site
+  # comment in dv_pipeline_stack for the rationale (avoid virtiofs/9p
+  # on the StopBag move). Operators retrieve bags onto the host with
+  # `tools/pull-bag.sh <name>`.
+  ifssim_bags:

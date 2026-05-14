@@ -110,7 +110,8 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
           />
           <span>Record bag (mcap)</span>
           <span className="text-gray-500 text-xs">
-            — saves a full topic dump to <code className="text-gray-400">bags/</code> while the session runs
+            — saves a full topic dump inside dv_pipeline_stack; pull with{' '}
+            <code className="text-gray-400">tools/pull-bag.sh &lt;name&gt;</code>
           </span>
         </label>
 
@@ -206,8 +207,11 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
             </span>
           )}
           {telemetry.bag_state === 'stopped' && telemetry.bag_name && (
-            <span className="text-gray-400 text-xs">
-              ◍ bag saved: {telemetry.bag_name}
+            <span className="text-gray-400 text-xs" title={`Pull onto host:\ntools/pull-bag.sh ${telemetry.bag_name}`}>
+              ◍ bag saved (in container): {telemetry.bag_name}
+              <span className="ml-1 text-gray-500">
+                — pull with <code className="font-mono">tools/pull-bag.sh</code>
+              </span>
             </span>
           )}
           {telemetry.bag_state === 'failed' && (
