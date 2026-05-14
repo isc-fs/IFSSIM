@@ -27,7 +27,7 @@ services:
       # or when keyboard-driving for motion sanity checks.
       - DV_DISABLE_CONTROL=${DV_DISABLE_CONTROL:-false}
       # LiDAR transport is UDP-only as of #322. The plugin pushes
-      # via FSDSUdpBroadcaster on port 51453; the bridge listens
+      # via FSDSUdpBroadcaster on port 41500 (#477); the bridge listens
       # there. The TCP and UDS LiDAR senders existed pre-#322 to
       # work around macOS Docker Desktop's ~7 MB/s TCP loopback cap,
       # but UDP turned out to be reliable enough on every supported
@@ -101,29 +101,50 @@ services:
       # doesn't require an image rebuild — restart the container after
       # an edit.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/dv_pipeline_stack_ws/fastdds_profile.xml
-    # Host networking: bypasses Docker Desktop's userspace UDP proxy
-    # (com.docker.backend) entirely. The proxy was unreliable for the
-    # high-rate / large-fragmented LiDAR datagrams — under sustained load
-    # the proxy would silently lose its socket binding for the LiDAR
-    # port (`lsof -nP -iUDP | grep 51453` empty), while the smaller-
-    # datagram sensor port stayed bound. Two attempts to fix at the port
-    # level (port-isolation 41452/51453 in 2026-04, then ephemeral-range
-    # avoidance 41453 today) both got circumvented by the proxy itself
-    # losing sockets at any port carrying the fragmented stream. Issue
-    # #286 has the full diagnostic trail.
+    # Bridged networking with explicit port forwards. Replaces the
+    # previous `network_mode: host` configuration (#286) because host
+    # networking has different semantics on each Docker Desktop backend:
     #
-    # Host networking on Docker Desktop (>= 4.34) shares the macOS host
-    # network namespace with the container directly, so the bridge's
-    # listen socket lives on the host's loopback and UE5's sendto() goes
-    # straight there with no userspace proxy in the path. Other services
-    # in the compose stack keep their default bridge networking.
-    network_mode: host
-    # `ports:` is intentionally absent — host networking ignores it. The
-    # bridge process inside the container listens on 41452 (sensor UDP),
-    # 51453 (LiDAR UDP), and 8765 (foxglove WebSocket) directly on the
-    # host's interfaces.
+    #   - Linux native Docker:        works (container shares host net)
+    #   - Mac Docker Desktop ≥4.34 +  works (vmnet bridges to host)
+    #     "Use host networking" ON
+    #   - Mac Docker Desktop without  toggle is OFF on fresh installs;
+    #     "Use host networking" ON    the container has no useful host
+    #                                 reachability — chunked-UDP silently
+    #                                 dropped (#286)
+    #   - Windows Docker Desktop      toggle has no chunked-UDP effect:
+    #     "Use host networking" ON    WSL2 backend still drops fragmented
+    #                                 datagrams on the way to Windows
+    #                                 loopback
+    #
+    # Bridged networking with explicit forwards sidesteps all three of
+    # those proxy paths — the kernel handles fragmentation/reassembly
+    # directly on Linux, and on Mac / Windows Docker Desktop's modern
+    # gRPC-fuse / gvisor proxies handle the same flow reliably (the
+    # original #286 userspace-proxy wedge was fixed upstream over the
+    # 6+ minor Docker Desktop releases since the host-networking move).
+    #
+    # Forwards (all 127.0.0.1-bound so they're loopback-only, not LAN-
+    # reachable):
+    #
+    #   - 8765 TCP : foxglove_bridge WS — Lichtblick connects here
+    #   - 41452/udp: sensor UDP fanout from FSDSUdpBroadcaster (currently
+    #                benign/unused at runtime — sensors ride TCP RPC —
+    #                but the socket is always bound; forwarded for
+    #                completeness)
+    #   - 41500/udp: LiDAR chunked-UDP stream from FSDSUdpBroadcaster.
+    #                Port chosen to be both non-adjacent to 41452 (macOS
+    #                Docker Desktop range-proxy quirk) AND below 49152
+    #                (Windows dynamic port range). See PR #477 for the
+    #                full reasoning.
+    ports:
+      - "127.0.0.1:8765:8765/tcp"
+      - "127.0.0.1:41452:41452/udp"
+      - "127.0.0.1:41500:41500/udp"
     extra_hosts:
-      # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
+      # On Linux, host.docker.internal needs explicit mapping to reach
+      # the host running UE5 (not auto-provisioned like Mac/Windows
+      # Docker Desktop). Harmless on Mac/Windows.
       - "host.docker.internal:host-gateway"
     volumes:
       # Persist Numba JIT cache so ~20 s warmup only happens on first ever run.
@@ -166,7 +187,7 @@ services:
       # container. The UDS LiDAR sender was retired in #322 and the
       # surrounding UDS infrastructure (StartUds / StreamSensorsUds
       # stub) was deleted in this PR's #322 follow-up. Production
-      # LiDAR is UDP-only on port 51453.
+      # LiDAR is UDP-only on port 41500 (#477).
     # Runtime peaks at ~1.5 GB (bridge + foxglove + pipeline). Bumped
     # to 2.5 GB because cc1plus compiling ifssim_ros_wrapper.cpp peaks
     # at ~2 GB after the v2 grew (the file now also handles the
