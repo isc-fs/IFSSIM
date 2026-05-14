@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Before filing, please check:
-        - **[QUICKSTART troubleshooting](https://github.com/isc-fs/IFSSIM/blob/dev/docs/QUICKSTART.md#troubleshooting)** — the most common failure modes are listed there.
+        - **[SETUP troubleshooting](https://github.com/isc-fs/IFSSIM/blob/dev/docs/SETUP.md#troubleshooting)** — the most common failure modes are listed there.
         - **[CHANGELOG known limitations](https://github.com/isc-fs/IFSSIM/blob/dev/CHANGELOG.md)** — issues we already know about and are tracking.
 
   - type: textarea

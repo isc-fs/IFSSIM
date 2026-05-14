@@ -27,7 +27,7 @@ doesn't make obvious.
 - [ ] PR targets `dev`, not `main`
 - [ ] If user-visible: a one-liner is added under `## [Unreleased]` in `CHANGELOG.md`
 - [ ] If touching `Plugins/`, `Config/`, `Content/`, `IFSSIM.uproject`, or `package_*.{sh,ps1}`: I cooked locally and the staged sim runs (UE5 dev side has no GitHub-hosted CI gate)
-- [ ] If adding a new sensor / RPC / topic: `docs/FUNCTIONALITIES.md` or `docs/autonomy_pipeline.md` is updated to match
+- [ ] If adding a new sensor / RPC / topic: `docs/REFERENCE.md` or `docs/AUTONOMY.md` is updated to match
 
 ## Closes
 

@@ -2,7 +2,7 @@
 
 End-to-end overview of the autonomy stack: from raw LiDAR/IMU coming out of UE5 through perception, SLAM, path planning, and control — and back to UE5 as a `ControlCommand`. Read this before touching any of the autonomy nodes.
 
-For sim-side topics (sensors, vehicle physics, RPC) see [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md). For container layout and how to launch the stack see [`GETTING_STARTED_DOCKER.md`](GETTING_STARTED_DOCKER.md).
+For sim-side topics (sensors, vehicle physics, RPC) see [`REFERENCE.md`](REFERENCE.md). For container layout and how to launch the stack see [`SETUP.md`](SETUP.md) (first-time) and [`OPERATING.md`](OPERATING.md) (daily ops).
 
 The DV pipeline (perception, SLAM, path planning, control, mission management) lives in a separate repo and is attached here as a submodule. The point of the split is that **the same code runs on the real car and in sim** — IFSSIM owns everything that fakes the real-car environment for it (sim, sim ↔ ROS bridge, Mission Control web, visualisation, Docker glue), and the autonomy submodule sees the same ROS interface either way. This is the central organising principle of the architecture and shows up in every section below.
 
@@ -172,7 +172,7 @@ All sensor topics are namespaced under `/fsds/...` — the prefix is what tells 
 
 | Topic | Type | Frame | Rate | Notes |
 |---|---|---|---|---|
-| `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — fields `x`, `y`, `z`, `intensity` (FLOAT32). Intensity follows the Hesai ATX-S01 working principle (ρ × cos(θ) × (R_ref/r)²); see `FUNCTIONALITIES.md` §4.1. |
+| `/fsds/lidar/Lidar1` | `sensor_msgs/PointCloud2` | `fsds/Lidar` | 10 Hz | LiDAR point cloud — fields `x`, `y`, `z`, `intensity` (FLOAT32). Intensity follows the Hesai ATX-S01 working principle (ρ × cos(θ) × (R_ref/r)²); see [`REFERENCE.md`](REFERENCE.md) §4.1. |
 | `/fsds/imu` | `sensor_msgs/Imu` | `fsds/IMU` | ~400 Hz | 6-DoF IMU. Consumed by `slam_node` (preintegration) AND `sim_supervisor_node` (filter prediction step) post-feat/360. |
 | `/fsds/motor_rpm` | `std_msgs/Float32` | — | ~80 Hz | Drive-axle RPM. Primary longitudinal velocity input — both `slam_node` (velocity prior) and `sim_supervisor_node` (filter correction step) consume it. The IFS-08 doesn't have GSS, so RPM + IMU + steering + brake_pressure is the full real-car odometry input set. |
 | `/fsds/steering_angle` | `std_msgs/Float32` | — | ~100 Hz | **Phase 3 (#383).** Front-wheel angle in radians, converted in the bridge from the plugin's normalized [-1, 1] axis input via `max_steering_angle_rad` (default 0.5). Consumed by `sim_supervisor_node` for the kinematic-bicycle yaw cross-check (`ω_pred = (vx/L)·tan(δ)`); residual published on `/odom_diag/yaw_residual_rad_s`. |
@@ -274,6 +274,7 @@ Co-located with the autonomy stack rather than under `tools/`, so they're easy t
 
 ## See also
 
-- [`FUNCTIONALITIES.md`](FUNCTIONALITIES.md) — sim-side topics, sensors, vehicle physics, RPC.
-- [`GETTING_STARTED_DOCKER.md`](GETTING_STARTED_DOCKER.md) — container layout and how to launch the stack.
+- [`REFERENCE.md`](REFERENCE.md) — sim-side topics, sensors, vehicle physics, RPC.
+- [`SETUP.md`](SETUP.md) — first-time-user setup.
+- [`OPERATING.md`](OPERATING.md) — daily ops, bag flow, diagnostics.
 - LiDAR per-point intensity follows the Hesai ATX-S01 working principle (`ρ × cos(θ) × (R_ref/r)²`), implemented in #318-style coordinated wire-format change. Per-cone-material 905 nm reflectance tuning is a follow-up content task (separate from the simulator-side principle).

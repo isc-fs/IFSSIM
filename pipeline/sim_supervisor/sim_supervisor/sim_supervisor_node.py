@@ -13,7 +13,7 @@ node fakes all of that so the autonomy stack sees an identical ROS 2
 surface in sim and on the real car. **It is sim-only** and is not
 launched on the real-car compose stack.
 
-Two-phase action protocol implemented here (see docs/autonomy_pipeline.md
+Two-phase action protocol implemented here (see docs/AUTONOMY.md
 §"Runtime action protocol"):
 
   Phase 1 — StartMission (this node is the *client*, mission_control
@@ -146,7 +146,7 @@ class SimSupervisorNode(LifecycleNode):
         self._cb_group = ReentrantCallbackGroup()
 
         # Odometry filter (Phase 1 of the /odom split — see
-        # docs/autonomy_pipeline.md §"Open questions" Q1). Subscribes
+        # docs/AUTONOMY.md §"Open questions" Q1). Subscribes
         # to /imu and /motor_rpm, publishes /odom at ODOM_PUBLISH_HZ.
         # The supervisor is the natural owner because on the real car
         # the uDV (which this node simulates) publishes /odom from the
@@ -279,7 +279,7 @@ class SimSupervisorNode(LifecycleNode):
         # control command would be silently dropped. Pre-#384
         # control_node owned this publish on its own on_activate;
         # the topic is now exclusively supervisor-owned per the
-        # diagram contract in docs/autonomy_pipeline.md.
+        # diagram contract in docs/AUTONOMY.md.
         if self._ebs_reset_pub is not None:
             self._ebs_reset_pub.publish(EmptyMsg())
 

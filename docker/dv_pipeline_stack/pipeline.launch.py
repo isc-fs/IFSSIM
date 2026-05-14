@@ -35,7 +35,7 @@ mechanism in entrypoint.sh.
 
 Topic remappings translate IFSSIM-side `/fsds/*` names to the names
 the pipeline nodes consume (per the integration contract in
-docs/autonomy_pipeline.md §"Topics IFSSIM publishes").
+docs/AUTONOMY.md §"Topics IFSSIM publishes").
 """
 
 from __future__ import annotations
@@ -253,7 +253,7 @@ def generate_launch_description() -> LaunchDescription:
         "sim_supervisor", "sim_supervisor_node", "sim_supervisor_node",
         # REMAP_CMD: the supervisor's internal name is `/fsds/control_command`
         # (matches the topic-table contract in
-        # docs/autonomy_pipeline.md §"Topics the submodule publishes back"),
+        # docs/AUTONOMY.md §"Topics the submodule publishes back"),
         # but the bridge's subscriber is bound to the unnamespaced
         # `/control_command` since the bridge does its own /fsds-prefix
         # mapping internally. Remap keeps the supervisor's published

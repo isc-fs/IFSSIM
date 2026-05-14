@@ -48,7 +48,7 @@ echo "IFSSIM ROS stack starting — full lifecycle launch..."
 echo "  Simulator: $IFSSIM_HOST:$IFSSIM_PORT"
 echo "  Mission:   $MISSION_NAME / track $TRACK_NAME"
 
-# Bring everything up in one launch (per docs/autonomy_pipeline.md
+# Bring everything up in one launch (per docs/AUTONOMY.md
 # §"Lifecycle orchestration mechanism"):
 #
 #   • bridge + foxglove_bridge  — always-active C++ Nodes

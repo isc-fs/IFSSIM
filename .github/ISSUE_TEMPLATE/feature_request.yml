@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Before filing, please check:
-        - **[FUNCTIONALITIES.md](https://github.com/isc-fs/IFSSIM/blob/dev/docs/FUNCTIONALITIES.md)** — the feature might already be there under a name you didn't search for.
+        - **[REFERENCE.md](https://github.com/isc-fs/IFSSIM/blob/dev/docs/REFERENCE.md)** — the feature might already be there under a name you didn't search for.
         - **Existing issues with the `feat` label** — someone may have already proposed this.
 
   - type: textarea
