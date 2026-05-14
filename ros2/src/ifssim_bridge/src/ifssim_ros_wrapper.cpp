@@ -501,6 +501,24 @@ void IFSSIMRosWrapper::startStreaming()
         // (non-adjacent to 41452, below Windows' 49152 dynamic range).
         // See FSDSGameMode.cpp for the port-choice trail.
         udp_receiver_.start(0, 41500);
+
+        // PR-#482: the sim's UDP LiDAR broadcaster defaults OFF since
+        // the production transport is now TCP. Explicitly turn it on
+        // for the UDP-fallback branch so the chunked-UDP listener
+        // actually receives data. (On the TCP branch above, we
+        // intentionally leave the broadcaster off so the sim doesn't
+        // spuriously send ~1.5 MB/s of LiDAR packets nobody's
+        // listening for.)
+        if (client_ && client_->isConnected()) {
+            const std::string resp = client_->sendCommand("enableLidarUdpBroadcast");
+            if (resp.find("true") == std::string::npos) {
+                RCLCPP_WARN(node_->get_logger(),
+                    "UDP fallback: enableLidarUdpBroadcast returned %s — "
+                    "sim may not be sending UDP LiDAR; check sim build "
+                    "predates PR-#482", resp.c_str());
+            }
+        }
+
         RCLCPP_INFO(node_->get_logger(),
             "LiDAR transport: UDP fallback (IFSSIM_LIDAR_TRANSPORT=udp, listening on 41500)");
     }

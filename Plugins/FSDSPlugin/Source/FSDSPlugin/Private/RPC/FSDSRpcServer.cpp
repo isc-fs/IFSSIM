@@ -380,6 +380,29 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		return bApiControlEnabled ? TEXT("true") : TEXT("false");
 	}
+	else if (Method == TEXT("enableLidarUdpBroadcast"))
+	{
+		// PR-#482: opt-in for the legacy chunked-UDP LiDAR path.
+		// Default state of UdpBroadcaster is OFF (sim sends no LiDAR
+		// UDP) because the production transport is now TCP via
+		// StreamLidar. Bridges using the UDP fallback path
+		// (IFSSIM_LIDAR_TRANSPORT=udp) call this RPC at connect time
+		// to flip the broadcaster on; subsequent disconnect doesn't
+		// auto-disable so a flaky bridge doesn't lose data, but a
+		// matching disableLidarUdpBroadcast is available below.
+		if (UdpBroadcaster) UdpBroadcaster->SetLidarBroadcastEnabled(true);
+		return TEXT("true");
+	}
+	else if (Method == TEXT("disableLidarUdpBroadcast"))
+	{
+		// Counterpart to enableLidarUdpBroadcast. Bridges that switch
+		// transports mid-session (e.g. operator toggles
+		// IFSSIM_LIDAR_TRANSPORT and restarts the container) should
+		// disable the UDP broadcast on their way out, otherwise the
+		// next bridge picks up spurious old UDP at startup.
+		if (UdpBroadcaster) UdpBroadcaster->SetLidarBroadcastEnabled(false);
+		return TEXT("true");
+	}
 	else if (Method == TEXT("activateEbs"))
 	{
 		// EBS via the handbrake channel (pneumatic analog). The previous

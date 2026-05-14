@@ -148,6 +148,23 @@ public:
 	/** Update target IP at runtime (called when bridge registers via TCP) */
 	void SetTargetIP(const FString& IP);
 
+	/** Toggle the UDP LiDAR broadcast at runtime.
+	 *
+	 *  Default OFF since PR-#482: the primary LiDAR transport is now TCP
+	 *  via FFSDSRpcServer::StreamLidar, so sending UDP unconditionally
+	 *  wastes ~1.5 MB/s of game-thread CPU + loopback bandwidth on packets
+	 *  the bridge isn't listening for. Bridges using the legacy chunked-
+	 *  UDP path (IFSSIM_LIDAR_TRANSPORT=udp) re-enable this via the
+	 *  `enableLidarUdpBroadcast` RPC command at connection time.
+	 *
+	 *  Sensor UDP fanout (BroadcastSensorFrame) is unaffected — its
+	 *  per-tick cost is two orders of magnitude lower and it's kept on
+	 *  unconditionally so any future consumer of the UDP sensor stream
+	 *  doesn't need a similar opt-in.
+	 */
+	void SetLidarBroadcastEnabled(bool bEnabled) { bLidarBroadcastEnabled.store(bEnabled); }
+	bool IsLidarBroadcastEnabled() const { return bLidarBroadcastEnabled.load(); }
+
 	// FTickableGameObject — engine ticks us automatically while bRunning.
 	// Editor-only ticking is disabled (the broadcaster only does anything
 	// useful when a vehicle pawn is possessed, which only happens in PIE).
@@ -177,6 +194,10 @@ private:
 	TSharedPtr<FInternetAddr> LidarAddr;
 
 	std::atomic<bool> bRunning{false};
+
+	// Runtime gate on LiDAR-over-UDP broadcasting. Default OFF (PR-#482);
+	// see SetLidarBroadcastEnabled() header doc for the rationale.
+	std::atomic<bool> bLidarBroadcastEnabled{false};
 	// Count of LiDAR send AsyncTasks dispatched but not yet finished.
 	// BroadcastLidarFrame moves the per-chunk send loop onto a background
 	// worker thread; the lambda captures LidarSocket by raw pointer. If
