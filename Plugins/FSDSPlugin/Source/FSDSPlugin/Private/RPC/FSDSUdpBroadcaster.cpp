@@ -155,12 +155,21 @@ void FFSDSUdpBroadcaster::Tick(float DeltaTime)
 	// Always broadcast sensor frame (every tick = engine frame rate)
 	BroadcastSensorFrame();
 
-	// LiDAR at ~10Hz
+	// LiDAR at ~10Hz — gated on bLidarBroadcastEnabled since PR-#482
+	// (default OFF; bridges using the chunked-UDP fallback path turn
+	// it on via the `enableLidarUdpBroadcast` RPC). Keep the
+	// accumulator advancing even when disabled so the 10 Hz cadence
+	// is preserved if a consumer enables UDP mid-session — otherwise
+	// the first scan after enable would race the readback and might
+	// emit a stale point cloud.
 	LidarAccumulator += DeltaTime;
 	if (LidarAccumulator >= LidarInterval)
 	{
 		LidarAccumulator -= LidarInterval;
-		BroadcastLidarFrame();
+		if (bLidarBroadcastEnabled.load(std::memory_order_relaxed))
+		{
+			BroadcastLidarFrame();
+		}
 	}
 }
 

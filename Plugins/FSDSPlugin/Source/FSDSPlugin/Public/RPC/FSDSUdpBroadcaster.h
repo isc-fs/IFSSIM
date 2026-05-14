@@ -93,6 +93,38 @@ struct FFSDSLidarChunkHeader
 	// physically-grounded model. Stride was 3 floats pre-#255.
 };
 
+// Wire header for the TCP LiDAR stream (PR-#482). One header per scan,
+// sent over the streaming TCP connection the bridge opens by sending
+// "streamLidar\n" on port IFSSIM_PORT. Followed immediately by
+// `TotalPoints * 4 * sizeof(float)` bytes of (x, y, z, intensity)
+// floats — no chunking, no fragmentation handling at the application
+// level (TCP is a byte stream; SendAll/readExact handle partial
+// progress on either side).
+//
+// Why a separate struct from FFSDSLidarChunkHeader: the chunked-UDP
+// header carried ChunkIndex / TotalChunks / PointsInChunk fields the
+// bridge needed for reassembly. TCP doesn't need any of that — one
+// header is the whole scan. Carrying the unused fields would bloat
+// the wire format and confuse future readers into thinking TCP also
+// chunks. Same Magic ("LIDR") so the bridge's first-bytes-magic check
+// is recognisable from either path; FrameID / Channels / TotalPoints
+// / LagNs semantics match the chunked header so all downstream code
+// (lidar_cb_, onLidarFrame, ROS stamp recovery via LagNs) is
+// transport-agnostic.
+struct FFSDSLidarStreamHeader
+{
+	uint32 Magic = 0x4C494452; // "LIDR"
+	uint32 FrameID = 0;
+	int32  Channels = 0;
+	int32  TotalPoints = 0;
+	int64  LagNs = 0;
+};
+static_assert(sizeof(FFSDSLidarStreamHeader) == 24,
+	"FFSDSLidarStreamHeader is the on-wire LiDAR-stream header — "
+	"its size is part of the bridge↔sim ABI. If you grow or shrink "
+	"this struct, bump a wire-version field instead of expecting "
+	"old bridges to keep parsing.");
+
 #pragma pack(pop)
 
 /**
@@ -115,6 +147,23 @@ public:
 
 	/** Update target IP at runtime (called when bridge registers via TCP) */
 	void SetTargetIP(const FString& IP);
+
+	/** Toggle the UDP LiDAR broadcast at runtime.
+	 *
+	 *  Default OFF since PR-#482: the primary LiDAR transport is now TCP
+	 *  via FFSDSRpcServer::StreamLidar, so sending UDP unconditionally
+	 *  wastes ~1.5 MB/s of game-thread CPU + loopback bandwidth on packets
+	 *  the bridge isn't listening for. Bridges using the legacy chunked-
+	 *  UDP path (IFSSIM_LIDAR_TRANSPORT=udp) re-enable this via the
+	 *  `enableLidarUdpBroadcast` RPC command at connection time.
+	 *
+	 *  Sensor UDP fanout (BroadcastSensorFrame) is unaffected — its
+	 *  per-tick cost is two orders of magnitude lower and it's kept on
+	 *  unconditionally so any future consumer of the UDP sensor stream
+	 *  doesn't need a similar opt-in.
+	 */
+	void SetLidarBroadcastEnabled(bool bEnabled) { bLidarBroadcastEnabled.store(bEnabled); }
+	bool IsLidarBroadcastEnabled() const { return bLidarBroadcastEnabled.load(); }
 
 	// FTickableGameObject — engine ticks us automatically while bRunning.
 	// Editor-only ticking is disabled (the broadcaster only does anything
@@ -145,6 +194,10 @@ private:
 	TSharedPtr<FInternetAddr> LidarAddr;
 
 	std::atomic<bool> bRunning{false};
+
+	// Runtime gate on LiDAR-over-UDP broadcasting. Default OFF (PR-#482);
+	// see SetLidarBroadcastEnabled() header doc for the rationale.
+	std::atomic<bool> bLidarBroadcastEnabled{false};
 	// Count of LiDAR send AsyncTasks dispatched but not yet finished.
 	// BroadcastLidarFrame moves the per-chunk send loop onto a background
 	// worker thread; the lambda captures LidarSocket by raw pointer. If

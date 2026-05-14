@@ -56,10 +56,19 @@ private:
 	bool ProcessBinaryRequest(const FString& Request, FSocket* ClientSocket);
 
 	/** Streaming modes — hold connection open and push data continuously.
-	 *  StreamLidar removed in #322 (TCP LiDAR retired in favour of
-	 *  UDP via FSDSUdpBroadcaster::BroadcastLidarFrame). */
+	 *  StreamLidar was retired in #322 (TCP LiDAR moved to chunked UDP
+	 *  via FSDSUdpBroadcaster::BroadcastLidarFrame to dodge a macOS
+	 *  Docker Desktop TCP loopback throughput cap that no longer
+	 *  exists on modern Docker Desktop). PR-#482 brings TCP LiDAR
+	 *  back as the primary transport because the UDP path's wedge
+	 *  modes (userspace UDP proxy losing bindings under sustained
+	 *  fragmented load on Mac/Windows Docker Desktop, kernel rcvbuf
+	 *  overflow in WSL2 on Windows) are structurally unfixable
+	 *  cross-platform from inside the plugin. */
 	void StreamSensors(FSocket* ClientSocket);
+	void StreamLidar(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;
+	uint32 LidarStreamFrameCounter = 0;
 
 	// Cached binary data for thread-safe transfer
 	TArray<uint8> CachedImageData;
