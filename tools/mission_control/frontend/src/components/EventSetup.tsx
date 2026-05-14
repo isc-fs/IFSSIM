@@ -6,6 +6,27 @@ import { useConfirm } from './ConfirmDialog'
 const EVENTS = ['trackdrive', 'autocross', 'acceleration', 'skidpad'] as const
 type EventName = typeof EVENTS[number]
 
+// #465 — localStorage key for the "Record bag" checkbox. Persisted
+// across page reloads so a tester who always wants recordings doesn't
+// have to re-tick every session.
+const LS_RECORD_BAG = 'ifssim.mc.record_bag'
+
+function loadRecordBagPref(): boolean {
+  try {
+    return localStorage.getItem(LS_RECORD_BAG) === '1'
+  } catch {
+    return false
+  }
+}
+
+function saveRecordBagPref(v: boolean) {
+  try {
+    localStorage.setItem(LS_RECORD_BAG, v ? '1' : '0')
+  } catch {
+    /* private-mode / quota — best-effort persistence */
+  }
+}
+
 export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) {
   const [event, setEvent] = useState<EventName>('trackdrive')
   const [laps, setLaps] = useState(10)
@@ -14,6 +35,9 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
   // double-click can't re-fire the 4.5 s event_start sequence (#327 B7) or
   // queue a duplicate pipeline-stop. Cleared in the finally block.
   const [busy, setBusy] = useState(false)
+  // #465 — optional bag-record. Default to the localStorage-persisted
+  // preference. Disabled while busy (same gating as other inputs).
+  const [recordBag, setRecordBag] = useState<boolean>(loadRecordBagPref)
   const confirm = useConfirm()
   // `initialSyncDoneRef` ensures we mirror the sim's reported event ONCE
   // when the first non-unknown frame lands, then leave the local
@@ -73,6 +97,23 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
           </div>
         )}
 
+        {/* #465 — bag-record toggle. Sits ABOVE the Start/Stop row
+            so the operator sees it as part of "what this Start will
+            do" rather than a stray control. Persisted preference. */}
+        <label className="flex items-center gap-2 mb-3 text-sm text-gray-300 select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={recordBag}
+            disabled={busy}
+            onChange={e => { setRecordBag(e.target.checked); saveRecordBagPref(e.target.checked) }}
+            className="w-4 h-4 accent-[#ffb81c] disabled:opacity-50"
+          />
+          <span>Record bag (mcap)</span>
+          <span className="text-gray-500 text-xs">
+            — saves a full topic dump to <code className="text-gray-400">bags/</code> while the session runs
+          </span>
+        </label>
+
         <div className="flex gap-3 flex-wrap items-center">
           <button
             disabled={busy}
@@ -80,8 +121,26 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
               setBusy(true)
               setMsg('Starting…')
               try {
-                const r = await api('/api/event/start', { event_type: event, num_laps: laps })
-                setMsg(r.ok ? `Session started: ${r.event} (${r.laps} laps)` : `Error: ${r.error ?? 'unknown'}`)
+                const r = await api('/api/event/start', {
+                  event_type: event,
+                  num_laps: laps,
+                  record_bag: recordBag,
+                })
+                if (r.ok) {
+                  let m = `Session started: ${r.event} (${r.laps} laps)`
+                  // The backend echoes bag info on the response if
+                  // record_bag was true. Surface failures clearly —
+                  // the session is up but recording isn't, so the
+                  // operator knows not to wait for an mcap.
+                  if (r.bag?.error) {
+                    m += ` — recording failed: ${r.bag.error}`
+                  } else if (r.bag?.name) {
+                    m += ` — recording: ${r.bag.name}`
+                  }
+                  setMsg(m)
+                } else {
+                  setMsg(`Error: ${r.error ?? 'unknown'}`)
+                }
               } catch (e) {
                 setMsg(`Error: ${e instanceof Error ? e.message : String(e)}`)
               } finally {
@@ -131,6 +190,30 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
           </button>
           {telemetry.pipeline_enabled && (
             <span className="text-green-400 text-xs font-medium animate-pulse">● PIPELINE RUNNING</span>
+          )}
+          {/* #465 — bag-record live badge. Visible whenever the
+              recorder is alive (starting/recording) and stays visible
+              one terminal-state tick after stop so the operator sees
+              the "stopped" or "failed" outcome without missing it. */}
+          {telemetry.bag_state === 'recording' && (
+            <span className="text-red-400 text-xs font-medium animate-pulse">
+              ● RECORDING{telemetry.bag_name ? ` — ${telemetry.bag_name}` : ''}
+            </span>
+          )}
+          {telemetry.bag_state === 'starting' && (
+            <span className="text-amber-400 text-xs font-medium">
+              ◌ starting recorder…
+            </span>
+          )}
+          {telemetry.bag_state === 'stopped' && telemetry.bag_name && (
+            <span className="text-gray-400 text-xs">
+              ◍ bag saved: {telemetry.bag_name}
+            </span>
+          )}
+          {telemetry.bag_state === 'failed' && (
+            <span className="text-red-500 text-xs font-medium">
+              ✗ recording failed (see logs)
+            </span>
           )}
         </div>
 
