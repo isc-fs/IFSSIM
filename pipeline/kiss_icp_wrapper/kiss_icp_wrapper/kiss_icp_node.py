@@ -96,6 +96,11 @@ KISS_MIN_RANGE_M = 0.5
 KISS_VOXEL_SIZE_M = 0.5
 KISS_INITIAL_THRESHOLD_M = 2.0
 
+# Sentinel for the timestamps argument when per-point timestamps are
+# not available (see `_on_scan` for the gory reason this isn't `None`).
+# Built once at module load; KissICP doesn't mutate the array.
+_EMPTY_TIMESTAMPS = np.array([], dtype=np.float64)
+
 
 def _rotation_matrix_to_quaternion(R: np.ndarray) -> tuple[float, float, float, float]:
     """Convert a 3x3 rotation matrix to (qx, qy, qz, qw) — ROS convention.
@@ -267,16 +272,34 @@ class KissIcpNode(LifecycleNode):
 
         # KISS-ICP wants float64 xyz. Per-point timestamps are not
         # available in the FSDS-format clouds we ship today, so we
-        # skip the deskewing step (passing None to register_frame).
+        # signal "no deskewing" with the empty-array sentinel — this
+        # is exactly the pattern the upstream KITTI reader uses
+        # (kiss_icp/datasets/generic.py: ReadKITTI returns
+        # `np.array([])` for timestamps).
+        #
+        # API gotchas we hit during integration (kiss-icp 1.3.0):
+        #   * Passing `None` crashes: `Preprocessor.preprocess()` does
+        #     `timestamps.ravel()` unconditionally and raises
+        #     "'NoneType' has no attribute 'ravel'".
+        #   * Passing `np.zeros(N)` SIGABRTs deeper in the C++ stack:
+        #     all-equal timestamps make the deskew compensator
+        #     produce NaN angles, which Sophus's `SO3::exp` ENSUREs
+        #     out on. Process exits -6.
+        #   * Empty `np.array([])` is the only safe "skip deskew"
+        #     value — the C++ side branches on `timestamps.empty()`
+        #     and skips the compensation step.
+        #
         # At 10 Hz / <10 m/s the intra-scan motion is < 1 m which is
-        # below the FS-scale voxel resolution.
+        # below the FS-scale voxel resolution, so skipping deskew
+        # costs us at most a fraction of a voxel of registration
+        # accuracy.
         points = raw[:, :3].astype(np.float64)
 
         t0 = time.perf_counter()
         try:
             # Upstream API: register_frame(points, timestamps) -> (frame, keypoints).
             # Return value discarded; we only need kiss.last_pose afterwards.
-            self._kiss.register_frame(points, None)
+            self._kiss.register_frame(points, _EMPTY_TIMESTAMPS)
         except Exception as e:
             self._n_failures += 1
             if self._n_failures <= 5 or self._n_failures % 50 == 0:
