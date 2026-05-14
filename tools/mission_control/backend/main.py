@@ -948,6 +948,44 @@ def pipeline_stop():
                     "record_bag",
                     f"stopped {name} → {bag_info['path']}",
                 )
+                # #498 — auto-pull the finalised bag onto the host
+                # filesystem (and clean from the docker volume).
+                # Best-effort: a pull failure does NOT fail the
+                # pipeline-stop; the bag is still safe in the
+                # volume and the user can recover via
+                # `tools/pull-bag.sh`.
+                if _bag.is_auto_pull_enabled() and stop_resp.get("ok"):
+                    pull = _bag.auto_pull_and_clean(name)
+                    if pull.get("ok"):
+                        bag_info["host_path"] = pull["host_path"]
+                        _active_recording["host_path"] = pull["host_path"]
+                        if pull.get("error"):
+                            # Cleanup partial-failure path: bag is on host,
+                            # but the volume-side rm failed. Surface as a
+                            # warning, don't taint the bag_info["state"].
+                            log_event(
+                                "record_bag",
+                                f"auto-pulled {name} → {pull['host_path']} "
+                                f"(warning: {pull['error']})",
+                            )
+                        else:
+                            log_event(
+                                "record_bag",
+                                f"auto-pulled {name} → {pull['host_path']}",
+                            )
+                    else:
+                        # Pull failed: bag stays in volume. Log it so
+                        # the user knows to retrieve manually.
+                        bag_info["pull_error"] = pull.get(
+                            "error", "unknown auto-pull failure",
+                        )
+                        log_event(
+                            "record_bag",
+                            f"auto-pull failed for {name}: "
+                            f"{bag_info['pull_error']} — "
+                            "bag is still in /bags volume, "
+                            "retrieve with `tools/pull-bag.sh`",
+                        )
             # Keep the dict around with its terminal state so the
             # next /api/event/state response can still surface the
             # final bag path — cleared by the next event_start.

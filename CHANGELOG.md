@@ -12,6 +12,56 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **Auto-pull bag onto host filesystem on session stop** (#498,
+  closes the manual `pull-bag.sh` step from #490). When **Record bag
+  (mcap)** is ticked, clicking **Stop Session** now:
+  1. Finalises the bag in the docker volume (`ifssim_bags`, on
+     container ext4 — fast).
+  2. Streams the bag tarball out of `dv_pipeline_stack` via the
+     Python docker SDK (`container.get_archive`) and extracts it
+     into the host's `./bags/<name>/` (bind-mounted to mc_backend
+     as `/host_bags/`).
+  3. Cleans the volume-side copy via `container.exec_run(rm -rf …)`.
+
+  All inside the StopBag callback. No user action required to get
+  the bag onto the host filesystem; `tools/pull-bag.sh` is now the
+  manual-recovery path, not the default flow. Session log surfaces
+  progress + the final host path. Failure semantics are best-effort:
+  if the transfer fails (host disk full, etc.), the bag stays in
+  the volume and the user gets a clear log line pointing at the
+  manual recovery command.
+
+  Env-gated via `IFSSIM_BAG_AUTO_PULL` (default `1`). Set to `0` to
+  disable and keep the manual `pull-bag.sh` flow.
+
+  Why the Python SDK and not the docker CLI: the Linux docker CLI
+  inside mc_backend can't pass a Windows host path to `docker cp`
+  (the first `:` in `C:/Users/...` gets parsed as a container name,
+  and the daemon doesn't recognise `/c/Users/...` as a host mount).
+  The SDK uses the daemon's HTTP API directly — no argv parsing.
+  Tarball extraction uses Python 3.12+'s safe `filter="data"`
+  policy, plus a member-path traversal check for defence in depth.
+
+  **One security note**: the mc_backend container now mounts
+  `/var/run/docker.sock` (for the SDK) and `./bags:/host_bags`
+  (for the extraction target). docker.sock means anything that
+  compromises mc_backend can root the host. The blast radius for
+  mc_backend was already broad (it talks RPC to the sim, runs ROS
+  actions, holds the API key), so this doesn't materially change
+  the threat model for this dev/sim stack. For a hardened
+  deployment, set `IFSSIM_BAG_AUTO_PULL=0` AND drop both mounts
+  from `docker-compose.yml`.
+
+  The `./bags:/host_bags` bind-mount partially reverses #490's
+  retirement of host bind-mounts on the autonomy stack — but it
+  only applies to mc_backend (low-traffic) and only at session-stop
+  (write-only, not on any hot path), so the 30-90 s startup-time
+  cost #490 was targeting doesn't apply here. Recording itself
+  still lands in the named volume on container ext4 (fast); this
+  bind-mount only takes the finalised tarball at the end.
+
 ### Changed
 
 - **Documentation overhaul** (#492). Consolidated the three setup

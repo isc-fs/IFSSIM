@@ -264,6 +264,22 @@ services:
       # endpoints and the telemetry WebSocket.
       - IFSSIM_MC_API_KEY=${IFSSIM_MC_API_KEY:-}
       - IFSSIM_MC_CORS_ORIGINS=${IFSSIM_MC_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      # #498 — auto-pull bag to host on session stop. When true the
+      # mc_backend StopBag handler shells out to `docker cp` to copy
+      # the bag from the dv_pipeline_stack container's `/bags` volume
+      # into the host's `./bags/<name>/`, then `docker exec ... rm -rf`
+      # the volume-side copy. The user gets the bag on their host
+      # filesystem without running `tools/pull-bag.sh` manually. Set
+      # to "0" / "false" to keep the manual flow (volume stays
+      # populated, retrieve with `tools/pull-bag.sh`).
+      - IFSSIM_BAG_AUTO_PULL=${IFSSIM_BAG_AUTO_PULL:-1}
+      # Container name of the dv_pipeline_stack — mc_backend's auto-pull
+      # talks to the docker daemon via the Python SDK and addresses the
+      # source container by this name. Compose names it
+      # `<project>-<service>-<idx>` by default; the project prefix is
+      # `ifssim` (pinned by `image:` in this file) so the full name is
+      # stable.
+      - DV_PIPELINE_STACK_CONTAINER=ifssim-dv_pipeline_stack-1
     volumes:
       # Tracks dir: STAYS as a bind mount on purpose. mc_backend's
       # track_generate writes a CSV here; UE5 (the host process,
@@ -273,6 +289,28 @@ services:
       # (~few KB CSVs, infrequent writes) so the 9p/virtiofs cost is
       # negligible vs. its essential role bridging container ↔ host.
       - ./Content/tracks:/tracks
+      # #498 — docker socket for the auto-pull flow. mc_backend uses
+      # the Python docker SDK (`pip install docker`) to talk to the
+      # host daemon: stream `/bags/<name>` out of dv_pipeline_stack
+      # as a tarball, write it directly to /host_bags/ (bind-mounted
+      # below), then ask the daemon to `rm -rf /bags/<name>` inside
+      # dv_pipeline_stack. SECURITY NOTE: anything with docker.sock
+      # access can root the host. The blast radius for mc_backend is
+      # already broad (RPC into the sim, ROS action client, holds the
+      # API key), so this doesn't materially change the threat model
+      # for this dev/sim stack. Disable by setting
+      # `IFSSIM_BAG_AUTO_PULL=0` AND removing this mount if you want
+      # to harden the deployment.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # #498 — host-side landing directory for the auto-pulled bag.
+      # Mc_backend's docker SDK streams the bag tarball through this
+      # mount; the write is cross-filesystem (virtiofs on macOS, 9p
+      # on Windows + WSL2) but happens off the StopBag callback's hot
+      # path (the recording itself finalises in the named volume
+      # before this kicks in) and is only used at session-stop, so
+      # the per-import startup cost #490 was avoiding doesn't apply
+      # here.
+      - ./bags:/host_bags
       # `pipeline_ctrl` shared-volume mount removed in #381 — flag-file
       # path retired; autonomy bring-up is via StartMission action chain.
       #
