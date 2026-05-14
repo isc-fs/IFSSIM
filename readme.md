@@ -9,256 +9,45 @@ Racing Team as the test bench for the autonomy stack that runs on
 their IFS-08 race car.
 
 [![CI](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/isc-fs/IFSSIM/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/isc-fs/IFSSIM?display_name=tag&sort=semver)](https://github.com/isc-fs/IFSSIM/releases/latest)
 
 ---
 
-## I want to drive the sim
+## I just want to run it
 
-→ **[`docs/QUICKSTART.md`](docs/QUICKSTART.md)** — 15 minutes,
-   prerequisites + clone + cook + bridge up + first track loaded.
-   Manual driving works out of the box; for the autonomy stack, see
-   below.
+→ **[`docs/SETUP.md`](docs/SETUP.md)** — 20–45 min, end-to-end first
+time setup. Windows and macOS in parallel. Covers prereqs, clone,
+sim build (or pre-built download), Docker stack, first session in
+Mission Control, troubleshooting.
+
+Once you've finished SETUP, **[`docs/OPERATING.md`](docs/OPERATING.md)**
+is the daily-ops reference: recording MCAP bags, refreshing the bridge
+after a source edit, switching tracks, common-failure fixes.
 
 ## I want to wire my autonomy code to it
 
-→ **[`docs/autonomy_pipeline.md`](docs/autonomy_pipeline.md)** —
-   end-to-end architecture (sim → bridge → SLAM / planning /
-   control → Mission Control), integration contracts, the topics
-   and frames the bridge guarantees. The same code that runs on
-   the real IFS-08 runs against this sim.
-
-→ **[`docs/GETTING_STARTED_DOCKER.md`](docs/GETTING_STARTED_DOCKER.md)** —
-   bringing up the full bridge + autonomy stack alongside the
-   sim, in a Docker pipeline.
+→ **[`docs/AUTONOMY.md`](docs/AUTONOMY.md)** — end-to-end architecture
+(sim → bridge → SLAM / planning / control → Mission Control), the
+integration contract, the topics and frames the bridge guarantees.
+The same code that runs on the real IFS-08 runs against this sim.
 
 ## I want to know what every knob does
 
-→ **[`docs/FUNCTIONALITIES.md`](docs/FUNCTIONALITIES.md)** —
-   exhaustive technical reference: every sensor and its noise
-   model, the RPC API, the wire format, the ROS 2 topics with
-   types and rates, vehicle physics parameters, configuration
-   schema, coordinate conventions.
+→ **[`docs/REFERENCE.md`](docs/REFERENCE.md)** — exhaustive technical
+reference: every sensor and its noise model, the RPC API, the wire
+format, the ROS 2 topics with types and rates, vehicle physics
+parameters, configuration schema, coordinate conventions.
 
 ## I want to see what changed between releases
 
 → **[`CHANGELOG.md`](CHANGELOG.md)** — release-level human-readable
-   delta. Known limitations live there too — read it before
-   reporting "the IFS-08 CoG looks off".
+delta. Known limitations live there too — read it before reporting
+"the IFS-08 CoG looks off".
 
----
+## I want to contribute
 
-# Hacking on IFSSIM
-
-Everything below is for contributors — people writing PRs against
-this repository. If you only want to run the sim, the four links
-above are enough.
-
-## Getting set up
-
-1. Create a GitHub account if you don't have one yet.
-2. Download and install [GitHub Desktop](https://desktop.github.com/) (beginner) or [Git CLI](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) (advanced).
-
-   - If this is your first time using GitHub Desktop, make sure to read the [User Manual](https://help.github.com/desktop/guides/).
-   - If this is your first time using Git, start with a tutorial. There are many available online:
-     - [Git Tutorial](https://git-scm.com/docs/gittutorial)
-     - [Atlassian Git Tutorial](https://www.atlassian.com/git/tutorials/)
-   - Keep a copy of [GitHub's Git Cheat Sheet](https://services.github.com/kit/downloads/github-git-cheat-sheet.pdf) handy as a reference.
-
-3. Clone this repository to your machine:
-   - SSH: `git@github.com:isc-fs/IFSSIM.git`
-   - HTTPS: `https://github.com/isc-fs/IFSSIM.git`
-
-4. The repo uses **Git LFS** for binary assets (cone meshes, vehicle
-   textures, the M_LiDARStencilEncoder material). After cloning:
-   ```bash
-   git lfs install
-   git lfs pull
-   ```
-
-## How we work with this repository
-
-### Main branches
-
-The repository has two permanent branches:
-
-**`main`** is the production branch. It contains only validated code. Never work directly on it.
-
-**`dev`** is the development branch. It is the integration point where everyone's work comes together. Never work directly on it either — all changes arrive through a feature branch.
-
-```
-main  ──────────────────●──────────────────────●──▶  (validated releases only)
-                        ↑                      ↑
-dev   ──────●───●───●───●───●───●───●───●───●──●──▶  (continuous integration)
-            ↑   ↑       ↑   ↑   ↑       ↑   ↑
-          feat/1 fix/1 feat/2 fix/2   feat/3 fix/3
-```
-
-### Feature branches
-
-All work — whether a new feature or a bug fix — is done on a **feature branch** created from `dev`. When the work is ready, a Pull Request is opened toward `dev`, reviewed, merged, and the branch is deleted.
-
-There are two branch types, each with its own independent numeric counter. Every branch name carries a short kebab-case title after the number so its purpose is visible at a glance:
-
-```
-feat/<n>-<short-title>   →  new functionality  (feat/1-frame-layout, feat/2-isotp, ...)
-fix/<n>-<short-title>    →  bug fix            (fix/1-wrp-race,      fix/2-crc-pad,  ...)
-```
-
-The short title should be 2–4 lowercase words joined by dashes. The `feat` and `fix` counters are independent: `feat/2-…` and `fix/2-…` can exist at the same time with no conflict.
-
-### Tracking branch history
-
-Feature branches are deleted after merging to keep the repository clean. The history of each branch is preserved in **GitHub Issues**.
-
-Every branch has one associated issue. The issue carries a **label** (`feat` or `fix`) and its title includes the branch number, for example: `[feat/3] Add simulation model for steering`. When the branch is merged and deleted, the issue is closed — becoming a permanent record of all the work done.
-
-To see which branches are currently active: filter issues by label and status `open`.
-To browse the full history: filter by label and status `closed`.
-The number for the next branch of each type is the last closed issue of that type plus one.
-
-> Example: if the last closed issue with label `feat` is `[feat/4-…] ...`, the next feature branch will be `feat/5-<your-title>`.
-
-## Continuous integration
-
-Every PR to `dev` or `main` runs through a four-job CI suite (`.github/workflows/ci.yml`) on free GitHub-hosted Linux runners — total wall time under 4 minutes. PRs cannot merge with a red status.
-
-| Job | What it checks | When it runs |
-|---|---|---|
-| **Bridge — colcon build** | `ifssim_bridge` + `fs_msgs` compile cleanly on ROS 2 Humble | every PR |
-| **Mission Control — frontend** | ESLint clean, `tsc --noEmit` clean, production `npm run build` succeeds | every PR |
-| **Mission Control — backend** | `compileall` syntax check, `pytest` for `track_validators` + `scoring` (pure-Python unit tests, ~70 cases) | every PR |
-| **Tracks — CSV validator** | every `Content/tracks/*.csv` parses (correct field count, known cone types, numeric coordinates within ±500 m) | every PR |
-
-### Release pipelines (per-platform)
-
-Three workflows produce shipping builds when a version tag (e.g. `v0.1.0`) is pushed. All run on **self-hosted runners** because UE5 5.7 must be installed on the host — there's no GitHub-hosted runner with UE5 pre-baked, and installing the engine per-run is impractical.
-
-| Workflow | Runner label | Requirements | Local-dev script |
-|---|---|---|---|
-| `package-mac.yml` | `[self-hosted, macOS]` | UE5 5.7 + Mac codesigning identity | `./package_mac.sh` |
-| `package-linux.yml` | `[self-hosted, Linux]` | UE5 5.7 (Linux clone of UnrealEngine, built from source — Epic doesn't ship a Linux binary) | `./package_linux.sh` |
-| `package-windows.yml` | `[self-hosted, Windows]` | UE5 5.7 + Visual Studio 2022 (C++ workload) | `./package_windows.ps1` |
-
-Each runner needs `UE5_ROOT` exported in its env (e.g. `/Users/Shared/Epic Games/UE_5.7` on Mac, `/opt/UE_5.7` on Linux, `C:\Program Files\Epic Games\UE_5.7` on Windows). Register at **Settings → Actions → Runners → New self-hosted runner**.
-
-The local-dev scripts (`package_mac.sh`, `package_linux.sh`, `package_windows.ps1`) produce the same staged distribution shape — `Saved/StagedBuilds/<Platform>/` with the binary, `tracks/` sibling directory, patched `UECommandLine.txt`. They run on the corresponding host platform; `package_linux.sh` can also cross-compile from a macOS dev box if Epic's Linux Clang Toolchain is installed (set `LINUX_MULTIARCH_ROOT`).
-
-**No self-hosted runners registered yet?** That's OK. The CI gate above (Bridge / Frontend / Backend / Tracks) runs on free GitHub-hosted runners and protects every PR. The release workflows just sit idle until a tag is pushed AND a runner is online — without runners, tag pushes won't produce release artefacts but won't break anything else.
-
-### Running CI locally
-
-```bash
-# Bridge build (inside the dv_pipeline_stack container)
-docker compose exec dv_pipeline_stack bash -lc \
-  'cd /dv_pipeline_stack_ws && source /opt/ros/humble/setup.bash && \
-   colcon build --packages-select ifssim_bridge'
-
-# Frontend
-cd tools/mission_control/frontend && npx eslint src && npx tsc --noEmit && npm run build
-
-# Backend
-cd tools/mission_control/backend && pytest tests/ -v
-
-# Track CSV validator
-python3 tools/validate_tracks.py
-
-# Markdown internal-link checker (skip external URLs)
-npx lychee --offline ./readme.md ./CHANGELOG.md ./docs/**/*.md
-```
-
-If all five pass locally, the CI gate will pass too.
-
-### Pre-commit hooks (optional)
-
-Want CI's checks to run on every `git commit` instead of waiting for the push? Install the [pre-commit](https://pre-commit.com) framework once per machine:
-
-```bash
-pip install pre-commit
-pre-commit install        # in the repo root — installs the git hook
-```
-
-From then on, every commit runs ruff (Python lint + format), ESLint (frontend), the track CSV validator (when CSVs change), plus repo hygiene (trailing whitespace, EOL, large-file guard). Skip in an emergency with `git commit -n`; the push-time CI gate will still catch the issue. To run all hooks against all files (after a rebase, say): `pre-commit run --all-files`.
-
-## Automation
-
-The repository includes a GitHub Actions workflow that manages tracking issues automatically. No setup is required — it works for every developer as soon as they create a branch.
-
-### Automatic issue creation
-
-When a `feat/*` or `fix/*` branch is pushed to GitHub, the workflow automatically opens an issue with:
-
-- A title that mirrors the branch name — `[feat/N-short-title]` or `[fix/N-short-title]`
-- The correct label (`feat` or `fix`)
-- A template with sections for describing the work and adding notes
-- The name of the developer who created the branch
-
-### Wrong number warning
-
-If the branch number is not the next expected one (either too low or too high), the issue will display a warning indicating the correct number and asking the developer to delete and recreate the branch with the right name.
-
-### Auto-fill description from first commit
-
-When the developer makes their first commit and pushes it, the workflow automatically updates the *"What does this branch do?"* section of the issue with that commit message.
-
-- If the developer manually edits the issue before pushing their first commit, the workflow will not overwrite the description.
-- The description is only updated once — subsequent commits do not modify the issue.
-
-## Step-by-step workflow
-
-### 1. Create the branch
-
-```bash
-# Make sure you are on an up-to-date dev
-git checkout dev
-git pull origin dev
-
-# Create your branch using the next available number for its type
-# (last closed issue of that type + 1) plus a short kebab-case title
-git checkout -b feat/5-frame-layout    # or fix/3-wrp-race, etc.
-```
-
-> To find the right number: go to **Issues → filter by label `feat` or `fix` → sort by newest** and read the last number.
-
-### 2. Push the branch
-
-```bash
-git push origin feat/5-frame-layout
-```
-
-The tracking issue will be opened automatically on GitHub within seconds.
-
-### 3. Work and commit
-
-```bash
-# Make your changes and commit with a clear, descriptive message
-git add .
-git commit -m "short description of what this commit does"
-
-# Push the changes
-git push origin feat/5-frame-layout
-```
-
-The message of your **first commit** will be used to automatically fill in the issue description.
-
-### 4. Open a Pull Request
-
-When the work is ready, open a Pull Request on GitHub from your branch toward `dev`. In the PR description write `Closes #<issue-number>` so the issue closes automatically when the PR is merged.
-
-Before requesting a review, check that:
-- The CI gate is green (Bridge / Frontend / Backend / Tracks all passing)
-- You have tested the change if applicable
-- The PR targets `dev`, not `main`
-- If your change is user-visible, **`CHANGELOG.md` has a one-liner under `## [Unreleased]`**
-
-### 5. Review and merge
-
-Another team member will review the PR. Once approved, it is merged into `dev` and the branch is deleted. The issue will be closed as a permanent record.
-
-### 6. Merging into main
-
-When `dev` holds a set of validated changes that are ready, a responsible team member opens a Pull Request from `dev` into `main`. This only happens after full validation.
-
-When cutting a release, move the `[Unreleased]` block in `CHANGELOG.md` under the new version heading, push a `vX.Y.Z` tag, and the per-platform release workflows pick it up (provided the corresponding self-hosted runners are registered — see "Release pipelines" above).
+→ **[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)** — branch flow,
+CI gate, release process, conventions.
 
 ---
 

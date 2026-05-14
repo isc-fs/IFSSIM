@@ -38,7 +38,7 @@ parameters (alpha_vx, beta_vy_decay, calibration window) are tuned
 against the existing slam_node motor-RPM velocity prior; revisit
 once we have GT-aligned residual data on a few real drives.
 
-Open question — see docs/autonomy_pipeline.md §"Open questions" Q2:
+Open question — see docs/AUTONOMY.md §"Open questions" Q2:
 the algorithm currently ingests IMU at full 400 Hz native rate. There
 is a follow-up to evaluate whether downsampling to 100 Hz (matching
 the publish rate) loses meaningful filter quality. Bias estimation

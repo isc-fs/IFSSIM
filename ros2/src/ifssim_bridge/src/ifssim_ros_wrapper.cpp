@@ -89,7 +89,7 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // entirely (production default; no extra publisher, no per-frame
     // subsample work). Set via the `LIDAR_VIZ_DECIMATION` env var in
     // docker-compose.yml or as a launch parameter override. See
-    // onLidarFrame() for the publish path and FUNCTIONALITIES.md §7
+    // onLidarFrame() for the publish path and REFERENCE.md §7
     // for the operator-facing rationale.
     {
         const int dec = node_->declare_parameter<int>("lidar_viz_decimation", 0);

@@ -567,9 +567,9 @@ LiDAR transport is hard-wired to UDP since #322. Earlier versions exposed a `lid
 | `testing_only/track` | `fs_msgs/Track` (latched) | 0.2 Hz | All cone positions. *Hidden in competition mode.* |
 | `testing_only/extra_info` | `fs_msgs/ExtraInfo` | 1 Hz | DOO counter, OC counter, lap count. *Hidden in competition mode.* |
 
-> **Topic naming.** The bridge today publishes bare names (no `/fsds/` prefix) and consumers remap or namespace as needed. The autonomy submodule expects a `/fsds/*` namespace per the integration contract in [`autonomy_pipeline.md`](autonomy_pipeline.md); the prefix renames are an open IFSSIM-side work item — until they land, consumers do the prefix on their side.
+> **Topic naming.** The bridge today publishes bare names (no `/fsds/` prefix) and consumers remap or namespace as needed. The autonomy submodule expects a `/fsds/*` namespace per the integration contract in [`AUTONOMY.md`](AUTONOMY.md); the prefix renames are an open IFSSIM-side work item — until they land, consumers do the prefix on their side.
 
-**Bridge TF behavior.** The bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`; cameras use the FSDS-internal hierarchical name `fsds/FSCar/<cam_name>` in their image messages but it's not part of the live TF chain) — autonomy nodes consume the sensors directly without TF lookups. The bridge publishes a few static TFs at startup (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`) on `/tf_static`, populated from the corresponding `getSensorOffset` RPC. The live TF tree (`map → odom → base_link`) is published by `slam_node`; see [`autonomy_pipeline.md`](autonomy_pipeline.md). `/testing_only/odom` is for debugging only — the autonomy must not consume it.
+**Bridge TF behavior.** The bridge does not publish any dynamic TF. Sensor messages carry sensor-local frame_ids (`fsds/IMU`, `fsds/GPS`, `fsds/Lidar`; cameras use the FSDS-internal hierarchical name `fsds/FSCar/<cam_name>` in their image messages but it's not part of the live TF chain) — autonomy nodes consume the sensors directly without TF lookups. The bridge publishes a few static TFs at startup (`base_link → fsds/IMU`, `base_link → fsds/Lidar`, `base_link → fsds/GPS`) on `/tf_static`, populated from the corresponding `getSensorOffset` RPC. The live TF tree (`map → odom → base_link`) is published by `slam_node`; see [`AUTONOMY.md`](AUTONOMY.md). `/testing_only/odom` is for debugging only — the autonomy must not consume it.
 
 > **`/testing_only/odom` is fully ground-truth.** Both pose and twist are sourced from the vehicle pawn's clean kinematics — no sensor in the loop, no GSS noise. The plugin packs a separate clean body-frame velocity field into `SensorFrame` (`GtVelBodyX/Y/Z`) and the bridge sources `twist.linear` from those fields with a tiny `1e-9` diagonal covariance. The `/gss` topic continues to carry the noisy GSS sensor model where the noise belongs.
 
@@ -851,7 +851,7 @@ The frontend stores the key in `localStorage` under `mc_api_key`; on the first 4
 | `/api/event/set` | POST | Set event type and lap count |
 | `/api/event/start` | POST | Start a session — sends `StartMission` to the autonomy lifecycle. Refuses with HTTP 400 if no track loaded (cones=0). |
 
-The `/api/event/start` flow drives the autonomy lifecycle through the typed mission-management interface: the backend is an `rclpy` Action client of `sim_supervisor_node` and sends `StartMission` with the chosen mission. The supervisor relays to `mission_control_node`, which drives `mode_manager` to bring up the right lifecycle nodes with the right strategy flag. Phase 1 (startup) runs the heartbeat + JIT-warmup window; once it reports `ready`, Phase 2 begins and actuator commands start flowing through the supervisor to the bridge. Sim-only setup steps (track load, sim pause/resume, RES line) stay on the bridge JSON-RPC, called by the same backend in parallel. See [`autonomy_pipeline.md`](autonomy_pipeline.md) for the protocol details.
+The `/api/event/start` flow drives the autonomy lifecycle through the typed mission-management interface: the backend is an `rclpy` Action client of `sim_supervisor_node` and sends `StartMission` with the chosen mission. The supervisor relays to `mission_control_node`, which drives `mode_manager` to bring up the right lifecycle nodes with the right strategy flag. Phase 1 (startup) runs the heartbeat + JIT-warmup window; once it reports `ready`, Phase 2 begins and actuator commands start flowing through the supervisor to the bridge. Sim-only setup steps (track load, sim pause/resume, RES line) stay on the bridge JSON-RPC, called by the same backend in parallel. See [`AUTONOMY.md`](AUTONOMY.md) for the protocol details.
 
 **RES (Remote Emergency Stop):**
 
@@ -1023,7 +1023,7 @@ All coordinates in the TCP API, UDP streams, ROS 2 topics, Python client, and Mi
 
 ## 14. Autonomy Pipeline
 
-The autonomy stack — perception, SLAM, path planning, control — is the same code on the real car and in sim. It lives in a separate repo and is attached here as a submodule, so this functionality reference deliberately doesn't duplicate it. See [`autonomy_pipeline.md`](autonomy_pipeline.md) for the full architecture, which covers:
+The autonomy stack — perception, SLAM, path planning, control — is the same code on the real car and in sim. It lives in a separate repo and is attached here as a submodule, so this functionality reference deliberately doesn't duplicate it. See [`AUTONOMY.md`](AUTONOMY.md) for the full architecture, which covers:
 
 - The integration contract between IFSSIM (sim, bridge, Mission Control web, viz) and the autonomy submodule.
 - The end-to-end topic graph from `/fsds/lidar/Lidar1` through `/fsds/control_command`.

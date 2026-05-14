@@ -12,6 +12,33 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Changed
+
+- **Documentation overhaul** (#492). Consolidated the three setup
+  entry points (`readme.md` → `QUICKSTART.md` → `GETTING_STARTED_DOCKER.md`)
+  into one unified path:
+  - **New** `docs/SETUP.md` — single first-time-user setup, parallel
+    Windows + macOS sections. Covers prereqs, submodule init, sim
+    build / download, Docker stack, first Mission Control session,
+    troubleshooting. Replaces `QUICKSTART.md` (Mac-only, stale post-#482)
+    and `GETTING_STARTED_DOCKER.md` (UE 5.4 + bind-mount workflow,
+    both wrong post-v0.1.0 / #490).
+  - **New** `docs/OPERATING.md` — daily ops: refresh-bridge cycle,
+    recording and retrieving MCAP bags, switching tracks, common
+    failures during a session.
+  - `docs/autonomy_pipeline.md` → `docs/AUTONOMY.md` (renamed, links
+    refreshed for the new doc names).
+  - `docs/FUNCTIONALITIES.md` → `docs/REFERENCE.md` (renamed so
+    first-time users don't mistake the 1000-line reference for setup).
+  - **New** `docs/CONTRIBUTING.md` — branch flow + CI + release
+    process. Extracted from `readme.md`'s "Hacking on IFSSIM" section.
+  - `readme.md` slimmed to a thin front door (45 lines). All
+    contributor flow moved to `CONTRIBUTING.md`.
+  - `.github/ISSUE_TEMPLATE/*.yml` + `PULL_REQUEST_TEMPLATE.md`
+    repointed at the new doc names. Code comments in
+    `docker/`, `pipeline/sim_supervisor/`, `ros2/src/ifssim_bridge/`
+    also updated.
+
 ### Planned for v0.1.2
 
 - **Cone-floor clipping fix.** Spline-spawned cones currently sit a
