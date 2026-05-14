@@ -230,6 +230,69 @@ class FactorGraph:
         self._new_factors.add(gtsam.PriorFactorVector(
             V(self._k), v_world, noise))
 
+    def stage_kiss_icp_prior(
+        self,
+        pose: gtsam.Pose3,
+        sigma_xy_m: float = 0.05,
+        sigma_z_m: float = 0.20,
+        sigma_yaw_rad: float = 0.02,
+        sigma_roll_pitch_rad: float = 0.10,
+    ) -> None:
+        """Add a `PriorFactorPose3` on `X(self._k)` from a KISS-ICP-derived
+        pose estimate. Used to pin the global rotation degree of freedom
+        that cone-only DA cannot resolve in cone-poor scans — the root
+        cause of the cascade documented in
+        docs/archive/2026-05-06_slam-phase2-cascade-frozen.md.
+
+        Issue #485 (Pattern A): KISS-ICP runs as a sibling node, publishing
+        /odom_lidar at scan rate. The node passes the KISS-ICP pose for
+        the current scan window here; iSAM2 then has a strong xy + yaw
+        anchor every scan regardless of cone density.
+
+        The pose argument must already be expressed in the same frame as
+        the SLAM anchor (X(0)). The caller is responsible for capturing
+        the KISS-ICP frame ↔ SLAM frame offset at `initialize_anchor`
+        time and applying it before invoking this method — exactly the
+        same delta-from-first-pose pattern the GT-aligned diagnostic
+        uses (`_gt_init_pose` in cone_graph_slam_node.py).
+
+        Default sigmas:
+          σ_xy   = 5 cm   — KISS-ICP's scan-to-scan position residual on
+                            a Hesai-class cloud at 10 Hz is sub-cm in
+                            steady state; 5 cm is a generous upper bound
+                            that accounts for adaptive-threshold ICP's
+                            occasional small misalignments without
+                            letting cone factors override KISS-ICP
+                            entirely.
+          σ_z    = 20 cm — looser because flat-track means there's no
+                            true z signal for KISS-ICP to lock onto;
+                            cone factors don't constrain z either, so
+                            the prior is the only constraint and we want
+                            it deliberately loose.
+          σ_yaw  = 0.02 rad (~1.1°) — KISS-ICP's yaw is the actual
+                            cascade-breaker. Tight enough to dominate
+                            cone-only DA, loose enough that a single
+                            bad ICP scan doesn't drag pose with it.
+          σ_rp   = 0.10 rad (~5.7°) — roll/pitch are uninteresting on
+                            flat ground; loose prior avoids overconstraining
+                            them.
+
+        Tangent ordering matches gtsam.Pose3 convention: [rx, ry, rz, tx,
+        ty, tz] — rotation first (rxx/ryy/rzz are roll/pitch/yaw in the
+        body-frame tangent space), translation second.
+        """
+        sigmas = np.array([
+            sigma_roll_pitch_rad,  # roll
+            sigma_roll_pitch_rad,  # pitch
+            sigma_yaw_rad,         # yaw
+            sigma_xy_m,            # x
+            sigma_xy_m,            # y
+            sigma_z_m,             # z
+        ])
+        noise = gtsam.noiseModel.Diagonal.Sigmas(sigmas)
+        self._new_factors.add(gtsam.PriorFactorPose3(
+            X(self._k), pose, noise))
+
     def stage_new_landmark(
         self,
         landmark_id: int,

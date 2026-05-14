@@ -177,6 +177,13 @@ RPM_TO_MS = 0.00821
 # rather than constraining the optimizer with last-good-but-stale data.
 RPM_STALE_S = 0.5
 
+# /odom_lidar (KISS-ICP) freshness threshold. KISS-ICP publishes at the
+# LiDAR scan rate (~10 Hz, 100 ms cadence). Anything older than 500 ms
+# means kiss_icp_node stalled, fell off, or never activated — fall back
+# to no prior rather than anchoring iSAM2 to a sample that no longer
+# reflects current geometry.
+KISS_STALE_S = 0.5
+
 
 class State(Enum):
     INIT_WAITING_IMU = 1
@@ -299,6 +306,20 @@ class ConeGraphSlamNode(LifecycleNode):
         self._sub_supervisor_odom = None
         self._latest_supervisor_odom: Optional[Odometry] = None
 
+        # KISS-ICP pose source (issue #485, Pattern A). When
+        # IFSSIM_USE_KISS_ICP_PRIOR is set, /odom_lidar is consumed
+        # as a per-scan PriorFactorPose3 on X(k) to fix the cone-only
+        # DA cascade. Off by default to keep the pre-#485 codepath
+        # unchanged for replay regression.
+        self._sub_kiss = None
+        self._latest_kiss_pose: Optional[gtsam.Pose3] = None
+        self._latest_kiss_t: Optional[float] = None
+        # Snapshot at calibration-end so subsequent KISS-ICP poses
+        # are expressed as a delta from this anchor. Mirrors
+        # _gt_init_pose for the GT-aligned diagnostic.
+        self._kiss_init_pose: Optional[gtsam.Pose3] = None
+        self._use_kiss_icp_prior: bool = False
+
         # Publisher / broadcaster handles (created in on_configure)
         self._tf_broadcaster = None
         self._state_pub = None
@@ -342,7 +363,22 @@ class ConeGraphSlamNode(LifecycleNode):
         # if many landmarks created at long range or during a yaw rotation
         # have body_y near the threshold and get locked the wrong colour, the
         # hypothesis is confirmed.
+        # KISS-ICP prior flag — read at configure time so a node restart
+        # with the env var flipped picks it up without a code change.
+        # Default off so the existing cone-only path is the regression
+        # baseline.
         import os as _os
+        self._use_kiss_icp_prior = _os.environ.get(
+            "IFSSIM_USE_KISS_ICP_PRIOR", "0").strip().lower() in (
+                "1", "true", "yes", "on")
+        if self._use_kiss_icp_prior:
+            self.get_logger().info(
+                "IFSSIM_USE_KISS_ICP_PRIOR enabled — /odom_lidar will be "
+                "consumed as a PriorFactorPose3 on X(k) (issue #485, Pattern A)")
+        self._latest_kiss_pose = None
+        self._latest_kiss_t = None
+        self._kiss_init_pose = None
+
         self._lm_capture_path = _os.environ.get("DV_SLAM_LANDMARK_CAPTURE", "")
         if self._lm_capture_path:
             try:
@@ -502,6 +538,22 @@ class ConeGraphSlamNode(LifecycleNode):
         self._sub_supervisor_odom = self.create_subscription(
             Odometry, "/odom", self._on_supervisor_odom, odom_qos)
 
+        # /odom_lidar — KISS-ICP-derived pose, BEST_EFFORT at scan
+        # rate (#485, Pattern A). Subscribed only when the env flag
+        # is set so an unset deployment stays bit-identical to the
+        # pre-#485 cone-only path. Reuses the same BEST_EFFORT QoS as
+        # the rest of the sensor topics; the publisher
+        # (kiss_icp_wrapper) is BEST_EFFORT too.
+        if self._use_kiss_icp_prior:
+            kiss_qos = QoSProfile(
+                reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=10,
+                durability=QoSDurabilityPolicy.VOLATILE,
+            )
+            self._sub_kiss = self.create_subscription(
+                Odometry, "/odom_lidar", self._on_kiss_odom, kiss_qos)
+
         # Latch /slam/finished=false on activate (#384 stub). The
         # publisher exists from on_configure; this fires the default
         # value so a subscriber that joins between configure and
@@ -517,7 +569,7 @@ class ConeGraphSlamNode(LifecycleNode):
         self.get_logger().info("on_deactivate: dropping subscriptions")
         for sub in (self._sub_imu, self._sub_cones,
                     self._sub_rpm, self._sub_gt,
-                    self._sub_supervisor_odom):
+                    self._sub_supervisor_odom, self._sub_kiss):
             if sub is not None:
                 self.destroy_subscription(sub)
         self._sub_imu = None
@@ -525,6 +577,7 @@ class ConeGraphSlamNode(LifecycleNode):
         self._sub_rpm = None
         self._sub_gt = None
         self._sub_supervisor_odom = None
+        self._sub_kiss = None
         return super().on_deactivate(state)
 
     def on_cleanup(
@@ -533,7 +586,7 @@ class ConeGraphSlamNode(LifecycleNode):
         self.get_logger().info("on_cleanup: destroying publishers + components")
         for sub in (self._sub_imu, self._sub_cones,
                     self._sub_rpm, self._sub_gt,
-                    self._sub_supervisor_odom):
+                    self._sub_supervisor_odom, self._sub_kiss):
             if sub is not None:
                 self.destroy_subscription(sub)
         self._sub_imu = None
@@ -541,6 +594,7 @@ class ConeGraphSlamNode(LifecycleNode):
         self._sub_rpm = None
         self._sub_gt = None
         self._sub_supervisor_odom = None
+        self._sub_kiss = None
 
         for pub in (self._state_pub, self._cones_pub,
                     self._gt_aligned_pub, self._gt_error_pub,
@@ -558,6 +612,12 @@ class ConeGraphSlamNode(LifecycleNode):
         # is now dynamic, computed from slam_pose ⊖ /odom).
         self._tf_broadcaster = None
         self._latest_supervisor_odom = None
+
+        # KISS-ICP state (issue #485). Reset alongside the rest of
+        # the per-mission caches so a re-configure starts cleanly.
+        self._latest_kiss_pose = None
+        self._latest_kiss_t = None
+        self._kiss_init_pose = None
 
         # Components
         self._preint = None
@@ -684,6 +744,35 @@ class ConeGraphSlamNode(LifecycleNode):
                 "no /testing_only/odom received before SLAM_RUNNING — "
                 "GT-aligned diagnostic disabled this run")
 
+        # KISS-ICP frame-offset anchor (#485, Pattern A). Same pattern
+        # as the GT-aligned diagnostic above: snapshot the latest seen
+        # KISS-ICP pose at the instant the SLAM graph anchor is locked
+        # at identity. All subsequent /odom_lidar samples will be
+        # expressed as the delta from this anchor before being staged
+        # as a PriorFactorPose3.
+        #
+        # If KISS-ICP hasn't published its first pose yet at this point
+        # (e.g. it activated late, or its first scan hasn't arrived),
+        # `_kiss_init_pose` stays None and the prior staging in
+        # `_on_cones` skips itself with a one-shot warning the first
+        # time the env flag is on but no anchor was captured. We don't
+        # spin waiting because cone_slam's bring-up is on the
+        # mode_manager critical path.
+        if self._use_kiss_icp_prior:
+            if self._latest_kiss_pose is not None:
+                self._kiss_init_pose = self._latest_kiss_pose
+                self.get_logger().info(
+                    f"KISS-ICP alignment anchor: "
+                    f"pos=({self._kiss_init_pose.x():+.2f}, "
+                    f"{self._kiss_init_pose.y():+.2f}, "
+                    f"{self._kiss_init_pose.z():+.2f}), "
+                    f"yaw={np.degrees(self._kiss_init_pose.rotation().yaw()):+.1f}°"
+                )
+            else:
+                self.get_logger().warn(
+                    "no /odom_lidar received before SLAM_RUNNING — "
+                    "KISS-ICP prior disabled until the first sample arrives")
+
     # ----- Cone observation callback (scan trigger) -------------------------
 
     def _on_cones(self, msg: MarkerArray) -> None:
@@ -726,6 +815,33 @@ class ConeGraphSlamNode(LifecycleNode):
                     v_body_long=self._latest_rpm,
                     predicted_yaw=_pred_yaw,
                 )
+
+        # KISS-ICP pose prior on X(k) — issue #485, Pattern A. The
+        # global-rotation anchor that the cone-only DA cascade needs
+        # but cannot provide itself. Three gates before staging:
+        #   1. Env flag set (`IFSSIM_USE_KISS_ICP_PRIOR=1` at boot).
+        #   2. KISS-ICP anchor was captured at SLAM_RUNNING entry
+        #      (`_kiss_init_pose is not None`).
+        #   3. The cached sample is fresh (< KISS_STALE_S).
+        # All three must hold; failing any one falls back to the
+        # pre-#485 cone-only path for this scan.
+        #
+        # Frame composition: KISS-ICP's pose is in its own integrator
+        # frame, with the LiDAR at identity at kiss_icp_node activation.
+        # SLAM's X(0) is at identity at calibration-end. The delta
+        #     T_slam_pose = T_kiss_anchor⁻¹ · T_kiss_now
+        # is the motion KISS-ICP observed between those two events —
+        # which is exactly the value of X(k) in the SLAM anchor frame.
+        if (self._use_kiss_icp_prior
+                and self._kiss_init_pose is not None
+                and self._latest_kiss_pose is not None
+                and self._latest_kiss_t is not None):
+            kiss_age = self._time.monotonic() - self._latest_kiss_t
+            if kiss_age <= KISS_STALE_S:
+                # T_slam_pose = T_kiss_anchor^-1 · T_kiss_now
+                prior_pose = self._kiss_init_pose.between(
+                    self._latest_kiss_pose)
+                self._graph.stage_kiss_icp_prior(prior_pose)
 
         # Parse cone observations from /Conos_raw markers.
         observations = self._observations_from_markers(msg)
@@ -1067,6 +1183,24 @@ class ConeGraphSlamNode(LifecycleNode):
     def _on_supervisor_odom(self, msg: Odometry) -> None:
         """Cache sim_supervisor's latest /odom sample for map→odom math."""
         self._latest_supervisor_odom = msg
+
+    def _on_kiss_odom(self, msg: Odometry) -> None:
+        """Cache KISS-ICP's latest /odom_lidar pose (issue #485, Pattern A).
+
+        Consumed inside `_on_cones` as a `PriorFactorPose3` on `X(k)`,
+        expressed as a delta from `_kiss_init_pose` (which is snapshotted
+        at SLAM_RUNNING entry — same pattern as `_gt_init_pose`).
+
+        BEST_EFFORT subscription matches kiss_icp_wrapper's publisher
+        QoS; dropped samples are tolerable since the cache holds the
+        latest value across any single missed message and the scan
+        callback only reads it once per scan window.
+        """
+        self._latest_kiss_pose = _odom_to_pose3(msg)
+        # Use monotonic time so a stamp clock reset (sim restart) can't
+        # poison the freshness check. The bridge publishes /odom_lidar
+        # at ~10 Hz so a freshness window of a few hundred ms is plenty.
+        self._latest_kiss_t = self._time.monotonic()
 
     def _publish_map_to_odom(self, stamp, result: ScanResult) -> None:
         """Broadcast the dynamic `map → odom` transform (Phase 2 #382).
