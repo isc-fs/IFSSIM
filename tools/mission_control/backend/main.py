@@ -365,32 +365,85 @@ def sim_reset():
         except Exception as ex:
             log_event("sim_reset",
                       f"autonomy stop failed (continuing reset anyway): {ex}")
+    # Resolve the target pose to teleport to. Priority order:
+    #
+    #   1. The plugin's stored start-gate pose (LastStartGateLoc_UE /
+    #      LastStartGateRot_UE), exposed via the `getStartGatePose`
+    #      RPC. This is the SAME pose `loadTrack` aligns the car to,
+    #      so "/api/sim/reset" becomes semantically "redo the car-
+    #      alignment step of the last loadTrack" — no cone respawn,
+    #      no scene rebuild, just the car. This is the authoritative
+    #      target whenever a track has been loaded.
+    #
+    #   2. Captured `home_pose` as fallback. Used only when no track
+    #      has been loaded yet (e.g. first sim connect on customMap
+    #      with no track) — in that regime the only "home" we know
+    #      is the PlayerStart pose snapshotted at first connect.
+    #
+    # Previous behaviour: read x/y/z from home_pose, DROP the captured
+    # quaternion, call teleport_pos (position-only). Two compounding
+    # bugs:
+    #   a) `home_pose` was captured at sim-connect, before the user
+    #      loaded a track. So its quaternion was PlayerStart's
+    #      (typically yaw=+90°), never the track's start gate.
+    #   b) Even if (a) were right, dropping the quaternion meant the
+    #      plugin's position-only handler restored the pawn's CURRENT
+    #      orientation — fine before a drive, wrong after one.
+    # Net result: post-drive resets returned the car to spawn XY but
+    # with whatever yaw it had when reset was pressed. Visible as the
+    # autonomy launching at the wrong heading on the first tick.
+    start_gate = None
+    try:
+        start_gate = sim.get_start_gate_pose()
+    except Exception as ex:
+        log_event("sim_reset",
+                  f"get_start_gate_pose failed (falling back to home_pose): {ex}")
+
+    if start_gate is not None:
+        tx = start_gate["x"]
+        ty = start_gate["y"]
+        tz = start_gate["z"]
+        qw = start_gate["qw"]
+        qx = start_gate["qx"]
+        qy = start_gate["qy"]
+        qz = start_gate["qz"]
+        target_source = "start_gate"
+    else:
+        with _state_lock:
+            # Snapshot the home pose under `_home_lock` (#327 B5) so
+            # the seven coordinates we pass to teleport are consistent
+            # with each other — a concurrent capture could otherwise
+            # update fields one at a time and we'd teleport to a mid-
+            # update pose.
+            with _home_lock:
+                tx = home_pose["x"]
+                ty = home_pose["y"]
+                tz = home_pose["z"]
+                qw = home_pose.get("qw", 1.0)
+                qx = home_pose.get("qx", 0.0)
+                qy = home_pose.get("qy", 0.0)
+                qz = home_pose.get("qz", 0.0)
+        target_source = "home_pose"
+
     with _state_lock:
-        # Snapshot the home pose under `_home_lock` (#327 B5) so the
-        # three coordinates we pass to teleport_pos are consistent
-        # with each other — a concurrent capture could otherwise
-        # update X/Y/Z one field at a time and we'd teleport to a
-        # mid-update position.
-        with _home_lock:
-            tx, ty, tz = home_pose["x"], home_pose["y"], home_pose["z"]
         try:
             sim.res_activate()
-            # Position-only teleport. The full sim.teleport(...) variant
-            # round-trips ENU↔UE5 quaternions through FSDSCoord and we
-            # consistently observe a ~90° rotation drift on the way back
-            # — the pawn ends up facing perpendicular to its spawn
-            # heading, which makes Stanley's yaw_error term permanently
-            # wrong and the controller steers off the corridor on the
-            # first tick. Keeping the orientation untouched preserves
-            # whatever yaw the pawn already has from loadTrack /
-            # spawn_at_start_gate, which is the orientation the
-            # autonomy was calibrated against.
-            sim.teleport_pos(tx, ty, tz)
+            # Full pose teleport (xyz + quaternion). The plugin's
+            # simSetVehiclePose handler does the same teleport-with-
+            # velocity-reset sequence loadTrack uses for the car —
+            # SetActorLocationAndRotation, body-transform snap,
+            # zero linear + angular velocities, ResetVehicleState —
+            # so once we hand it the right pose, post-reset state
+            # matches post-loadTrack state for the car.
+            sim.teleport(tx, ty, tz, qw, qx, qy, qz)
             res_active = False
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-        log_event("reset", "Soft reset: pipeline stopped, car teleported to start")
-    return {"ok": True}
+        log_event(
+            "reset",
+            f"Soft reset: pipeline stopped, car teleported to {target_source} "
+            f"({tx:.2f}, {ty:.2f}, {tz:.2f})")
+    return {"ok": True, "target": target_source}
 
 
 # === Event Control ===
