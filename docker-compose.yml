@@ -141,7 +141,7 @@ services:
       # /api/pipeline/start now use rclpy actions exclusively.
       #
       # ----------------------------------------------------------------
-      # #490 — source bind mounts removed.
+      # #497 — source bind mounts replaced by watched volumes.
       # ----------------------------------------------------------------
       # We used to bind-mount each ROS package over the image's COPY'd
       # baseline so a Python edit on the host went live with a
@@ -153,23 +153,37 @@ services:
       # Net cost on Windows with the repo on /mnt/c: 30-90 s startup
       # + minutes per rebuild.
       #
-      # Now the image is the source of truth: `colcon build` runs at
-      # image build time (see Dockerfile) against COPY'd source. To
-      # iterate on ROS code, edit the host source then run:
+      # Runtime ROS source now lives in Docker-managed volumes. New
+      # volumes are seeded from the image's /dv_pipeline_stack_ws/src
+      # contents, so the image remains the baseline, while
+      # `docker compose watch dv_pipeline_stack` syncs host edits into
+      # those volumes for live Python iteration without Windows
+      # bind-mount latency. Image-time `colcon build --symlink-install`
+      # makes existing Python files resolve through the synced source
+      # tree the next time lifecycle nodes restart.
       #
-      #     docker compose build dv_pipeline_stack
-      #     docker compose up -d --force-recreate dv_pipeline_stack
+      # Caveats (run `docker compose build dv_pipeline_stack`, or use
+      # `tools/refresh-bridge.sh`, for these):
+      #   - C++ source changes (ifssim_bridge): need recompile.
+      #   - .msg file changes (fs_msgs): need regeneration.
+      #   - setup.py changes (new entry_points, new packages): need re-link.
       #
-      # …or just `tools/refresh-bridge.sh`, which now wraps both
-      # steps. A `.dockerignore` cuts the build context to ~200 MB so
-      # the rebuild is still fast on Windows.
+      # Mounted per-package, not as a single tree, because ros2/src/ and
+      # pipeline/ collapse into one src/ inside the container — mounting
+      # either parent would hide the other. fastdds_profile.xml is COPY'd
+      # into the image now (see Dockerfile), so it is not bind-mounted.
+      - dv_pipeline_cone_slam_src:/dv_pipeline_stack_ws/src/cone_slam
+      - dv_pipeline_control_src:/dv_pipeline_stack_ws/src/control
+      - dv_pipeline_path_planning_src:/dv_pipeline_stack_ws/src/path_planning
+      - dv_pipeline_cone_detection_src:/dv_pipeline_stack_ws/src/cone_detection
+      # #465 — bag_recorder_node hosts /bag_recorder/{start,stop}
+      # services so MC's web backend can record from inside this
+      # container (where the DDS context is SHM-tuned for full-
+      # fidelity LiDAR capture). See pipeline/bag_recorder_node/.
+      - dv_pipeline_bag_recorder_node_src:/dv_pipeline_stack_ws/src/bag_recorder_node
+      - dv_pipeline_fs_msgs_src:/dv_pipeline_stack_ws/src/fs_msgs
+      - dv_pipeline_ifssim_bridge_src:/dv_pipeline_stack_ws/src/ifssim_bridge
       #
-      # ifssim_bridge (C++) used to need DV_REBUILD_ON_STARTUP=true
-      # to recompile after a source edit; that's also rolled into
-      # the image build now.
-      #
-      # Fast DDS profile — same story, COPY'd at image build time
-      # (see Dockerfile) so this mount is no longer needed either.
       # #465 v3 — landing dir for finalised bags. Used to be a bind
       # mount to ./bags, but on macOS Docker Desktop (virtiofs) and
       # Windows + WSL2 (9p) the cross-fs `shutil.move` from the
@@ -194,13 +208,45 @@ services:
       # surrounding UDS infrastructure (StartUds / StreamSensorsUds
       # stub) was deleted in this PR's #322 follow-up. Production
       # LiDAR is UDP-only on port 51453.
-    # Runtime peaks at ~1.5 GB (bridge + foxglove + pipeline). Bumped
-    # to 2.5 GB because cc1plus compiling ifssim_ros_wrapper.cpp peaks
-    # at ~2 GB after the v2 grew (the file now also handles the
-    # subsampled-viz publish path). Swap stays off — OOM-kill is
-    # better than thrashing in a real run.
-    mem_limit: 2500m
-    memswap_limit: 2500m
+    develop:
+      watch:
+        - action: sync
+          path: ./pipeline/cone_slam
+          target: /dv_pipeline_stack_ws/src/cone_slam
+          ignore: &ros_source_watch_ignore
+            - "**/__pycache__"
+            - "**/*.pyc"
+            - "**/.pytest_cache"
+        - action: sync
+          path: ./pipeline/control
+          target: /dv_pipeline_stack_ws/src/control
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/path_planning
+          target: /dv_pipeline_stack_ws/src/path_planning
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/cone_detection
+          target: /dv_pipeline_stack_ws/src/cone_detection
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/bag_recorder_node
+          target: /dv_pipeline_stack_ws/src/bag_recorder_node
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./ros2/src/fs_msgs
+          target: /dv_pipeline_stack_ws/src/fs_msgs
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./ros2/src/ifssim_bridge
+          target: /dv_pipeline_stack_ws/src/ifssim_bridge
+          ignore: *ros_source_watch_ignore
+    # Runtime peaks are host-dependent on Windows/WSL2, especially
+    # during cold Numba/GTSAM/FaSTTUBe startup. Keep swap off but give
+    # the pipeline enough RAM headroom to avoid Docker Desktop pressure
+    # while UE5 and browser tooling are also active.
+    mem_limit: 8g
+    memswap_limit: 8g
     shm_size: 1gb         # Default 64 MB is too small for Fast DDS SHM —
                           # 1 GB lets DDS use its native shared-memory
                           # transport which is dramatically cheaper than
@@ -364,6 +410,13 @@ services:
 
 volumes:
   numba_cache:
+  dv_pipeline_cone_slam_src:
+  dv_pipeline_control_src:
+  dv_pipeline_path_planning_src:
+  dv_pipeline_cone_detection_src:
+  dv_pipeline_bag_recorder_node_src:
+  dv_pipeline_fs_msgs_src:
+  dv_pipeline_ifssim_bridge_src:
   # `pipeline_ctrl` named volume removed in #381 — see the mount-site
   # comments above for context. Existing `pipeline_ctrl` volumes on
   # developer machines can be reclaimed with `docker volume rm

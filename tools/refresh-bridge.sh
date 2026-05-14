@@ -35,6 +35,12 @@
 
 set -euo pipefail
 
+# Git Bash on Windows rewrites Linux-looking paths like /entrypoint.sh
+# before native Windows executables see them. Docker commands need those
+# paths to reach the Linux container unchanged.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL="*"
+
 cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 
 echo "→ docker compose build dv_pipeline_stack"
