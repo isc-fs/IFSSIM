@@ -148,8 +148,15 @@ class ConeDetectionNode(LifecycleNode):
         if self._pub_markers is None:
             return
 
-        # Parse PointCloud2 using point_step to handle any field layout (xyz, xyz+padding, xyzi, etc.)
-        floats_per_point = msg.point_step // 4  # bytes per point / 4 bytes per float32
+        # Parse PointCloud2 by reinterpreting the byte buffer as float32
+        # rows of width point_step/4. Cone_Detection only reads the first
+        # three columns (x, y, z), so any trailing fields — intensity,
+        # padding, the FLOAT64 `timestamp` LIMOncello expects (#497) —
+        # are sliced off as junk-typed columns and ignored. Width-by-
+        # point_step keeps this layout-agnostic; if a future field
+        # arrives or leaves, only the cones consumer that needs it has
+        # to care.
+        floats_per_point = msg.point_step // 4
         num_points = msg.width * msg.height
         raw = np.frombuffer(msg.data, dtype=np.float32).reshape(num_points, floats_per_point)
         point_cloud = raw[:, :3]  # take only x, y, z

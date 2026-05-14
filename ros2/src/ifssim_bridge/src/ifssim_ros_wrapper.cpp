@@ -1080,36 +1080,73 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     msg.is_dense = true;
     msg.is_bigendian = false;
 
-    // XYZ + intensity PointCloud2 (#255). Per-point payload is 16 B —
-    // (x, y, z, intensity) FLOAT32. Intensity ∈ [0, 1] is computed by
-    // the GPU decode shader / CPU LineTrace path:
+    // XYZ + intensity + timestamp PointCloud2. Per-point payload is
+    // 24 B — (x, y, z, intensity) FLOAT32 + `timestamp` FLOAT64 at
+    // offset 16. Intensity ∈ [0, 1] is computed by the GPU decode
+    // shader / CPU LineTrace path:
     //   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
     // (Hesai ATX-S01 working principle, see FSDSLidarDecode.usf and
     // FSDSLidarSensor.cpp::PerformScan.)
     //
-    // Pre-#255 was XYZ-only (12 B/point); the timestamp field that lived
-    // here even earlier was for fast_LIMO's HESAI handler, which has
-    // since been replaced upstream — current consumers read x/y/z and
-    // (now) intensity.
+    // ## History of the `timestamp` field
     //
-    // Per-point construction with PointCloud2Iterator was the dominant
-    // cost on this thread at the datasheet pts/s rate; the source data
-    // is already a packed (x,y,z,intensity) float32 array, so the full
-    // point payload is a single memcpy of total_points × 16 bytes.
+    //   * Pre-#255: layout was XYZ-only (12 B/point) plus a FLOAT64
+    //     timestamp field added for fast_LIMO's HESAI handler.
+    //   * #255: fast_LIMO dropped → timestamp field also dropped,
+    //     intensity added. Layout shrank to xyz+intensity (16 B/pt).
+    //   * #497 (this commit, LIMOncello SLAM smoke test): timestamp
+    //     re-added. LIMOncello's HESAI mode reads `p.timestamp` as
+    //     an absolute time in seconds (see ros2/src/limoncello/
+    //     include/Utils/PCL.hpp:26).
+    //
+    // ## Why every point gets the SAME timestamp
+    //
+    // FSDSLidarSensor.cpp snapshots the car transform ONCE per scan
+    // and ray-traces every point from that single pose. The sim's
+    // LiDAR has no intra-scan motion distortion — there's nothing to
+    // deskew, because all points were physically captured at the
+    // same instant. So we fill the per-point `timestamp` field with
+    // `lidar_stamp` for every point. LIMOncello's deskew step then
+    // computes a zero correction (correct for the sim) without any
+    // special-case logic on its side. When real-car LiDAR comes in
+    // (#396 territory), the timestamps need to span the sweep window
+    // — but that's a real-hardware concern, not a sim concern.
+    //
+    // ## Construction cost
+    //
+    // The xyz+intensity quartet is still a bulk memcpy from the
+    // source `points` array (which is already packed float32). The
+    // timestamp slot is a per-point write of one double — a single
+    // pass that fills total_points × 8 bytes with the same value
+    // (memset isn't quite right because we're writing a double, not
+    // a byte pattern; std::fill_n hits the same memory bandwidth).
     sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(4,
+    modifier.setPointCloud2Fields(5,
         "x",         1, sensor_msgs::msg::PointField::FLOAT32,
         "y",         1, sensor_msgs::msg::PointField::FLOAT32,
         "z",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
+        "intensity", 1, sensor_msgs::msg::PointField::FLOAT32,
+        "timestamp", 1, sensor_msgs::msg::PointField::FLOAT64);
     modifier.resize(total_points);
 
     // NOTE: points are passed through verbatim — the downstream pipeline
     // (cone detection / SLAM) was written against UE's left-handed axis
     // convention, so "correcting" to REP-103 by negating Y here breaks
     // cone clustering. Leave as-is for compatibility.
-    std::memcpy(msg.data.data(), points,
-                static_cast<size_t>(total_points) * 4 * sizeof(float));
+    //
+    // Per-point layout in msg.data:
+    //   bytes  0- 3 : x         (float32)
+    //   bytes  4- 7 : y         (float32)
+    //   bytes  8-11 : z         (float32)
+    //   bytes 12-15 : intensity (float32)
+    //   bytes 16-23 : timestamp (float64)
+    // → point_step = 24, set by the modifier above.
+    const double scan_time_s = lidar_stamp.seconds();
+    uint8_t* dst = msg.data.data();
+    for (int i = 0; i < total_points; ++i) {
+        std::memcpy(dst + i * 24,      &points[i * 4], 4 * sizeof(float));
+        std::memcpy(dst + i * 24 + 16, &scan_time_s,   sizeof(double));
+    }
 
     lidar_pub_->publish(msg);
 
