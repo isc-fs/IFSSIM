@@ -73,6 +73,12 @@ services:
       # on-first-observation is triggering wrong-side classifications
       # in tight corners (#188).
       - DV_SLAM_LANDMARK_CAPTURE=${DV_SLAM_LANDMARK_CAPTURE:-}
+      # Pattern A of issue #485 — when set (1/true/yes/on), cone_slam
+      # subscribes to /odom_lidar and stages a PriorFactorPose3 on X(k)
+      # per scan. Default off → bit-identical to the pre-#485 cone-only
+      # path. Flip to "1" via shell env or compose .env to enable the
+      # KISS-ICP global anchor.
+      - IFSSIM_USE_KISS_ICP_PRIOR=${IFSSIM_USE_KISS_ICP_PRIOR:-0}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed
