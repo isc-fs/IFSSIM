@@ -56,12 +56,20 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
     }
   }, [telemetry.event])
 
-  // Generic so callers can narrow the response shape when it matters
-  // (e.g. `await api<{ ok: boolean; error?: string }>(...)`). The default
-  // `Record<string, any>` keeps existing call sites compiling — they read
-  // ad-hoc keys like `r.ok`, `r.event`, `r.bag?.error` without explicit
-  // typing — while still preserving the indexed-access pattern.
-  const api = async <T = Record<string, any>>(
+  // Union of the response shapes the backend returns for this component's
+  // endpoints. Defining one type for all call sites is enough — the keys
+  // are all optional and TS lets callers read whichever ones their
+  // endpoint actually produces. Callers that want stricter typing can
+  // pass an explicit type argument (`await api<MyShape>(...)`).
+  type ApiResponse = {
+    ok?: boolean
+    error?: string
+    // /api/event/start echoes:
+    event?: string
+    laps?: number
+    bag?: { error?: string; name?: string }
+  }
+  const api = async <T = ApiResponse>(
     url: string,
     body?: Record<string, unknown>,
   ): Promise<T> => {
