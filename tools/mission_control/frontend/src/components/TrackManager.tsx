@@ -40,7 +40,7 @@ export default function TrackManager() {
     setSelected(name)
     setPreview(null)
     const r = await apiFetch(`/api/track/${encodeURIComponent(name)}/preview`, {}, promptForApiKey)
-    const d = await readJsonResponse<Record<string, unknown>>(r)
+    const d = await readJsonResponse<Record<string, any>>(r)
     if (d.image) setPreview(d.image)
   }
 
@@ -50,7 +50,7 @@ export default function TrackManager() {
     setMsg(`Loading ${track.name}...`)
     try {
       const r = await apiFetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' }, promptForApiKey)
-      const d = await readJsonResponse<Record<string, unknown>>(r)
+      const d = await readJsonResponse<Record<string, any>>(r)
       if (d.result?.error) {
         setMsg(`Error: ${d.result.error}`)
       } else {
@@ -94,7 +94,7 @@ export default function TrackManager() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(genParams),
     }, promptForApiKey)
-    const d = await readJsonResponse<Record<string, unknown>>(r)
+    const d = await readJsonResponse<Record<string, any>>(r)
     setGenerating(false)
     if (d.name) {
       setMsg(`Generated: ${d.name} (${d.cones} cones)`)
