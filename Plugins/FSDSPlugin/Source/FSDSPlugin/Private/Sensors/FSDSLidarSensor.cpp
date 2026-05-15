@@ -542,7 +542,13 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->CaptureSource         = ESceneCaptureSource::SCS_SceneDepth;
 	GPUDepthCapture->bCaptureEveryFrame    = false;
 	GPUDepthCapture->bCaptureOnMovement    = false;
-	GPUDepthCapture->bAlwaysPersistRenderingState = true;
+	// bAlwaysPersistRenderingState=false — same #488 fix as the color
+	// capture below. Even though this capture has all show flags off
+	// (no AA, no tonemapper, no post-process), persisting render state
+	// keeps allocated buffers across captures that the main view ends
+	// up sharing. The asphalt dots return as soon as the depth capture
+	// is allowed to persist, regardless of color-capture config.
+	GPUDepthCapture->bAlwaysPersistRenderingState = false;
 
 	// FOVAngle is *horizontal*; vertical FOV is implicit via aspect
 	// (V-FOV = 2·atan(tan(H/2)/aspect)). Sizing RT to Aspect above
@@ -599,19 +605,60 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUColorCapture->CaptureSource         = ESceneCaptureSource::SCS_FinalColorLDR;
 	GPUColorCapture->bCaptureEveryFrame    = false;
 	GPUColorCapture->bCaptureOnMovement    = false;
-	GPUColorCapture->bAlwaysPersistRenderingState = true;
+	// bAlwaysPersistRenderingState=false: the LiDAR re-captures fresh
+	// every tick; we don't need temporal history to converge across
+	// captures (that's the contract for things like mirrors). Leaving
+	// it `true` was the root cause of #488 — the LiDAR's SCS_FinalColorLDR
+	// capture from its mount POV (looking down at the road from 1.1 m)
+	// kept feeding UE5's shared temporal AA + eye-adaptation history
+	// buffers, and the main viewport read those back as blue stippling
+	// that accumulated on opaque surfaces over time. The pattern was
+	// strongest on diffuse ground/car surfaces and absent on the sky
+	// (sky atmosphere has its own render pass, no TAA history sharing).
+	// Diagnosed empirically: disabling the LiDAR entirely cleared the
+	// asphalt, re-enabling it brought it back; cmdline `r.AntiAliasingMethod 0`
+	// didn't help because the scene capture has its own ShowFlags
+	// independent of the global CVar.
+	GPUColorCapture->bAlwaysPersistRenderingState = false;
 	GPUColorCapture->FOVAngle              = HFovDeg;
-	// Keep AA/tonemapper enabled here — FinalColorLDR is the post-
-	// processed pipeline output, so the usual visual flags apply. We
-	// only strip the LiDAR-irrelevant ones the depth capture also
-	// stripped (motion blur, bloom, vignette, etc.) to keep the
-	// per-frame cost down.
+	// Strip every show flag that touches scene-wide state shared with
+	// the main viewport. The previous comment ("Keep AA/tonemapper
+	// enabled here") was wrong: SCS_FinalColorLDR doesn't *require*
+	// the full pipeline for the intensity readout — we need surface
+	// reflectance ρ, not the lit appearance under the sun this frame.
+	// For a 905 nm IR LiDAR that's the physically-correct signal too:
+	// a real LiDAR doesn't care about ambient daylight on the cone.
+	//
+	// Full lighting pass kept polluting the main view's state even
+	// after bAlwaysPersistRenderingState was disabled — most likely via
+	// Lumen surface cache / screen-space probes / shared probe data,
+	// which run as part of the GI / lighting subpasses regardless of
+	// the temporal-AA family of flags. With Lighting + GlobalIllumination
+	// + DirectLighting + IndirectLighting + Atmosphere disabled, the
+	// color capture renders pure unlit material output and shares no
+	// lighting-pipeline buffers with the main viewport. Intensity then
+	// = luminance(albedo) × cos(θ_inc), which is closer to the physical
+	// truth for 905 nm than luminance(FinalColor) anyway.
+	GPUColorCapture->ShowFlags.SetLighting(false);
+	GPUColorCapture->ShowFlags.SetGlobalIllumination(false);
+	GPUColorCapture->ShowFlags.SetDirectLighting(false);
+	GPUColorCapture->ShowFlags.SetIndirectLightingCache(false);
+	GPUColorCapture->ShowFlags.SetAtmosphere(false);
+	GPUColorCapture->ShowFlags.SetSkyLighting(false);
+	GPUColorCapture->ShowFlags.SetDynamicShadows(false);
+	GPUColorCapture->ShowFlags.SetVolumetricFog(false);
+	GPUColorCapture->ShowFlags.SetTemporalAA(false);
+	GPUColorCapture->ShowFlags.SetAntiAliasing(false);
+	GPUColorCapture->ShowFlags.SetEyeAdaptation(false);
+	GPUColorCapture->ShowFlags.SetTonemapper(false);
 	GPUColorCapture->ShowFlags.SetMotionBlur(false);
 	GPUColorCapture->ShowFlags.SetBloom(false);
 	GPUColorCapture->ShowFlags.SetVignette(false);
 	GPUColorCapture->ShowFlags.SetGrain(false);
 	GPUColorCapture->ShowFlags.SetLensFlares(false);
 	GPUColorCapture->ShowFlags.SetScreenSpaceReflections(false);
+	GPUColorCapture->ShowFlags.SetReflectionEnvironment(false);
+	GPUColorCapture->ShowFlags.SetAmbientOcclusion(false);
 
 	// === #321 D-Phase-2 — stencil → alpha post-process material ======
 	//
