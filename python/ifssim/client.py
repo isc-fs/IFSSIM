@@ -227,21 +227,24 @@ class IFSSIMClient:
             "bridge, or replicate the UDP receiver in udp_receiver.h."
         )
 
-    # --- Camera ---
+    # --- Camera (removed in perf/strip-cameras) ---
+    # Camera sensors were stripped from the simulator — the real IFS-08
+    # has no cameras and the autonomy pipeline never consumed any
+    # /camera/* topics. simGetImage / simGetImages now raise so legacy
+    # client scripts surface the change instead of silently getting
+    # zero-byte payloads.
 
     def simGetImage(self, camera_name, image_type, vehicle_name='FSCar'):
-        header, data = self._binary_cmd(f"simGetImageBinary {camera_name} {image_type}")
-        if header.startswith("IMG:") and len(data) > 0:
-            return data  # Raw PNG bytes
-        return None
+        raise NotImplementedError(
+            "Cameras were removed from IFSSIM in perf/strip-cameras. "
+            "If you need RGB capture, pin to a pre-strip commit."
+        )
 
     def simGetImages(self, requests, vehicle_name='FSCar'):
-        """Batch image capture — returns list of PNG byte arrays."""
-        results = []
-        for req in requests:
-            img = self.simGetImage(req.camera_name, req.image_type, vehicle_name)
-            results.append(img)
-        return results
+        raise NotImplementedError(
+            "Cameras were removed from IFSSIM in perf/strip-cameras. "
+            "If you need RGB capture, pin to a pre-strip commit."
+        )
 
     # --- Ground Truth ---
 

@@ -3,7 +3,8 @@
  *
  * Sensor data streams continuously from the sim over persistent TCP connections.
  * No polling. The sim pushes binary frames at engine tick rate (~100Hz).
- * Camera and commands use traditional TCP request-response.
+ * Control commands and referee queries use traditional TCP request-response.
+ * Camera sensors were removed in perf/strip-cameras.
  */
 
 #include "ifssim_ros_wrapper.h"
@@ -206,26 +207,10 @@ void IFSSIMRosWrapper::initializeConnection()
         return;
     }
 
-    client_camera_ = std::make_unique<TcpClient>();
-    if (!client_camera_->connect(host_, port_, timeout_sec_)) {
-        RCLCPP_WARN(node_->get_logger(), "Camera client failed, using main");
-    }
-
     client_->sendBool("enableApiControl");
 
-    // Discover cameras
-    std::string cam_list = client_->sendCommand("listCameras");
-    if (!cam_list.empty() && cam_list[0] == '[') {
-        std::string stripped = cam_list.substr(1, cam_list.size() - 2);
-        std::stringstream ss(stripped);
-        std::string token;
-        while (std::getline(ss, token, ',')) {
-            token.erase(std::remove(token.begin(), token.end(), '"'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), ' '), token.end());
-            if (!token.empty()) camera_names_.push_back(token);
-        }
-    }
-    RCLCPP_INFO(node_->get_logger(), "Discovered %zu cameras", camera_names_.size());
+    // Camera discovery removed in perf/strip-cameras — cameras no longer
+    // exist on the sim side. The dedicated camera TCP client is gone too.
 
     if (client_->sendBool("ping")) {
         RCLCPP_INFO(node_->get_logger(), "IFSSIM connected (TCP push model)");
@@ -239,9 +224,6 @@ void IFSSIMRosWrapper::initializeConnection()
     // constructor-time constants on the sim side and won't change until
     // the sim is restarted.
     lidar_offset_ = querySensorOffset("lidar");
-    for (const auto& cam_name : camera_names_) {
-        camera_offsets_[cam_name] = querySensorOffset(cam_name);
-    }
 
     // Capture spawn position for the /reset service. Must happen after the
     // track is loaded (the vehicle is already placed at the start gate by
@@ -357,12 +339,7 @@ void IFSSIMRosWrapper::initializePublishers()
     // consumers (e.g. the control node) brake the car to end the event cleanly.
     finished_signal_pub_ = node_->create_publisher<fs_msgs::msg::FinishedSignal>("signal/finished", 10);
 
-    for (const auto& cam_name : camera_names_) {
-        auto pub = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
-            "camera/" + cam_name + "/compressed", 10);
-        camera_pubs_[cam_name] = pub;
-        RCLCPP_INFO(node_->get_logger(), "Camera publisher: camera/%s/compressed", cam_name.c_str());
-    }
+    // Camera publishers removed in perf/strip-cameras — see header comment.
 
     if (!competition_mode_) {
         odom_pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("testing_only/odom", sensor_qos);
@@ -409,17 +386,7 @@ void IFSSIMRosWrapper::initializeSubscribers()
 
 void IFSSIMRosWrapper::initializeTimers()
 {
-    // Camera rate configurable via parameter (default 10Hz, 0 to disable)
-    int camera_hz = node_->declare_parameter<int>("camera_hz", 0);
-    if (camera_hz > 0) {
-        int period_ms = 1000 / camera_hz;
-        camera_timer_ = node_->create_wall_timer(
-            std::chrono::milliseconds(period_ms),
-            std::bind(&IFSSIMRosWrapper::cameraTimerCb, this));
-        RCLCPP_INFO(node_->get_logger(), "Camera streaming at %dHz (%dms)", camera_hz, period_ms);
-    } else {
-        RCLCPP_INFO(node_->get_logger(), "Camera streaming disabled (use camera_hz:=10 to enable)");
-    }
+    // Camera timer removed in perf/strip-cameras.
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
     // /tire_loads at 20 Hz — fast enough that the autonomy controller
@@ -1161,30 +1128,6 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 // TCP timer callbacks (low frequency)
 // =============================================================================
 
-void IFSSIMRosWrapper::cameraTimerCb()
-{
-    TcpClient* cam = (client_camera_ && client_camera_->isConnected())
-        ? client_camera_.get() : client_.get();
-    if (!cam || !cam->isConnected()) return;
-
-    for (const auto& cam_name : camera_names_) {
-        auto it = camera_pubs_.find(cam_name);
-        if (it == camera_pubs_.end()) continue;
-
-        std::vector<uint8_t> data;
-        std::string header = cam->sendBinaryCommand("simGetImageBinary " + cam_name + " 0", data);
-
-        if (!data.empty()) {
-            sensor_msgs::msg::CompressedImage msg;
-            msg.header.stamp = node_->now();
-            msg.header.frame_id = vehicle_frame_id_ + "/" + cam_name;
-            msg.format = "png";
-            msg.data = std::move(data);
-            it->second->publish(msg);
-        }
-    }
-}
-
 void IFSSIMRosWrapper::goSignalTimerCb()
 {
     fs_msgs::msg::GoSignal msg;
@@ -1370,11 +1313,8 @@ void IFSSIMRosWrapper::staticTfCb()
     publishIdentityStatic("base_link", "fsds/Lidar");
     publishIdentityStatic("base_link", "fsds/GPS");
 
-    // Camera static TFs — REMOVED in PR #3 step 5. Cameras don't exist on
-    // the real IFS-08 (memo: project_no_cameras_on_real_car.md), and after
-    // Odometria_perfecta was deleted, the legacy fsds/FSCar parent has
-    // no publisher anyway — leaving the camera children would create a
-    // disconnected subtree. Camera *image* publishing is unaffected.
+    // Camera static TFs and the camera sensors they referred to were
+    // both removed in perf/strip-cameras — see header comment.
 }
 
 void IFSSIMRosWrapper::parseNoiseSettings(const std::string& settings)
