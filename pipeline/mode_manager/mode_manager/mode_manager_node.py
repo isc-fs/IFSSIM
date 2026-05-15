@@ -123,32 +123,28 @@ class ModeManagerNode(LifecycleNode):
         self._prepared_mode: str | None = None
         self._active_mode: str | None = None
         self._activate_mode_srv = None
-        # change_state clients keyed by node name. Lazy-created in
-        # on_configure so the autonomy nodes have time to register
-        # their lifecycle services before we try to bind to them.
-        self._change_state_clients: dict[str, rclpy.client.Client] = {}
         # #387 — per-node-per-transition progress publisher. One event
-        # per change_state call ("starting" before, "ok"/"failed"/
-        # "skipped"/"timeout" after) so mission_control_node can echo
-        # the current step into StartMission feedback. Created in
-        # on_configure alongside the lifecycle clients; published
-        # to / unconditionally (cheap event-driven topic, no
-        # subscribers → no-op).
+        # per change_state call. Created in on_configure.
         self._progress_pub = None
-        # Reentrant group so the inner spin_until_future_complete inside
-        # _drive_transition can dispatch the change_state response while
-        # the activate_mode service callback that triggered it is still
-        # on the call stack. Without this the default mutually-exclusive
-        # group would deadlock.
+        # Reentrant group so the activate_mode service callback can
+        # call out to lifecycle clients and wait on their futures
+        # while the same node's executor dispatches the responses.
         self._cb_group = ReentrantCallbackGroup()
-        # get_state clients for the pre-check that makes _fan_out
-        # idempotent (skip transitions whose target state is already
-        # reached). Lazy-created in on_configure alongside the
-        # change_state clients.
+        # change_state / get_state clients are *cached lazily* —
+        # created on first use inside _drive_transition /
+        # _get_current_state and reused. We never created them
+        # up-front in on_configure because doing so before the
+        # autonomy nodes are up costs a DDS discovery race: clients
+        # made too early can miss the server's late-joining endpoint
+        # announcement and stay stale for the lifetime of the node.
+        # Lazy creation guarantees the client is built only after
+        # the activate_mode call lands, by which time the autonomy
+        # nodes have been alive for the full container-startup
+        # window and discovery is settled. Setup clients (~/setup)
+        # are created *fresh per call* inside _call_setup — they
+        # are one-shot per mission, so caching buys nothing.
+        self._change_state_clients: dict[str, rclpy.client.Client] = {}
         self._get_state_clients: dict[str, rclpy.client.Client] = {}
-        # setup clients — BaseLifecycleNode exposes ~/setup on each
-        # managed autonomy node before configure.
-        self._setup_clients: dict[str, rclpy.client.Client] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle transitions
@@ -170,28 +166,34 @@ class ModeManagerNode(LifecycleNode):
         self._progress_pub = self.create_publisher(
             LifecycleProgress, "/mode_manager/progress", 10,
         )
-        # One change_state + one get_state client per managed autonomy
-        # node. ROS will not error if the server isn't up yet;
-        # wait_for_service is used at call-time inside the helpers.
-        for name, managed in AUTONOMY_LIFECYCLE_NODES:
-            if not managed:
-                continue
-            self._change_state_clients[name] = self.create_client(
-                ChangeState,
-                f"/{name}/change_state",
-                callback_group=self._cb_group,
-            )
-            self._get_state_clients[name] = self.create_client(
-                GetState,
-                f"/{name}/get_state",
-                callback_group=self._cb_group,
-            )
-            self._setup_clients[name] = self.create_client(
-                Setup,
-                f"/{name}/setup",
-                callback_group=self._cb_group,
-            )
+        # Lifecycle clients are created lazily — see __init__ comment
+        # for the discovery-race rationale.
         return TransitionCallbackReturn.SUCCESS
+
+    # ------------------------------------------------------------------
+    # Lazy client accessors
+    # ------------------------------------------------------------------
+    def _get_change_state_client(self, node_name: str) -> "rclpy.client.Client":
+        cli = self._change_state_clients.get(node_name)
+        if cli is None:
+            cli = self.create_client(
+                ChangeState,
+                f"/{node_name}/change_state",
+                callback_group=self._cb_group,
+            )
+            self._change_state_clients[node_name] = cli
+        return cli
+
+    def _get_get_state_client(self, node_name: str) -> "rclpy.client.Client":
+        cli = self._get_state_clients.get(node_name)
+        if cli is None:
+            cli = self.create_client(
+                GetState,
+                f"/{node_name}/get_state",
+                callback_group=self._cb_group,
+            )
+            self._get_state_clients[node_name] = cli
+        return cli
 
     def on_activate(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("on_activate")
@@ -215,9 +217,6 @@ class ModeManagerNode(LifecycleNode):
         for cli in self._get_state_clients.values():
             self.destroy_client(cli)
         self._get_state_clients.clear()
-        for cli in self._setup_clients.values():
-            self.destroy_client(cli)
-        self._setup_clients.clear()
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: State) -> TransitionCallbackReturn:
@@ -479,15 +478,34 @@ class ModeManagerNode(LifecycleNode):
     def _call_setup(
         self, node_name: str, mode_name: str, behavior: str,
     ) -> tuple[bool, str]:
-        """Call /<node_name>/setup with mode + behavior. Blocks."""
-        cli = self._setup_clients.get(node_name)
-        if cli is None:
-            err = "no setup client (not in managed set)"
-            self._publish_progress(node_name, TRANSITION_SETUP, "failed", err)
-            return False, err
+        """Call /<node_name>/setup with mode + behavior. Blocks.
 
+        Fresh client per call (no caching): setup is one-shot per
+        mission, and creating it on demand sidesteps the
+        startup-time DDS discovery race that bit clients built in
+        on_configure before the autonomy nodes were up.
+        """
         self._publish_progress(node_name, TRANSITION_SETUP, "starting", "")
 
+        cli = self.create_client(
+            Setup,
+            f"/{node_name}/setup",
+            callback_group=self._cb_group,
+        )
+        try:
+            return self._call_setup_with_client(
+                cli, node_name, mode_name, behavior,
+            )
+        finally:
+            self.destroy_client(cli)
+
+    def _call_setup_with_client(
+        self,
+        cli: "rclpy.client.Client",
+        node_name: str,
+        mode_name: str,
+        behavior: str,
+    ) -> tuple[bool, str]:
         if not cli.wait_for_service(timeout_sec=_SETUP_TIMEOUT_S):
             err = (
                 f"/{node_name}/setup did not appear within "
@@ -539,11 +557,7 @@ class ModeManagerNode(LifecycleNode):
         of "ok"/"failed"/"timeout"/"skipped") so mission_control_node
         can echo per-node progress into StartMission feedback (#387).
         """
-        cli = self._change_state_clients.get(node_name)
-        if cli is None:
-            self._publish_progress(node_name, transition_id, "failed",
-                                   "no change_state client (not in managed set)")
-            return False, "no change_state client (not in managed set)"
+        cli = self._get_change_state_client(node_name)
 
         # State-check: skip if already at/past target. The get_state
         # call is cheap (~ms) and removes the need for callers to
@@ -651,9 +665,7 @@ class ModeManagerNode(LifecycleNode):
         the change_state call will fail with a more informative
         error anyway.
         """
-        cli = self._get_state_clients.get(node_name)
-        if cli is None:
-            return None
+        cli = self._get_get_state_client(node_name)
         if not cli.service_is_ready():
             # No wait — if the service isn't already there, we won't
             # wait for it. The downstream change_state will gate on

@@ -59,7 +59,6 @@ from typing import List, Optional
 
 import rclpy
 from node_base.base_lifecycle_node import BaseLifecycleNode
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import TransitionCallbackReturn, State as LifecycleState
 
 from tf2_ros import TransformException
@@ -441,20 +440,11 @@ class PathPlanningNode(BaseLifecycleNode):
 
 
 def main(args=None) -> None:
-    """Entry point: spin PathPlanningNode under MultiThreadedExecutor.
-
-    MTE (rather than the single-threaded `rclpy.spin`) is required so
-    BaseLifecycleNode's ~/setup service gets dispatched while the node
-    is unconfigured. The default single-threaded executor leaves plain
-    user services starved until a lifecycle event wakes the loop,
-    which made mode_manager's pre-configure /setup call time out.
-    """
+    """Entry point: spin PathPlanningNode until SIGINT."""
     rclpy.init(args=args)
     node = PathPlanningNode()
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
     try:
-        executor.spin()
+        rclpy.spin(node)
     finally:
         node.destroy_node()
         rclpy.shutdown()

@@ -31,7 +31,6 @@ from typing import Optional
 
 import rclpy
 from node_base.base_lifecycle_node import BaseLifecycleNode
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import TransitionCallbackReturn, State as LifecycleState
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
@@ -668,20 +667,10 @@ def _slew(prev: float, target: float, max_step: float) -> float:
 
 
 def main(args=None) -> None:
-    """Entry point: spin ControlNode under MultiThreadedExecutor.
-
-    MTE (rather than the single-threaded `rclpy.spin`) is required so
-    BaseLifecycleNode's ~/setup service gets dispatched while the node
-    is unconfigured. The default single-threaded executor leaves plain
-    user services starved until a lifecycle event wakes the loop,
-    which made mode_manager's pre-configure /setup call time out.
-    """
     rclpy.init(args=args)
     node = ControlNode()
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:

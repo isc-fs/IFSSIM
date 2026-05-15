@@ -49,7 +49,6 @@ import numpy as np
 
 import rclpy
 from node_base.base_lifecycle_node import BaseLifecycleNode
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import TransitionCallbackReturn, State as LifecycleState
 from rclpy.qos import (
     QoSDurabilityPolicy,
@@ -1262,23 +1261,17 @@ class ConeGraphSlamNode(BaseLifecycleNode):
 def main(args=None):
     rclpy.init(args=args)
     node = ConeGraphSlamNode()
-    # MultiThreadedExecutor is required so BaseLifecycleNode's ~/setup
-    # service gets dispatched promptly while the node is unconfigured
-    # — under rclpy.spin's default SingleThreadedExecutor the plain
-    # user service stays starved until a lifecycle event wakes the
-    # spin loop, so mode_manager's pre-configure /setup call timed
-    # out after 60 s. The iSAM2 thread-safety concern from the prior
-    # single-threaded design is preserved by keeping every SLAM-graph
-    # callback in the node's default MutuallyExclusiveCallbackGroup:
-    # within that group MTE still serialises callbacks one-at-a-time,
-    # so GTSAM never sees concurrent access. The thread pool only
-    # lets *different* callback groups run in parallel — which is
-    # exactly what we want for ~/setup (lifecycle group, untouched
-    # by graph code).
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
+    # NOTE: We tried MultiThreadedExecutor + callback groups to drain
+    # IMU samples while the cone callback ran iSAM2 (the "skip scan: no
+    # IMU samples" warnings suggested the executor was bottlenecked).
+    # That broke standstill drastically (77 m drift in 28 s of being
+    # parked at origin) — GTSAM's iSAM2 holds non-thread-safe state
+    # even when our two callback groups never run graph code in
+    # parallel. Stick with single-threaded until we have a way to
+    # offload IMU buffering without touching the graph from a second
+    # thread (e.g. a separate node + IPC).
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
