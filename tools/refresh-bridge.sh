@@ -10,11 +10,13 @@
 # internally. Only a full container teardown + recreate consistently
 # recovers (verified by an afternoon of chasing this).
 #
-# #490 — pipeline source is no longer bind-mounted. We rebuild the
-# image so the new source is baked in, then recreate the container.
-# A repo-wide .dockerignore keeps the build context small (~200 MB
-# vs. the unbounded ~33 GB it used to be) so the rebuild stays fast
-# even on Windows + WSL2 with the repo on /mnt/c.
+# #490 — pipeline source is not bind-mounted from the host; each
+# package uses a Docker named volume sync'd by `docker compose watch`
+# (see docker-compose.yml develop.watch) so Python edits across all
+# pipeline/* packages apply without rebuilding. Use this script when
+# you change docker/dv_pipeline_stack/*, need a full colcon rebuild
+# (C++, .msg, setup.py), or want a clean recreate to clear DDS state.
+# A repo-wide .dockerignore keeps `docker compose build` fast.
 #
 # What this script does, in order:
 #   1. `docker compose build dv_pipeline_stack` — rebuild the image
@@ -32,6 +34,10 @@
 #   - docker/dv_pipeline_stack/{bridge,pipeline,pipeline_only}.launch.py
 #   - docker/dv_pipeline_stack/entrypoint.sh
 #   - docker/dv_pipeline_stack/fastdds_profile.xml
+#
+# For iterative Python work, `docker compose watch` syncs all pipeline
+# packages into the container (see docker-compose.yml); only use this
+# script when you need an image rebuild or a hard recreate.
 
 set -euo pipefail
 

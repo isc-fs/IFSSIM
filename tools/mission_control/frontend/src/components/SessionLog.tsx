@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, promptForApiKey } from '../lib/api'
+import { apiFetch, promptForApiKey, readJsonResponse } from '../lib/api'
 
 interface LogEntry {
   timestamp: string;
@@ -42,7 +42,7 @@ export default function SessionLog() {
           setError(`HTTP ${r.status}`)
           return
         }
-        const parsed: unknown = await r.json()
+        const parsed: unknown = await readJsonResponse(r)
         if (cancelled) return
         if (isLogArray(parsed)) {
           setLog(parsed)

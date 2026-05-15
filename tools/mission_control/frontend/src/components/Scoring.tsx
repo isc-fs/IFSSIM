@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, promptForApiKey } from '../lib/api'
+import { apiFetch, promptForApiKey, readJsonResponse } from '../lib/api'
 
 interface ScoringData {
   event: string;
@@ -69,7 +69,7 @@ export default function Scoring() {
           setError(`HTTP ${r.status}`)
           return
         }
-        const parsed: unknown = await r.json()
+        const parsed: unknown = await readJsonResponse(r)
         if (cancelled) return
         if (isScoringData(parsed)) {
           setScoring(parsed)
