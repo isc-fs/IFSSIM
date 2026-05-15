@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, promptForApiKey } from '../lib/api'
+import { apiFetch, promptForApiKey, readJsonResponse } from '../lib/api'
 import type { TelemetryData } from '../hooks/useWebSocket'
 import { useConfirm } from './ConfirmDialog'
 
@@ -62,7 +62,7 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
     }, promptForApiKey)
-    return res.json()
+    return readJsonResponse(res)
   }
 
   return (

@@ -118,13 +118,12 @@ def generate_launch_description() -> LaunchDescription:
         remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE,
                     REMAP_CMD],
     )
-    actions += _auto_active(
+    # Autonomy lifecycle nodes (unconfigured until mode_manager)
+    actions.append(_autonomy_lifecycle(
         "odometry_filter_node", "odometry_filter_node",
         "odometry_filter_node",
         remappings=[REMAP_IMU, REMAP_RPM, REMAP_STEERING, REMAP_BRAKE],
-    )
-
-    # Autonomy lifecycle nodes (unconfigured)
+    ))
     actions.append(_autonomy_lifecycle(
         "cone_detection", "cone_detection_node", "cone_detection_node",
         remappings=[REMAP_LIDAR],
