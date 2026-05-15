@@ -570,6 +570,11 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// tilt=0 — see comment in geometry-derivation block above.
 	GPUDepthCapture->SetRelativeRotation(FRotator::ZeroRotator);
 	GPUDepthCapture->TextureTarget         = GPUDepthRT;
+	// Tried SCS_DeviceDepth here as an #488 residual-reduction attempt
+	// — device depth has less pipeline machinery than SceneDepth. It
+	// returns non-linear NDC depth though, and the decode shader
+	// (FSDSLidarDecode.usf) was authored against linear scene depth →
+	// switching this drops point count to 0. Staying on SCS_SceneDepth.
 	GPUDepthCapture->CaptureSource         = ESceneCaptureSource::SCS_SceneDepth;
 	GPUDepthCapture->bCaptureEveryFrame    = false;
 	GPUDepthCapture->bCaptureOnMovement    = false;
@@ -581,15 +586,14 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// is allowed to persist, regardless of color-capture config.
 	GPUDepthCapture->bAlwaysPersistRenderingState = false;
 
-	// Cap the capture's view distance to just past the LiDAR's MaxRange.
-	// Without this, the capture renders every primitive in the level
-	// (including the entire skybox horizon, distant walls, etc.) every
-	// tick. With MaxRange typically 30 m and a small buffer, we cut
-	// the capture's culling work dramatically — perf win AND less
-	// "surface" for #488-style residual leakage to the main view.
-	// MaxRange is in cm (LiDAR-side units) and is set up before
-	// InitializeGPUPath runs.
-	GPUDepthCapture->MaxViewDistanceOverride = MaxRange + 500.f; // +5 m buffer
+	// NOTE: an earlier revision set MaxViewDistanceOverride = MaxRange+5m
+	// here as an optimisation. Removed because it broke LiDAR data flow
+	// in shipping builds: hit count dropped to 0 even though the
+	// captures themselves looked correct in the editor. The property
+	// has different semantics on SceneCaptureComponent than expected
+	// (likely culls the entire capture not per-primitive). Revisit
+	// when we have time to test the right primitive-level approach
+	// (HiddenComponents / ShowOnlyComponents on the capture).
 
 	// FOVAngle is *horizontal*; vertical FOV is implicit via aspect
 	// (V-FOV = 2·atan(tan(H/2)/aspect)). Sizing RT to Aspect above
@@ -624,23 +628,36 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->ShowFlags.SetScreenSpaceReflections(false);
 	GPUDepthCapture->ShowFlags.SetReflectionEnvironment(false);
 	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
+	// Additional disables for #488 residual on depth capture. Each of
+	// these can write to scene-wide buffers even when their visual
+	// outputs are unused by the capture's depth-only output. Velocity
+	// is the most suspect — it writes the velocity buffer that's then
+	// read by the main view's TAA/motion-blur passes the next frame.
+	GPUDepthCapture->ShowFlags.SetMotionBlur(false);
+	GPUDepthCapture->ShowFlags.SetSeparateTranslucency(false);
+	GPUDepthCapture->ShowFlags.SetTranslucency(false);
+	GPUDepthCapture->ShowFlags.SetDecals(false);
+	GPUDepthCapture->ShowFlags.SetSubsurfaceScattering(false);
+	GPUDepthCapture->ShowFlags.SetParticles(false);
+	GPUDepthCapture->ShowFlags.SetFog(false);
+	GPUDepthCapture->ShowFlags.SetDistanceFieldAO(false);
+	GPUDepthCapture->ShowFlags.SetVolumetricLightmap(false);
+	GPUDepthCapture->ShowFlags.SetTexturedLightProfiles(false);
 
 	// === #255 — intensity capture (FinalColorLDR) ===
-	// Gated by fsds.LidarGPU.StencilEncoder (default OFF, see CVar at
-	// top of file). When off, GPUColorCapture stays null and the
-	// reflectance LUT path falls back to luminance-baseline behaviour
-	// in the decode shader. When on, a second SceneCapture component
-	// is created to feed per-cone reflectance into the encoder.
-	// Default OFF closes #488 (stippling on dark surfaces from the
-	// color capture's full-pipeline render leaking state to the main
-	// view); opt-in keeps the reflectance feature available for
-	// callers that need cone-color discrimination via stencil ID.
-	if (CVarLidarStencilEncoder.GetValueOnGameThread() <= 0)
-	{
-		UE_LOG(LogTemp, Log, TEXT("FSDS LiDAR GPU: stencil encoder disabled (fsds.LidarGPU.StencilEncoder=0); skipping color capture. Intensity falls back to luminance baseline."));
-		bReflectanceLUTActive = false;
-		return;
-	}
+	// NOTE: the GPUColorCapture component + GPUColorRT are ALWAYS created
+	// because the decode shader (line ~1168, `Params->ColorTexture`) needs
+	// a valid color texture handle to bind even when reflectance LUT is
+	// disabled. What's gated by `fsds.LidarGPU.StencilEncoder` is the
+	// per-tick CaptureScene() call (see TickGPUPath below). Default OFF
+	// → the GPU color capture exists but never renders → the color
+	// render target stays cleared-to-black → the decode shader reads
+	// zero alpha → reflectance LUT lookup gracefully falls back to
+	// luminance baseline. This is what closes #488 (the contamination
+	// vector is the active rendering of the capture, not its existence).
+	// Earlier attempt: skip creating the components entirely. Outcome:
+	// LiDAR data dropped to 0 points because the decode RDG pass was
+	// receiving a null ColorRDG and silently failing. Don't repeat.
 
 	// One extra render target sharing the depth capture's view geometry
 	// (FOV, position, rotation, RT size). The decode shader samples it
@@ -759,9 +776,22 @@ void UFSDSLidarSensor::InitializeGPUPath()
 		if (StencilEncoder)
 		{
 			GPUColorCapture->PostProcessSettings.AddBlendable(StencilEncoder, 1.0f);
-			bReflectanceLUTActive = true;
+			// Only mark the LUT as active when the per-tick CaptureScene
+			// for the color capture is actually going to run — i.e. the
+			// CVar gate is open. Otherwise the color RT stays cleared-to-
+			// black, the alpha channel encodes stencil-ID 0 everywhere,
+			// and the shader's UseReflectanceLUT=1 path would look up
+			// ReflectanceLUT[0]=0.0f for every point → all intensities
+			// collapse to 0. Keeping the flag false in the gated-off case
+			// makes the shader use the Rec.709 luminance fallback, which
+			// works on a black RT too (gives uniform low intensity, fine
+			// as a sensor baseline).
+			const bool bEncoderEnabled = CVarLidarStencilEncoder.GetValueOnGameThread() > 0;
+			bReflectanceLUTActive = bEncoderEnabled;
 			UE_LOG(LogTemp, Log,
-				TEXT("FSDS LiDAR GPU: stencil-encoder post-process material loaded — per-cone-material reflectance LUT active (#321 D-Phase-2)"));
+				TEXT("FSDS LiDAR GPU: stencil-encoder post-process material loaded — reflectance LUT %s (fsds.LidarGPU.StencilEncoder=%d, #488 fix)"),
+				bEncoderEnabled ? TEXT("ACTIVE (#321 D-Phase-2)") : TEXT("OFF (color capture disabled, falling back to Rec.709 luminance)"),
+				bEncoderEnabled ? 1 : 0);
 		}
 		else
 		{
@@ -915,11 +945,19 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 
 	const double T0 = FPlatformTime::Seconds();
 	GPUDepthCapture->CaptureScene();
-	// Color capture is null when fsds.LidarGPU.StencilEncoder=0 (default).
-	// When enabled, the reflectance LUT path runs and reintroduces some
-	// of the #488 stippling — opt-in for callers that need per-cone
-	// reflectance via stencil ID.
-	if (GPUColorCapture) GPUColorCapture->CaptureScene();
+	// #488: gate the per-tick color capture, NOT its existence. The
+	// component + render target are always allocated so the decode
+	// shader has a valid texture handle; what we skip is the
+	// CaptureScene() call that actually renders the scene from the
+	// LiDAR's POV. That render is the contamination vector — without
+	// it the RT stays cleared-to-black and the decode shader's
+	// reflectance lookup gracefully falls back to luminance baseline.
+	// Opt in via -ExecCmds="fsds.LidarGPU.StencilEncoder 1" if you
+	// need per-cone reflectance and can tolerate the #488 stippling.
+	if (GPUColorCapture && CVarLidarStencilEncoder.GetValueOnGameThread() > 0)
+	{
+		GPUColorCapture->CaptureScene();
+	}
 	EnqueueDecodePass();
 	const double T1 = FPlatformTime::Seconds();
 
