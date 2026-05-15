@@ -8,6 +8,20 @@ interface Track {
   builtin: boolean; event_type: string | null;
 }
 
+// Response shapes — kept narrow per endpoint so TS catches typos at
+// call sites. All fields optional because the backend skips error
+// envelopes on success and vice versa.
+interface PreviewResponse { image?: string }
+interface LoadResponse {
+  result?: { error?: string }
+  event_type?: string
+}
+interface GenerateResponse {
+  name?: string
+  cones?: number
+  error?: string
+}
+
 export default function TrackManager() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -40,7 +54,7 @@ export default function TrackManager() {
     setSelected(name)
     setPreview(null)
     const r = await apiFetch(`/api/track/${encodeURIComponent(name)}/preview`, {}, promptForApiKey)
-    const d = await readJsonResponse<Record<string, unknown>>(r)
+    const d = await readJsonResponse<PreviewResponse>(r)
     if (d.image) setPreview(d.image)
   }
 
@@ -50,7 +64,7 @@ export default function TrackManager() {
     setMsg(`Loading ${track.name}...`)
     try {
       const r = await apiFetch(`/api/track/${encodeURIComponent(track.name)}/load`, { method: 'POST' }, promptForApiKey)
-      const d = await readJsonResponse<Record<string, unknown>>(r)
+      const d = await readJsonResponse<LoadResponse>(r)
       if (d.result?.error) {
         setMsg(`Error: ${d.result.error}`)
       } else {
@@ -94,7 +108,7 @@ export default function TrackManager() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(genParams),
     }, promptForApiKey)
-    const d = await readJsonResponse<Record<string, unknown>>(r)
+    const d = await readJsonResponse<GenerateResponse>(r)
     setGenerating(false)
     if (d.name) {
       setMsg(`Generated: ${d.name} (${d.cones} cones)`)
