@@ -23,6 +23,12 @@ fi
 echo "=== IFSSIM Mac post-build (v$PROJECT_VERSION) ==="
 
 # 1. BuildCookRun
+#
+# `-pak -iostore -compressed` is the UE5.7 recipe for packaged
+# shipping builds — generates one bundled .pak + .ucas/.utoc pair
+# under Content/Paks/. Tried dropping `-pak` on perf/sim-tier1-cook-strip
+# expecting IoStore to fully replace it; got 200 MB of loose
+# .uexp/.uasset/.ubulk files instead (worse). Both flags stay.
 echo "[1/3] Building..."
 "/Users/Shared/Epic Games/UE_5.7/Engine/Build/BatchFiles/RunUAT.sh" \
   BuildCookRun \
