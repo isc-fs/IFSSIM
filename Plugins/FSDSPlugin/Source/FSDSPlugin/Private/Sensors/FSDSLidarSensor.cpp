@@ -40,6 +40,37 @@ static TAutoConsoleVariable<float> CVarLidarGPUExtraOversample(
 	TEXT("Mac runs; 3.0 is a flat plateau (no measurable gain over 2.0)."),
 	ECVF_Default);
 
+// #488 — gate the LiDAR's GPU color capture (the reflectance/intensity
+// encoder path from #321 D-Phase-2). When enabled, the LiDAR creates a
+// second SceneCaptureComponent2D that runs SCS_FinalColorLDR through
+// the post-process M_LiDARStencilEncoder material to feed per-cone
+// reflectance into the decode shader. The encoder is what gives the
+// LiDAR different reflectance values for blue/yellow/big-orange/mini-
+// orange cones at 905 nm.
+//
+// Cost: this second capture is the dominant source of #488 — the
+// per-tick SCS_FinalColorLDR pass shares state with the main view's
+// rendering pipeline below ShowFlag granularity, producing visible
+// blue stippling on dark opaque surfaces (asphalt, dark car paint)
+// that accumulates over time. The depth capture leaks a similar but
+// much smaller residual; disabling just the color capture removes
+// most of the artifact.
+//
+// Default = 0 (off). Most consumers (cone-detection at the autonomy
+// level) don't actually need per-material reflectance — luminance-
+// based intensity from the depth pass alone is enough to distinguish
+// cones from ground returns. Anyone who needs the LUT path enables
+// this CVar at boot time (e.g. via -ExecCmds in UECommandLine.txt or
+// from settings.json's startup hooks).
+static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
+	TEXT("fsds.LidarGPU.StencilEncoder"),
+	0,
+	TEXT("0 = depth-only LiDAR (no color capture, no #488 stippling). ")
+	TEXT("1 = full reflectance LUT path (creates color capture, ships ")
+	TEXT("per-cone-material 905 nm reflectance via M_LiDARStencilEncoder, ")
+	TEXT("but reintroduces the asphalt/car-paint stippling tracked in #488)."),
+	ECVF_Default);
+
 UFSDSLidarSensor::UFSDSLidarSensor()
 {
 	PrimaryComponentTick.bCanEverTick = true;
@@ -542,7 +573,23 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->CaptureSource         = ESceneCaptureSource::SCS_SceneDepth;
 	GPUDepthCapture->bCaptureEveryFrame    = false;
 	GPUDepthCapture->bCaptureOnMovement    = false;
-	GPUDepthCapture->bAlwaysPersistRenderingState = true;
+	// bAlwaysPersistRenderingState=false — same #488 fix as the color
+	// capture below. Even though this capture has all show flags off
+	// (no AA, no tonemapper, no post-process), persisting render state
+	// keeps allocated buffers across captures that the main view ends
+	// up sharing. The asphalt dots return as soon as the depth capture
+	// is allowed to persist, regardless of color-capture config.
+	GPUDepthCapture->bAlwaysPersistRenderingState = false;
+
+	// Cap the capture's view distance to just past the LiDAR's MaxRange.
+	// Without this, the capture renders every primitive in the level
+	// (including the entire skybox horizon, distant walls, etc.) every
+	// tick. With MaxRange typically 30 m and a small buffer, we cut
+	// the capture's culling work dramatically — perf win AND less
+	// "surface" for #488-style residual leakage to the main view.
+	// MaxRange is in cm (LiDAR-side units) and is set up before
+	// InitializeGPUPath runs.
+	GPUDepthCapture->MaxViewDistanceOverride = MaxRange + 500.f; // +5 m buffer
 
 	// FOVAngle is *horizontal*; vertical FOV is implicit via aspect
 	// (V-FOV = 2·atan(tan(H/2)/aspect)). Sizing RT to Aspect above
@@ -550,9 +597,21 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// spherical V exactly.
 	GPUDepthCapture->FOVAngle = HFovDeg;
 
-	// Same show-flag stripping as the Phase-0 spike: depth-only,
-	// no AA / post / SSR / AO. AA-off in particular avoids fake
-	// intermediate-depth hits at cone silhouettes (#223 risk #3).
+	// Depth-only output. AA-off in particular avoids fake intermediate
+	// depth hits at cone silhouettes (#223 risk #3). Lighting / GI /
+	// Atmosphere / Shadows also off — even though SCS_SceneDepth doesn't
+	// emit lit colour, UE5 still walks those subsystems internally as
+	// part of scene preparation when they're enabled, which is the
+	// remaining vector for #488-style main-view state sharing after the
+	// persist-state flag was disabled.
+	GPUDepthCapture->ShowFlags.SetLighting(false);
+	GPUDepthCapture->ShowFlags.SetGlobalIllumination(false);
+	GPUDepthCapture->ShowFlags.SetDirectLighting(false);
+	GPUDepthCapture->ShowFlags.SetIndirectLightingCache(false);
+	GPUDepthCapture->ShowFlags.SetAtmosphere(false);
+	GPUDepthCapture->ShowFlags.SetSkyLighting(false);
+	GPUDepthCapture->ShowFlags.SetDynamicShadows(false);
+	GPUDepthCapture->ShowFlags.SetVolumetricFog(false);
 	GPUDepthCapture->ShowFlags.SetAntiAliasing(false);
 	GPUDepthCapture->ShowFlags.SetTemporalAA(false);
 	GPUDepthCapture->ShowFlags.SetMotionBlur(false);
@@ -567,6 +626,22 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->ShowFlags.SetAmbientOcclusion(false);
 
 	// === #255 — intensity capture (FinalColorLDR) ===
+	// Gated by fsds.LidarGPU.StencilEncoder (default OFF, see CVar at
+	// top of file). When off, GPUColorCapture stays null and the
+	// reflectance LUT path falls back to luminance-baseline behaviour
+	// in the decode shader. When on, a second SceneCapture component
+	// is created to feed per-cone reflectance into the encoder.
+	// Default OFF closes #488 (stippling on dark surfaces from the
+	// color capture's full-pipeline render leaking state to the main
+	// view); opt-in keeps the reflectance feature available for
+	// callers that need cone-color discrimination via stencil ID.
+	if (CVarLidarStencilEncoder.GetValueOnGameThread() <= 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS LiDAR GPU: stencil encoder disabled (fsds.LidarGPU.StencilEncoder=0); skipping color capture. Intensity falls back to luminance baseline."));
+		bReflectanceLUTActive = false;
+		return;
+	}
+
 	// One extra render target sharing the depth capture's view geometry
 	// (FOV, position, rotation, RT size). The decode shader samples it
 	// at the same texel as the depth to compute per-point intensity =
@@ -599,19 +674,60 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUColorCapture->CaptureSource         = ESceneCaptureSource::SCS_FinalColorLDR;
 	GPUColorCapture->bCaptureEveryFrame    = false;
 	GPUColorCapture->bCaptureOnMovement    = false;
-	GPUColorCapture->bAlwaysPersistRenderingState = true;
+	// bAlwaysPersistRenderingState=false: the LiDAR re-captures fresh
+	// every tick; we don't need temporal history to converge across
+	// captures (that's the contract for things like mirrors). Leaving
+	// it `true` was the root cause of #488 — the LiDAR's SCS_FinalColorLDR
+	// capture from its mount POV (looking down at the road from 1.1 m)
+	// kept feeding UE5's shared temporal AA + eye-adaptation history
+	// buffers, and the main viewport read those back as blue stippling
+	// that accumulated on opaque surfaces over time. The pattern was
+	// strongest on diffuse ground/car surfaces and absent on the sky
+	// (sky atmosphere has its own render pass, no TAA history sharing).
+	// Diagnosed empirically: disabling the LiDAR entirely cleared the
+	// asphalt, re-enabling it brought it back; cmdline `r.AntiAliasingMethod 0`
+	// didn't help because the scene capture has its own ShowFlags
+	// independent of the global CVar.
+	GPUColorCapture->bAlwaysPersistRenderingState = false;
 	GPUColorCapture->FOVAngle              = HFovDeg;
-	// Keep AA/tonemapper enabled here — FinalColorLDR is the post-
-	// processed pipeline output, so the usual visual flags apply. We
-	// only strip the LiDAR-irrelevant ones the depth capture also
-	// stripped (motion blur, bloom, vignette, etc.) to keep the
-	// per-frame cost down.
+	// Strip every show flag that touches scene-wide state shared with
+	// the main viewport. The previous comment ("Keep AA/tonemapper
+	// enabled here") was wrong: SCS_FinalColorLDR doesn't *require*
+	// the full pipeline for the intensity readout — we need surface
+	// reflectance ρ, not the lit appearance under the sun this frame.
+	// For a 905 nm IR LiDAR that's the physically-correct signal too:
+	// a real LiDAR doesn't care about ambient daylight on the cone.
+	//
+	// Full lighting pass kept polluting the main view's state even
+	// after bAlwaysPersistRenderingState was disabled — most likely via
+	// Lumen surface cache / screen-space probes / shared probe data,
+	// which run as part of the GI / lighting subpasses regardless of
+	// the temporal-AA family of flags. With Lighting + GlobalIllumination
+	// + DirectLighting + IndirectLighting + Atmosphere disabled, the
+	// color capture renders pure unlit material output and shares no
+	// lighting-pipeline buffers with the main viewport. Intensity then
+	// = luminance(albedo) × cos(θ_inc), which is closer to the physical
+	// truth for 905 nm than luminance(FinalColor) anyway.
+	GPUColorCapture->ShowFlags.SetLighting(false);
+	GPUColorCapture->ShowFlags.SetGlobalIllumination(false);
+	GPUColorCapture->ShowFlags.SetDirectLighting(false);
+	GPUColorCapture->ShowFlags.SetIndirectLightingCache(false);
+	GPUColorCapture->ShowFlags.SetAtmosphere(false);
+	GPUColorCapture->ShowFlags.SetSkyLighting(false);
+	GPUColorCapture->ShowFlags.SetDynamicShadows(false);
+	GPUColorCapture->ShowFlags.SetVolumetricFog(false);
+	GPUColorCapture->ShowFlags.SetTemporalAA(false);
+	GPUColorCapture->ShowFlags.SetAntiAliasing(false);
+	GPUColorCapture->ShowFlags.SetEyeAdaptation(false);
+	GPUColorCapture->ShowFlags.SetTonemapper(false);
 	GPUColorCapture->ShowFlags.SetMotionBlur(false);
 	GPUColorCapture->ShowFlags.SetBloom(false);
 	GPUColorCapture->ShowFlags.SetVignette(false);
 	GPUColorCapture->ShowFlags.SetGrain(false);
 	GPUColorCapture->ShowFlags.SetLensFlares(false);
 	GPUColorCapture->ShowFlags.SetScreenSpaceReflections(false);
+	GPUColorCapture->ShowFlags.SetReflectionEnvironment(false);
+	GPUColorCapture->ShowFlags.SetAmbientOcclusion(false);
 
 	// === #321 D-Phase-2 — stencil → alpha post-process material ======
 	//
@@ -799,6 +915,10 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 
 	const double T0 = FPlatformTime::Seconds();
 	GPUDepthCapture->CaptureScene();
+	// Color capture is null when fsds.LidarGPU.StencilEncoder=0 (default).
+	// When enabled, the reflectance LUT path runs and reintroduces some
+	// of the #488 stippling — opt-in for callers that need per-cone
+	// reflectance via stencil ID.
 	if (GPUColorCapture) GPUColorCapture->CaptureScene();
 	EnqueueDecodePass();
 	const double T1 = FPlatformTime::Seconds();
