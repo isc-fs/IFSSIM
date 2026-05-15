@@ -5,78 +5,15 @@
 #include "FSDSPacejkaTireModel.h"
 
 /**
- * FSDS Settings — Parses settings.json for vehicle, sensor, and camera configuration.
- * Compatible with the original FSDS settings format.
+ * FSDS Settings — Parses settings.json for vehicle and sensor configuration.
+ * Compatible with the original FSDS settings format (camera fields ignored).
+ *
+ * Camera sensors were removed in PR perf/strip-cameras (2026-05): the real
+ * IFS-08 carries no cameras and the autonomy pipeline never consumed any
+ * `camera` topics in production. Stripping them removed the
+ * SceneCaptureComponent2D render pass from every frame (largest single
+ * source of GPU cost on the mid-range gaming-laptop target).
  */
-
-enum class EFSDSImageType : uint8
-{
-	Scene = 0,
-	DepthPlanner = 1,
-	DepthPerspective = 2,
-	DepthVis = 3,
-	DisparityNormalized = 4,
-	Segmentation = 5,
-	SurfaceNormals = 6,
-	Infrared = 7
-};
-
-struct FFSDSCaptureSettings
-{
-	EFSDSImageType ImageType = EFSDSImageType::Scene;
-	int32 Width = 785;
-	int32 Height = 785;
-	float FOV_Degrees = 90.f;
-
-	// Auto-exposure
-	float AutoExposureSpeed = 100.f;
-	float AutoExposureBias = 0.f;
-	float AutoExposureMaxBrightness = 0.64f;
-	float AutoExposureMinBrightness = 0.03f;
-
-	// Motion blur
-	float MotionBlurAmount = 0.f; // 0 = disabled (default for sim)
-
-	// Gamma
-	float TargetGamma = 1.0f;
-
-	// Projection
-	bool bOrthographic = false;
-	float OrthoWidth = 5.12f;
-};
-
-struct FFSDSGimbalSettings
-{
-	bool bEnabled = false;
-	float Stabilization = 0.f; // 0 = no stabilization, 1 = full
-	FRotator Rotation = FRotator::ZeroRotator;
-};
-
-struct FFSDSNoiseSettings
-{
-	bool bEnabled = false;
-	float RandContrib = 0.f;
-	float RandSpeed = 1.f;
-	float RandSize = 1.f;
-	float RandDensity = 1.f;
-	float HorzWaveContrib = 0.f;
-	float HorzWaveStrength = 0.f;
-	float HorzWaveVertSize = 0.f;
-	float HorzWaveScreenSize = 0.f;
-	float HorzNoiseLinesContrib = 0.f;
-	float HorzDistortionContrib = 0.f;
-	float HorzDistortionStrength = 0.f;
-};
-
-struct FFSDSCameraSettings
-{
-	FString Name;
-	FVector Position = FVector::ZeroVector; // meters
-	FRotator Rotation = FRotator::ZeroRotator;
-	TArray<FFSDSCaptureSettings> CaptureSettings;
-	FFSDSGimbalSettings Gimbal;
-	TMap<int32, FFSDSNoiseSettings> NoiseSettings; // per image type
-};
 
 struct FFSDSSensorSettings
 {
@@ -201,7 +138,6 @@ struct FFSDSVehicleSettings
 
 	FFSDSVehiclePhysics Physics;
 	TMap<FString, FFSDSSensorSettings> Sensors;
-	TMap<FString, FFSDSCameraSettings> Cameras;
 };
 
 class FSDSPLUGIN_API FFSDSSettings
@@ -238,7 +174,6 @@ private:
 
 	void ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> VehicleObj);
 	void ParseSensor(const FString& Name, TSharedPtr<FJsonObject> SensorObj, FFSDSVehicleSettings& Vehicle);
-	void ParseCamera(const FString& Name, TSharedPtr<FJsonObject> CameraObj, FFSDSVehicleSettings& Vehicle);
 
 	FString SettingsString;
 

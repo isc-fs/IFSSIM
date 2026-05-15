@@ -73,7 +73,7 @@ void AFSDSGameMode::StartPlay()
 			ConeSpawnerActor->SpawnedCones.Num());
 	}
 
-	// Start RPC server (commands + camera)
+	// Start RPC server (commands + sensor queries)
 	RpcServer.SetVehiclePawn(VehiclePawn);
 	RpcServer.SetReferee(RefereeActor);
 	RpcServer.SetWorld(GetWorld());

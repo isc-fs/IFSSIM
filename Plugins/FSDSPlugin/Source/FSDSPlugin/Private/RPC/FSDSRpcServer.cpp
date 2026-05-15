@@ -717,50 +717,22 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			*Mode, Loads.FL, Loads.FR, Loads.RL, Loads.RR, Loads.Total());
 	}
 
-	else if (Method == TEXT("simGetImage"))
+	else if (Method == TEXT("simGetImage")     ||
+	         Method == TEXT("simGetImages")    ||
+	         Method == TEXT("simGetCameraInfo") ||
+	         Method == TEXT("simSetCameraFov")  ||
+	         Method == TEXT("simSetCameraOrientation"))
 	{
-		// Parse: simGetImage camera_name image_type
-		if (!IsValid(VehiclePawn)) return TEXT("{}");
-		TArray<FString> Parts;
-		Request.ParseIntoArray(Parts, TEXT(" "));
-		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
-		int32 ImgType = (Parts.Num() >= 3) ? FCString::Atoi(*Parts[2]) : 0;
-
-		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
-		if (!Cam)
-		{
-			for (auto& Pair : VehiclePawn->Cameras)
-			{
-				Cam = Pair.Value;
-				break;
-			}
-		}
-		if (!Cam) return TEXT("{\"error\":\"no camera\"}");
-
-		// Image capture MUST run on game thread
-		int32 PngSize = CallOnGameThread<int32>(
-			[Cam, ImgType]() -> int32 {
-				TArray<uint8> PngData = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
-				return PngData.Num();
-			},
-			3.0, 0, TEXT("getImageSize"));
-
-		return FString::Printf(TEXT("{\"size\":%d,\"camera\":\"%s\",\"type\":%d}"),
-			PngSize, *CamName, ImgType);
+		// Camera sensors were stripped in perf/strip-cameras (the real
+		// IFS-08 has no cameras and the autonomy never consumed any
+		// /camera/* topics). Return an explicit not-implemented so any
+		// stale client surfaces the change instead of silently failing.
+		return FString::Printf(TEXT("{\"error\":\"cameras removed; method not implemented: %s\"}"), *Method);
 	}
 	else if (Method == TEXT("listCameras"))
 	{
-		if (!IsValid(VehiclePawn)) return TEXT("[]");
-		FString Result = TEXT("[");
-		bool bFirst = true;
-		for (auto& Pair : VehiclePawn->Cameras)
-		{
-			if (!bFirst) Result += TEXT(",");
-			Result += FString::Printf(TEXT("\"%s\""), *Pair.Key);
-			bFirst = false;
-		}
-		Result += TEXT("]");
-		return Result;
+		// Cameras removed (perf/strip-cameras) — always empty list.
+		return TEXT("[]");
 	}
 	else if (Method == TEXT("getSensorOffset"))
 	{
@@ -771,11 +743,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		//
 		// Supported names:
 		//   "lidar"            → the one LiDAR mount
-		//   "<camera_name>"    → any camera from settings.json
 		//
-		// Body frame here is REP-103 (X=forward, Y=left, Z=up); the
-		// plugin stores sensor positions in UE units (X=forward,
-		// Y=right, Z=up, centimetres), so we flip Y and convert cm→m.
+		// Camera sensors were stripped in perf/strip-cameras; "<camera>"
+		// names are no longer recognised here. Body frame is REP-103
+		// (X=forward, Y=left, Z=up); the plugin stores sensor positions
+		// in UE units (X=forward, Y=right, Z=up, centimetres), so we
+		// flip Y and convert cm→m.
 		TArray<FString> Parts;
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		if (Parts.Num() < 2) return TEXT("{\"error\":\"usage: getSensorOffset <name>\"}");
@@ -792,11 +765,6 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				UeOffsetCm = VehiclePawn->LidarSensor->SensorOffset;
 				bFound = true;
 			}
-		}
-		else if (auto* Cam = VehiclePawn->GetCamera(Name))
-		{
-			UeOffsetCm = Cam->GetRelativeLocation();
-			bFound = true;
 		}
 
 		if (!bFound) return FString::Printf(TEXT("{\"error\":\"no sensor named %s\"}"), *Name);
@@ -1098,90 +1066,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 
 	// === Camera info/control ===
-
-	else if (Method == TEXT("simGetCameraInfo"))
-	{
-		if (!IsValid(VehiclePawn)) return TEXT("{}");
-		TArray<FString> Parts;
-		Request.ParseIntoArray(Parts, TEXT(" "));
-		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
-
-		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
-		if (!Cam) return TEXT("{\"error\":\"camera not found\"}");
-
-		FVector Pos = FSDSCoord::UEToENU(Cam->GetComponentLocation());
-		FQuat Ori = FSDSCoord::UEQuatToENU(Cam->GetComponentQuat());
-
-		return FString::Printf(TEXT("{\"camera\":\"%s\",\"fov\":%.1f,\"width\":%d,\"height\":%d,\"px\":%.4f,\"py\":%.4f,\"pz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
-			*CamName, Cam->FOVAngle, Cam->ImageWidth, Cam->ImageHeight,
-			Pos.X, Pos.Y, Pos.Z, Ori.W, Ori.X, Ori.Y, Ori.Z);
-	}
-	else if (Method == TEXT("simSetCameraFov"))
-	{
-		// Parse: simSetCameraFov camera_name fov_degrees
-		if (!IsValid(VehiclePawn)) return TEXT("false");
-		TArray<FString> Parts;
-		Request.ParseIntoArray(Parts, TEXT(" "));
-		if (Parts.Num() < 3) return TEXT("{\"error\":\"usage: simSetCameraFov cam1 90\"}");
-
-		FString CamName = Parts[1];
-		float NewFOV = FCString::Atof(*Parts[2]);
-
-		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
-		if (!Cam) return TEXT("{\"error\":\"camera not found\"}");
-
-		Cam->FOVAngle = NewFOV;
-		return TEXT("true");
-	}
-	else if (Method == TEXT("simSetCameraOrientation"))
-	{
-		// Parse: simSetCameraOrientation camera_name pitch yaw roll
-		if (!IsValid(VehiclePawn)) return TEXT("false");
-		TArray<FString> Parts;
-		Request.ParseIntoArray(Parts, TEXT(" "));
-		if (Parts.Num() < 5) return TEXT("{\"error\":\"usage: simSetCameraOrientation cam1 pitch yaw roll\"}");
-
-		FString CamName = Parts[1];
-		float Pitch = FCString::Atof(*Parts[2]);
-		float Yaw = FCString::Atof(*Parts[3]);
-		float Roll = FCString::Atof(*Parts[4]);
-
-		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
-		if (!Cam) return TEXT("{\"error\":\"camera not found\"}");
-
-		Cam->SetRelativeRotation(FRotator(Pitch, Yaw, Roll));
-		return TEXT("true");
-	}
-
-	// === simGetImages (batch) ===
-
-	else if (Method == TEXT("simGetImages"))
-	{
-		if (!IsValid(VehiclePawn)) return TEXT("[]");
-		TArray<FString> Parts;
-		Request.ParseIntoArray(Parts, TEXT(" "));
-		FString Result = TEXT("[");
-		bool bFirst = true;
-		for (int32 i = 1; i < Parts.Num(); i++)
-		{
-			FString CamName, TypeStr;
-			Parts[i].Split(TEXT(":"), &CamName, &TypeStr);
-			int32 ImgType = FCString::Atoi(*TypeStr);
-			UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
-			if (!Cam) continue;
-			int32 PngSize = CallOnGameThread<int32>(
-				[Cam, ImgType]() -> int32 {
-					TArray<uint8> Png = Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
-					return Png.Num();
-				},
-				3.0, 0, TEXT("simGetImages[i]"));
-			if (!bFirst) Result += TEXT(",");
-			Result += FString::Printf(TEXT("{\"camera\":\"%s\",\"type\":%d,\"size\":%d}"), *CamName, ImgType, PngSize);
-			bFirst = false;
-		}
-		Result += TEXT("]");
-		return Result;
-	}
+	// Removed in perf/strip-cameras — the camera RPCs (simGetImage,
+	// simGetImages, simGetCameraInfo, simSetCameraFov,
+	// simSetCameraOrientation, simGetImageBinary) now return a single
+	// "method not implemented" stub handled at the top of the dispatch.
 
 	// === Weather / TimeOfDay — still "true" stubs ===
 	// Left as-is because no client cares about the return value today and
@@ -1505,50 +1393,15 @@ bool FFSDSRpcServer::ProcessBinaryRequest(const FString& Request, FSocket* Clien
 
 	if (Method == TEXT("simGetImageBinary"))
 	{
-		// Parse: simGetImageBinary camera_name image_type
-		if (!IsValid(VehiclePawn)) return false;
-
-		TArray<FString> Parts;
-		Request.ParseIntoArray(Parts, TEXT(" "));
-		FString CamName = (Parts.Num() >= 2) ? Parts[1] : TEXT("cam1");
-		int32 ImgType = (Parts.Num() >= 3) ? FCString::Atoi(*Parts[2]) : 0;
-
-		UFSDSCameraSensor* Cam = VehiclePawn->GetCamera(CamName);
-		if (!Cam)
-		{
-			for (auto& Pair : VehiclePawn->Cameras)
-			{
-				Cam = Pair.Value;
-				break;
-			}
-		}
-		if (!Cam) return false;
-
-		// Capture on game thread
-		TArray<uint8> PngData = CallOnGameThread<TArray<uint8>>(
-			[Cam, ImgType]() -> TArray<uint8> {
-				return Cam->CaptureImagePNG(static_cast<EFSDSImageType>(ImgType));
-			},
-			5.0, TArray<uint8>(), TEXT("simGetImageBinary"));
-
-		// Send header: "IMG:size\n" followed by raw PNG bytes
-		FString Header = FString::Printf(TEXT("IMG:%d\n"), PngData.Num());
+		// Camera sensors stripped in perf/strip-cameras. Send a zero-byte
+		// IMG:0 header so any in-flight client (e.g. an old packaged
+		// bridge) doesn't deadlock waiting for a payload — it'll see
+		// length 0 and skip the read. The bridge no longer makes this
+		// call from main.
+		FString Header = TEXT("IMG:0\n");
 		FTCHARToUTF8 HeaderConv(*Header);
 		int32 Sent = 0;
 		ClientSocket->Send((const uint8*)HeaderConv.Get(), HeaderConv.Length(), Sent);
-
-		// Send raw PNG bytes
-		if (PngData.Num() > 0)
-		{
-			int32 TotalSent = 0;
-			while (TotalSent < PngData.Num())
-			{
-				int32 ChunkSent = 0;
-				ClientSocket->Send(PngData.GetData() + TotalSent, PngData.Num() - TotalSent, ChunkSent);
-				if (ChunkSent <= 0) break;
-				TotalSent += ChunkSent;
-			}
-		}
 		return true;
 	}
 	// `getLidarDataBinary` (PTS:N\n + raw float array) was removed in
