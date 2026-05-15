@@ -139,7 +139,10 @@ fi
 #    live on different drives. We overwrite it with an absolute path
 #    computed from $SCRIPT_DIR.
 #
-#    FPS cap mirrored from macOS (30 default; override IFSSIM_MAX_FPS).
+#    FPS cap mirrored from macOS: default 0 (uncapped). See the long
+#    comment in package_mac.sh for why 30 was the wrong default —
+#    UE5 yokes physics tick to render frame rate, so capping render
+#    halves dynamics resolution. Override IFSSIM_MAX_FPS for demos.
 #
 #    Windowed mode on Win64 shipping: -windowed alone is not enough.
 #    UE5 still picks the desktop resolution and the resulting window
@@ -147,12 +150,18 @@ fi
 #    -ForceRes makes the engine ignore any saved GameUserSettings
 #    that might otherwise restore a previous fullscreen value.
 #    Override the window size via IFSSIM_WIN_W / IFSSIM_WIN_H.
-IFSSIM_MAX_FPS="${IFSSIM_MAX_FPS:-30}"
+IFSSIM_MAX_FPS="${IFSSIM_MAX_FPS:-0}"
 IFSSIM_WIN_W="${IFSSIM_WIN_W:-1280}"
 IFSSIM_WIN_H="${IFSSIM_WIN_H:-720}"
 CMDLINE="$STAGED_DIR/UECommandLine.txt"
 PROJECT_ABS_WIN="$(cygpath -w "$SCRIPT_DIR/IFSSIM.uproject" 2>/dev/null || echo "$SCRIPT_DIR/IFSSIM.uproject")"
-echo "-project=\"$PROJECT_ABS_WIN\" -windowed -ResX=$IFSSIM_WIN_W -ResY=$IFSSIM_WIN_H -ForceRes -ExecCmds=\"t.MaxFPS $IFSSIM_MAX_FPS\" -log" > "$CMDLINE"
+# Conditional t.MaxFPS — see the long comment in package_mac.sh for
+# why we don't always emit it (it would override the .ini's 60).
+if [ "$IFSSIM_MAX_FPS" = "0" ]; then
+    echo "-project=\"$PROJECT_ABS_WIN\" -windowed -ResX=$IFSSIM_WIN_W -ResY=$IFSSIM_WIN_H -ForceRes -log" > "$CMDLINE"
+else
+    echo "-project=\"$PROJECT_ABS_WIN\" -windowed -ResX=$IFSSIM_WIN_W -ResY=$IFSSIM_WIN_H -ForceRes -ExecCmds=\"t.MaxFPS $IFSSIM_MAX_FPS\" -log" > "$CMDLINE"
+fi
 echo "    UECommandLine.txt: $(cat "$CMDLINE")"
 
 echo ""

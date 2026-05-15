@@ -79,16 +79,36 @@ echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 #    into DefaultEngine.ini [SystemSettings] for future cooked builds,
 #    but -ExecCmds catches builds that predate that change.
 #
-#    FPS cap dropped 60 → 30. UE5's CPU+GPU work is proportional to
-#    frame rate; for autonomy testing (sensors run at their own rates,
-#    not tied to render FPS) 30 FPS is plenty smooth visually and
-#    halves the host load that was competing with the SLAM optimizer.
-#    Override via env: `IFSSIM_MAX_FPS=60 ./package_mac.sh` if you
-#    want the higher cap back for visual demos.
-IFSSIM_MAX_FPS="${IFSSIM_MAX_FPS:-30}"
+#    FPS cap default = 0 ("don't override the .ini"). Earlier revisions
+#    defaulted to 30 on the "sensors run independently of render FPS,
+#    so we can cap cheap" theory — that turned out to be false. UE5's
+#    game thread is yoked to the render frame rate by default, so
+#    capping render at 30 Hz locks the physics tick at 30 Hz too. With
+#    Chaos substeps capped at 4 (see [SystemSettings]
+#    p.Chaos.Substep.MaxSubsteps in DefaultEngine.ini), 30 Hz game
+#    tick gives 120 Hz physics; 60 Hz game tick gives 240 Hz — a
+#    meaningful halving of dynamics resolution for the controller and
+#    the EKF/odometry filter to chew on.
+#
+#    Precedence note: DefaultEngine.ini [SystemSettings] already sets
+#    t.MaxFPS=60 as the sensible upper bound. -ExecCmds runs AFTER
+#    the .ini and overrides it, so if we always emit `t.MaxFPS 0`
+#    here the runtime command would uncap the renderer entirely
+#    (overriding the .ini's 60). Instead: only emit the -ExecCmds
+#    snippet when IFSSIM_MAX_FPS is explicitly set non-zero — then
+#    the .ini cap of 60 stays in force for the default run. Override
+#    via env: `IFSSIM_MAX_FPS=30 ./package_mac.sh` for a lower demo
+#    cap, or set 0 explicitly to mean "uncap deliberately."
+IFSSIM_MAX_FPS="${IFSSIM_MAX_FPS:-0}"
 CMDLINE="$SCRIPT_DIR/Saved/StagedBuilds/Mac/UECommandLine.txt"
 PROJECT_ABS="$SCRIPT_DIR/IFSSIM.uproject"
-echo "-project=\"$PROJECT_ABS\" -windowed -ExecCmds=\"t.MaxFPS $IFSSIM_MAX_FPS\"" > "$CMDLINE"
+if [ "$IFSSIM_MAX_FPS" = "0" ]; then
+    # Default path — let DefaultEngine.ini's t.MaxFPS=60 be the cap.
+    echo "-project=\"$PROJECT_ABS\" -windowed" > "$CMDLINE"
+else
+    # Explicit override — runtime cmd takes precedence over the .ini.
+    echo "-project=\"$PROJECT_ABS\" -windowed -ExecCmds=\"t.MaxFPS $IFSSIM_MAX_FPS\"" > "$CMDLINE"
+fi
 echo "  UECommandLine.txt: $(cat "$CMDLINE")"
 
 echo ""
