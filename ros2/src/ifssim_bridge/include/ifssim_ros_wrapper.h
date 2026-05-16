@@ -4,7 +4,6 @@
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -39,16 +38,17 @@
 /**
  * IFSSIM ROS2 Wrapper — sensor over TCP, LiDAR over UDP.
  *
- * Architecture (3 TCP connections + one UDP listener):
+ * Architecture (2 TCP connections + one UDP listener):
  *   1. Sensor stream (`streamSensors`, TCP push, port 41452)
  *      → IMU at 400Hz, GSS/TF/Odom at 100Hz, GPS at 10Hz
  *   2. LiDAR stream (UDP push from FSDSUdpBroadcaster, port 51453)
  *      → PointCloud2 at ~10Hz. UdpReceiver handles chunk reassembly.
  *      LiDAR is UDP-only since #322 (#321's TCP/UDS soft-deprecation).
- *   3. Camera client (TCP req/resp, port 41451 RPC)
- *      → CompressedImage at 10Hz
- *   4. Command client (TCP req/resp, port 41451 RPC)
+ *   3. Command client (TCP req/resp, port 41451 RPC)
  *      → control commands, settings, referee queries
+ *
+ * Camera sensors were removed in perf/strip-cameras — the legacy camera
+ * client + cameraTimerCb + CompressedImage publishers are gone.
  */
 class IFSSIMRosWrapper
 {
@@ -88,7 +88,6 @@ private:
     void onLidarFrame(const LidarChunkHeader& header, const float* points);
 
     // Timer callbacks (TCP command client, low frequency)
-    void cameraTimerCb();
     void goSignalTimerCb();
     void extraInfoTimerCb();
     void trackPublishCb();
@@ -108,7 +107,6 @@ private:
 
     // TCP clients
     std::unique_ptr<TcpClient> client_;          // Commands + referee queries
-    std::unique_ptr<TcpClient> client_camera_;   // Camera image requests
 
     // Streaming sockets (raw, not TcpClient — held open).
     // `lidar_stream_fd_` + `lidar_thread_` are populated only when
@@ -216,7 +214,6 @@ private:
     // 0 (default) = disabled, no viz publisher created. >= 2 = publish
     // every Nth point on /lidar/Lidar1/viz alongside the full cloud.
     uint32_t lidar_viz_decimation_ = 0;
-    std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> camera_pubs_;
     rclcpp::Publisher<fs_msgs::msg::GoSignal>::SharedPtr go_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::ExtraInfo>::SharedPtr extra_info_pub_;
@@ -267,7 +264,6 @@ private:
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     // Timers
-    rclcpp::TimerBase::SharedPtr camera_timer_;
     rclcpp::TimerBase::SharedPtr go_signal_timer_;
     rclcpp::TimerBase::SharedPtr extra_info_timer_;
     rclcpp::TimerBase::SharedPtr track_publish_timer_;
@@ -278,7 +274,6 @@ private:
     std::string mission_name_ = "trackdrive";
     std::string track_name_ = "A";
     bool competition_mode_ = false;
-    std::vector<std::string> camera_names_;
     // UDP receiver — owns the sensor + LiDAR UDP listener threads.
     // start() called unconditionally from initializeConnection (#322
     // retired the TCP and UDS LiDAR transports; UDP is the only path
@@ -292,7 +287,6 @@ private:
     // numbers.
     struct Vec3 { double x = 0.0; double y = 0.0; double z = 0.0; bool valid = false; };
     Vec3 lidar_offset_;
-    std::map<std::string, Vec3> camera_offsets_;
 
     // Spawn position captured once at connection time via simGetVehiclePose.
     // resetSrvCb teleports back here; position-only (no quaternion) to avoid

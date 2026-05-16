@@ -158,7 +158,9 @@ services:
       # contents, so the image remains the baseline, while
       # `docker compose watch dv_pipeline_stack` syncs host edits into
       # those volumes for live Python iteration without Windows
-      # bind-mount latency. Image-time `colcon build --symlink-install`
+      # bind-mount latency. Wrapper: tools/compose-up-and-watch.{sh,ps1}
+      # runs `up -d` then `watch` (Compose cannot embed watch in the YAML).
+      # Image-time `colcon build --symlink-install`
       # makes existing Python files resolve through the synced source
       # tree the next time lifecycle nodes restart.
       #
@@ -183,6 +185,20 @@ services:
       - dv_pipeline_bag_recorder_node_src:/dv_pipeline_stack_ws/src/bag_recorder_node
       - dv_pipeline_fs_msgs_src:/dv_pipeline_stack_ws/src/fs_msgs
       - dv_pipeline_ifssim_bridge_src:/dv_pipeline_stack_ws/src/ifssim_bridge
+      # Remaining pipeline packages — same watch + named-volume pattern as
+      # #497 so Python (and synced sources for C++ pkgs) update without an
+      # image rebuild. C++/msg changes still need `colcon build` inside the
+      # container or `docker compose build dv_pipeline_stack`.
+      - dv_pipeline_bringup_src:/dv_pipeline_stack_ws/src/bringup
+      - dv_pipeline_coche_urdf_src:/dv_pipeline_stack_ws/src/coche_urdf
+      - dv_pipeline_dv_msgs_src:/dv_pipeline_stack_ws/src/dv_msgs
+      - dv_pipeline_mission_control_src:/dv_pipeline_stack_ws/src/mission_control
+      - dv_pipeline_mode_manager_src:/dv_pipeline_stack_ws/src/mode_manager
+      - dv_pipeline_node_base_src:/dv_pipeline_stack_ws/src/node_base
+      - dv_pipeline_node_base_cpp_src:/dv_pipeline_stack_ws/src/node_base_cpp
+      - dv_pipeline_odometry_filter_src:/dv_pipeline_stack_ws/src/odometry_filter
+      - dv_pipeline_odometry_filter_node_src:/dv_pipeline_stack_ws/src/odometry_filter_node
+      - dv_pipeline_sim_supervisor_src:/dv_pipeline_stack_ws/src/sim_supervisor
       #
       # #465 v3 — landing dir for finalised bags. Used to be a bind
       # mount to ./bags, but on macOS Docker Desktop (virtiofs) and
@@ -240,6 +256,46 @@ services:
         - action: sync
           path: ./ros2/src/ifssim_bridge
           target: /dv_pipeline_stack_ws/src/ifssim_bridge
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/bringup
+          target: /dv_pipeline_stack_ws/src/bringup
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/coche_urdf
+          target: /dv_pipeline_stack_ws/src/coche_urdf
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/dv_msgs
+          target: /dv_pipeline_stack_ws/src/dv_msgs
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/mission_control
+          target: /dv_pipeline_stack_ws/src/mission_control
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/mode_manager
+          target: /dv_pipeline_stack_ws/src/mode_manager
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/node_base
+          target: /dv_pipeline_stack_ws/src/node_base
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/node_base_cpp
+          target: /dv_pipeline_stack_ws/src/node_base_cpp
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/odometry_filter
+          target: /dv_pipeline_stack_ws/src/odometry_filter
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/odometry_filter_node
+          target: /dv_pipeline_stack_ws/src/odometry_filter_node
+          ignore: *ros_source_watch_ignore
+        - action: sync
+          path: ./pipeline/sim_supervisor
+          target: /dv_pipeline_stack_ws/src/sim_supervisor
           ignore: *ros_source_watch_ignore
     # Runtime peaks are host-dependent on Windows/WSL2, especially
     # during cold Numba/GTSAM/FaSTTUBe startup. Keep swap off but give
@@ -455,6 +511,16 @@ volumes:
   dv_pipeline_bag_recorder_node_src:
   dv_pipeline_fs_msgs_src:
   dv_pipeline_ifssim_bridge_src:
+  dv_pipeline_bringup_src:
+  dv_pipeline_coche_urdf_src:
+  dv_pipeline_dv_msgs_src:
+  dv_pipeline_mission_control_src:
+  dv_pipeline_mode_manager_src:
+  dv_pipeline_node_base_src:
+  dv_pipeline_node_base_cpp_src:
+  dv_pipeline_odometry_filter_src:
+  dv_pipeline_odometry_filter_node_src:
+  dv_pipeline_sim_supervisor_src:
   # `pipeline_ctrl` named volume removed in #381 — see the mount-site
   # comments above for context. Existing `pipeline_ctrl` volumes on
   # developer machines can be reclaimed with `docker volume rm

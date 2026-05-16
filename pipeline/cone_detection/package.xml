@@ -3,7 +3,7 @@
 <package format="3">
   <name>cone_detection</name>
   <version>0.0.0</version>
-  <description>LiDAR cone detection: ground removal (RANSAC), DBSCAN clustering, and per-cluster cone fitting that publishes raw cone observations on /Conos_raw for downstream factor-graph SLAM in cone_slam. Lifecycle-managed: configure runs Numba JIT warmup, activate enables the LiDAR subscription.</description>
+  <description>LiDAR cone detection: RANSAC ground removal, DBSCAN clustering, template-dispatch cone fitting, and /Conos_raw + /Conos_Orange markers for cone_slam. Strategy-based (behavior=base); lifecycle configure runs Numba warmup.</description>
   <maintainer email="jaimeperezgil21@gmail.com">jaime</maintainer>
   <license>GPL-3.0-or-later</license>
 
@@ -11,6 +11,8 @@
 
   <depend>rclpy</depend>
   <depend>lifecycle_msgs</depend>
+  <depend>node_base</depend>
+  <depend>dv_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>visualization_msgs</depend>

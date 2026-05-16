@@ -1,4 +1,5 @@
 #include "FSDSVehiclePawn.h"
+#include "FSDSSettings.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -109,7 +110,7 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
 
-	// --- Sensors (non-camera — cameras created in BeginPlay from settings) ---
+	// --- Sensors ---
 	LidarSensor = CreateDefaultSubobject<UFSDSLidarSensor>(TEXT("LidarSensor"));
 	ImuSensor = CreateDefaultSubobject<UFSDSImuSensor>(TEXT("ImuSensor"));
 	GpsSensor = CreateDefaultSubobject<UFSDSGpsSensor>(TEXT("GpsSensor"));
@@ -239,57 +240,15 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->SleepThreshold = 0.f;
 }
 
-UFSDSCameraSensor* AFSDSVehiclePawn::GetCamera(const FString& Name) const
-{
-	const auto* Found = Cameras.Find(Name);
-	return Found ? *Found : nullptr;
-}
-
 void AFSDSVehiclePawn::SetupSensorsFromSettings()
 {
 	const FFSDSVehicleSettings* VehicleSettings = FFSDSSettings::Get().GetDefaultVehicle();
 	if (!VehicleSettings)
 	{
-		// Create a default camera if no settings
-		UFSDSCameraSensor* DefaultCam = NewObject<UFSDSCameraSensor>(this, FName("cam1"));
-		DefaultCam->SetupAttachment(GetRootComponent());
-		DefaultCam->SetRelativeLocation(FVector(160.f, 0.f, 50.f));
-		DefaultCam->RegisterComponent();
-		Cameras.Add(TEXT("cam1"), DefaultCam);
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Created default camera 'cam1'"));
+		// No settings loaded — sensors stay at their constructor defaults
+		// (LiDAR/IMU/GPS/GSS were already CreateDefaultSubobject'd above).
+		// Camera sensors were removed in perf/strip-cameras.
 		return;
-	}
-
-	// Create cameras from settings
-	for (auto& CamPair : VehicleSettings->Cameras)
-	{
-		const FFSDSCameraSettings& CamSettings = CamPair.Value;
-
-		UFSDSCameraSensor* Cam = NewObject<UFSDSCameraSensor>(this, FName(*CamPair.Key));
-		Cam->SetupAttachment(GetRootComponent());
-
-		// Position: settings uses meters, UE uses cm
-		Cam->SetRelativeLocation(FVector(
-			CamSettings.Position.X * 100.f,
-			CamSettings.Position.Y * 100.f,
-			CamSettings.Position.Z * -100.f // Z is inverted in settings (negative = up)
-		));
-		Cam->SetRelativeRotation(CamSettings.Rotation);
-
-		// Configure from capture settings
-		if (CamSettings.CaptureSettings.Num() > 0)
-		{
-			Cam->Configure(CamPair.Key, CamSettings.CaptureSettings[0]);
-		}
-
-		Cam->RegisterComponent();
-		Cameras.Add(CamPair.Key, Cam);
-
-		UE_LOG(LogTemp, Log, TEXT("FSDS: Created camera '%s' at (%.0f, %.0f, %.0f)cm"),
-			*CamPair.Key,
-			CamSettings.Position.X * 100.f,
-			CamSettings.Position.Y * 100.f,
-			CamSettings.Position.Z * -100.f);
 	}
 
 	// Configure LiDAR from settings
@@ -510,8 +469,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			P.Mass, *P.Drivetrain, P.MotorMaxTorque, P.MotorMaxPower, P.MaxRegenTorque, P.MaxRegenPower, P.TireMu);
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("FSDS: Configured %d cameras, LiDAR, IMU, GPS, GSS from settings (with noise)"),
-		Cameras.Num());
+	UE_LOG(LogTemp, Log, TEXT("FSDS: Configured LiDAR, IMU, GPS, GSS from settings (with noise)"));
 }
 
 void AFSDSVehiclePawn::BeginPlay()
@@ -529,7 +487,7 @@ void AFSDSVehiclePawn::BeginPlay()
 	// power-on; we replicate that here.
 	ActivateEbs();
 
-	// Load settings and create cameras
+	// Load settings and configure sensors
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
 

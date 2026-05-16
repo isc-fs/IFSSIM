@@ -6,7 +6,6 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "Camera/CameraComponent.h"
-#include "Sensors/FSDSCameraSensor.h"
 #include "Sensors/FSDSLidarSensor.h"
 #include "Sensors/FSDSImuSensor.h"
 #include "Sensors/FSDSGpsSensor.h"
@@ -164,12 +163,12 @@ public:
 
 	// --- Sensors ---
 
-	/** Multiple cameras from settings.json */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
-	TMap<FString, UFSDSCameraSensor*> Cameras;
-
-	/** Get a camera by name (returns nullptr if not found) */
-	UFSDSCameraSensor* GetCamera(const FString& Name) const;
+	// FSDSCameraSensor was removed in perf/strip-cameras. The real IFS-08
+	// has no cameras and the autonomy pipeline never consumed any
+	// /camera/* topics — keeping the SceneCaptureComponent2D in the tree
+	// was the largest single source of per-frame GPU cost on the
+	// mid-range gaming-laptop target. FollowCamera above is unrelated:
+	// it's the editor/spectator chase view, not a sensor.
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Sensors")
 	UFSDSLidarSensor* LidarSensor;

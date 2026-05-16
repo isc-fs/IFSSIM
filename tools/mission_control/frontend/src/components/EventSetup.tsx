@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { apiFetch, promptForApiKey } from '../lib/api'
+import { apiFetch, promptForApiKey, readJsonResponse } from '../lib/api'
 import type { TelemetryData } from '../hooks/useWebSocket'
 import { useConfirm } from './ConfirmDialog'
 
@@ -56,13 +56,29 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
     }
   }, [telemetry.event])
 
-  const api = async (url: string, body?: Record<string, unknown>) => {
+  // Union of the response shapes the backend returns for this component's
+  // endpoints. Defining one type for all call sites is enough — the keys
+  // are all optional and TS lets callers read whichever ones their
+  // endpoint actually produces. Callers that want stricter typing can
+  // pass an explicit type argument (`await api<MyShape>(...)`).
+  type ApiResponse = {
+    ok?: boolean
+    error?: string
+    // /api/event/start echoes:
+    event?: string
+    laps?: number
+    bag?: { error?: string; name?: string }
+  }
+  const api = async <T = ApiResponse>(
+    url: string,
+    body?: Record<string, unknown>,
+  ): Promise<T> => {
     const res = await apiFetch(url, {
       method: 'POST',
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
     }, promptForApiKey)
-    return res.json()
+    return readJsonResponse<T>(res)
   }
 
   return (

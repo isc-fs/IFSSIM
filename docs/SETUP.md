@@ -232,24 +232,33 @@ Open <http://localhost:3000> in a browser.
 When you click Start Session you'll see (in the session log):
 
 ```
-mode_manager: configuring cone_detection_node…   ← ~10-20 s (numba JIT)
-mode_manager: activating cone_detection_node
-mode_manager: configuring slam_node…
-mode_manager: activating slam_node
-mode_manager: configuring path_planning_node…
-mode_manager: activating path_planning_node
-mode_manager: configuring control_node…
-mode_manager: activating control_node
+SetMission: setup odometry_filter_node (mode=trackdrive, behavior=base)
+SetMission: configuring odometry_filter_node
+SetMission: setup cone_detection_node (mode=trackdrive, behavior=base)
+SetMission: configuring cone_detection_node…   ← ~10-20 s (numba JIT)
+SetMission: setup slam_node (mode=trackdrive, behavior=trackdrive)
+SetMission: configuring slam_node
+SetMission: setup path_planning_node (mode=trackdrive, behavior=trackdrive)
+SetMission: configuring path_planning_node
+SetMission: setup control_node (mode=trackdrive, behavior=pure_pursuit)
+SetMission: configuring control_node
+SetMission: ready
+RuntimeControl: activating autonomy
 ```
 
 The 10-20 s cone_detection_node configure step is **expected** —
 that's the numba JIT compile. Pre-v0.1.1 this looked like a hang;
-since #489 the spinner shows per-node progress.
+since #489 the spinner shows per-node progress (now relayed as
+`SetMission` `Feedback.stage` since #518's two-phase protocol).
 
-Once all four are `active`, the supervisor releases EBS and the car
-starts driving (if an autonomy stack is wired up) or sits still
-(if not — in which case you can **drive manually** by focusing the
-sim window and using **WASD** + **Space** for handbrake).
+The bring-up is two phases: `SetMission` configures every
+autonomy `BaseLifecycleNode` with the right `(mode, behavior)`
+strategy; `RuntimeControl` activates them and starts streaming
+control feedback. Once all five are `active`, the backend
+releases EBS and the car starts driving (if an autonomy stack is
+wired up) or sits still (if not — in which case you can **drive
+manually** by focusing the sim window and using **WASD** +
+**Space** for handbrake).
 
 ---
 

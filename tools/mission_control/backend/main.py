@@ -393,7 +393,7 @@ def sim_reset():
     # in #381).
     if _ros_bridge_available:
         try:
-            RosBridge.get().start_mission("")
+            RosBridge.get().stop_mission()
         except Exception as ex:
             log_event("sim_reset",
                       f"autonomy stop failed (continuing reset anyway): {ex}")
@@ -517,26 +517,20 @@ def event_set(setup: EventSetup):
 
 @app.post("/api/event/start", dependencies=[Depends(require_api_key)])
 def event_start(setup: EventSetup):
-    """Boot the autonomy pipeline via the StartMission action chain.
+    """Boot the autonomy pipeline (SetMission then RuntimeControl).
 
-    Phases (post-#379):
+    Phases:
       1. Pre-flight (under `_state_lock`): connectivity check, cone
          preflight, RES-activate to park the car, set event type,
          resume sim.
-      2. Bring up autonomy (NO LOCK): call
-         `RosBridge.get().start_mission(mission)`. The action chain
-         (supervisor → mission_control → mode_manager) handles the
-         timing internally: configure + activate of each autonomy
-         LifecycleNode, the Numba JIT warmup window inside
-         cone_detection_node.on_configure (10–20 s on Apple Silicon
-         Docker), and the SLAM calibration window. Returns ready=true
-         only when control_node is `active` and ready to consume
-         /Path. Mode_manager's _drive_transition is idempotent so
-         calling start_mission on an already-active stack just
-         skips and succeeds.
-      3. Release EBS (under `_state_lock`): hand control to the
-         active autonomy. With autonomy already active, /control_command
-         starts flowing into the bridge the moment RES releases.
+      2. Prepare (NO LOCK): `RosBridge.get().set_mission(mission)`.
+         Supervisor → mission_control → mode_manager CONFIGURE only
+         (Numba JIT, SLAM setup, etc.) while EBS holds the car still.
+      3. Release EBS + enable API control (under `_state_lock`).
+      4. Run (NO LOCK): `RosBridge.get().start_runtime()` opens
+         RuntimeControl on mission_control (ACTIVATE). Control commands
+         flow via action feedback; sim_supervisor relays to
+         /fsds/control_command for the UE5 bridge.
 
     Pre-#379 this used `/pipeline_ctrl/enable` flag-file writes plus
     a hard-coded `time.sleep(4.5)` for the SLAM calibration window.
@@ -597,14 +591,7 @@ def event_start(setup: EventSetup):
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-        # === Phase 2: bring up autonomy via the action chain (NO LOCK) ===
-        # The StartMission action returns ready=true only when all 4
-        # autonomy LifecycleNodes (cone_detection, slam, planning,
-        # control) reach `active`. No more time.sleep needed — the
-        # action's own heartbeats absorb the variable warmup window.
-        # The lock is released across this call so other endpoints
-        # (sim_reset, res_activate, telemetry WS) remain responsive
-        # during the 10–20 s autonomy boot.
+        # === Phase 2: prepare autonomy via SetMission (NO LOCK) ===
         if _ros_bridge_available:
             mission = _EVENT_TO_MISSION.get(setup.event_type, "trackdrive")
             if setup.event_type not in _EVENT_TO_MISSION:
@@ -615,14 +602,11 @@ def event_start(setup: EventSetup):
                 )
             log_event(
                 "event_start",
-                f"calling StartMission(mission={mission!r}) — autonomy "
-                f"configure+activate, can take 10–20 s",
+                f"SetMission(mission={mission!r}) — configure only, "
+                f"can take 10–20 s",
             )
-            outcome = RosBridge.get().start_mission(mission)
-            if not outcome.ready:
-                # Re-engage EBS defensively — if the autonomy boot
-                # failed, releasing EBS would just let the car drift
-                # under residual EMRAX idle torque.
+            prep = RosBridge.get().set_mission(mission)
+            if not prep.success:
                 with _state_lock:
                     try:
                         sim.res_activate()
@@ -631,12 +615,12 @@ def event_start(setup: EventSetup):
                         pass
                 log_event(
                     "event_start",
-                    f"StartMission failed: {outcome.message}",
+                    f"SetMission failed: {prep.message}",
                 )
                 return JSONResponse(
                     {
                         "ok": False,
-                        "error": f"autonomy startup failed: {outcome.message}",
+                        "error": f"autonomy prepare failed: {prep.message}",
                     },
                     status_code=502,
                 )
@@ -659,17 +643,9 @@ def event_start(setup: EventSetup):
                 status_code=503,
             )
 
-        # === Phase 3: release EBS, autonomy takes over (under lock) ===
+        # === Phase 3: release EBS before RuntimeControl (under lock) ===
         with _state_lock:
             try:
-                # Autonomy is already `active` and control_node is
-                # publishing /control_command. Releasing EBS lets the
-                # bridge forward those commands to UE5. Strict FS-DV
-                # T 14.8.4 / T 14.8.5 timings (≥5 s in AS_Ready before
-                # R2D, ≥3 s in AS_Driving before motion) are NOT
-                # enforced here — they belong in a proper state-machine
-                # implementation (issue #148) that publishes the
-                # AS_state on a CAN-equivalent topic.
                 sim.res_release()
                 res_active = False
                 try:
@@ -678,6 +654,34 @@ def event_start(setup: EventSetup):
                     pass
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+        # === Phase 4: activate + run via RuntimeControl (NO LOCK) ===
+        if _ros_bridge_available:
+            log_event(
+                "event_start",
+                "RuntimeControl — activating autonomy stack",
+            )
+            runtime = RosBridge.get().start_runtime()
+            if not runtime.success:
+                with _state_lock:
+                    try:
+                        sim.res_activate()
+                        res_active = True
+                    except Exception:
+                        pass
+                log_event(
+                    "event_start",
+                    f"RuntimeControl failed: {runtime.message}",
+                )
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"autonomy start failed: {runtime.message}",
+                    },
+                    status_code=502,
+                )
+
+        with _state_lock:
             current_event = setup.event_type
             _save_state({"event": current_event})
             # The plugin's SetEventType clamps lap counts per event
@@ -866,19 +870,18 @@ def pipeline_start():
 
     log_event(
         "pipeline",
-        f"calling StartMission(mission={mission!r}) — this can take "
-        f"10–25 s while autonomy configures+activates",
+        f"SetMission(mission={mission!r}) — prepare only (10–25 s)",
     )
-    outcome = RosBridge.get().start_mission(mission)
+    outcome = RosBridge.get().set_mission(mission)
 
-    if not outcome.ready:
-        log_event("pipeline", f"StartMission failed: {outcome.message}")
+    if not outcome.success:
+        log_event("pipeline", f"SetMission failed: {outcome.message}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=outcome.message,
         )
 
-    log_event("pipeline", f"StartMission ready (mission={mission!r})")
+    log_event("pipeline", f"SetMission ready (mission={mission!r})")
     return {
         "ok": True,
         "pipeline": "started",
@@ -889,15 +892,7 @@ def pipeline_start():
 
 @app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
-    """Tear down the autonomy via StartMission(mission='').
-
-    mode_manager handles the empty-mission case as a deactivate +
-    cleanup fan-out over the autonomy LifecycleNodes; the management
-    trio (supervisor / mission_control / mode_manager) stays
-    `active` to handle the next start. Idempotent — calling on an
-    already-torn-down stack is a no-op (post-#379 mode_manager
-    idempotency).
-    """
+    """Tear down: cancel RuntimeControl, then SetMission(mission_id=0)."""
     if not _ros_bridge_available:
         # No flag-file fallback post-#381; nothing to stop if rclpy
         # isn't available (the autonomy can only run via the action
@@ -905,8 +900,8 @@ def pipeline_stop():
         log_event("pipeline", "Pipeline stop: ros_bridge unavailable; no-op")
         return {"ok": True, "pipeline": "stopped", "via": "no_op"}
 
-    outcome = RosBridge.get().start_mission("")
-    if not outcome.ready:
+    outcome = RosBridge.get().stop_mission()
+    if not outcome.success:
         log_event("pipeline", f"Pipeline stop failed: {outcome.message}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1002,7 +997,7 @@ def pipeline_status():
 
     Reflects the actual lifecycle state of `control_node` — the leaf
     consumer in the mode_manager bring-up order. If control_node is
-    `active`, everything upstream of it (cone_detection, slam,
+    `active`, everything upstream of it (odometry_filter, cone_detection, slam,
     planning) is too. Checking control_node alone is one rclpy call
     instead of four; cached in ros_bridge for 500 ms so the 1 Hz
     telemetry tick doesn't storm the get_state service.
@@ -1163,7 +1158,7 @@ def track_load(name: str):
     # path post-#381.
     if _ros_bridge_available:
         try:
-            RosBridge.get().start_mission("")
+            RosBridge.get().stop_mission()
         except Exception as ex:
             log_event("track_load",
                       f"autonomy teardown failed (track loaded anyway): {ex}")

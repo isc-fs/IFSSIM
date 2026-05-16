@@ -58,16 +58,6 @@ bool FFSDSSettings::AutoLoad()
 	GssSensor.Name = TEXT("GSS"); GssSensor.SensorType = 7; GssSensor.bEnabled = true;
 	DefaultVehicle.Sensors.Add(TEXT("GSS"), GssSensor);
 
-	// Default camera
-	FFSDSCameraSettings Cam;
-	Cam.Name = TEXT("cam1");
-	Cam.Position = FVector(1.6f, 0.f, -0.2f);
-	FFSDSCaptureSettings Cap;
-	Cap.ImageType = EFSDSImageType::Scene;
-	Cap.Width = 785; Cap.Height = 785; Cap.FOV_Degrees = 90.f;
-	Cam.CaptureSettings.Add(Cap);
-	DefaultVehicle.Cameras.Add(TEXT("cam1"), Cam);
-
 	Vehicles.Add(TEXT("FSCar"), DefaultVehicle);
 	return false;
 }
@@ -119,8 +109,8 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 	UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Loaded — %d vehicles"), Vehicles.Num());
 	for (auto& V : Vehicles)
 	{
-		UE_LOG(LogTemp, Log, TEXT("  Vehicle '%s': %d sensors, %d cameras"),
-			*V.Key, V.Value.Sensors.Num(), V.Value.Cameras.Num());
+		UE_LOG(LogTemp, Log, TEXT("  Vehicle '%s': %d sensors"),
+			*V.Key, V.Value.Sensors.Num());
 	}
 
 	return true;
@@ -150,19 +140,10 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		}
 	}
 
-	// Cameras
-	const TSharedPtr<FJsonObject>* CamerasObj;
-	if (VehicleObj->TryGetObjectField(TEXT("Cameras"), CamerasObj))
-	{
-		for (auto& Pair : (*CamerasObj)->Values)
-		{
-			const TSharedPtr<FJsonObject>* CameraObj;
-			if (Pair.Value->TryGetObject(CameraObj))
-			{
-				ParseCamera(Pair.Key, *CameraObj, Vehicle);
-			}
-		}
-	}
+	// Cameras block in settings.json is silently ignored — camera sensors
+	// were removed in perf/strip-cameras (the real IFS-08 has no cameras
+	// and the autonomy never consumed /camera/* topics). Leaving the
+	// JSON keys behind is harmless; the parser just skips them.
 
 	// VehiclePhysics
 	const TSharedPtr<FJsonObject>* PhysicsObj;
@@ -316,113 +297,6 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
 
 	Vehicle.Sensors.Add(Name, Sensor);
-}
-
-void FFSDSSettings::ParseCamera(const FString& Name, TSharedPtr<FJsonObject> CameraObj, FFSDSVehicleSettings& Vehicle)
-{
-	FFSDSCameraSettings Camera;
-	Camera.Name = Name;
-
-	// Position (meters)
-	double X = 0, Y = 0, Z = 0;
-	CameraObj->TryGetNumberField(TEXT("X"), X); Camera.Position.X = X;
-	CameraObj->TryGetNumberField(TEXT("Y"), Y); Camera.Position.Y = Y;
-	CameraObj->TryGetNumberField(TEXT("Z"), Z); Camera.Position.Z = Z;
-
-	double Roll = 0, Pitch = 0, Yaw = 0;
-	CameraObj->TryGetNumberField(TEXT("Roll"), Roll); Camera.Rotation.Roll = Roll;
-	CameraObj->TryGetNumberField(TEXT("Pitch"), Pitch); Camera.Rotation.Pitch = Pitch;
-	CameraObj->TryGetNumberField(TEXT("Yaw"), Yaw); Camera.Rotation.Yaw = Yaw;
-
-	// Capture settings
-	const TArray<TSharedPtr<FJsonValue>>* CaptureArray;
-	if (CameraObj->TryGetArrayField(TEXT("CaptureSettings"), CaptureArray))
-	{
-		for (auto& CaptureVal : *CaptureArray)
-		{
-			TSharedPtr<FJsonObject> CapObj = CaptureVal->AsObject();
-			if (!CapObj.IsValid()) continue;
-
-			FFSDSCaptureSettings Cap;
-			int32 ImgType = 0;
-			CapObj->TryGetNumberField(TEXT("ImageType"), ImgType);
-			Cap.ImageType = static_cast<EFSDSImageType>(ImgType);
-
-			int32 W = 785, H = 785;
-			CapObj->TryGetNumberField(TEXT("Width"), W); Cap.Width = W;
-			CapObj->TryGetNumberField(TEXT("Height"), H); Cap.Height = H;
-
-			double FOV = 90.0;
-			CapObj->TryGetNumberField(TEXT("FOV_Degrees"), FOV); Cap.FOV_Degrees = FOV;
-
-			// Auto-exposure
-			double DblVal;
-			if (CapObj->TryGetNumberField(TEXT("AutoExposureSpeed"), DblVal)) Cap.AutoExposureSpeed = DblVal;
-			if (CapObj->TryGetNumberField(TEXT("AutoExposureBias"), DblVal)) Cap.AutoExposureBias = DblVal;
-			if (CapObj->TryGetNumberField(TEXT("AutoExposureMaxBrightness"), DblVal)) Cap.AutoExposureMaxBrightness = DblVal;
-			if (CapObj->TryGetNumberField(TEXT("AutoExposureMinBrightness"), DblVal)) Cap.AutoExposureMinBrightness = DblVal;
-
-			// Motion blur
-			if (CapObj->TryGetNumberField(TEXT("MotionBlurAmount"), DblVal)) Cap.MotionBlurAmount = DblVal;
-
-			// Gamma
-			if (CapObj->TryGetNumberField(TEXT("TargetGamma"), DblVal)) Cap.TargetGamma = DblVal;
-
-			// Projection
-			bool bOrtho = false;
-			if (CapObj->TryGetBoolField(TEXT("ProjectionMode"), bOrtho)) Cap.bOrthographic = bOrtho;
-			if (CapObj->TryGetNumberField(TEXT("OrthoWidth"), DblVal)) Cap.OrthoWidth = DblVal;
-
-			Camera.CaptureSettings.Add(Cap);
-		}
-	}
-
-	// Gimbal settings
-	const TSharedPtr<FJsonObject>* GimbalObj;
-	if (CameraObj->TryGetObjectField(TEXT("Gimbal"), GimbalObj))
-	{
-		(*GimbalObj)->TryGetBoolField(TEXT("Enabled"), Camera.Gimbal.bEnabled);
-		double Stab = 0;
-		if ((*GimbalObj)->TryGetNumberField(TEXT("Stabilization"), Stab)) Camera.Gimbal.Stabilization = Stab;
-	}
-
-	// Noise settings (per image type)
-	const TSharedPtr<FJsonObject>* NoiseObj;
-	if (CameraObj->TryGetObjectField(TEXT("NoiseSettings"), NoiseObj))
-	{
-		for (auto& NoisePair : (*NoiseObj)->Values)
-		{
-			int32 ImgType = FCString::Atoi(*NoisePair.Key);
-			const TSharedPtr<FJsonObject>* NObj;
-			if (NoisePair.Value->TryGetObject(NObj))
-			{
-				FFSDSNoiseSettings Noise;
-				(*NObj)->TryGetBoolField(TEXT("Enabled"), Noise.bEnabled);
-				double D;
-				if ((*NObj)->TryGetNumberField(TEXT("RandContrib"), D)) Noise.RandContrib = D;
-				if ((*NObj)->TryGetNumberField(TEXT("RandSpeed"), D)) Noise.RandSpeed = D;
-				if ((*NObj)->TryGetNumberField(TEXT("RandSize"), D)) Noise.RandSize = D;
-				if ((*NObj)->TryGetNumberField(TEXT("RandDensity"), D)) Noise.RandDensity = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveContrib"), D)) Noise.HorzWaveContrib = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveStrength"), D)) Noise.HorzWaveStrength = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveVertSize"), D)) Noise.HorzWaveVertSize = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzWaveScreenSize"), D)) Noise.HorzWaveScreenSize = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzNoiseLinesContrib"), D)) Noise.HorzNoiseLinesContrib = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzDistortionContrib"), D)) Noise.HorzDistortionContrib = D;
-				if ((*NObj)->TryGetNumberField(TEXT("HorzDistortionStrength"), D)) Noise.HorzDistortionStrength = D;
-				Camera.NoiseSettings.Add(ImgType, Noise);
-			}
-		}
-	}
-
-	// Default capture settings if none provided
-	if (Camera.CaptureSettings.Num() == 0)
-	{
-		FFSDSCaptureSettings DefaultCap;
-		Camera.CaptureSettings.Add(DefaultCap);
-	}
-
-	Vehicle.Cameras.Add(Name, Camera);
 }
 
 const FFSDSVehicleSettings* FFSDSSettings::GetDefaultVehicle() const

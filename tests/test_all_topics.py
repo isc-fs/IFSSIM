@@ -118,14 +118,8 @@ def main():
     resp = c.text_cmd("enableApiControl")
     check("enableApiControl", resp == "true", resp)
 
-    # 2. Camera discovery
-    print("\n--- Camera Discovery ---")
-    resp = c.text_cmd("listCameras")
-    check("listCameras", "[" in resp, resp)
-    cameras = []
-    if resp.startswith("["):
-        cameras = [x.strip().strip('"') for x in resp[1:-1].split(",") if x.strip()]
-    check("cameras found", len(cameras) >= 1, f"{len(cameras)} cameras: {cameras}")
+    # 2. Camera tests removed in perf/strip-cameras — listCameras now
+    # returns an empty list and the image RPCs are stubbed out.
 
     # 3. GPS (10 Hz topic: /gps)
     print("\n--- GPS (NavSatFix @ 10Hz) ---")
@@ -169,17 +163,7 @@ def main():
     # exercises the JSON path that's still available.
     print("\n--- LiDAR Binary — SKIPPED (TCP RPC removed in #322) ---")
 
-    # 8. Camera images (what ROS2 bridge uses)
-    print("\n--- Camera Images (CompressedImage @ 10Hz) ---")
-    for cam in cameras:
-        header, data = c.binary_cmd(f"simGetImageBinary {cam} 0")
-        check(f"{cam} header", header.startswith("IMG:"), header)
-        if header.startswith("IMG:"):
-            size = int(header.split(":")[1])
-            check(f"{cam} data received", len(data) > 0, f"{len(data)} bytes")
-            is_png = data[:4] == b"\x89PNG" if len(data) >= 4 else False
-            check(f"{cam} valid PNG", is_png, f"header={data[:4].hex() if len(data)>=4 else 'empty'}")
-            check(f"{cam} reasonable size", len(data) > 10000, f"{len(data)/1024:.0f} KB")
+    # 8. Camera images removed in perf/strip-cameras.
 
     # 9. Odometry (250 Hz topic: /testing_only/odom)
     print("\n--- Odometry (Odometry @ 250Hz) ---")

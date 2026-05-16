@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
 
-from ifssim import IFSSIMClient, CarControls, ImageType, ImageRequest
+from ifssim import IFSSIMClient, CarControls
 
 def main():
     passed = 0
@@ -102,19 +102,8 @@ def main():
         dist = (x*x + y*y + z*z) ** 0.5
         check("first point valid", dist > 0.1, f"({x:.2f},{y:.2f},{z:.2f}) dist={dist:.1f}m")
 
-    # Camera — same API as FSDS
-    print("\n--- Camera ---")
-    img = client.simGetImage("cam1", ImageType.Scene)
-    check("simGetImage returns bytes", img is not None and len(img) > 0, f"{len(img)//1024} KB")
-    check("valid PNG", img[:4] == b"\x89PNG" if img else False)
-
-    # Batch images — same API as FSDS
-    imgs = client.simGetImages([
-        ImageRequest("cam1", ImageType.Scene),
-        ImageRequest("cam2", ImageType.Scene),
-    ])
-    check("simGetImages batch", len(imgs) == 2, f"{len(imgs)} images")
-    check("both valid", all(i and len(i) > 0 for i in imgs))
+    # Camera tests removed in perf/strip-cameras — camera sensors have
+    # been stripped from the plugin (real IFS-08 has no cameras).
 
     # Ground truth — same API as FSDS
     print("\n--- Ground Truth ---")

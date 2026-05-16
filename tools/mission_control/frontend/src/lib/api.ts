@@ -76,6 +76,29 @@ export function apiWsUrl(base: string): string {
 }
 
 /**
+ * Parse a fetch {@link Response} as JSON. If the body is HTML (e.g. nginx
+ * 502 page), empty, or non‑JSON, throws an error that includes HTTP status
+ * and a short text snippet — avoids opaque `JSON.parse` errors in the console.
+ */
+export async function readJsonResponse<T = unknown>(res: Response): Promise<T> {
+  const text = await res.text()
+  const trimmed = text.trim()
+  if (!trimmed) {
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText} (empty body)`)
+    }
+    throw new Error('Empty response body')
+  }
+  try {
+    return JSON.parse(trimmed) as T
+  } catch {
+    throw new Error(
+      `HTTP ${res.status}: response was not JSON (${trimmed.slice(0, 160)}${trimmed.length > 160 ? '…' : ''})`,
+    )
+  }
+}
+
+/**
  * Default `onUnauthorized` handler: prompt the user for the key via
  * `window.prompt`, persist it, and trigger a reload so the WebSocket
  * reconnects with the new credentials. Components can pass their own

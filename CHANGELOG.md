@@ -62,6 +62,72 @@ shipping pipeline, documentation.
   still lands in the named volume on container ext4 (fast); this
   bind-mount only takes the finalised tarball at the end.
 
+- **Two-phase mission lifecycle: `SetMission` → `RuntimeControl`**
+  (#499, #518). The single `StartMission` action that previously
+  combined configure + activate is replaced by an explicit two-step
+  protocol on `mission_control_node`:
+  - **`SetMission(mission_id)`** — prepare phase. Resolves the
+    mission via `MODE_REGISTRY` (single source of truth for
+    `mission → ordered (node, behavior)` in
+    `pipeline/mode_manager/mode_manager/mode_registry.py`),
+    calls each autonomy node's new `~/setup` service with
+    `(mode_name, behavior)`, then drives the `configure` lifecycle
+    transition. Per-node progress streams back as `Feedback.stage`
+    so the operator sees live bring-up state instead of a single
+    "starting" wait. Numba JIT (~10-20 s on `cone_detection_node`)
+    lands here, not in `RuntimeControl`.
+  - **`RuntimeControl`** — activate + run. Once `SetMission` returns
+    `success=true`, the client opens `RuntimeControl`;
+    `mission_control_node` activates the prepared stack and streams
+    throttle/steering/emergency/finished feedback at 40 Hz.
+    `sim_supervisor_node` subscribes to the feedback topic and
+    relays each frame onto `/fsds/control_command` for the bridge —
+    a clean split from before, where the supervisor was the action
+    server.
+
+  New packages: `pipeline/node_base/` (Python) and
+  `pipeline/node_base_cpp/` (C++) provide `BaseLifecycleNode` with
+  the `~/setup` plumbing; every managed autonomy node now inherits
+  from it. `pipeline/bringup/` consolidates the launch files
+  (`sim_pipeline.launch.py`, `car_pipeline.launch.py`,
+  `full_pipeline.launch.py`) — `docker/dv_pipeline_stack/
+  pipeline.launch.py` is now a thin include of these.
+
+- **`odometry_filter_node`** (#499 / #518). The IMU+RPM
+  complementary filter that previously lived inside
+  `sim_supervisor_node` was lifted into a standalone C++
+  `BaseLifecycleNode` (`pipeline/odometry_filter_node/`, backed by
+  `pipeline/odometry_filter/` for the algorithm library). Same
+  `/odom` contract (100 Hz, IMU+RPM+steering+brake_pressure,
+  `odom→base_link` TF, identical diagnostics on
+  `/odom_diag/*`) — but now part of the standard managed bring-up
+  via `activate_mode`, alongside the other four autonomy nodes.
+  Matches the real-car split where the uDV's odometry firmware is
+  a separate subsystem from the mission interface.
+
+- **`supervisor_cli`** (#518). Terminal client that mirrors the web
+  backend's two-phase flow without needing Mission Control:
+  `ros2 run sim_supervisor supervisor_cli {set_mission, start_mission, run}`.
+  Reproduces production lifecycle from a shell — useful for
+  developing missions/behaviors and triaging session-start bugs.
+  Mission IDs match the registry (1=trackdrive, 2=autocross,
+  3=accel, 4=skidpad, 5=scruti, 0=tear down).
+
+- **`tools/compose-up-and-watch.sh|ps1`** (#518). Wrapper that
+  runs `docker compose up -d` then `docker compose watch` in the
+  foreground, syncing host edits under `pipeline/*` into named
+  src volumes for live Python iteration. Replaces the pre-#490
+  bind-mount workflow; `tools/refresh-bridge.sh` is still the
+  go-to for C++ / msg / launch / setup.py changes.
+
+- **`DriveController` / `CompositeDriveController` / Stanley** in
+  `pipeline/control/control/controllers/`. The control node now
+  picks its lateral+longitudinal strategy from the `behavior`
+  string passed via `~/setup` — `pure_pursuit` for trackdrive/accel,
+  `stanley` for autocross/skidpad/scruti — instead of a runtime
+  ROS parameter. Composite wraps both into a single
+  `ActuationCommand`-returning interface.
+
 ### Changed
 
 - **Project relicensed to GPL-3.0-or-later.** Top-level `LICENSE`
@@ -69,12 +135,12 @@ shipping pipeline, documentation.
   `pipeline/` and `ros2/src/` updated from their previous mix of
   MIT (7 packages), Apache-2.0 (4 packages), and GPLv2 (2 packages —
   fs_msgs + ifssim_bridge inherited from upstream FSDS-Sim) to a
-  uniform `GPL-3.0-or-later`. Motivation: incoming LiDAR-Inertial
-  SLAM dependency (LIMOncello) ships under GPL-3.0 and is contagious
-  for derivative works; unifying the stack on GPL-3-or-later
-  preserves the option to link against it without licence-conflict
-  worry. Apache-2.0 contributions remain attributable through git
-  history; the relicense reflects forward distribution only.
+  uniform `GPL-3.0-or-later`. Motivation: keep the stack on a single
+  copyleft-compatible licence so prospective GPL-3-only SLAM /
+  perception dependencies can be linked in without per-package
+  licence-conflict audits. Apache-2.0 contributions remain
+  attributable through git history; the relicense reflects forward
+  distribution only.
 
 - **Documentation overhaul** (#492). Consolidated the three setup
   entry points (`readme.md` → `QUICKSTART.md` → `GETTING_STARTED_DOCKER.md`)
