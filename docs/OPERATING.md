@@ -15,22 +15,45 @@ This saves 30-90 s on container startup (no per-import 9p traversal
 on Windows/macOS) and cuts the docker build context from 33 GB to
 ~200 MB.
 
-To pick up a source edit:
+There are two ways to pick up a source edit:
+
+**Live (Python-only, fastest path):**
+
+```bash
+tools/compose-up-and-watch.sh dv_pipeline_stack
+```
+
+Runs `docker compose up -d` then `docker compose watch` in the
+foreground. `compose watch` syncs your edits under `pipeline/*` into
+named volumes mounted at `/dv_pipeline_stack_ws/src/<pkg>` inside the
+container; the image's `colcon build --symlink-install` already
+points the install tree at those sources, so the next time a
+lifecycle node restarts (e.g. the next `SetMission` call), it
+imports your edited code. Ctrl+C stops the watch but leaves the
+containers running.
+
+**Full rebuild (C++, msgs/srvs/actions, launch, entrypoint, FastDDS profile):**
 
 ```bash
 tools/refresh-bridge.sh
 ```
 
-That's it. The script does `docker compose build dv_pipeline_stack`
-(BuildKit cache makes Python-only edits hit in seconds) then
+Does `docker compose build dv_pipeline_stack` (BuildKit cache makes
+incremental builds hit in seconds) then
 `docker compose up -d --force-recreate dv_pipeline_stack` (drops any
 wedged DDS / UDP-proxy state). Run it any time you edit:
 
-- `pipeline/*` ROS source (Python or C++)
+- `pipeline/*/src/*.cpp` or anything under `pipeline/dv_msgs/{srv,msg,action}/`
 - `ros2/src/*` (fs_msgs, ifssim_bridge)
-- Any of the launch files under `docker/dv_pipeline_stack/`
+- Any launch file under `docker/dv_pipeline_stack/` or `pipeline/bringup/launch/`
+- A package's `setup.py` (new entry-points or packages)
 - `entrypoint.sh`
 - `fastdds_profile.xml`
+
+The named src volumes are seeded from the image on **first creation only**.
+If `setup.py` changes don't show up after `tools/refresh-bridge.sh`, it's
+because the volumes survived the recreate — drop them with
+`docker volume rm ifssim_dv_pipeline_<pkg>_src` and start again.
 
 ### Mission Control edits
 
@@ -184,6 +207,32 @@ Session. To drive manually, focus the sim window and use:
 Manual control is only available when the autonomy isn't taking
 priority (i.e. before Start Session, or in `Stopped` state).
 
+### Manual mission control without Mission Control
+
+If you want to reproduce the production lifecycle from a shell —
+useful while developing a new mission/behavior or triaging a
+session-start bug — `supervisor_cli` is an `rclpy` action client
+that mirrors the web backend's two-phase flow:
+
+```bash
+docker compose exec dv_pipeline_stack bash -lc '. /opt/ros/humble/setup.bash && \
+  . /dv_pipeline_stack_ws/install/setup.bash && \
+  ros2 run sim_supervisor supervisor_cli <cmd>'
+```
+
+Commands:
+
+- `set_mission <id>` — Phase 1 (`SetMission`) prepare/configure. IDs:
+  `1=trackdrive`, `2=autocross`, `3=accel`, `4=skidpad`, `5=scruti`,
+  `0=tear down`.
+- `start_mission [--wait]` — Phase 2 (`RuntimeControl`) activate +
+  run. Blocks until terminated when `--wait` is given.
+- `run [--wait] <id>` — `set_mission` followed by `start_mission`
+  in one shot.
+
+The web backend uses the same actions on the same node; either path
+is equivalent.
+
 ---
 
 ## Diagnosing common failures during a session
@@ -212,10 +261,14 @@ the session itself (the autonomy keeps running).
 
 ### `Stop Session` doesn't react immediately
 
-The supervisor honours stop requests at the next RuntimeControl
-feedback tick (~25 ms). If you click Stop during the 10-20 s
-cone_detection JIT warm-up, the request is queued and fires at the
-end of the warm-up. Patience.
+Stop Session cancels the active `RuntimeControl` goal on
+`mission_control_node` and then issues `SetMission(mission_id=0)` to
+tear down. The cancel honours at the next feedback tick (~25 ms);
+the tear-down then walks each `BaseLifecycleNode` through `deactivate`
+→ `cleanup` in reverse registry order. If you click Stop during the
+10-20 s cone_detection JIT warm-up (which lands inside `SetMission`,
+not `RuntimeControl`), the cancel preempts the in-flight configure
+and the stack returns to unconfigured. Patience.
 
 ### Foxglove / Lichtblick tab pegs the CPU
 
@@ -265,6 +318,12 @@ docker compose exec dv_pipeline_stack bash -lc \
 # See the live lifecycle state of an autonomy node
 docker compose exec dv_pipeline_stack bash -lc \
   '. /opt/ros/humble/setup.bash && ros2 lifecycle get /slam_node'
+
+# Drive the two-phase mission lifecycle from a shell, no web UI:
+#   1=trackdrive, 2=autocross, 3=accel, 4=skidpad, 5=scruti, 0=tear down
+docker compose exec dv_pipeline_stack bash -lc \
+  '. /opt/ros/humble/setup.bash && . /dv_pipeline_stack_ws/install/setup.bash && \
+   ros2 run sim_supervisor supervisor_cli run --wait 1'
 
 # Force-restart everything (sim stays up)
 docker compose down && docker compose up -d

@@ -849,9 +849,10 @@ The frontend stores the key in `localStorage` under `mc_api_key`; on the first 4
 |---|---|---|
 | `/api/event/state` | GET | Full referee state |
 | `/api/event/set` | POST | Set event type and lap count |
-| `/api/event/start` | POST | Start a session — sends `StartMission` to the autonomy lifecycle. Refuses with HTTP 400 if no track loaded (cones=0). |
+| `/api/event/start` | POST | Start a session — drives the two-phase mission protocol (`SetMission` → `RuntimeControl`) on `mission_control_node`. Refuses with HTTP 400 if no track loaded (cones=0). |
+| `/api/pipeline/stop` | POST | Stop the autonomy pipeline — cancels the active `RuntimeControl` and issues `SetMission(mission_id=0)` to tear down. |
 
-The `/api/event/start` flow drives the autonomy lifecycle through the typed mission-management interface: the backend is an `rclpy` Action client of `sim_supervisor_node` and sends `StartMission` with the chosen mission. The supervisor relays to `mission_control_node`, which drives `mode_manager` to bring up the right lifecycle nodes with the right strategy flag. Phase 1 (startup) runs the heartbeat + JIT-warmup window; once it reports `ready`, Phase 2 begins and actuator commands start flowing through the supervisor to the bridge. Sim-only setup steps (track load, sim pause/resume, RES line) stay on the bridge JSON-RPC, called by the same backend in parallel. See [`AUTONOMY.md`](AUTONOMY.md) for the protocol details.
+The `/api/event/start` flow drives the autonomy lifecycle through the typed two-phase mission interface: the backend is an `rclpy` Action client of `mission_control_node` and sends `SetMission(mission_id)` for Phase 1 (configure-only) — that resolves the mission via `MODE_REGISTRY`, calls each `BaseLifecycleNode`'s `~/setup` service with `(mode_name, behavior)`, then drives the `configure` transition (cone_detection's ~10-20 s Numba JIT lands here). `SetMission` `Feedback.stage` carries per-node progress so the operator sees live bring-up state instead of an opaque "starting" wait. Once `SetMission` returns `success=true`, the backend opens `RuntimeControl` for Phase 2 — `mission_control_node` activates the prepared stack and streams `Feedback` frames (throttle/steering/emergency/finished) at 40 Hz, which `sim_supervisor_node` relays onto `/fsds/control_command` for the bridge. Sim-only setup steps (track load, sim pause/resume, RES line) stay on the bridge JSON-RPC, called by the same backend in parallel. See [`AUTONOMY.md`](AUTONOMY.md) for the protocol details.
 
 **RES (Remote Emergency Stop):**
 
@@ -925,7 +926,7 @@ Pushes JSON at **5 Hz** (200 ms loop):
 }
 ```
 
-The five `regen_*` fields surface live brake-energy-recovery telemetry (motor-side, pre-gearbox) — `*_avail_torque` is the cap at the current motor ω, `*_max_torque/power` are the hardware ceilings from `settings.json`. `pipeline_enabled` mirrors the `/pipeline_ctrl/enable` flag the bridge watches.
+The five `regen_*` fields surface live brake-energy-recovery telemetry (motor-side, pre-gearbox) — `*_avail_torque` is the cap at the current motor ω, `*_max_torque/power` are the hardware ceilings from `settings.json`. `pipeline_enabled` is `true` while `mission_control_node` has an active `RuntimeControl` goal (i.e. the autonomy stack is `active` and feeding the bridge); pre-#381 it mirrored a `/pipeline_ctrl/enable` flag file that the bridge polled, retired with the action-chain bring-up.
 
 If the backend can't talk to the sim, the loop emits `{"error": "sim_disconnected"}` instead of the schema above.
 
@@ -1027,8 +1028,9 @@ The autonomy stack — perception, SLAM, path planning, control — is the same 
 
 - The integration contract between IFSSIM (sim, bridge, Mission Control web, viz) and the autonomy submodule.
 - The end-to-end topic graph from `/fsds/lidar/Lidar1` through `/fsds/control_command`.
-- Mission management: `sim_supervisor_node` (the simulated micro), `mission_control_node` (DVPC role), `mode_manager_node` (lifecycle orchestrator).
-- The two-phase runtime action protocol (startup with JIT warmup → runtime with throttle/steering/emergency/finished).
+- Mission management: `sim_supervisor_node` (the simulated micro, relays `RuntimeControl` feedback to the bridge), `mission_control_node` (DVPC role, action server for `SetMission` + `RuntimeControl`), `mode_manager_node` (lifecycle orchestrator driving `~/setup` + `change_state` per `BaseLifecycleNode`).
+- The five managed autonomy nodes: `odometry_filter_node` (C++, 100 Hz `/odom` + `odom→base_link` TF), `cone_detection_node`, `slam_node`, `path_planning_node`, `control_node`.
+- The two-phase runtime action protocol (`SetMission` for prepare/configure with JIT warmup → `RuntimeControl` for activate/run with throttle/steering/emergency/finished).
 - The TF tree `map → odom → base_link` and which node owns which frame.
 - One open question still being finalised on the submodule side (where `/odom` comes from now that `odometria_node` is being removed).
 
