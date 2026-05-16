@@ -25,6 +25,7 @@ setup(
     entry_points={
         "console_scripts": [
             "sim_supervisor_node = sim_supervisor.sim_supervisor_node:main",
+            "supervisor_cli = sim_supervisor.supervisor_cli:main",
         ],
     },
 )
