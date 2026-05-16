@@ -26,6 +26,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-colcon-common-extensions \
         ros-humble-rosidl-default-generators \
     && rm -rf /var/lib/apt/lists/*
+# `docker` Python SDK (#498) — backend talks directly to the host
+# docker daemon over /var/run/docker.sock to copy a finalised bag out
+# of the dv_pipeline_stack container into the host-bind-mounted
+# `/host_bags/` directory. We use the SDK (HTTP API) rather than the
+# CLI because Linux `docker cp` from inside a container hits a
+# colon-parsing failure on Windows host paths (`C:/Users/...` is
+# parsed as container `C` + path `/Users/...`) and the daemon
+# doesn't recognise `/c/Users/...` as a host mount. The SDK writes
+# the tarball directly to mc_backend's filesystem (bind-mounted
+# `/host_bags/` → host `./bags/`), so cross-filesystem path
+# translation isn't involved.
+RUN pip3 install --no-cache-dir "docker>=7,<8"
 # Note: ros-humble-ros2bag / rosbag2-transport / rosbag2-storage-mcap
 # are NOT installed here — bag recording was moved to dv_pipeline_stack
 # in #465 v2 (the recorder needs to share the publisher's SHM-tuned

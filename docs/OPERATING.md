@@ -118,31 +118,54 @@ cross-container) and Fast DDS's UDP fragmentation reassembly drops
 multi-fragment messages. The v2 architecture (#465) moved the
 recorder where the data is.
 
-### Retrieving
+### Retrieving — default: auto-pull on stop
 
-Bags live in a **named Docker volume** (`ifssim_ifssim_bags`) since
-v0.1.1, not the host filesystem. To get a bag onto the host:
+Since #498 (v0.1.2+), when you click **Stop Session** the finalised
+bag is **automatically copied to your host filesystem** and removed
+from the docker volume. You'll see this in the session log:
+
+```
+record_bag: stopped <name> → /bags/<name>/                ← inside container
+record_bag: auto-pulled <name> → /home/.../IFSSIM/bags/<name>
+```
+
+The bag lands at `./bags/<name>/` on the host. The volume gets
+cleaned in the same step, so it never accumulates.
+
+`docker cp` does the move via Docker Desktop's vmcompute stdio
+pipe — fast on Windows / macOS (~1-2 s for a multi-GB bag, vs the
+20-40 s a bind-mount `shutil.move` would take). The host's
+`./bags/` is gitignored.
+
+To disable auto-pull (e.g. you want bags to stay in the volume for
+some reason), set `IFSSIM_BAG_AUTO_PULL=0` in your shell before
+`docker compose up`. Then bags stay in the docker volume and you
+retrieve them manually:
 
 ```bash
 tools/list-bags.sh                # see what's in the volume
 tools/pull-bag.sh <bag_name>      # docker cp it to ./bags/<bag_name>/
 ```
 
-`docker cp` uses Docker Desktop's vmcompute stdio pipe, not the
-virtiofs/9p bind-mount layer, so it's fast even on Windows / macOS.
-The host's `./bags/` is gitignored.
+These two CLI helpers also serve as the **manual recovery** path
+if auto-pull failed for any reason (host disk full, docker socket
+unreachable, etc.). The session log surfaces the failure and tells
+you which command to run.
 
-### Why the indirection (host bind-mount → named volume + pull step)
+### Why the indirection (host bind-mount → named volume + auto-pull)
 
-Pre-v0.1.1 the recorder wrote to a host-bind-mounted `./bags/`, which
-meant the final `shutil.move` from the in-container `/tmp` staging
-directory to `/bags/` was a cross-filesystem copy across virtiofs
-(macOS) or 9p (Windows + WSL2). For a multi-GB bag that took 20-40 s
-and blocked the StopBag service callback, visibly stalling the
-session-stop click in Mission Control. The named-volume approach
-keeps the move on the container's local ext4 — finalisation is <1 s,
-and the explicit `pull-bag.sh` step replaces the implicit-but-slow
-auto-sync.
+Pre-v0.1.1 the recorder wrote directly to a host-bind-mounted
+`./bags/`, which meant the final `shutil.move` from the in-container
+`/tmp` staging directory to `/bags/` was a cross-filesystem copy
+across virtiofs (macOS) or 9p (Windows + WSL2). For a multi-GB bag
+that took 20-40 s and blocked the StopBag service callback, visibly
+stalling the session-stop click in Mission Control.
+
+The current flow (named docker volume + `docker cp` auto-pull) keeps
+the move on the container's local ext4 (finalisation < 1 s), then
+uses Docker Desktop's vmcompute stdio pipe for the host-side copy
+(~1-2 s vs 20-40 s). All inside the same StopBag callback, no user
+action required.
 
 ### Playing back a bag
 
@@ -348,8 +371,8 @@ docker compose down && docker compose up -d
 | Sim binary | `Saved\StagedBuilds\Windows\IFSSIM.exe` | `Saved/StagedBuilds/Mac/IFSSIM-Mac-Shipping.app` |
 | Sim user data | `%LOCALAPPDATA%\IFSSIM\` | `~/Library/Application Support/Epic/IFSSIM/` |
 | Tracks | `Content/tracks/*.csv` | same |
-| Bags (on disk) | `./bags/<name>/` (after `pull-bag.sh`) | same |
-| Bags (in volume) | `ifssim_ifssim_bags` docker volume | same |
+| Bags (on disk) | `./bags/<name>/` (auto-pulled on stop, or `pull-bag.sh` if disabled) | same |
+| Bags (transient) | `ifssim_ifssim_bags` docker volume — empty in steady state when auto-pull is on | same |
 
 ### Environment knobs
 
@@ -359,6 +382,7 @@ A few that get asked about; full list in `docker-compose.yml`.
 |---|---|---|
 | `LIDAR_VIZ_DECIMATION` | `4` | Subsampled `/lidar/Lidar1/viz` for browser viz. 0 disables; ≥2 publishes every Nth point. |
 | `IFSSIM_MC_API_KEY` | empty | When set, MC backend requires `X-API-Key` header on mutating endpoints. Empty = dev mode, open. |
+| `IFSSIM_BAG_AUTO_PULL` | `1` | Auto-pull finalised bag onto host filesystem on StopBag (`docker cp` from the volume to `./bags/<name>/`, then `rm` the volume copy). Set to `0` to disable; bag stays in the volume and you retrieve manually via `tools/pull-bag.sh`. |
 | `OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS` / `OMP_NUM_THREADS` | `2` | BLAS thread caps. Capped because cone_detection's per-call RANSAC spawned 8-10 threads per call and saturated CPU. |
 | `DV_PLANNER_CAPTURE` | empty | Path-planning JSONL dump path. For offline replay against failing scenes. |
 | `DV_SLAM_LANDMARK_CAPTURE` | empty | cone_slam landmark-creation JSONL dump. For DA cascade triage. |
