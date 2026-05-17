@@ -126,8 +126,13 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
           />
           <span>Record bag (mcap)</span>
           <span className="text-gray-500 text-xs">
-            — saves a full topic dump inside dv_pipeline_stack; pull with{' '}
-            <code className="text-gray-400">tools/pull-bag.sh &lt;name&gt;</code>
+            {/* Wording updated post-#498 auto-pull: bags now land on host
+                automatically at Stop Session, no manual pull-bag.sh
+                step needed in the happy path. The post-stop badge
+                surfaces the host path (or falls back to the manual
+                hint when auto-pull is disabled or fails). */}
+            — full topic dump; auto-pulled onto host{' '}
+            <code className="text-gray-400">bags/&lt;name&gt;/</code> when the session stops.
           </span>
         </label>
 
