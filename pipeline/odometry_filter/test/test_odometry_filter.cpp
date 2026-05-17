@@ -293,6 +293,61 @@ TEST(SteeringCorrection, FlagsSlipUnderHighResidual) {
 
 
 // ============================================================================
+// Non-holonomic constraint (NHC) — the only direct observation of vy
+//
+// Without it, bias-noise integration drives vy unbounded. Live-sim
+// regression: stationary car after calibration drifted to vy ≈ 0.96
+// m/s within ~10 s, sent PurePursuit off-track before the first turn.
+// ============================================================================
+
+TEST(NHC, StationaryAfterCalibrationDoesNotDriftVy) {
+  // Simulates the regression directly: 30 s of "stationary" IMU
+  // (post-calibration) with a tiny accel-y bias error (the EKF can't
+  // know its bias estimate is imperfect — real-world calibration
+  // leaves some residual). Without NHC, vy integrates this bias
+  // unbounded. With NHC gated on slip_flag (which stays false here),
+  // vy must stay bounded.
+  auto f = make_stationary_filter();
+  // Feed a small post-calibration ay bias (~5 mm/s² — 100× tighter
+  // than the BMI088 spec, so this is a benign noise floor).
+  const Eigen::Vector3d accel_biased(0.0, 0.005, kG);
+  const Eigen::Vector3d gyro = Eigen::Vector3d::Zero();
+  const double t0 = 1500 * kImuDt;
+  // 30 s @ 400 Hz. Old EKF (no NHC) would have vy ≈ 30·0.005 = 0.15 m/s.
+  for (int i = 0; i < 12000; ++i) {
+    f.push_imu(t0 + i * kImuDt, accel_biased, gyro);
+  }
+  EXPECT_LT(std::abs(f.state().vy), 0.05)
+    << "vy drifted to " << f.state().vy << " without NHC;"
+    << " regression: stationary car at +0.96 m/s in live sim";
+}
+
+TEST(NHC, NotAppliedWhenSlipFlagRaised) {
+  // When the kinematic-bicycle disagrees with the gyro by more than
+  // the threshold, slip_flag goes true and NHC must NOT fire — real
+  // lateral motion (tire sideslip) is allowed to develop. Use the
+  // same setup as SteeringCorrection.FlagsSlipUnderHighResidual but
+  // then artificially inject a non-zero ay so vy WOULD pull away from
+  // zero. Without NHC, vy follows ay·dt; if NHC fired it would clamp.
+  auto f = make_stationary_filter();
+  f.push_steering(0.0, 0.4);  // δ ≠ 0
+  for (int i = 0; i < 200; ++i) {
+    f.push_rpm(i * 0.0125, 200.0);  // vx ≈ 1.6 m/s → ω_pred ≈ 0.44 > threshold
+  }
+  const Eigen::Vector3d accel(0.0, 0.5, kG);   // 0.5 m/s² lateral
+  const Eigen::Vector3d gyro = Eigen::Vector3d::Zero();
+  const double t0 = 1500 * kImuDt;
+  for (int i = 0; i < 100; ++i) {
+    f.push_imu(t0 + i * kImuDt, accel, gyro);
+  }
+  ASSERT_TRUE(f.diagnostics().slip_flag);
+  // ≈ 100 ticks · 0.0025 s · 0.5 m/s² = 0.125 m/s of accumulated vy.
+  // If NHC were applied, vy would be near zero; assert it isn't.
+  EXPECT_GT(std::abs(f.state().vy), 0.05);
+}
+
+
+// ============================================================================
 // Covariance behaviour
 // ============================================================================
 

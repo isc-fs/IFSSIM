@@ -77,8 +77,9 @@ class OdometryFilterNode : public node_base_cpp::BaseLifecycleNode {
     declare_parameter<double>("ekf.sigma_gz",           0.01);
     declare_parameter<double>("ekf.sigma_ba_walk",      1.0e-4);
     declare_parameter<double>("ekf.sigma_bg_walk",      1.0e-5);
-    declare_parameter<double>("ekf.sigma_rpm",          0.10);
+    declare_parameter<double>("ekf.sigma_rpm",          0.02);
     declare_parameter<double>("ekf.sigma_steer",        0.30);
+    declare_parameter<double>("ekf.sigma_vy_nhc",       0.10);
     declare_parameter<double>("ekf.slip_yaw_residual_threshold",
                               odometry_filter::kSlipYawResidualThreshold);
   }
@@ -113,6 +114,7 @@ class OdometryFilterNode : public node_base_cpp::BaseLifecycleNode {
     p.sigma_bg_walk            = get_parameter("ekf.sigma_bg_walk").as_double();
     p.sigma_rpm                = get_parameter("ekf.sigma_rpm").as_double();
     p.sigma_steer              = get_parameter("ekf.sigma_steer").as_double();
+    p.sigma_vy_nhc             = get_parameter("ekf.sigma_vy_nhc").as_double();
     p.slip_yaw_residual_threshold =
       get_parameter("ekf.slip_yaw_residual_threshold").as_double();
 

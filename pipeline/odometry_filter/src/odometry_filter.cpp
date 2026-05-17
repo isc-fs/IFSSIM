@@ -92,9 +92,40 @@ void OdometryFilter::push_imu(
   predict_step(dt, accel, gyro);
 
   // Steering kinematic cross-check fires here (with vx and ω fresh
-  // from predict). The function gates internally.
+  // from predict). The function gates internally; also sets slip_flag
+  // which the NHC step below reads.
   if (have_steering_) {
     correct_steering();
+  }
+
+  // Non-holonomic constraint: rolling cars don't slide sideways. This
+  // is a pseudo-measurement (z = 0, h = vy) applied every IMU tick.
+  // It's the only thing in the filter that observes vy directly:
+  //   * The Coriolis-correct predict cancels centripetal accel during
+  //     cornering (v̇y = ay − ω·vx ≈ 0 in steady-state turns), but it
+  //     does not OBSERVE vy. Any small residual ay from bias error or
+  //     sensor noise integrates into vy with nothing pulling it back.
+  //     Live-sim regression: a stationary car with calibrated biases
+  //     drifted to vy ≈ +0.96 m/s within ~10 s of activation, which
+  //     fed PurePursuit a false "the car is sliding" signal and sent
+  //     it off-track before the first turn.
+  //   * Gated on slip_flag (raised by correct_steering when the
+  //     kinematic-bicycle prediction disagrees with the gyro). Real
+  //     lateral motion (tire sideslip during hard cornering) violates
+  //     vy = 0; disabling NHC there lets the EKF carry the true
+  //     non-zero vy.
+  //   * sigma_vy_nhc is loose enough (0.10 m/s) that the EKF doesn't
+  //     fight legitimate body-y dynamics within rolling tolerance, but
+  //     tight enough to pull bias-noise integration back to zero on
+  //     ~1 s timescales.
+  // Prior memory note ("NHC failed 3 times — fix Coriolis instead")
+  // applied to NHC layered on top of the broken complementary predict,
+  // where NHC was masking the Coriolis-missing symptom and fighting
+  // real centripetal accel. With the predict now Coriolis-correct, NHC
+  // and predict don't conflict — NHC just bounds the unobservable-vy
+  // drift.
+  if (!diag_.slip_flag) {
+    correct_nhc();
   }
 
   publish_state_view();
@@ -207,6 +238,25 @@ void OdometryFilter::correct_rpm(double z_vx) {
   const double y       = z_vx - x_(VX);              // innovation
   const double R_rpm   = params_.sigma_rpm * params_.sigma_rpm;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_rpm;  // 1×1
+  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  x_ += K * y;
+  x_(THETA) = wrap_pi(x_(THETA));
+
+  P_ = (Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H) * P_;
+}
+
+
+void OdometryFilter::correct_nhc() {
+  // Non-holonomic constraint as a pseudo-measurement: z = 0, h = vy.
+  // Standard practice for wheeled-vehicle odometry filters; bounds the
+  // unobservable-vy drift without coupling to any sensor.
+  Eigen::Matrix<double, 1, kStateDim> H = Eigen::Matrix<double, 1, kStateDim>::Zero();
+  H(0, VY) = 1.0;
+
+  const double y       = 0.0 - x_(VY);                              // innovation
+  const double R_nhc   = params_.sigma_vy_nhc * params_.sigma_vy_nhc;
+  const double S       = (H * P_ * H.transpose())(0, 0) + R_nhc;
   const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
 
   x_ += K * y;

@@ -185,6 +185,12 @@ struct EkfParams {
   // (v̇y = ay − ω·vx) leaves residual that integrates into vy drift.
   double sigma_rpm = 0.02;      // [m/s]
   double sigma_steer = 0.30;    // [rad/s] — deliberately loose; gated under slip
+  // sigma_vy_nhc — non-holonomic-constraint pseudo-measurement. 0.10
+  // m/s lets the rolling-tire assumption pull vy → 0 on ~1 s
+  // timescales while tolerating small real lateral motion within
+  // sideslip tolerance. The constraint is gated off when slip_flag is
+  // raised (see correct_steering).
+  double sigma_vy_nhc = 0.10;   // [m/s]
 
   // Steering gating
   double slip_yaw_residual_threshold = kSlipYawResidualThreshold;
@@ -290,6 +296,12 @@ class OdometryFilter {
   // |z − ω| > slip_yaw_residual_threshold and raises slip_flag.
   // Always updates diagnostics (yaw_residual + slip_flag).
   void correct_steering();
+
+  // Non-holonomic-constraint pseudo-measurement: z = 0, h = vy. Gated
+  // by slip_flag (the caller skips when slipping). This is the only
+  // direct observation of vy — without it, bias-noise integration
+  // drives vy unbounded over seconds (see correct_nhc impl comment).
+  void correct_nhc();
 
   // Stationary-calibration accumulator.
   void accumulate_calibration(
