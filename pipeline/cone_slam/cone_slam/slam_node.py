@@ -416,13 +416,21 @@ class SlamNode(BaseLifecycleNode):
                 body_y=float(m.pose.position.y),
                 is_big_orange=int(m.id) in self._big_orange_ids,
             ))
-        if not observations:
-            return
 
+        # Count the scan regardless of whether it carried any
+        # observations — empty scans still represent time / motion
+        # the filter should account for.
         self._total_scans += 1
+
         if self._localiser is None:
-            self._tick_phase1(msg, observations)
+            # Phase 1: nothing to do on an empty scan (the mapper
+            # has no internal state to advance).
+            if observations:
+                self._tick_phase1(msg, observations)
         else:
+            # Phase 2: always tick. predict() must run every scan
+            # to keep the pose advancing; update() is skipped if
+            # the scan was empty.
             self._tick_phase2(msg, observations)
 
     def _tick_phase1(self, msg: MarkerArray,
@@ -455,9 +463,13 @@ class SlamNode(BaseLifecycleNode):
                      observations: list[Observation]) -> None:
         """Phase 2 (localising) per-scan body. Predict from a
         body-frame delta of the raw pose feed, update against the
-        frozen map, publish the corrected pose."""
+        frozen map (when there are observations), publish the
+        corrected pose."""
         assert self._localiser is not None
-        # Body-frame delta from previous /odom-frame pose.
+        # Body-frame delta from previous /odom-frame pose. Runs
+        # every scan whether or not observations are present —
+        # otherwise the pose freezes during cone-less windows
+        # (turn-aways, lidar occlusion, etc.).
         if self._last_pose_for_delta is not None:
             prev = self._last_pose_for_delta
             curr = self._latest_pose
@@ -474,7 +486,10 @@ class SlamNode(BaseLifecycleNode):
             )
         self._last_pose_for_delta = self._latest_pose
 
-        summary = self._localiser.update(observations)
+        if observations:
+            summary = self._localiser.update(observations)
+        else:
+            summary = None
 
         # Publish corrected pose + frozen map (unchanged) + TF.
         self._publish_phase2_pose(msg)
@@ -487,9 +502,11 @@ class SlamNode(BaseLifecycleNode):
         # `_db`; the frozen map is the same memory.
         self._update_lap_state()
 
-        if summary.n_obs and (summary.n_obs + summary.n_matched) % 50 == 0:
+        if summary is not None and summary.n_obs \
+                and self._total_scans % 50 == 0:
             self.get_logger().info(
-                f"PHASE2 obs={summary.n_obs} matched={summary.n_matched} "
+                f"PHASE2 scan={self._total_scans} "
+                f"obs={summary.n_obs} matched={summary.n_matched} "
                 f"gated={summary.n_gated_out} "
                 f"unmatched={summary.n_unmatched} "
                 f"mean_innov={summary.mean_innovation_m:.2f}m "
