@@ -45,6 +45,24 @@ from ros_bridge import RosBridge, StartMissionOutcome
 # rather than aligning the action spec means the user-facing event
 # type stays FS-Rules-canonical ("Acceleration") while the wire
 # protocol stays compact.
+
+# Wall-clock wait between RuntimeControl (autonomy activate) and EBS
+# release. odometry_filter's on_activate runs a stationary bias-
+# calibration window (default 3.0 s, see EkfParams::calibration_seconds);
+# EBS must stay engaged for the full window or bias absorbs early
+# motion and yaw drifts 20–30° in the first few seconds. Tracks the
+# EKF default with a small margin for DDS / lifecycle propagation.
+_EKF_CAL_WAIT_S = 3.5
+
+# Polling interval during the cal wait. Each sample reads the sim's
+# vehicle state so we can prove (in the session log) whether EBS is
+# physically pinning the car. If vx stays at zero through the wait,
+# the calibration window saw stationary IMU. If vx > 0 mid-wait, EBS
+# is letting the chassis roll despite `activateEbs`, and the bring-up
+# reorder alone won't fix yaw drift.
+_EKF_CAL_POLL_S = 0.5
+
+
 _EVENT_TO_MISSION = {
     "acceleration": "accel",
     "skidpad":      "skidpad",
@@ -526,18 +544,29 @@ def event_start(setup: EventSetup):
       2. Prepare (NO LOCK): `RosBridge.get().set_mission(mission)`.
          Supervisor → mission_control → mode_manager CONFIGURE only
          (Numba JIT, SLAM setup, etc.) while EBS holds the car still.
-      3. Release EBS + enable API control (under `_state_lock`).
-      4. Run (NO LOCK): `RosBridge.get().start_runtime()` opens
-         RuntimeControl on mission_control (ACTIVATE). Control commands
-         flow via action feedback; sim_supervisor relays to
-         /fsds/control_command for the UE5 bridge.
+      3. Run (NO LOCK): `RosBridge.get().start_runtime()` opens
+         RuntimeControl on mission_control (ACTIVATE). EBS is STILL
+         ENGAGED — odometry_filter's on_activate kicks its 3 s
+         stationary bias-calibration window with the car physically
+         pinned, which is what makes the bias estimate valid.
+      3.5. Sleep `_EKF_CAL_WAIT_S` for the EKF calibration window to
+         finish, with EBS still holding the car still. Polls the sim
+         every `_EKF_CAL_POLL_S` and logs vx so we can prove (in the
+         session log) whether EBS actually pins the chassis. Without
+         this wait, Phase 4 races the calibration accumulator and
+         the EKF absorbs early motion into bias (see #518 post-mortem
+         on bag autocross_no-track_20260517_202133 — 22–32° yaw drift).
+      4. Release EBS + enable API control (under `_state_lock`).
+         Control commands now flow via action feedback; sim_supervisor
+         relays to /fsds/control_command for the UE5 bridge.
 
-    Pre-#379 this used `/pipeline_ctrl/enable` flag-file writes plus
-    a hard-coded `time.sleep(4.5)` for the SLAM calibration window.
-    The flag-file mechanism is retired (see #381). When ros_bridge
-    isn't available — unit-test envs without rclpy — the legacy
-    flag-file fallback is retained so existing tests don't have to
-    spin up DDS.
+    Pre-#518 the action chain bundled CONFIGURE + ACTIVATE in a single
+    goal, so the original EBS-then-activate ordering was fine — there
+    was no separate "run" step. #518 split prepare from run but left
+    EBS release in slot 3, which silently put activate AFTER EBS
+    release. This restores the correct ordering. When ros_bridge isn't
+    available — unit-test envs without rclpy — the legacy flag-file
+    fallback is retained so existing tests don't have to spin up DDS.
 
     Idempotency: `_session_starting` flag prevents double-click
     re-firing the boot sequence (B7). Returns 409 if a start is
@@ -580,10 +609,11 @@ def event_start(setup: EventSetup):
             try:
                 # Park the car under EBS while the autonomy boots.
                 # Mode_manager's CONFIGURE step on cone_detection_node
-                # runs the Numba JIT compile (10–20 s); slam_node's
-                # on_activate resets the IMU+RPM filter for a fresh
-                # stationary calibration window (~3 s). Both rely on
-                # the car being motionless — EBS guarantees that.
+                # runs the Numba JIT compile (10–20 s); odometry_filter's
+                # on_activate (Phase 3) then runs a ~3 s stationary
+                # bias-calibration window. EBS stays engaged through
+                # both AND through the Phase 3.5 wait, so the EKF
+                # always calibrates on truly motionless IMU.
                 sim.res_activate()
                 res_active = True
                 sim.set_event(setup.event_type, setup.num_laps)
@@ -643,32 +673,27 @@ def event_start(setup: EventSetup):
                 status_code=503,
             )
 
-        # === Phase 3: release EBS before RuntimeControl (under lock) ===
-        with _state_lock:
-            try:
-                sim.res_release()
-                res_active = False
-                try:
-                    sim._cmd("enableApiControl 1")
-                except Exception:
-                    pass
-            except Exception as e:
-                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-        # === Phase 4: activate + run via RuntimeControl (NO LOCK) ===
+        # === Phase 3: activate + run via RuntimeControl (NO LOCK) ===
+        #
+        # ORDER MATTERS. Activate runs BEFORE EBS release so
+        # odometry_filter's on_activate kicks its 3 s stationary
+        # bias-calibration window with the car physically pinned by
+        # EBS. Pre-#518 the action chain bundled CONFIGURE + ACTIVATE
+        # in Phase 2 (single goal), so the original EBS-then-run
+        # ordering was fine — there was no separate "run" step. #518
+        # split prepare from run but left EBS release in slot 3,
+        # which silently put activate AFTER EBS release. That broke
+        # the calibration window's stationarity precondition and
+        # introduced the 22-32° yaw drift seen in all post-#518 bags.
         if _ros_bridge_available:
             log_event(
                 "event_start",
-                "RuntimeControl — activating autonomy stack",
+                "RuntimeControl — activating autonomy stack (EBS still engaged)",
             )
             runtime = RosBridge.get().start_runtime()
             if not runtime.success:
-                with _state_lock:
-                    try:
-                        sim.res_activate()
-                        res_active = True
-                    except Exception:
-                        pass
+                # EBS is still active here, so no rollback needed —
+                # just leave the latch and surface the failure.
                 log_event(
                     "event_start",
                     f"RuntimeControl failed: {runtime.message}",
@@ -680,6 +705,55 @@ def event_start(setup: EventSetup):
                     },
                     status_code=502,
                 )
+
+            # === Phase 3.5: wait for EKF calibration, log vx ===
+            #
+            # We poll the sim's vehicle state every _EKF_CAL_POLL_S so
+            # the session log records whether EBS is actually pinning
+            # the chassis during the calibration window. If vx stays
+            # at 0, the EKF calibrated on stationary IMU — Track 1 of
+            # the post-#518 fix is working. If vx rises mid-wait, the
+            # `activateEbs` UE5 plugin call isn't physically stopping
+            # the car (it may just be locking control inputs) and the
+            # fix needs to happen one layer down in the plugin.
+            log_event(
+                "event_start",
+                f"waiting {_EKF_CAL_WAIT_S:.1f}s for EKF stationary "
+                f"bias-calibration window (EBS still engaged)",
+            )
+            _speed_samples: list[float] = []
+            _wait_start = time.monotonic()
+            while (time.monotonic() - _wait_start) < _EKF_CAL_WAIT_S:
+                try:
+                    state = sim.get_vehicle_state()
+                    # `speed` is |velocity| from getCarState — frame
+                    # agnostic, what we actually care about.
+                    _speed_samples.append(float(state.get("speed", 0.0)))
+                except Exception:
+                    # Don't fail the boot on a transient sim RPC blip;
+                    # just skip this sample.
+                    _speed_samples.append(float("nan"))
+                time.sleep(_EKF_CAL_POLL_S)
+            _max_speed = max((v for v in _speed_samples if v == v), default=0.0)
+            _ebs_held = _max_speed < 0.05  # 5 cm/s threshold for "still"
+            log_event(
+                "event_start",
+                f"EKF cal wait done | max speed during wait = "
+                f"{_max_speed:.3f} m/s | EBS_held={_ebs_held} | "
+                f"samples={[round(v, 3) for v in _speed_samples]}",
+            )
+
+        # === Phase 4: release EBS (under lock) ===
+        with _state_lock:
+            try:
+                sim.res_release()
+                res_active = False
+                try:
+                    sim._cmd("enableApiControl 1")
+                except Exception:
+                    pass
+            except Exception as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
         with _state_lock:
             current_event = setup.event_type
