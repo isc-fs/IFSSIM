@@ -66,6 +66,7 @@ from cone_slam.frozen_map import FrozenMap
 from cone_slam.landmark_db import LandmarkDb
 from cone_slam.lap_detector import LapDetector
 from cone_slam.phase1_mapper import Observation, Phase1Mapper, Pose2D
+from cone_slam.phase2_localiser import Phase2Localiser
 
 
 # Per-behavior lap-completion parameters. Phase 1's mapper is the
@@ -140,6 +141,20 @@ class SlamNode(BaseLifecycleNode):
         # Phase 1 algorithm knobs.
         self.declare_parameter("da_gate_m", 1.0)
         self.declare_parameter("obs_sigma_m", 0.20)
+        # Phase 2 algorithm knobs. Take effect at the MAPPING →
+        # LOCALISING transition (first lap completion in multi-lap
+        # modes, or `phase2_force_freeze_after_n_scans` for testing).
+        self.declare_parameter("phase2_obs_sigma_m", 0.20)
+        self.declare_parameter("phase2_max_match_radius_m", 3.0)
+        # Process-noise σ applied per scan-tick in Phase 2's predict
+        # step. Defaults reflect the per-tick (not per-second) drift
+        # an /odom-fed body delta accumulates on FS-DV trackdrives.
+        self.declare_parameter("phase2_proc_sigma_xy_m", 0.05)
+        self.declare_parameter("phase2_proc_sigma_yaw_deg", 0.5)
+        # Test/diagnostic knob: force the freeze + Phase 2 switchover
+        # after N cone scans, ignoring the lap detector. 0 disables
+        # the override and the node uses the natural lap-gated path.
+        self.declare_parameter("phase2_force_freeze_after_n_scans", 0)
 
         # Runtime state — set up in on_configure_impl.
         self._db: Optional[LandmarkDb] = None
@@ -152,6 +167,17 @@ class SlamNode(BaseLifecycleNode):
         self._latest_odom_msg: Optional[Odometry] = None
         self._latest_gt_msg: Optional[Odometry] = None
         self._gt_init_pose: Optional[Pose2D] = None
+
+        # Phase 2 state. `_localiser` is None while we're mapping;
+        # populated by `_transition_to_phase2` at the freeze point.
+        # `_last_pose_for_delta` caches the previous /odom-frame
+        # pose so Phase 2's predict step can use a body-frame delta.
+        self._localiser: Optional[Phase2Localiser] = None
+        self._last_pose_for_delta: Optional[Pose2D] = None
+        # Total cone scans processed, regardless of phase. Mapper's
+        # internal step counter stops advancing after the freeze, so
+        # we keep this separate for diagnostics + the replay snapshot.
+        self._total_scans: int = 0
 
         # Subscriptions / publishers — populated in on_configure /
         # on_activate.
@@ -185,6 +211,18 @@ class SlamNode(BaseLifecycleNode):
         self._pose_source = self.get_parameter("pose_source").value
         da_gate_m = float(self.get_parameter("da_gate_m").value)
         obs_sigma_m = float(self.get_parameter("obs_sigma_m").value)
+
+        # Phase 2 knobs cached for `_transition_to_phase2`.
+        self._phase2_obs_sigma_m = float(
+            self.get_parameter("phase2_obs_sigma_m").value)
+        self._phase2_max_match_radius_m = float(
+            self.get_parameter("phase2_max_match_radius_m").value)
+        self._phase2_proc_sigma_xy_m = float(
+            self.get_parameter("phase2_proc_sigma_xy_m").value)
+        self._phase2_proc_sigma_yaw_rad = math.radians(float(
+            self.get_parameter("phase2_proc_sigma_yaw_deg").value))
+        self._phase2_force_freeze_after_n_scans = int(
+            self.get_parameter("phase2_force_freeze_after_n_scans").value)
 
         # Initialise Phase 1 components.
         self._db = LandmarkDb()
@@ -245,6 +283,11 @@ class SlamNode(BaseLifecycleNode):
         self._latest_gt_msg = None
         self._gt_init_pose = None
         self._big_orange_ids = set()
+        self._localiser = None
+        self._last_pose_for_delta = None
+        self._total_scans = 0
+        if hasattr(self, "_slam_init_pose"):
+            self._slam_init_pose = None
 
         # Subscriptions. QoS rationale:
         #   /odom              — odometry_filter publishes RELIABLE
@@ -361,7 +404,8 @@ class SlamNode(BaseLifecycleNode):
         self._big_orange_ids = ids
 
     def _on_cones(self, msg: MarkerArray) -> None:
-        """Per-scan tick — the workhorse of Phase 1."""
+        """Per-scan tick. Branches on whether Phase 1 (mapping) or
+        Phase 2 (localising) owns the current state."""
         if self._mapper is None or self._latest_pose is None:
             return
 
@@ -375,18 +419,24 @@ class SlamNode(BaseLifecycleNode):
         if not observations:
             return
 
+        self._total_scans += 1
+        if self._localiser is None:
+            self._tick_phase1(msg, observations)
+        else:
+            self._tick_phase2(msg, observations)
+
+    def _tick_phase1(self, msg: MarkerArray,
+                     observations: list[Observation]) -> None:
+        """Phase 1 (mapping) per-scan body."""
         summary = self._mapper.observe_scan(self._latest_pose, observations)
 
-        # Publish outputs.
         self._publish_slam_pose(msg)
         self._publish_landmarks(msg)
         self._publish_map_to_odom_tf(msg)
         self._publish_gt_aligned(msg)
 
-        # Lap detection + finish logic.
         self._update_lap_state()
 
-        # Periodic diagnostic — mirrors the old SLAM_OBS log line.
         if summary["step"] % 50 == 0:
             self.get_logger().info(
                 f"SLAM_OBS step={summary['step']} "
@@ -395,6 +445,103 @@ class SlamNode(BaseLifecycleNode):
                 f"big_orange={summary['n_big_orange']} "
                 f"laps={self._lap_count}"
             )
+
+        # Possible Phase 1 → Phase 2 freeze. Order matters: the
+        # decision uses the lap state we just updated.
+        if self._should_freeze_now(summary["step"]):
+            self._transition_to_phase2()
+
+    def _tick_phase2(self, msg: MarkerArray,
+                     observations: list[Observation]) -> None:
+        """Phase 2 (localising) per-scan body. Predict from a
+        body-frame delta of the raw pose feed, update against the
+        frozen map, publish the corrected pose."""
+        assert self._localiser is not None
+        # Body-frame delta from previous /odom-frame pose.
+        if self._last_pose_for_delta is not None:
+            prev = self._last_pose_for_delta
+            curr = self._latest_pose
+            dxw = curr.x - prev.x
+            dyw = curr.y - prev.y
+            dtheta = _wrap_pi(curr.yaw - prev.yaw)
+            c, s = math.cos(-prev.yaw), math.sin(-prev.yaw)
+            dx_body = c * dxw - s * dyw
+            dy_body = s * dxw + c * dyw
+            self._localiser.predict(
+                dx_body=dx_body, dy_body=dy_body, dtheta=dtheta,
+                sigma_xy=self._phase2_proc_sigma_xy_m,
+                sigma_yaw=self._phase2_proc_sigma_yaw_rad,
+            )
+        self._last_pose_for_delta = self._latest_pose
+
+        summary = self._localiser.update(observations)
+
+        # Publish corrected pose + frozen map (unchanged) + TF.
+        self._publish_phase2_pose(msg)
+        self._publish_landmarks(msg)
+        self._publish_phase2_tf(msg)
+        self._publish_gt_aligned(msg)
+
+        # Lap state — keep counting so multi-lap modes can hit
+        # their target. The detector still reads landmarks from
+        # `_db`; the frozen map is the same memory.
+        self._update_lap_state()
+
+        if summary.n_obs and (summary.n_obs + summary.n_matched) % 50 == 0:
+            self.get_logger().info(
+                f"PHASE2 obs={summary.n_obs} matched={summary.n_matched} "
+                f"gated={summary.n_gated_out} "
+                f"unmatched={summary.n_unmatched} "
+                f"mean_innov={summary.mean_innovation_m:.2f}m "
+                f"laps={self._lap_count}"
+            )
+
+    # ----- Phase 1 → Phase 2 transition -----
+
+    def _should_freeze_now(self, step: int) -> bool:
+        """Decide whether to take the snapshot and switch to Phase 2.
+
+        Two triggers, in priority order:
+          1. `phase2_force_freeze_after_n_scans` > 0 — testing
+             override; switch deterministically at scan N regardless
+             of lap state. Lets the regression suite exercise Phase
+             2 on bags that don't contain a real lap-completion event.
+          2. Lap detector fired (and we're in a multi-lap mode).
+             Single-lap modes (autocross, accel) have nothing left
+             to do after the first crossing, so Phase 2 isn't worth
+             paying the predict/update cost for.
+        """
+        force_n = self._phase2_force_freeze_after_n_scans
+        if force_n > 0 and step >= force_n:
+            return True
+        if self._dispatcher is None:
+            return False
+        if self._dispatcher.get("single_lap_finish"):
+            return False
+        return self._lap_count >= 1
+
+    def _transition_to_phase2(self) -> None:
+        """Snapshot the live map, hand it to a fresh Phase2Localiser,
+        seed it with the current pose. The mapper stops being driven
+        from this point — the LandmarkDb is kept around only so
+        downstream consumers (lap detector, /Conos publishing) keep
+        seeing the same cones."""
+        if self._mapper is None or self._latest_pose is None:
+            return
+        frozen = FrozenMap.from_landmarks(self._mapper.snapshot_for_freeze())
+        self._localiser = Phase2Localiser(
+            frozen,
+            self._latest_pose,
+            obs_sigma_m=self._phase2_obs_sigma_m,
+            max_match_radius_m=self._phase2_max_match_radius_m,
+        )
+        self._last_pose_for_delta = self._latest_pose
+        self.get_logger().info(
+            f"PHASE2_ACTIVE frozen_cones={len(frozen)} "
+            f"init_pose=({self._latest_pose.x:.2f}, "
+            f"{self._latest_pose.y:.2f}, "
+            f"{math.degrees(self._latest_pose.yaw):.1f}°)"
+        )
 
     # ----- publishing -----
 
@@ -446,9 +593,8 @@ class SlamNode(BaseLifecycleNode):
         Phase 1's pose source is `/odom` (or GT, in replay), so
         SLAM's `map` frame is just `odom` with no drift correction.
         Publish identity so the TF tree resolves end-to-end for
-        downstream consumers (path_planning, control). Phase 2 will
-        replace this with the real `slam_pose ⊖ /odom` math from
-        `tf_math.compute_map_to_odom`.
+        downstream consumers (path_planning, control). Phase 2
+        overrides this via `_publish_phase2_tf`.
         """
         if self._tf_broadcaster is None:
             return
@@ -460,15 +606,84 @@ class SlamNode(BaseLifecycleNode):
         t.transform.rotation.w = 1.0
         self._tf_broadcaster.sendTransform(t)
 
+    def _publish_phase2_pose(self, scan_msg: MarkerArray) -> None:
+        """Publish the EKF-corrected pose as /slam/pose. Twist is
+        copied from /odom — Phase 2 doesn't estimate velocity, only
+        pose; downstream consumers that need vx/vy still trust the
+        odometry filter for those."""
+        if self._localiser is None:
+            return
+        pose = self._localiser.pose
+        out = Odometry()
+        out.header.stamp = scan_msg.markers[0].header.stamp if scan_msg.markers \
+            else self.get_clock().now().to_msg()
+        out.header.frame_id = self._map_frame
+        out.child_frame_id = self._base_frame
+        out.pose.pose.position.x = pose.x
+        out.pose.pose.position.y = pose.y
+        half = 0.5 * pose.yaw
+        out.pose.pose.orientation.w = math.cos(half)
+        out.pose.pose.orientation.z = math.sin(half)
+        if self._latest_odom_msg is not None:
+            out.twist = self._latest_odom_msg.twist
+        self._pose_pub.publish(out)
+
+    def _publish_phase2_tf(self, scan_msg: MarkerArray) -> None:
+        """Compute and broadcast the real `map → odom` transform.
+
+        With `T_map_base = SLAM pose` and `T_odom_base = /odom pose`,
+        the SE(2) algebra gives:
+            T_map_odom = T_map_base ⊖ T_odom_base
+        which lets downstream nodes that still publish in `odom`
+        (path planning, control) project into `map` consistently.
+        """
+        if self._tf_broadcaster is None or self._localiser is None \
+                or self._latest_pose is None:
+            return
+        slam = self._localiser.pose
+        odom = self._latest_pose
+        dtheta = _wrap_pi(slam.yaw - odom.yaw)
+        c, s = math.cos(slam.yaw), math.sin(slam.yaw)
+        co, so = math.cos(odom.yaw), math.sin(odom.yaw)
+        # base in odom: (odom.x, odom.y); we want
+        # T_map_odom.position = slam.position - R(dtheta) @ odom.position
+        dx = slam.x - (math.cos(dtheta) * odom.x - math.sin(dtheta) * odom.y)
+        dy = slam.y - (math.sin(dtheta) * odom.x + math.cos(dtheta) * odom.y)
+        t = TransformStamped()
+        t.header.stamp = scan_msg.markers[0].header.stamp if scan_msg.markers \
+            else self.get_clock().now().to_msg()
+        t.header.frame_id = self._map_frame
+        t.child_frame_id = self._odom_frame
+        t.transform.translation.x = dx
+        t.transform.translation.y = dy
+        half = 0.5 * dtheta
+        t.transform.rotation.w = math.cos(half)
+        t.transform.rotation.z = math.sin(half)
+        self._tf_broadcaster.sendTransform(t)
+
+    def _effective_pose(self) -> Optional[Pose2D]:
+        """SLAM's externally-published pose: localiser output when
+        Phase 2 is active, raw pose feed when Phase 1 is."""
+        if self._localiser is not None:
+            return self._localiser.pose
+        return self._latest_pose
+
     def _publish_gt_aligned(self, scan_msg: MarkerArray) -> None:
         """GT pose re-anchored to SLAM's calibration-end frame —
         ports `cone_graph_slam_node._publish_gt_aligned`."""
-        if self._latest_gt_msg is None or self._latest_pose is None:
+        slam_pose = self._effective_pose()
+        if self._latest_gt_msg is None or slam_pose is None:
             return
         gt_now = Pose2D.from_ros_pose(self._latest_gt_msg.pose.pose)
+
+        # Anchor: take the first sample where BOTH gt and slam are
+        # available, so the two re-anchored trajectories start from
+        # the same instant (avoids the constant ~1 m bias from
+        # snapshotting them at different scans — see SLAM rewrite
+        # caveat #2).
         if self._gt_init_pose is None:
-            # First GT sample becomes the anchor.
             self._gt_init_pose = gt_now
+            self._slam_init_pose = slam_pose
             return
 
         # Express gt_now in the anchor frame.
@@ -478,19 +693,14 @@ class SlamNode(BaseLifecycleNode):
         s = math.sin(-self._gt_init_pose.yaw)
         gt_aligned_x = c * dx - s * dy
         gt_aligned_y = s * dx + c * dy
-        gt_aligned_yaw = (gt_now.yaw - self._gt_init_pose.yaw
-                          + math.pi) % (2 * math.pi) - math.pi
+        gt_aligned_yaw = _wrap_pi(gt_now.yaw - self._gt_init_pose.yaw)
 
-        # Same anchor math applied to SLAM's pose. For Phase 1 SLAM
-        # pose == /odom pose, so we compare /odom-relative motion
-        # to GT-relative motion in the same anchor frame.
-        slam = self._latest_pose
-        if not hasattr(self, "_slam_init_pose") or self._slam_init_pose is None:
-            self._slam_init_pose = slam
-        sx = slam.x - self._slam_init_pose.x
-        sy = slam.y - self._slam_init_pose.y
-        c = math.cos(-self._slam_init_pose.yaw)
-        s = math.sin(-self._slam_init_pose.yaw)
+        # Same anchor math applied to SLAM's pose.
+        slam_init = self._slam_init_pose
+        sx = slam_pose.x - slam_init.x
+        sy = slam_pose.y - slam_init.y
+        c = math.cos(-slam_init.yaw)
+        s = math.sin(-slam_init.yaw)
         slam_aligned_x = c * sx - s * sy
         slam_aligned_y = s * sx + c * sy
 
@@ -517,10 +727,11 @@ class SlamNode(BaseLifecycleNode):
     # ----- lap accounting -----
 
     def _update_lap_state(self) -> None:
-        if self._lap_detector is None or self._latest_pose is None:
+        pose = self._effective_pose()
+        if self._lap_detector is None or pose is None:
             return
         landmarks = list(self._db) if self._db is not None else []
-        crossed = self._lap_detector.observe(self._latest_pose, landmarks)
+        crossed = self._lap_detector.observe(pose, landmarks)
         if crossed:
             self._lap_count += 1
             self.get_logger().info(
@@ -608,7 +819,8 @@ class SlamNode(BaseLifecycleNode):
         """SLAM-vs-GT residual snapshot in the same anchor frame as
         `_publish_gt_aligned`. Returns None until both SLAM and GT
         anchors are populated."""
-        if (self._latest_pose is None
+        slam_pose = self._effective_pose()
+        if (slam_pose is None
                 or self._latest_gt_msg is None
                 or self._gt_init_pose is None):
             return None
@@ -623,21 +835,18 @@ class SlamNode(BaseLifecycleNode):
         s = math.sin(-self._gt_init_pose.yaw)
         gt_aligned_x = c * dx - s * dy
         gt_aligned_y = s * dx + c * dy
-        gt_aligned_yaw = (gt_now.yaw - self._gt_init_pose.yaw
-                          + math.pi) % (2 * math.pi) - math.pi
+        gt_aligned_yaw = _wrap_pi(gt_now.yaw - self._gt_init_pose.yaw)
 
-        slam = self._latest_pose
-        sx = slam.x - slam_init.x
-        sy = slam.y - slam_init.y
+        sx = slam_pose.x - slam_init.x
+        sy = slam_pose.y - slam_init.y
         c = math.cos(-slam_init.yaw)
         s = math.sin(-slam_init.yaw)
         slam_aligned_x = c * sx - s * sy
         slam_aligned_y = s * sx + c * sy
-        slam_aligned_yaw = (slam.yaw - slam_init.yaw
-                            + math.pi) % (2 * math.pi) - math.pi
+        slam_aligned_yaw = _wrap_pi(slam_pose.yaw - slam_init.yaw)
 
         return {
-            "step": self._mapper.step if self._mapper is not None else 0,
+            "step": self._total_scans,
             "slam_x": slam_aligned_x,
             "slam_y": slam_aligned_y,
             "slam_yaw": slam_aligned_yaw,
@@ -645,7 +854,13 @@ class SlamNode(BaseLifecycleNode):
             "gt_y": gt_aligned_y,
             "gt_yaw": gt_aligned_yaw,
             "n_map": len(self._db) if self._db is not None else 0,
+            "phase2": self._localiser is not None,
         }
+
+
+def _wrap_pi(angle: float) -> float:
+    """Wrap to (-π, π]."""
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
 def main() -> None:

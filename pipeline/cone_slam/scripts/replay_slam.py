@@ -147,6 +147,13 @@ def main() -> int:
              "setting for Phase 1 baselines that don't want /odom "
              "drift dominating the residual. Ignored by the legacy "
              "node.")
+    ap.add_argument(
+        "--param", action="append", default=[],
+        metavar="NAME=VALUE",
+        help="Set an arbitrary ROS parameter on the SLAM node before "
+             "configure. Repeatable. Example: --param "
+             "phase2_force_freeze_after_n_scans=200. Value is parsed "
+             "as int, then float, then string.")
     args = ap.parse_args()
 
     if not Path(args.bag).exists():
@@ -197,9 +204,33 @@ def main() -> int:
             return 2
 
         from rclpy.parameter import Parameter
+
+        def _coerce(v: str):
+            try:
+                return int(v), Parameter.Type.INTEGER
+            except ValueError:
+                pass
+            try:
+                return float(v), Parameter.Type.DOUBLE
+            except ValueError:
+                pass
+            return v, Parameter.Type.STRING
+
+        extra_params: list[Parameter] = []
+        for kv in args.param:
+            if "=" not in kv:
+                print(f"--param expects NAME=VALUE, got {kv!r}",
+                      file=sys.stderr)
+                return 2
+            name, _, val = kv.partition("=")
+            cval, ctype = _coerce(val)
+            extra_params.append(Parameter(name, ctype, cval))
+
         if is_new_node:
             node.set_parameters([Parameter(
                 "pose_source", Parameter.Type.STRING, args.pose_source)])
+            if extra_params:
+                node.set_parameters(extra_params)
             node.replay_setup(args.behavior)
         elif args.veto_m is not None:
             node.set_parameters([Parameter(
