@@ -60,9 +60,19 @@ REQUIRED_TOPICS = {
 def _open_bag(path: str):
     # Imports deferred so `--help` works outside the container.
     from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+    # Auto-detect storage_id from the bag's metadata.yaml so we work
+    # against both sqlite3 (older capture path) and mcap (post-#465).
+    storage_id = "sqlite3"
+    meta = Path(path) / "metadata.yaml"
+    if meta.exists():
+        for line in meta.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("storage_identifier:"):
+                storage_id = line.split(":", 1)[1].strip()
+                break
     reader = SequentialReader()
     reader.open(
-        StorageOptions(uri=path, storage_id="sqlite3"),
+        StorageOptions(uri=path, storage_id=storage_id),
         ConverterOptions("", ""),
     )
     return reader
@@ -118,6 +128,13 @@ def main() -> int:
         "--veto-m", type=float, default=None,
         help="override `new_landmark_proximity_veto_m`; pass 0 to "
              "disable the cascade-guard veto for baseline comparison")
+    ap.add_argument(
+        "--node-class", type=str,
+        default="cone_slam.cone_graph_slam_node:ConeGraphSlamNode",
+        help="SLAM node class to drive, as `module.path:ClassName`. "
+             "Default targets the current cone_graph_slam. Switch to "
+             "the new class once the rewrite lands "
+             "(e.g. `cone_slam.slam_node:SlamNode`).")
     args = ap.parse_args()
 
     if not Path(args.bag).exists():
@@ -141,9 +158,22 @@ def main() -> int:
     rclpy.init()
     node = None
     try:
-        from cone_slam.cone_graph_slam_node import ConeGraphSlamNode
+        # Dynamic import — class-agnostic so we can swap in the new
+        # rewrite class without editing this script. Format is
+        # `module.path:ClassName`.
+        try:
+            mod_name, _, cls_name = args.node_class.partition(":")
+            if not mod_name or not cls_name:
+                raise ValueError("--node-class must be `module.path:ClassName`")
+            import importlib
+            slam_mod = importlib.import_module(mod_name)
+            SlamNodeCls = getattr(slam_mod, cls_name)
+        except (ImportError, AttributeError, ValueError) as ex:
+            print(f"--node-class {args.node_class!r} failed to resolve: {ex}",
+                  file=sys.stderr)
+            return 2
 
-        node = ConeGraphSlamNode()
+        node = SlamNodeCls()
 
         if args.veto_m is not None:
             from rclpy.parameter import Parameter
