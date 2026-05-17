@@ -33,7 +33,6 @@ module just borrows its rclpy.Node to host two service clients.
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
@@ -403,13 +402,34 @@ def auto_pull_and_clean(
     # entry is the source basename (i.e. `<bag_name>/`), so extracting
     # to /host_bags/ recreates /host_bags/<bag_name>/... — same
     # ergonomics as the `docker cp` parent-dir convention.
-    tar_buf = io.BytesIO()
-    for chunk in bits:
-        tar_buf.write(chunk)
-    tar_buf.seek(0)
+    #
+    # Stream the tarball to a temp file on disk first, then untar from
+    # there. Prior implementation buffered the whole archive in a
+    # BytesIO before extracting; that allocates `len(bag)` bytes in
+    # mc_backend's heap and tripped mem_limit: 512m on the container
+    # for multi-hundred-MB bags. The container got SIGKILL'd mid-stop,
+    # nginx surfaced a 502, and the volume-side cleanup never ran.
+    # Streaming to disk caps live RAM at the chunk size (~256 KB).
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(
+        prefix=f"bag_pull_{bag_name}_", suffix=".tar",
+        dir=host_dir, delete=False,
+    )
+    try:
+        for chunk in bits:
+            tmp.write(chunk)
+        tmp.flush()
+        tmp.close()
+    except Exception as ex:  # noqa: BLE001
+        out["error"] = f"streaming tarball to temp file failed: {ex}"
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        return out
 
     try:
-        with tarfile.open(fileobj=tar_buf, mode="r|") as tar:
+        with tarfile.open(name=tmp.name, mode="r") as tar:
             # `r|` is a streaming-read mode that's safe against large
             # archives. We don't try to validate every member's path
             # (`bag_name` is already sanitised) but we do refuse any
@@ -433,7 +453,17 @@ def auto_pull_and_clean(
                 tar.extract(member, path=host_dir, filter="data")
     except Exception as ex:  # noqa: BLE001
         out["error"] = f"tar extract to {host_dir} failed: {ex}"
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
         return out
+
+    # Remove the temp tarball — we've extracted everything we need.
+    try:
+        os.unlink(tmp.name)
+    except OSError as ex:
+        _LOG.warning("bag_recorder: temp tarball cleanup failed: %s", ex)
 
     out["ok"] = True
     out["host_path"] = f"{host_dir}/{bag_name}"

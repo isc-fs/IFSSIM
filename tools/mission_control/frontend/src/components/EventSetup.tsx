@@ -222,7 +222,19 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
               ◌ starting recorder…
             </span>
           )}
-          {telemetry.bag_state === 'stopped' && telemetry.bag_name && (
+          {telemetry.bag_state === 'stopped' && telemetry.bag_name && telemetry.bag_host_path && (
+            // #498 — auto-pull succeeded; bag is on host at the
+            // bind-mounted path. The leading "✓" + green tint signals
+            // operator can find the bag at `./bags/<name>/` without
+            // running tools/pull-bag.sh manually.
+            <span className="text-green-400 text-xs" title={`Bag on host:\nbags/${telemetry.bag_name}/`}>
+              ✓ bag saved to host: <code className="font-mono">bags/{telemetry.bag_name}/</code>
+            </span>
+          )}
+          {telemetry.bag_state === 'stopped' && telemetry.bag_name && !telemetry.bag_host_path && (
+            // Auto-pull disabled or failed — bag is only in the
+            // container's named volume. Operator can recover with the
+            // manual pull script.
             <span className="text-gray-400 text-xs" title={`Pull onto host:\ntools/pull-bag.sh ${telemetry.bag_name}`}>
               ◍ bag saved (in container): {telemetry.bag_name}
               <span className="ml-1 text-gray-500">

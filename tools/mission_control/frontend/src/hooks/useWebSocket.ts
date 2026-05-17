@@ -41,8 +41,13 @@ export interface TelemetryData {
   // bag_name is the directory name under the host `bags/` landing
   // zone (bind-mounted into mc_backend as /bags); null while recording
   // / unset on legacy backends.
+  //
+  // bag_host_path is the absolute path the bag landed at on the host
+  // after the #498 auto-pull (e.g. `/host_bags/<bag_name>`). Empty
+  // until auto-pull completes; absent on legacy backends.
   bag_state?: 'none' | 'starting' | 'recording' | 'stopped' | 'failed';
   bag_name?: string | null;
+  bag_host_path?: string | null;
   error?: string;
 }
 
@@ -55,7 +60,7 @@ const defaultTelemetry: TelemetryData = {
   doo: 0, oc: 0, laps: 0, required_laps: 0,
   finished: false, event: 'unknown',
   fps: 0, paused: false, res_active: false, pipeline_enabled: false,
-  bag_state: 'none', bag_name: null,
+  bag_state: 'none', bag_name: null, bag_host_path: null,
 };
 
 // Reconnect tuning. Capped at 30 s — long enough to spare a slow-restart

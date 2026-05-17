@@ -1416,9 +1416,15 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                         if _active_recording:
                             bag_name_snap = _active_recording.get("name")
                             bag_state_snap = _active_recording.get("state", "none")
+                            # #498 — once auto_pull_and_clean has run,
+                            # host_path is the absolute container-side
+                            # path (bind-mounted to host ./bags/<name>/).
+                            # Empty/None until the pull completes.
+                            bag_host_path_snap = _active_recording.get("host_path") or None
                         else:
                             bag_name_snap = None
                             bag_state_snap = "none"
+                            bag_host_path_snap = None
 
                     data = {
                         "speed": vehicle.get("speed", 0),
@@ -1466,6 +1472,10 @@ async def telemetry_ws(websocket: WebSocket, api_key: Optional[str] = Query(defa
                         # "● RECORDING" badge.
                         "bag_name": bag_name_snap,
                         "bag_state": bag_state_snap,
+                        # #498 — host-side path after auto-pull. UI
+                        # uses this to flip the post-stop badge from
+                        # "saved in container" to "saved to host".
+                        "bag_host_path": bag_host_path_snap,
                     }
 
                     if not await _ws_safe_send(websocket, data):

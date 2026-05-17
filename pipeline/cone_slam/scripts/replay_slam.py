@@ -60,9 +60,19 @@ REQUIRED_TOPICS = {
 def _open_bag(path: str):
     # Imports deferred so `--help` works outside the container.
     from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+    # Auto-detect storage_id from the bag's metadata.yaml so we work
+    # against both sqlite3 (older capture path) and mcap (post-#465).
+    storage_id = "sqlite3"
+    meta = Path(path) / "metadata.yaml"
+    if meta.exists():
+        for line in meta.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("storage_identifier:"):
+                storage_id = line.split(":", 1)[1].strip()
+                break
     reader = SequentialReader()
     reader.open(
-        StorageOptions(uri=path, storage_id="sqlite3"),
+        StorageOptions(uri=path, storage_id=storage_id),
         ConverterOptions("", ""),
     )
     return reader
