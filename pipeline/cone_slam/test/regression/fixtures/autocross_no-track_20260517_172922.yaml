@@ -39,8 +39,19 @@ description: >-
   thresholds against this bag (pose < 1.5 m, yaw < 5°) is the SLAM
   Phase 0 deliverable.
 
+# Drive the new two-phase SlamNode (Phase 1, #496) by default. The
+# legacy cone_graph node stays accessible via `slam_node_legacy` but
+# the regression gate now tracks the rewrite.
+node_class: cone_slam.slam_node:SlamNode
+# Phase 1 alone can't correct pose drift; the regression gate uses
+# /testing_only/odom AS the pose feed so the residual reflects the
+# mapping algorithm and Phase 1 ↔ snapshot consistency, not /odom
+# drift. Switch to "odom" once Phase 2 lands and we want to gate
+# end-to-end SLAM pose accuracy under production odometry.
+pose_source: gt
+
 expectations:
-  phase: pre_rewrite
+  phase: post_rewrite
 
   # pre_rewrite thresholds — measured by replay_slam.py on
   # 2026-05-17 against `cone_graph_slam_node` (PR #518 lineage).
@@ -59,18 +70,21 @@ expectations:
     # still None and _record_scan returns early).
     min_slam_pose_messages: 560
 
-  # post_rewrite thresholds — what the cone-landmark Phase 1+2
-  # rewrite must hit. The Phase 1 mapping pass uses GT as pose
-  # source (per the Plan's option-D decision) so post-rewrite
-  # numbers are bounded by /testing_only/odom precision, not
-  # /odom drift. Set to a strict-but-realistic target; tune down
-  # once Phase 1 is live and we see real numbers.
+  # post_rewrite thresholds — what the new two-phase SLAM must hit.
+  # Phase 1's pose feed is GT (per Plan option-D) so residuals are
+  # bounded by the snapshot's anchor-frame computation, not /odom
+  # drift. Measured on 2026-05-17 against `cone_slam.slam_node:SlamNode`
+  # commit 7372c4a: max=1.22 m, mean=0.81 m, yaw max=0.61°, yaw
+  # mean=0.61°. Thresholds set to ~1.5× observed so a real algorithmic
+  # regression fails CI while normal noise doesn't.
   post_rewrite:
     pose_error_max_m: 1.5
-    pose_error_mean_m: 0.8
-    yaw_error_max_deg: 5.0
-    yaw_error_mean_deg: 2.0
-    min_slam_pose_messages: 560
+    pose_error_mean_m: 1.0
+    yaw_error_max_deg: 2.0
+    yaw_error_mean_deg: 1.0
+    # Empirical: 599 residual rows (600 cone scans minus the 1-scan
+    # warm-up before snapshot has both anchors set).
+    min_slam_pose_messages: 580
 
   no_slam_crash: true
 

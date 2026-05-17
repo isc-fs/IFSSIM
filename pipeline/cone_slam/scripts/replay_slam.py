@@ -49,7 +49,7 @@ from typing import Optional
 import numpy as np
 
 
-REQUIRED_TOPICS = {
+_LEGACY_REQUIRED_TOPICS = {
     "/imu",
     "/Conos_raw",
     "/motor_rpm",
@@ -135,6 +135,18 @@ def main() -> int:
              "Default targets the current cone_graph_slam. Switch to "
              "the new class once the rewrite lands "
              "(e.g. `cone_slam.slam_node:SlamNode`).")
+    ap.add_argument(
+        "--behavior", type=str, default="autocross",
+        help="Behavior name passed to BaseLifecycleNode-style nodes "
+             "(mode_manager Setup contract). Ignored by the legacy "
+             "cone_graph node. Default: autocross.")
+    ap.add_argument(
+        "--pose-source", type=str, default="gt",
+        help="Pose feed for the new SlamNode (odom|gt). Default 'gt' "
+             "uses /testing_only/odom as the pose source — the right "
+             "setting for Phase 1 baselines that don't want /odom "
+             "drift dominating the residual. Ignored by the legacy "
+             "node.")
     args = ap.parse_args()
 
     if not Path(args.bag).exists():
@@ -143,13 +155,6 @@ def main() -> int:
 
     reader = _open_bag(args.bag)
     topic_classes = _topic_msg_classes(reader)
-    missing = REQUIRED_TOPICS - set(topic_classes.keys())
-    if missing:
-        print(f"bag missing required topics: {sorted(missing)}",
-              file=sys.stderr)
-        print(f"  found topics: {sorted(topic_classes.keys())}",
-              file=sys.stderr)
-        return 2
 
     # Heavy ROS imports past the arg-parse / file-presence checks.
     import rclpy
@@ -175,19 +180,36 @@ def main() -> int:
 
         node = SlamNodeCls()
 
-        if args.veto_m is not None:
-            from rclpy.parameter import Parameter
+        # Detect node interface: new SlamNode exposes replay_snapshot /
+        # replay_dispatch / REPLAY_TOPICS; legacy ConeGraphSlamNode
+        # does not. Switch behavior accordingly.
+        is_new_node = hasattr(node, "replay_snapshot")
+        required_topics = (
+            set(node.REPLAY_TOPICS) if is_new_node
+            else _LEGACY_REQUIRED_TOPICS
+        )
+        missing = required_topics - set(topic_classes.keys())
+        if missing:
+            print(f"bag missing required topics: {sorted(missing)}",
+                  file=sys.stderr)
+            print(f"  found topics: {sorted(topic_classes.keys())}",
+                  file=sys.stderr)
+            return 2
+
+        from rclpy.parameter import Parameter
+        if is_new_node:
+            node.set_parameters([Parameter(
+                "pose_source", Parameter.Type.STRING, args.pose_source)])
+            node.replay_setup(args.behavior)
+        elif args.veto_m is not None:
             node.set_parameters([Parameter(
                 "new_landmark_proximity_veto_m",
                 Parameter.Type.DOUBLE,
                 float(args.veto_m))])
 
-        # Lifecycle: ConeGraphSlamNode is a LifecycleNode; its _preint
-        # / _graph / _db only exist after on_configure(), and the
-        # subscription handlers only run their full logic past
-        # on_activate. The live pipeline issues these transitions via
-        # mode_manager; replay drives them directly. The state objects
-        # are unused by the callbacks, hence the simple stub.
+        # Lifecycle: LifecycleNode subclasses need on_configure +
+        # on_activate driven explicitly in replay mode. The state
+        # objects are unused by the callbacks, hence the simple stub.
         from rclpy.lifecycle import State as LifecycleState
         from lifecycle_msgs.msg import State as StateMsg
         _stub = LifecycleState(StateMsg.PRIMARY_STATE_UNCONFIGURED,
@@ -197,9 +219,7 @@ def main() -> int:
 
         residuals: list[dict] = []
 
-        def _record_scan(t: float) -> None:
-            """Snapshot SLAM pose vs GT (re-anchored). Mirrors the
-            node's `_publish_gt_aligned` math."""
+        def _record_scan_legacy(t: float) -> None:
             if node._latest_result is None:
                 return
             if node._gt_init_pose is None or node._latest_gt is None:
@@ -226,31 +246,59 @@ def main() -> int:
                 "yaw_err_rad": yaw_err,
             })
 
-        n_imu = n_cones = n_rpm = n_gt = 0
+        def _record_scan_new(t: float) -> None:
+            snap = node.replay_snapshot()
+            if snap is None:
+                return
+            err = float(np.hypot(
+                snap["slam_x"] - snap["gt_x"],
+                snap["slam_y"] - snap["gt_y"]))
+            yaw_err = _yaw_err(snap["slam_yaw"], snap["gt_yaw"])
+            residuals.append({
+                "t": t,
+                "step": snap["step"],
+                "slam_x": snap["slam_x"],
+                "slam_y": snap["slam_y"],
+                "slam_yaw": snap["slam_yaw"],
+                "gt_x": snap["gt_x"],
+                "gt_y": snap["gt_y"],
+                "gt_yaw": snap["gt_yaw"],
+                "err_m": err,
+                "yaw_err_rad": yaw_err,
+            })
+
+        record_scan = _record_scan_new if is_new_node else _record_scan_legacy
+
+        n_cones = 0
+        n_other = 0
 
         # Read messages in chronological order. rosbag2's
         # SequentialReader interleaves topics by recording timestamp,
         # which is the right order for replay.
         while reader.has_next():
             topic, raw, t_ns = reader.read_next()
-            if topic not in REQUIRED_TOPICS:
+            if topic not in required_topics:
                 continue
             cls = topic_classes[topic]
             msg = deserialize_message(raw, cls)
             try:
-                if topic == "/imu":
-                    node._on_imu(msg)
-                    n_imu += 1
-                elif topic == "/motor_rpm":
-                    node._on_rpm(msg)
-                    n_rpm += 1
-                elif topic == "/testing_only/odom":
-                    node._on_gt_odom(msg)
-                    n_gt += 1
-                elif topic == "/Conos_raw":
-                    node._on_cones(msg)
+                if is_new_node:
+                    is_scan = node.replay_dispatch(topic, msg)
+                else:
+                    is_scan = False
+                    if topic == "/imu":
+                        node._on_imu(msg)
+                    elif topic == "/motor_rpm":
+                        node._on_rpm(msg)
+                    elif topic == "/testing_only/odom":
+                        node._on_gt_odom(msg)
+                    elif topic == "/Conos_raw":
+                        node._on_cones(msg)
+                        is_scan = True
+
+                if is_scan:
                     n_cones += 1
-                    _record_scan(t_ns * 1e-9)
+                    record_scan(t_ns * 1e-9)
                     if not args.quiet and n_cones % 50 == 0 and residuals:
                         last = residuals[-1]
                         print(f"  scan {n_cones} step={last['step']} "
@@ -258,6 +306,8 @@ def main() -> int:
                               f"yaw_err={np.degrees(last['yaw_err_rad']):+.1f}°")
                     if args.max_scans and n_cones >= args.max_scans:
                         break
+                else:
+                    n_other += 1
             except Exception as ex:
                 print(f"\nSLAM crashed during {topic} (scan #{n_cones}): "
                       f"{type(ex).__name__}: {ex}", file=sys.stderr)
@@ -265,10 +315,8 @@ def main() -> int:
 
         # ----- Summary -----
         print(f"\nReplay summary:")
-        print(f"  imu:   {n_imu} samples")
         print(f"  cones: {n_cones} scans")
-        print(f"  rpm:   {n_rpm} samples")
-        print(f"  gt:    {n_gt} samples")
+        print(f"  other: {n_other} samples (non-scan support topics)")
 
         if not residuals:
             print("  no residuals collected — calibration may not have "

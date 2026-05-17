@@ -548,6 +548,105 @@ class SlamNode(BaseLifecycleNode):
             return None
         return FrozenMap.from_landmarks(self._mapper.snapshot_for_freeze())
 
+    # ----- replay / regression interface -----
+    #
+    # The offline replay harness (`scripts/replay_slam.py`) drives this
+    # node deterministically over a recorded bag. These helpers let it
+    # do that without touching private attributes:
+    #
+    #   REPLAY_TOPICS         — which bag topics are required.
+    #   replay_setup(beh)     — bypass the ROS `~/setup` service.
+    #   replay_dispatch(t, m) — route a deserialized msg to the right
+    #                           callback; returns True iff the message
+    #                           triggers a scan-tick (the harness uses
+    #                           that to record a residual sample).
+    #   replay_snapshot()     — uniform SLAM-vs-GT residual dict for
+    #                           CSV / threshold checks. None when not
+    #                           enough state has been seen yet.
+
+    REPLAY_TOPICS: frozenset = frozenset({
+        # Phase 1 only needs cones (raw + orange tag) and a pose feed.
+        # /odom is the production source; /testing_only/odom is both
+        # the gt-mode pose source AND the regression-test GT anchor.
+        "/Conos_raw",
+        "/Conos_Orange",
+        "/odom",
+        "/testing_only/odom",
+    })
+
+    def replay_setup(self, behavior: str, mode_name: str = "") -> None:
+        """Inject mode_name/behavior bypassing the ROS Setup service.
+        Must be called before on_configure() in replay mode."""
+        self._mode_name = mode_name or behavior
+        self._behavior = behavior
+
+    def replay_dispatch(self, topic: str, msg) -> bool:
+        """Route a bag message to the right callback.
+
+        Returns True when the callback corresponds to a scan tick
+        (i.e. the moment a residual should be recorded). For Phase 1
+        that's exactly `/Conos_raw`."""
+        if topic == "/Conos_raw":
+            self._on_cones(msg)
+            return True
+        if topic == "/Conos_Orange":
+            self._on_orange(msg)
+            return False
+        if topic == "/odom":
+            if self._pose_source == "odom":
+                self._on_odom(msg)
+            return False
+        if topic == "/testing_only/odom":
+            if self._pose_source == "gt":
+                self._on_gt_as_pose_source(msg)
+            else:
+                self._on_gt_odom(msg)
+            return False
+        return False
+
+    def replay_snapshot(self) -> Optional[dict]:
+        """SLAM-vs-GT residual snapshot in the same anchor frame as
+        `_publish_gt_aligned`. Returns None until both SLAM and GT
+        anchors are populated."""
+        if (self._latest_pose is None
+                or self._latest_gt_msg is None
+                or self._gt_init_pose is None):
+            return None
+        slam_init = getattr(self, "_slam_init_pose", None)
+        if slam_init is None:
+            return None
+
+        gt_now = Pose2D.from_ros_pose(self._latest_gt_msg.pose.pose)
+        dx = gt_now.x - self._gt_init_pose.x
+        dy = gt_now.y - self._gt_init_pose.y
+        c = math.cos(-self._gt_init_pose.yaw)
+        s = math.sin(-self._gt_init_pose.yaw)
+        gt_aligned_x = c * dx - s * dy
+        gt_aligned_y = s * dx + c * dy
+        gt_aligned_yaw = (gt_now.yaw - self._gt_init_pose.yaw
+                          + math.pi) % (2 * math.pi) - math.pi
+
+        slam = self._latest_pose
+        sx = slam.x - slam_init.x
+        sy = slam.y - slam_init.y
+        c = math.cos(-slam_init.yaw)
+        s = math.sin(-slam_init.yaw)
+        slam_aligned_x = c * sx - s * sy
+        slam_aligned_y = s * sx + c * sy
+        slam_aligned_yaw = (slam.yaw - slam_init.yaw
+                            + math.pi) % (2 * math.pi) - math.pi
+
+        return {
+            "step": self._mapper.step if self._mapper is not None else 0,
+            "slam_x": slam_aligned_x,
+            "slam_y": slam_aligned_y,
+            "slam_yaw": slam_aligned_yaw,
+            "gt_x": gt_aligned_x,
+            "gt_y": gt_aligned_y,
+            "gt_yaw": gt_aligned_yaw,
+            "n_map": len(self._db) if self._db is not None else 0,
+        }
+
 
 def main() -> None:
     rclpy.init()

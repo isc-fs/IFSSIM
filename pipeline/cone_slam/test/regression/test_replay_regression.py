@@ -151,25 +151,35 @@ def _bag_dir_from_uri(uri: str) -> Path | None:
     return None
 
 
-def _run_replay(bag_dir: Path, out_csv: Path, mode: str) -> int:
+def _run_replay(
+    bag_dir: Path,
+    out_csv: Path,
+    mode: str,
+    node_class: str | None = None,
+    pose_source: str | None = None,
+) -> int:
     """Invoke scripts/replay_slam.py and return its exit code.
 
     Stdout/stderr are inherited so the test framework's `-v` flag
     shows the SLAM progress. The script's CSV-output side-effect is
     what we then parse for residuals.
     """
-    # The replay script reads `--csv` from argv but doesn't yet take
-    # a mode flag (the bag's recorded /Conos_raw is already
-    # mode-specific from the original drive). The `mode` arg is
-    # passed in here for future extension.
-    _ = mode
     cmd = [
         sys.executable,
         str(_REPLAY_SCRIPT),
         str(bag_dir),
         "--csv", str(out_csv),
         "--quiet",
+        # Loose threshold flags — actual gating happens against the
+        # fixture's expectations after the run, on the parsed CSV.
+        "--max-pose-err-m", "1e9",
+        "--max-yaw-err-deg", "1e9",
     ]
+    if node_class:
+        cmd += ["--node-class", node_class]
+        cmd += ["--behavior", mode]
+    if pose_source:
+        cmd += ["--pose-source", pose_source]
     return subprocess.call(cmd)
 
 
@@ -234,7 +244,11 @@ def test_slam_regression(fixture_path: Path, tmp_path: Path) -> None:
     thr = fx["expectations"][phase]
     out_csv = tmp_path / f"{fixture_path.stem}.csv"
 
-    rc = _run_replay(bag_dir, out_csv, fx["mode"])
+    rc = _run_replay(
+        bag_dir, out_csv, fx["mode"],
+        node_class=fx.get("node_class"),
+        pose_source=fx.get("pose_source"),
+    )
     if fx["expectations"].get("no_slam_crash", True):
         assert rc in (0, 1), (
             f"replay_slam.py exited with rc={rc} on {fixture_path.name} "
