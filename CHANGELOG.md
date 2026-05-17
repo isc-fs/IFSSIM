@@ -12,6 +12,49 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking — odometry filter rewritten as a 9-state EKF.**
+  The complementary filter that previously lived in
+  `pipeline/odometry_filter/` is replaced by a hand-rolled EKF over
+  state `[x, y, θ, vx, vy, ω, ba_x, ba_y, bg_z]`. The predict step
+  now carries the Coriolis cross-terms (`v̇x = ax + ω·vy`,
+  `v̇y = ay − ω·vx`), which the complementary filter could not.
+  During steady-state cornering the IMU's body-y axis reads
+  centripetal acceleration `ω·vx` — the old filter integrated this
+  directly into `vy`, so `/odom.vy` drifted unbounded (4+ m/s after
+  68 s of cornering) and the inflated `state.speed` inside
+  PurePursuit was the trackdrive ceiling. The new EKF cancels the
+  Coriolis term in `v̇y` exactly when the model is consistent; the
+  gtest regression `CoriolisCornering.SteadyVyIsNearZero`
+  synthesises a 60 s constant-radius turn and asserts
+  `|vy| < 0.10 m/s` (pre-rewrite this fails by ~14×).
+
+  Measurements: motor-RPM is now a Kalman update on `vx` with
+  `sigma_rpm = 2 cm/s`, so RPM dominates over IMU accel integration
+  for `vx` tracking. Steering kinematic-bicycle
+  (`ω_pred = (vx/L)·tan δ`) is a **gated** update on `ω` — applied
+  when `|residual| < threshold`, raises `slip_flag` and rejects the
+  update otherwise (the kinematic-bicycle model is wrong under slip,
+  so folding it in would corrupt yaw).
+
+  **Breaking surface**:
+  - `/brake_pressure` subscription dropped from
+    `odometry_filter_node`. Brake authority pulled `α_vx` toward
+    zero during heavy braking pre-rewrite; the EKF's Kalman gating
+    handles wheel-lockup naturally via covariance. Bridge still
+    publishes `/brake_pressure` for replay parity, but no autonomy
+    consumer subscribes.
+  - `/odom_diag/effective_alpha_vx` topic retired.
+  - `OdometryFilter::push_brake()` method, `Params` struct (replaced
+    by `EkfParams`), `kAlphaVx*`, `kBetaVyLeak`, `kBrakeLockup*`,
+    `kRpmStaleS` all removed.
+
+  **Preserved**: `/odom` (now with non-trivial covariance populated
+  from the EKF P matrix), `odom→base_link` TF, lifecycle, QoS,
+  frame names, and the `/odom_diag/yaw_residual_rad_s` +
+  `/odom_diag/slip_flag` topics.
+
 ### Added
 
 - **Auto-pull bag onto host filesystem on session stop** (#498,
