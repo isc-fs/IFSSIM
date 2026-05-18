@@ -40,7 +40,7 @@ if [ -z "$BAG_NAME" ]; then
     echo "Usage: $0 <bag-name> [duration-seconds]" >&2
     exit 1
 fi
-SLAM_TOPIC="/cone_slam/state"
+SLAM_TOPIC="/slam/pose"
 
 HOST_BAG_DIR="$(realpath "tools/bags/$BAG_NAME")"
 if [ ! -d "$HOST_BAG_DIR" ]; then
@@ -87,30 +87,30 @@ docker run --rm \
         source /dv_pipeline_stack_ws/install/setup.bash
         export AMENT_PREFIX_PATH=/dv_pipeline_stack_ws/install/fs_msgs:/dv_pipeline_stack_ws/install/ifssim_bridge:\$AMENT_PREFIX_PATH
 
-        echo '==> Starting Cone_Detection (LIVE — picks up algorithm changes since the bag was recorded)'
-        ros2 run slam Cone_Detection \\
+        echo '==> Starting cone_detection (LIVE — picks up algorithm changes since the bag was recorded)'
+        ros2 run cone_detection cone_detection_node \\
             --ros-args -r /fsds/lidar/Lidar1:=/lidar/Lidar1 \\
             > /tmp/cone_detection.log 2>&1 &
         CONE_PID=\$!
         sleep 3   # numba JIT warmup
 
-        echo '==> Starting cone_graph_slam'
-        ros2 run cone_slam cone_graph_slam \\
+        echo '==> Starting cone_slam slam_node'
+        ros2 run cone_slam slam_node \\
             > /tmp/slam.log 2>&1 &
         SLAM_PID=\$!
 
-        echo '==> Starting Plan_Path (path_planning)'
-        ros2 run path_planning Plan_Path \\
+        echo '==> Starting path_planning_node'
+        ros2 run path_planning path_planning_node \\
             > /tmp/path.log 2>&1 &
         PATH_PID=\$!
 
-        echo '==> Starting Control'
+        echo '==> Starting control_node'
         # Same /control_command remap as the live launch; control no
         # longer needs GSS/odom subscriptions (it reads /cone_slam/state).
         # /Conos_Orange isn't published in replay (Cone_Detection only
         # emits /Conos_raw), so Control's orange-stop branch is naturally
         # disabled here — orange_callback just never receives.
-        ros2 run control Control \\
+        ros2 run control control_node \\
             --ros-args \\
               -r /fsds/control_command:=/control_command \\
             > /tmp/control.log 2>&1 &
@@ -123,6 +123,16 @@ docker run --rm \
         # first few publications.
         sleep 2
 
+        # The autonomy nodes are lifecycle nodes — they sit at
+        # 'unconfigured' until externally transitioned. mode_manager
+        # does that in the live pipeline; replay has no mode_manager,
+        # so we issue the transitions explicitly here.
+        echo '==> Lifecycle: configure + activate autonomy nodes'
+        for n in slam_node path_planning_node control_node cone_detection_node; do
+            ros2 lifecycle set /\$n configure >/dev/null 2>&1 || true
+            ros2 lifecycle set /\$n activate  >/dev/null 2>&1 || true
+        done
+
         echo '==> Starting MCAP recorder for SLAM outputs'
         # Record the SLAM-side topics into an mcap so the user can open
         # the run in Lichtblick afterward. We deliberately skip raw
@@ -131,7 +141,7 @@ docker run --rm \
         # the 3D panel even though it rarely changes.
         ros2 bag record \\
             -o /replay/out/replay_cone_slam \\
-            /tf /tf_static /cone_slam/state /Conos /Conos_raw /Path \\
+            /tf /tf_static /slam/pose /Conos /Conos_raw /Path \\
             /control_command \\
             > /tmp/recorder.log 2>&1 &
         REC_PID=\$!
