@@ -320,16 +320,20 @@ class FactorGraph:
         if abs(v_body_long) < 0.1:
             return "stopped"
 
-        # FSDS convention: /steering_angle is POSITIVE for a right turn,
-        # whereas the IMU's gyro (and ROS REP-103) use POSITIVE for a
-        # left turn. We negate here so the kinematic-bicycle prediction
-        # ends up sign-aligned with the IMU's measured yaw rate. Without
-        # this, the slip-gate below fires on every real cornering sample
-        # because the predicted and measured yaw rates have opposite signs
-        # (bag autocross_track_20260404_013721_20260518_104623 had 8 of
-        # 10 STEERING_FACTOR samples slip-gated off for exactly this
-        # reason).
-        omega_pred = -(v_body_long / wheelbase_m) * np.tan(steering_rad)
+        # NOTE on sign: we tried negating omega_pred in commit 7037294
+        # (bag _104623 showed 80 % slip rate during cornering with same-
+        # magnitude opposite-sign mismatch between δ and IMU dyaw). It
+        # DID get the factor staging on more samples, but bag _105724
+        # showed the car turning the wrong direction at a curve — the
+        # "opposite sign" was misdiagnosed. What's actually happening:
+        # the kinematic-bicycle model OVER-PREDICTS yaw rate at FS-DV
+        # speeds during transients (slip equilibrium not built up), and
+        # the IMU's gyro reads small because gyro-bias drift suppresses
+        # the rotation. The slip-gate firing on cornering samples is
+        # CORRECT behaviour — the prediction is genuinely untrustworthy
+        # in that regime. Negating it just doubled the magnitude error
+        # and started corrupting yaw in the wrong direction.
+        omega_pred = (v_body_long / wheelbase_m) * np.tan(steering_rad)
         omega_imu  = imu_predicted_dyaw_rad / dt if dt > 1e-6 else 0.0
         if abs(omega_pred - omega_imu) > slip_threshold_rad_s:
             return "slip"
