@@ -287,11 +287,13 @@ class ConeGraphSlamNode(BaseLifecycleNode):
         # whole scan" decision. Set to 0 to disable recovery; the
         # legacy "stay stuck forever" behaviour returns.
         #
-        # Tuning: 10 scans @ 10 Hz = 1 s of stuck — long enough that
-        # transient adversarial DA bursts (~0.1-0.3 s) don't trip it,
-        # short enough that an exploration window doesn't burn 5+
-        # seconds of useless predict-only pose.
-        self.declare_parameter("cascade_skip_recovery_threshold", 10)
+        # Tuning: 5 scans @ 10 Hz = 0.5 s of stuck. Originally 10 but
+        # bag autocross_track_20260404_013721_20260518_095215 had a
+        # cascade that lasted only 9 scans before the obs count dropped
+        # to 1 — recovery never fired despite SLAM being structurally
+        # in trouble. 5 catches shorter cascades without false-firing
+        # on transient ~0.2-0.3 s DA bursts.
+        self.declare_parameter("cascade_skip_recovery_threshold", 5)
 
         # I/O references — populated in on_configure / on_activate.
         self.map_frame: str = ""
