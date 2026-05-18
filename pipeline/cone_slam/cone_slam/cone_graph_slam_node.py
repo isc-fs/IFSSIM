@@ -270,6 +270,29 @@ class ConeGraphSlamNode(BaseLifecycleNode):
         # 0 disables the gate (legacy behaviour).
         self.declare_parameter("min_observations_for_publish", 3)
 
+        # Cascade-skip recovery. After this many consecutive scans
+        # rejected by the cascade-spike gate, force-accept the next
+        # scan instead of skipping it. The theory: 10 scans in a row
+        # all flagged as "all-new" is far longer than any real cascade
+        # burst — it's almost certainly the car driving into a section
+        # of track with legitimately-new cones that haven't been
+        # mapped yet. Refusing to spawn them indefinitely strands
+        # SLAM (cones lose alignment with the IMU-only pose dead-
+        # reckon, /slam/pose freezes, controller drives blind).
+        #
+        # The proximity veto (`new_landmark_proximity_veto_m`) still
+        # gates individual cones inside the force-accepted scan, so
+        # cascade ghosts that are spatially adjacent to existing
+        # landmarks are still rejected — we only relax the "skip the
+        # whole scan" decision. Set to 0 to disable recovery; the
+        # legacy "stay stuck forever" behaviour returns.
+        #
+        # Tuning: 10 scans @ 10 Hz = 1 s of stuck — long enough that
+        # transient adversarial DA bursts (~0.1-0.3 s) don't trip it,
+        # short enough that an exploration window doesn't burn 5+
+        # seconds of useless predict-only pose.
+        self.declare_parameter("cascade_skip_recovery_threshold", 10)
+
         # I/O references — populated in on_configure / on_activate.
         self.map_frame: str = ""
         self.odom_frame: str = ""
@@ -280,6 +303,11 @@ class ConeGraphSlamNode(BaseLifecycleNode):
         self._latest_result: Optional[ScanResult] = None
         self._state = State.INIT_WAITING_IMU
         self._calib_started_t: Optional[float] = None
+        # Count of consecutive scans rejected by the cascade-spike
+        # gate. Reset to 0 on any scan that passes through normally;
+        # crossing the recovery threshold force-accepts the next scan.
+        # See `cascade_skip_recovery_threshold` param.
+        self._consecutive_cascade_skips: int = 0
 
         self._lm_capture_path: str = ""
         self._lm_capture_fh = None
@@ -452,6 +480,7 @@ class ConeGraphSlamNode(BaseLifecycleNode):
         self._obs_diag = {}
         self._obs_n_scans = 0
         self._obs_last_log_ns = 0
+        self._consecutive_cascade_skips = 0
 
         # Subscriptions.
         # Bigger IMU queue than qos_profile_sensor_data's default 10:
@@ -864,6 +893,30 @@ class ConeGraphSlamNode(BaseLifecycleNode):
         triggered, reasons = cascade_spike_triggered(
             n_new_pre, total_pre, self._graph.step,
             count_threshold=n_count_thresh)
+
+        # Cascade-skip recovery: if we've been skipping continuously
+        # for too long, force-accept this scan. Long-stretch skips
+        # are almost certainly new-territory exploration (legitimate
+        # cones not yet in the map), not an adversarial cascade.
+        # Refusing forever strands SLAM in IMU-only dead reckoning
+        # and the /slam/pose feed freezes for the controller.
+        if triggered:
+            self._consecutive_cascade_skips += 1
+            recovery_thresh = int(self.get_parameter(
+                "cascade_skip_recovery_threshold").value)
+            if (recovery_thresh > 0
+                    and self._consecutive_cascade_skips > recovery_thresh):
+                self.get_logger().warn(
+                    f"CASCADE_SKIP_RECOVERY: force-accepting scan "
+                    f"after {self._consecutive_cascade_skips} "
+                    f"consecutive skips — assuming new-territory "
+                    f"exploration (obs={total_pre} new={n_new_pre} "
+                    f"assoc={total_pre - n_new_pre}); proximity veto "
+                    f"still gates individual cones."
+                )
+                self._consecutive_cascade_skips = 0
+                triggered = False  # fall through to the spawn path
+
         if triggered:
             self.get_logger().warn(
                 f"skip cone factors: DA-failure spike "
@@ -884,6 +937,10 @@ class ConeGraphSlamNode(BaseLifecycleNode):
             per_scan["skipped"] = 1
             self._accumulate_obs_diag(per_scan)
             return
+        else:
+            # Scan passed the gate cleanly — reset the consecutive-skip
+            # counter so a fresh stretch of skips later can be detected.
+            self._consecutive_cascade_skips = 0
 
         # For each matched obs → factor between current pose and the
         # known landmark. For unmatched → allocate a new landmark and
