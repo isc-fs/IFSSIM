@@ -91,9 +91,28 @@ void OdometryFilter::push_imu(
 
   predict_step(dt, accel, gyro);
 
-  // Steering kinematic cross-check fires here (with vx and ω fresh
-  // from predict). The function gates internally; also sets slip_flag
-  // which the NHC step below reads.
+  // Steering kinematic cross-check: diagnostics-only.
+  // We RUN the residual + slip-flag computation (the NHC step
+  // below depends on slip_flag) but DO NOT apply the EKF update.
+  // See the [BIAS_FREEZE + DIAGNOSTICS_ONLY] block inside
+  // correct_steering.
+  //
+  // Background — _225200 bag analysis: even with bias frozen
+  // (K[BG_Z]=0 in all corrections), the kinematic-bicycle update
+  // pulled x_(OMEGA) away from the (clean) gyro reading by up to
+  // ±12 °/s when the residual rode just under the slip-gate
+  // threshold (0.3 rad/s = 17 °/s — too loose). Between IMU
+  // callbacks (which reset OMEGA to gyro-bias), the 100 Hz publish
+  // timer caught the steering-corrupted state and that polluted
+  // value integrated into θ across the lap.
+  //
+  // The IMU is clean (raw gyro_z offset vs GT measured at
+  // 0.002 °/s on straights in _113508) and bias is frozen
+  // post-calibration, so x_(OMEGA) = gyro - bg_calibrated IS
+  // truth — no kinematic anchor needed. If real-car runs show
+  // gyro drift, revisit with a much tighter slip threshold
+  // (~0.05 rad/s) or a model that doesn't shed model-error
+  // onto ω.
   if (have_steering_) {
     correct_steering();
   }
@@ -238,7 +257,17 @@ void OdometryFilter::correct_rpm(double z_vx) {
   const double y       = z_vx - x_(VX);              // innovation
   const double R_rpm   = params_.sigma_rpm * params_.sigma_rpm;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_rpm;  // 1×1
-  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+  Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  // Bias-freeze: zero K[BG_Z]. RPM observes vx; the cross-coupling
+  // P[BG_Z, VX] from the propagation (F[VX, BG_Z] = -vy·dt) would
+  // otherwise let RPM-vs-vx residuals pull the gyro-bias state, but
+  // a wheel-rpm-vs-state-vx mismatch reveals nothing about gyro
+  // bias — it reflects RPM scale, accel integration error, or tire
+  // slip. Keeps K[BA_X] / K[BA_Y] intact: those legitimately track
+  // accel bias from integration mismatch. See correct_steering for
+  // the full justification.
+  K(BG_Z) = 0.0;
 
   x_ += K * y;
   x_(THETA) = wrap_pi(x_(THETA));
@@ -257,7 +286,12 @@ void OdometryFilter::correct_nhc() {
   const double y       = 0.0 - x_(VY);                              // innovation
   const double R_nhc   = params_.sigma_vy_nhc * params_.sigma_vy_nhc;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_nhc;
-  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+  Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  // Bias-freeze: zero K[BG_Z]. The NHC observation says "vy ≈ 0";
+  // residuals reflect lateral slip / centripetal error, not gyro
+  // bias. Same reasoning as correct_steering / correct_rpm.
+  K(BG_Z) = 0.0;
 
   x_ += K * y;
   x_(THETA) = wrap_pi(x_(THETA));
@@ -298,6 +332,18 @@ void OdometryFilter::correct_steering() {
   diag_.yaw_residual_rad_s = residual;
   diag_.slip_flag = std::abs(residual) > params_.slip_yaw_residual_threshold;
 
+  // [BIAS_FREEZE + DIAGNOSTICS_ONLY]
+  // After bias-freeze (K[BG_Z]=0) and bag _225200 analysis we
+  // decided to NOT apply the EKF update from the steering
+  // kinematic cross-check — see the long comment at the call
+  // site in push_imu. We've already populated yaw_residual and
+  // slip_flag (used by NHC gating), so return here.
+  return;
+
+  // ---- BELOW IS UNREACHABLE — kept intact in case we re-enable ----
+  // To re-enable: delete the early-return above. Consider also
+  // dropping slip_yaw_residual_threshold from 0.3 → 0.05 rad/s.
+
   // Gate the EKF update: above the threshold the kinematic model is
   // wrong (slip), so folding it in would corrupt ω.
   if (diag_.slip_flag) {
@@ -314,7 +360,22 @@ void OdometryFilter::correct_steering() {
   const double y       = omega_pred - x_(OMEGA);
   const double R_steer = params_.sigma_steer * params_.sigma_steer;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_steer;
-  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+  Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  // Bias-freeze: zero K[BG_Z]. The kinematic-bicycle observation
+  // residual reflects TIRE-SLIP / SUSPENSION-FLEX / MODEL-ERROR — not
+  // gyro bias. But P[BG_Z, OMEGA] is non-zero (from the propagation:
+  // F[OMEGA, BG_Z] = -1), so the standard EKF update would split the
+  // ω-residual between OMEGA and BG_Z proportional to the cross-
+  // covariance. That misattribution is the lap-blocker: on bag
+  // _113508 the bias drifted ±1.8 °/s during a 15 s corner; on bag
+  // _223932 it stepped -3.9 °/s in a single second when the steering
+  // residual stayed just under the slip-gate while the kinematic
+  // model over-predicted ω. The full chain peeled in #386/#447.
+  // Zeroing K[BG_Z] keeps the omega correction (which we want) but
+  // refuses to update bias from this observation (which has no bias
+  // information). Bias still propagates via Q (sigma_bg_walk).
+  K(BG_Z) = 0.0;
 
   x_ += K * y;
   x_(THETA) = wrap_pi(x_(THETA));
