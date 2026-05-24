@@ -238,12 +238,34 @@ void OdometryFilter::correct_rpm(double z_vx) {
   const double y       = z_vx - x_(VX);              // innovation
   const double R_rpm   = params_.sigma_rpm * params_.sigma_rpm;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_rpm;  // 1×1
-  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+  Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  // Schmidt-Kalman bias freeze (#386/#447, see top-of-file note).
+  // RPM observes vx; the cross-coupling P[BG_Z, VX] (from
+  // F[VX, BG_Z] = -vy·dt in propagation) would otherwise let
+  // RPM-vs-vx residuals pull gyro bias. A wheel-rpm-vs-state-vx
+  // mismatch carries NO gyro-bias information — it reflects RPM
+  // scale error, accel integration drift, or tire slip. Keep
+  // K[BA_X] / K[BA_Y] intact (accel bias DOES legitimately track
+  // RPM-vs-accel-integration mismatch).
+  K(BG_Z) = 0.0;
 
   x_ += K * y;
   x_(THETA) = wrap_pi(x_(THETA));
 
-  P_ = (Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H) * P_;
+  // Joseph-form covariance update — mandatory whenever K is
+  // artificially modified away from the optimal Kalman gain.
+  // Standard form P = (I-K·H)·P assumes K = P·Hᵀ/S exactly; with
+  // K[BG_Z]=0 the matrix becomes asymmetric and over many ticks
+  // can drift non-PSD, corrupting downstream consumers via the
+  // /odom covariance fields. Joseph form
+  //   P = (I-K·H)·P·(I-K·H)ᵀ + K·R·Kᵀ
+  // is symmetric + PSD for ANY K. Previous attempt (#550, closed)
+  // used standard form and broke path_planning via NaN-poisoned
+  // TF covariance — see #550 postmortem.
+  const Eigen::Matrix<double, kStateDim, kStateDim> IKH =
+      Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H;
+  P_ = IKH * P_ * IKH.transpose() + R_rpm * (K * K.transpose());
 }
 
 
@@ -257,12 +279,19 @@ void OdometryFilter::correct_nhc() {
   const double y       = 0.0 - x_(VY);                              // innovation
   const double R_nhc   = params_.sigma_vy_nhc * params_.sigma_vy_nhc;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_nhc;
-  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+  Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  // Schmidt-Kalman bias freeze: vy≈0 pseudo-measurement carries no
+  // gyro-bias information. See correct_rpm for the full reasoning.
+  K(BG_Z) = 0.0;
 
   x_ += K * y;
   x_(THETA) = wrap_pi(x_(THETA));
 
-  P_ = (Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H) * P_;
+  // Joseph-form covariance update (see correct_rpm).
+  const Eigen::Matrix<double, kStateDim, kStateDim> IKH =
+      Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H;
+  P_ = IKH * P_ * IKH.transpose() + R_nhc * (K * K.transpose());
 }
 
 
@@ -314,12 +343,23 @@ void OdometryFilter::correct_steering() {
   const double y       = omega_pred - x_(OMEGA);
   const double R_steer = params_.sigma_steer * params_.sigma_steer;
   const double S       = (H * P_ * H.transpose())(0, 0) + R_steer;
-  const Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+  Eigen::Matrix<double, kStateDim, 1> K = P_ * H.transpose() / S;
+
+  // Schmidt-Kalman bias freeze: kinematic-bicycle prediction
+  // residual reflects TIRE-SLIP / SUSPENSION-FLEX / MODEL-ERROR,
+  // NOT gyro bias. See correct_rpm for full reasoning. On bag
+  // _113508 (#447 step A) the un-frozen filter let bg_z walk
+  // ±1.8 °/s during a 15 s sustained corner, integrating to ~27°
+  // of map-frame yaw error and the lap-blocker.
+  K(BG_Z) = 0.0;
 
   x_ += K * y;
   x_(THETA) = wrap_pi(x_(THETA));
 
-  P_ = (Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H) * P_;
+  // Joseph-form covariance update (see correct_rpm).
+  const Eigen::Matrix<double, kStateDim, kStateDim> IKH =
+      Eigen::Matrix<double, kStateDim, kStateDim>::Identity() - K * H;
+  P_ = IKH * P_ * IKH.transpose() + R_steer * (K * K.transpose());
 }
 
 
