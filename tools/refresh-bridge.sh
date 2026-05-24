@@ -52,8 +52,36 @@ cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 echo "→ docker compose build dv_pipeline_stack"
 docker compose build dv_pipeline_stack 2>&1 | tail -3
 
-echo "→ docker compose up -d --force-recreate dv_pipeline_stack"
-docker compose up -d --force-recreate dv_pipeline_stack 2>&1 | tail -3
+# Stale-volume guard (added 2026-05-23 after silently driving a lap
+# against the pre-edit sigma_bg_walk because refresh-bridge rebuilt
+# the image, recreated the container — and the container still
+# read from a stale named volume).
+#
+# The story: docker-compose mounts named volumes (
+# `ifssim_dv_pipeline_<pkg>_src`, see develop.watch in
+# docker-compose.yml, introduced in #490) over each pipeline
+# package's source dir inside the container. Those volumes persist
+# across container recreates AND across image rebuilds. They were
+# designed for `compose watch` to sync into so Python edits go live
+# without a rebuild. But that means `compose build` updates the
+# image and `compose up -d --force-recreate` recreates the
+# container, yet the running container still sees whatever the
+# volume holds — which is the LAST sync, not the new image.
+#
+# Fix: drop the named source volumes after the build, so the
+# subsequent `compose up` re-populates them from the new image's
+# baked-in source. Cost is the volume re-init time (~1 s), tiny
+# relative to wasting a drive on stale code.
+echo "→ dropping stale pipeline source volumes (so they re-populate from new image)"
+docker compose down dv_pipeline_stack 2>&1 | tail -3
+VOLS=$(docker volume ls -q | grep -E '^ifssim_dv_pipeline_.+_src$' || true)
+if [[ -n "$VOLS" ]]; then
+    echo "$VOLS" | xargs -r docker volume rm >/dev/null 2>&1 || true
+    echo "  removed $(echo "$VOLS" | wc -l | tr -d ' ') volume(s)"
+fi
+
+echo "→ docker compose up -d dv_pipeline_stack"
+docker compose up -d dv_pipeline_stack 2>&1 | tail -3
 
 echo "→ waiting for healthy..."
 for _ in $(seq 1 30); do
@@ -66,6 +94,42 @@ for _ in $(seq 1 30); do
     fi
     sleep 1
 done
+
+
+# Post-recreate verification — check the RUNNING CONTAINER (not the
+# image alone). The named-volume failure mode masks the issue if
+# you only check the image, since the volume overlays the image's
+# COPY'd source. `docker exec` sees the effective FS the
+# autonomy nodes will use.
+echo "→ verifying container source == host source (post-recreate)"
+CANARIES=(
+    "pipeline/odometry_filter/include/odometry_filter/odometry_filter.hpp"
+    "pipeline/cone_slam/cone_slam/data_association.py"
+    "pipeline/cone_slam/cone_slam/cone_graph_slam_node.py"
+)
+STALE=0
+for f in "${CANARIES[@]}"; do
+    if [[ ! -f "$f" ]]; then continue; fi
+    target="/dv_pipeline_stack_ws/src/${f#pipeline/}"
+    container_sha=$(docker exec ifssim-dv_pipeline_stack-1 \
+        sha256sum "$target" 2>/dev/null | awk '{print $1}')
+    host_sha=$(sha256sum "$f" 2>/dev/null | awk '{print $1}')
+    if [[ -z "$container_sha" || -z "$host_sha" || "$container_sha" != "$host_sha" ]]; then
+        echo "  ✘ STALE: $f"
+        echo "    host:      $host_sha"
+        echo "    container: $container_sha"
+        STALE=1
+    fi
+done
+if [[ "$STALE" -ne 0 ]]; then
+    echo
+    echo "✘ ABORT: running container's source doesn't match host. Don't" >&2
+    echo "  drive — autonomy is running on stale code." >&2
+    echo "  Try: docker compose down dv_pipeline_stack && docker volume prune -f" >&2
+    echo "  and re-run this script." >&2
+    exit 1
+fi
+echo "  ✓ all canaries match in running container"
 
 echo
 echo "✓ bridge refreshed. Tail logs with:"
