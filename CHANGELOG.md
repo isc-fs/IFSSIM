@@ -12,6 +12,20 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-05-26
+
+The biggest autonomy-pipeline release since v0.1.0. Three intersecting
+threads: a clean **9-state EKF** with Coriolis-correct mechanics
+(rewrite + post-rewrite hardening), a **two-phase mission lifecycle**
+that separates `SetMission` (configure) from `RuntimeControl` (run),
+and a stack of **SLAM hardening** changes that took mid-lap `/odom`
+position drift from 56 m down to under 2 m on the autocross course
+and eliminated the late-corner SLAM yaw-cascade pattern.
+
+Sim-side: documentation overhaul, GPL-3.0-or-later relicense, auto-
+pull bags onto the host on session-stop, and a `compose-watch`-based
+inner-loop for Python edits without rebuilding the image.
+
 ### Changed
 
 - **Breaking — odometry filter rewritten as a 9-state EKF.**
@@ -210,7 +224,117 @@ shipping pipeline, documentation.
     `docker/`, `pipeline/sim_supervisor/`, `ros2/src/ifssim_bridge/`
     also updated.
 
-### Planned for v0.1.2
+### Added (SLAM + EKF hardening, post-v0.1.0 9-state EKF)
+
+A second wave of autonomy-pipeline fixes landed after the initial EKF
+rewrite. Each is a small change but they compose into the headline
+"`/odom` position drift mid-lap dropped from 56 m to under 2 m on the
+60 s autocross course, integrated yaw error from +19° mean down to
++1.3° mean, and the late-corner SLAM yaw-cascade pattern is gone."
+
+- **`/odom` as a SLAM pose prior** (#545). `cone_graph_slam` adds a
+  `BetweenFactorPose3` on consecutive poses driven by the latest
+  `/odom` delta. Bridges cone-poor windows where the previous IMU-only
+  prior gave the optimizer too much freedom and let it snap to
+  bad cone factors. Anchors the inter-scan pose so cone DA is
+  evaluated against a pose consistent with wheel odometry, not just
+  IMU pre-integration.
+- **Kinematic-bicycle steering BetweenFactor** (#543). A second pose
+  prior derived from `ω = (vx/L)·tan δ`, silent during cornering by
+  design (the slip-gate suppresses the factor when the kinematic
+  bicycle is wrong) but informative on straights — modestly
+  constrains yaw without contributing model error during transients.
+- **Cascade-skip recovery with force-accept threshold** (#541). When
+  the DA-failure cascade detector skips 5+ consecutive scans of cone
+  factors, force-accept the next scan as new-territory exploration.
+  Prevents permanent IMU-only drift when the car enters genuinely new
+  cone geometry (the detector's "everything looks new" signature is
+  ambiguous between cascade and exploration).
+- **Under-observed landmark filter** (#536). `/Conos` (the
+  map-frame cone publication consumed by `path_planning_node`) now
+  excludes landmarks observed fewer than 3 times. Filters single-shot
+  perception artifacts and phantom DA-spawn ghosts. Cone count on
+  /Conos drops from ~130 to ~100 on a clean autocross run; planner
+  sees a more stable map.
+- **EKF stationary-calibration invariant restored** (#534). The
+  3-second post-activate stationary-calibration window had been
+  drifting due to a Phase-3↔4 ordering issue surfaced by the
+  `SetMission`/`RuntimeControl` two-phase split. Restored the
+  per-sample stationarity gate and added a low-`vx` gate on the
+  steering correction (skip when `vx < 3 m/s`, where kinematic-
+  bicycle equilibrium hasn't built up).
+- **Gyro bias freeze + Joseph-form covariance update + slip-aware
+  NHC** (#555). The 9-state EKF's `F[OMEGA, BG_Z] = −1` propagation
+  produces non-zero `P[BG_Z, OMEGA]`, so the standard Kalman update
+  for **any** non-gyro observation (RPM, kinematic-bicycle steering,
+  NHC) leaks into the gyro bias state. Over a 15 s sustained corner
+  `bg_z` walked ±1.8 °/s, integrating into 27° of mid-lap yaw error.
+  Fix is per-correction Schmidt-Kalman partitioning — explicitly
+  zero `K[i]` for every state not legitimately informed by the
+  observation, then use Joseph form
+  `P = (I-K·H)·P·(I-K·H)ᵀ + K·R·Kᵀ` for the covariance update so P
+  stays symmetric and PSD under the modified gain. NHC is now
+  always-on with a slip-aware sigma (tight 0.10 m/s when
+  `!slip_flag`, loose 0.50 m/s when `slip_flag`) — previously it
+  was gated off entirely during slip, letting `vy` run unbounded
+  for half of every autocross lap. Net signal-side result:
+  `/odom` yaw-rate offset on straights drops from +0.526 °/s to
+  +0.046 °/s; peak `/odom`-vs-GT body-frame position drift drops
+  from 56 m to 1.4 m; SLAM cone-DA cascade events are gone in the
+  cascade-pulse scan.
+- **`sigma_bg_walk` 1e-5 → 1e-4** (#539). One-line tune of the
+  gyro-bias random-walk process noise. Loosened to let `bg_z` track
+  in-run drift instead of frozen-bias semantics. Subsumed for
+  practical purposes by #555's Schmidt-Kalman partitioning but
+  kept for the case where bias really does drift physically.
+
+### Added (tooling)
+
+- **`tools/refresh-bridge.sh` stale-volume guard** (#548). The
+  development workflow rebuilds the `dv_pipeline_stack` image and
+  recreates the container — but compose-watch's named source
+  volumes persist across both, leading to a silent failure where
+  source edits were rebuilt but the running container still saw
+  the previous content. Fixed in two parts: drop the named source
+  volumes after `compose build`, and verify post-recreate that the
+  container's source matches the host (sha256, three canary files
+  in odometry_filter + cone_slam). Aborts non-zero if any canary
+  doesn't match.
+- **`tools/replay.sh` fix-up** (#547). Stale executable names
+  (`ros2 run slam Cone_Detection` etc.) updated to the post-#530-
+  revert names (`cone_detection cone_detection_node`,
+  `cone_slam slam_node`, `path_planning path_planning_node`,
+  `control control_node`). Added explicit lifecycle transitions
+  since `mode_manager` doesn't run in replay. Topic rename
+  `/cone_slam/state` → `/slam/pose` (per #382) applied to the
+  comparator and recorder topic lists.
+- **Lichtblick layouts: integrated yaw drift + per-axis SLAM-vs-GT
+  plots** (#537). Two new userNodes / panels in `clean_bag_replay`
+  and `slam_debug` for diagnosing the yaw-integration and per-axis
+  drift modes addressed by #555.
+
+### Reverted
+
+- **`slam: two-phase rewrite (#530)` reverted in #531.** The
+  architecture couldn't be validated end-to-end on bag `_211619`
+  before the EKF-stack work landed (`/odom` drift made the
+  rewrite's cone DA cascade indistinguishable from baseline). The
+  legacy `cone_graph_slam_node` entry-point retained on dev as the
+  shipping SLAM. The two-phase rewrite branch is preserved under
+  `origin/feat/slam-two-phase-rewrite` for future revival once
+  `/odom` is healthy enough to validate the architecture in
+  isolation.
+
+### Fixed
+
+- **mc-backend: stream bag tarball to disk in auto-pull; fix UI
+  badge** (#528). Large bags would OOM `mc_backend` when
+  `container.get_archive` was buffered in-memory. Now streamed to
+  a temp file with chunked extraction. UI badge for "Bag pulled
+  to host" now reflects the actual extraction result instead of
+  going stale on streaming failures.
+
+### Planned for v0.1.3
 
 - **Cone-floor clipping fix.** Spline-spawned cones currently sit a
   few cm into the asphalt on every track because the spline control
@@ -219,8 +343,21 @@ shipping pipeline, documentation.
   `docs/cone_floor_clipping_fix.md`; fix is a line-trace ground-snap
   in the `spline_cones*` BP construction script (~1 h editor work).
   Visual + LiDAR-perf impact (bottom rings of close cones get
-  occluded by the floor mesh). Deferred from v0.1.0 / v0.1.1 because
-  the autonomy logic isn't affected. Tracking: #483.
+  occluded by the floor mesh). Deferred from v0.1.0 / v0.1.1 /
+  v0.1.2 because the autonomy logic isn't affected. Tracking: #483.
+- **Adaptive cone DA / cascade hardening.** PR #555's signal-side
+  cleanup made `/odom` an honest pose source, but the late-corner
+  cone-DA still cascades when the car re-enters a region with cones
+  visible from a different angle (autocross is open-line, not a
+  closed loop — there is no loop closure to lean on here). Pose
+  drifts ~1 m past the 1.0 m Euclidean DA gate, all observations
+  look new, cascade-skip-recovery dumps duplicate landmarks into
+  the persistent map. Experimental branches were explored this
+  release cycle (Mahalanobis DA, cascade percentage-gate
+  tightening, per-scan new-landmark rate cap); none reliably
+  helped on the validation bag. Real fix likely combines a tighter
+  proximity-veto envelope that scales with recent pose uncertainty
+  plus a cap on new-landmark commits per scan.
 
 ## [0.1.1] — 2026-05-14
 
