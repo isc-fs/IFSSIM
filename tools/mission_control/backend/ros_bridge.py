@@ -24,14 +24,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Mirrors pipeline/mode_manager/mode_manager/mode_registry.py
-_MISSION_NAME_TO_ID: dict[str, int] = {
-    "trackdrive": 1,
-    "autocross": 2,
-    "accel": 3,
-    "skidpad": 4,
-    "scruti": 5,
-}
+import mission_catalog as _mission_catalog
 
 _MC_SET_MISSION_ACTION = "/mission_control_node/set_mission"
 _MC_RUNTIME_CONTROL_ACTION = "/mission_control_node/runtime_control"
@@ -235,13 +228,13 @@ class RosBridge:
         if mission == "":
             mission_id = 0
         else:
-            mission_id = _MISSION_NAME_TO_ID.get(mission)
+            mission_id = _mission_catalog.mission_name_to_id().get(mission)
             if mission_id is None:
                 return SetMissionOutcome(
                     success=False,
                     message=(
-                        f"unknown mission {mission!r}; expected one of "
-                        f"{sorted(_MISSION_NAME_TO_ID.keys())}"
+                        f"unknown pipeline mission {mission!r}; expected one of "
+                        f"{sorted(_mission_catalog.mission_name_to_id().keys())}"
                     ),
                 )
 

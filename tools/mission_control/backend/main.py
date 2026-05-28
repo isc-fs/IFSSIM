@@ -33,18 +33,10 @@ from scoring import compute_scoring
 # test suite can drive subprocess calls with mocks. See bag_recorder.py
 # for the orchestration contract this module relies on.
 import bag_recorder as _bag
+import benchmark_control_runner as _benchmark
+import mission_catalog as _missions
 from ros_bridge import RosBridge, StartMissionOutcome
 
-
-# Map the backend's event_type strings (sourced from BUILTIN_TRACKS
-# and the EventSetup model — "acceleration"/"skidpad"/"autocross"/
-# "trackdrive") to the action-spec mission names accepted by
-# mode_manager (VALID_MISSIONS = {trackdrive, autocross, accel,
-# skidpad}). The only translation is "acceleration" → "accel"; the
-# others pass through. Keeping this mapping at the backend boundary
-# rather than aligning the action spec means the user-facing event
-# type stays FS-Rules-canonical ("Acceleration") while the wire
-# protocol stays compact.
 
 # Wall-clock wait between RuntimeControl (autonomy activate) and EBS
 # release. odometry_filter's on_activate runs a stationary bias-
@@ -62,13 +54,6 @@ _EKF_CAL_WAIT_S = 3.5
 # reorder alone won't fix yaw drift.
 _EKF_CAL_POLL_S = 0.5
 
-
-_EVENT_TO_MISSION = {
-    "acceleration": "accel",
-    "skidpad":      "skidpad",
-    "autocross":    "autocross",
-    "trackdrive":   "trackdrive",
-}
 
 # Built-in tracks that ship with the simulator — not deletable, auto-configure event type
 BUILTIN_TRACKS = {
@@ -334,7 +319,10 @@ _active_recording: Optional[dict] = None
 # === Pydantic Models ===
 
 class EventSetup(BaseModel):
-    event_type: str
+    # Pipeline mode name from GET /api/pipeline/missions (preferred).
+    mission: Optional[str] = None
+    # Legacy alias — FS referee event name ("acceleration", …).
+    event_type: Optional[str] = None
     num_laps: int = 10
     # #465 — optional bag-record toggle. Default False so a missing or
     # legacy client (UI without the checkbox, or a script call) never
@@ -343,6 +331,24 @@ class EventSetup(BaseModel):
     # pipeline container after autonomy is up, and pipeline_stop /
     # any equivalent session-stop tears it down + copies the bag out.
     record_bag: bool = False
+
+
+def _resolve_mission(setup: EventSetup) -> str:
+    if setup.mission:
+        return setup.mission.strip()
+    if setup.event_type:
+        return _missions.mission_for_sim_event(setup.event_type.strip())
+    return "trackdrive"
+
+
+def _resolve_mission_spec(setup: EventSetup):
+    spec = _missions.get_mission(_resolve_mission(setup))
+    if spec is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown mission {_resolve_mission(setup)!r}",
+        )
+    return spec
 
 class TrackGenerate(BaseModel):
     n_points: int = 50
@@ -498,6 +504,12 @@ def sim_reset():
 
 # === Event Control ===
 
+@app.get("/api/pipeline/missions")
+def pipeline_missions():
+    """Pipeline + sim-only missions for the Event UI."""
+    return {"missions": _missions.missions_for_api()}
+
+
 @app.get("/api/event/state")
 def event_state():
     try:
@@ -524,13 +536,15 @@ def event_state():
 @app.post("/api/event/set", dependencies=[Depends(require_api_key)])
 def event_set(setup: EventSetup):
     global current_event
+    spec = _resolve_mission_spec(setup)
+    sim_event = spec.sim_event_type
     try:
-        result = sim.set_event(setup.event_type, setup.num_laps)
+        result = sim.set_event(sim_event, setup.num_laps)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    current_event = setup.event_type
+    current_event = sim_event
     _save_state({"event": current_event})
-    log_event("event_set", f"{setup.event_type} ({setup.num_laps} laps)")
+    log_event("event_set", f"{spec.name} / {sim_event} ({setup.num_laps} laps)")
     return result
 
 @app.post("/api/event/start", dependencies=[Depends(require_api_key)])
@@ -573,6 +587,9 @@ def event_start(setup: EventSetup):
     already in progress.
     """
     global current_event, res_active, _session_starting
+    spec = _resolve_mission_spec(setup)
+    mission_name = spec.name
+    sim_event = spec.sim_event_type
     if not sim.is_connected():
         return JSONResponse({"ok": False, "error": "Simulator not connected"}, status_code=503)
     # Refuse to start a session if no track is loaded into UE5. Without
@@ -616,26 +633,70 @@ def event_start(setup: EventSetup):
                 # always calibrates on truly motionless IMU.
                 sim.res_activate()
                 res_active = True
-                sim.set_event(setup.event_type, setup.num_laps)
+                sim.set_event(sim_event, setup.num_laps)
                 sim.resume()
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-        # === Phase 2: prepare autonomy via SetMission (NO LOCK) ===
-        if _ros_bridge_available:
-            mission = _EVENT_TO_MISSION.get(setup.event_type, "trackdrive")
-            if setup.event_type not in _EVENT_TO_MISSION:
+        # === Sim-only benchmark control (no autonomy pipeline) ===
+        if spec.kind == "sim_benchmark_control":
+            if not current_track:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Load a track before starting benchmark control",
+                    },
+                    status_code=400,
+                )
+            track_csv = os.path.join(TRACKS_DIR, current_track)
+            if _ros_bridge_available:
+                try:
+                    RosBridge.get().stop_mission()
+                except Exception as ex:
+                    log_event(
+                        "event_start",
+                        f"benchmark_control: autonomy stop (continuing): {ex}",
+                    )
+            bench = _benchmark.start(track_csv)
+            if not bench.get("ok"):
+                return JSONResponse(
+                    {"ok": False, "error": bench.get("error", "benchmark start failed")},
+                    status_code=502,
+                )
+            with _state_lock:
+                try:
+                    sim.res_release()
+                    res_active = False
+                    try:
+                        sim._cmd("enableApiControl 1")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    _benchmark.stop()
+                    return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+                current_event = sim_event
+                _save_state({"event": current_event})
                 log_event(
                     "event_start",
-                    f"unknown event {setup.event_type!r}; defaulting mission "
-                    f"to 'trackdrive'",
+                    f"benchmark_control started on {current_track} "
+                    f"(pids={bench.get('pids')})",
                 )
+            return {
+                "ok": True,
+                "mission": mission_name,
+                "event": sim_event,
+                "mode": "benchmark_control",
+                "centerline_csv": bench.get("centerline_csv"),
+            }
+
+        # === Phase 2: prepare autonomy via SetMission (NO LOCK) ===
+        if _ros_bridge_available:
             log_event(
                 "event_start",
-                f"SetMission(mission={mission!r}) — configure only, "
+                f"SetMission(mission={mission_name!r}) — configure only, "
                 f"can take 10–20 s",
             )
-            prep = RosBridge.get().set_mission(mission)
+            prep = RosBridge.get().set_mission(mission_name)
             if not prep.success:
                 with _state_lock:
                     try:
@@ -756,7 +817,7 @@ def event_start(setup: EventSetup):
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
         with _state_lock:
-            current_event = setup.event_type
+            current_event = sim_event
             _save_state({"event": current_event})
             # The plugin's SetEventType clamps lap counts per event
             # type (Acceleration/Autocross → 1, Skidpad → 4,
@@ -768,7 +829,10 @@ def event_start(setup: EventSetup):
                 actual_laps = int(ref.get("required_laps", setup.num_laps))
             except Exception:
                 actual_laps = setup.num_laps
-            log_event("event_start", f"{setup.event_type} started ({actual_laps} laps)")
+            log_event(
+                "event_start",
+                f"{mission_name} started ({actual_laps} laps)",
+            )
 
             # #465 — optional bag-record. Strictly post-autonomy-up so
             # the recording window matches the lap, not the
@@ -791,7 +855,7 @@ def event_start(setup: EventSetup):
                         log_event("record_bag", f"prior-stop failed: {ex}")
                     _active_recording = None
 
-                bag_name = _bag.compose_bag_name(setup.event_type, current_track)
+                bag_name = _bag.compose_bag_name(sim_event, current_track)
                 start_resp = _bag.request_start(RosBridge.get(), bag_name)
                 if start_resp.get("ok"):
                     _active_recording = {
@@ -824,7 +888,8 @@ def event_start(setup: EventSetup):
 
         response = {
             "ok": True,
-            "event": setup.event_type,
+            "mission": mission_name,
+            "event": sim_event,
             "laps": actual_laps,
             "autonomy_via": "ros_action" if _ros_bridge_available else "flag_file_legacy",
         }
@@ -916,8 +981,7 @@ def pipeline_start():
     that returns success immediately.
 
     Mission selection: derived from `current_event` via
-    _EVENT_TO_MISSION. Defaults to "trackdrive" when the current
-    event is unknown — matches the most common dev scenario.
+    ``mission_catalog.mission_for_sim_event``.
 
     Pre-#381 a flag-file fallback existed for envs without rclpy;
     that path was retired alongside entrypoint.sh's polling loop.
@@ -934,12 +998,12 @@ def pipeline_start():
 
     with _state_lock:
         event_snap = current_event
-    mission = _EVENT_TO_MISSION.get(event_snap, "trackdrive")
-    if event_snap not in _EVENT_TO_MISSION:
-        log_event(
-            "pipeline",
-            f"unknown event {event_snap!r}; defaulting mission "
-            f"to 'trackdrive'",
+    mission = _missions.mission_for_sim_event(event_snap)
+    spec = _missions.get_mission(mission)
+    if spec is None or spec.kind != "pipeline":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"pipeline start not valid for mission {mission!r}",
         )
 
     log_event(
@@ -967,6 +1031,11 @@ def pipeline_start():
 @app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
     """Tear down: cancel RuntimeControl, then SetMission(mission_id=0)."""
+    if _benchmark.is_running():
+        _benchmark.stop()
+        log_event("benchmark_control", "stopped benchmark control processes")
+        return {"ok": True, "pipeline": "stopped", "mode": "benchmark_control"}
+
     if not _ros_bridge_available:
         # No flag-file fallback post-#381; nothing to stop if rclpy
         # isn't available (the autonomy can only run via the action
