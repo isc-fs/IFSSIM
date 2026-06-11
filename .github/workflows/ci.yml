@@ -41,6 +41,13 @@ jobs:
           # Bridge build doesn't need LFS-tracked binary assets; skip
           # the large .uasset / mesh fetch.
           lfs: false
+          # fs_msgs now lives in the IFS08-DV-PIPELINE submodule at
+          # pipeline/ (the autonomy pipeline was extracted to its own
+          # repo). ifssim_bridge depends on fs_msgs's generated message
+          # types, so the submodule must be checked out to build the
+          # bridge. IFS08-DV-PIPELINE is public, so the default
+          # GITHUB_TOKEN fetches it fine — no extra credentials needed.
+          submodules: recursive
 
       - name: Install build deps
         run: |
@@ -63,9 +70,12 @@ jobs:
         shell: bash
         run: |
           source /opt/ros/humble/setup.bash
-          cd ros2
+          # fs_msgs is now under the pipeline submodule (pipeline/fs_msgs);
+          # ifssim_bridge stays in ros2/src. Point colcon at both base
+          # paths and let it topologically order fs_msgs before the bridge.
           colcon build \
             --packages-select fs_msgs ifssim_bridge \
+            --base-paths ros2/src pipeline \
             --cmake-args -DCMAKE_BUILD_TYPE=Release
 
   # ---------------------------------------------------------------

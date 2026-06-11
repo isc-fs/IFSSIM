@@ -61,11 +61,23 @@ git submodule update --init --recursive
 ```
 
 The `git submodule update --init --recursive` is **not optional** —
-`tools/random-track-generator` is a submodule and the
-`mission_control_backend` Docker image bakes it in at build time.
-Skipping this step makes track generation 500 at runtime; pre-v0.1.1
-it silently appeared to work because the bind-mount hid the empty
-directory.
+there are two submodules and skipping it breaks the build:
+
+- **`pipeline/`** → [`isc-fs/IFS08-DV-PIPELINE`](https://github.com/isc-fs/IFS08-DV-PIPELINE),
+  the driverless autonomy pipeline (cone detection, SLAM, planning,
+  control, EKF, mission/mode management). The `dv_pipeline_stack`
+  Docker image builds the whole ROS 2 workspace from it; without it
+  there is **no autonomy** at all.
+- **`tools/random-track-generator`** → baked into the
+  `mission_control_backend` image at build time; skipping it makes
+  track generation 500 at runtime.
+
+Pre-v0.1.2 the pipeline lived in-tree under `pipeline/`; it was
+extracted to its own repo so the real-car stack (IFS08-DV) can share
+the same autonomy code. `pipeline/` is pinned to a specific
+`IFS08-DV-PIPELINE` commit on its `dev` branch — bump it deliberately
+with `git -C pipeline fetch && git -C pipeline checkout <sha>` then
+commit the new gitlink.
 
 ### Windows: where you clone matters
 
