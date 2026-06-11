@@ -104,13 +104,30 @@ done
 echo "→ verifying container source == host source (post-recreate)"
 CANARIES=(
     "pipeline/odometry_filter/include/odometry_filter/odometry_filter.hpp"
+    "pipeline/odometry_filter/src/odometry_filter.cpp"
+    "pipeline/odometry_filter_node/src/odometry_filter_node.cpp"
     "pipeline/cone_slam/cone_slam/data_association.py"
     "pipeline/cone_slam/cone_slam/cone_graph_slam_node.py"
+    "pipeline/cone_slam/cone_slam/factor_graph.py"
+    "pipeline/control/control/control_node.py"
+    "pipeline/control/control/controllers/pure_pursuit.py"
+    "pipeline/control/control/controllers/stanley.py"
+    "pipeline/control/control/controllers/pi_velocity.py"
+    "pipeline/path_planning/path_planning/path_planning.py"
+    "pipeline/path_planning/path_planning/fasttube_adapter.py"
+    "pipeline/cone_detection/cone_detection/cone_detection_node.py"
+    # sim_supervisor + ifssim_bridge live in ros2/src (not the pipeline
+    # submodule); fs_msgs moved INTO the submodule (pipeline/fs_msgs).
+    "ros2/src/sim_supervisor/sim_supervisor/sim_supervisor_node.py"
+    "pipeline/mode_manager/mode_manager/mode_registry.py"
 )
 STALE=0
 for f in "${CANARIES[@]}"; do
     if [[ ! -f "$f" ]]; then continue; fi
-    target="/dv_pipeline_stack_ws/src/${f#pipeline/}"
+    # Host paths are prefixed pipeline/ (submodule) or ros2/src/; both
+    # collapse to /dv_pipeline_stack_ws/src/<pkg>/... in the container.
+    rel="${f#pipeline/}"; rel="${rel#ros2/src/}"
+    target="/dv_pipeline_stack_ws/src/${rel}"
     container_sha=$(docker exec ifssim-dv_pipeline_stack-1 \
         sha256sum "$target" 2>/dev/null | awk '{print $1}')
     host_sha=$(sha256sum "$f" 2>/dev/null | awk '{print $1}')
