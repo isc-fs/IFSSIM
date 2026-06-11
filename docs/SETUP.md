@@ -67,9 +67,7 @@ there are two submodules and skipping it breaks the build:
   the driverless autonomy pipeline (cone detection, SLAM, planning,
   control, EKF, mission/mode management). The `dv_pipeline_stack`
   Docker image builds the whole ROS 2 workspace from it; without it
-  there is **no autonomy** at all. This repo is **private** — your
-  git credentials need read access to the `isc-fs` org, or the clone
-  of this submodule will fail.
+  there is **no autonomy** at all.
 - **`tools/random-track-generator`** → baked into the
   `mission_control_backend` image at build time; skipping it makes
   track generation 500 at runtime.

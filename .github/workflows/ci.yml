@@ -45,13 +45,9 @@ jobs:
           # pipeline/ (the autonomy pipeline was extracted to its own
           # repo). ifssim_bridge depends on fs_msgs's generated message
           # types, so the submodule must be checked out to build the
-          # bridge. IFS08-DV-PIPELINE is PRIVATE, so the default
-          # GITHUB_TOKEN cannot fetch it cross-repo — add an org PAT
-          # with repo:read as the secret PIPELINE_SUBMODULE_PAT. The
-          # `||` falls back to the default token (works only if org
-          # settings grant the Actions token cross-repo read).
+          # bridge. IFS08-DV-PIPELINE is public, so the default
+          # GITHUB_TOKEN fetches it fine — no extra credentials needed.
           submodules: recursive
-          token: ${{ secrets.PIPELINE_SUBMODULE_PAT || github.token }}
 
       - name: Install build deps
         run: |
