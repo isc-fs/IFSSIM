@@ -23,6 +23,12 @@
 .git
 .gitattributes
 .gitmodules
+# Nested .git — the pipeline/ submodule has a .git gitlink file that
+# `COPY pipeline/ src/` would otherwise drop into the colcon workspace.
+**/.git
+# The pipeline submodule ships its own README at its root; it's not a
+# ROS package so colcon ignores it, but keep it out of the image src/.
+pipeline/README.md
 
 # ---- UE5 build/cooked output (5+ GB combined) ----
 # Saved/ holds StagedBuilds (the packaged .app), logs, AutoSaves,

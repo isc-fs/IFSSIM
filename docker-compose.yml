@@ -250,7 +250,7 @@ services:
           target: /dv_pipeline_stack_ws/src/bag_recorder_node
           ignore: *ros_source_watch_ignore
         - action: sync
-          path: ./ros2/src/fs_msgs
+          path: ./pipeline/fs_msgs
           target: /dv_pipeline_stack_ws/src/fs_msgs
           ignore: *ros_source_watch_ignore
         - action: sync
@@ -294,7 +294,7 @@ services:
           target: /dv_pipeline_stack_ws/src/odometry_filter_node
           ignore: *ros_source_watch_ignore
         - action: sync
-          path: ./pipeline/sim_supervisor
+          path: ./ros2/src/sim_supervisor
           target: /dv_pipeline_stack_ws/src/sim_supervisor
           ignore: *ros_source_watch_ignore
     # Runtime peaks are host-dependent on Windows/WSL2, especially

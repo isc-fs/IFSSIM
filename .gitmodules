@@ -1,3 +1,6 @@
 [submodule "tools/random-track-generator"]
 	path = tools/random-track-generator
 	url = https://github.com/MITMotorsports/random-track-generator
+[submodule "pipeline"]
+	path = pipeline
+	url = https://github.com/isc-fs/IFS08-DV-PIPELINE.git
