@@ -367,6 +367,54 @@ def odom_for_lidar_scan(
     return odom_at_time(odom_msgs, scan_t_ns + offset_ns)
 
 
+def gt_cone_range_m(cone: Cone2D) -> float:
+    """Euclidean distance from ego (base_link origin) to a body-frame GT cone."""
+    return math.hypot(cone.x, cone.y)
+
+
+def match_range_err_pairs(frames: list[FrameMetrics]) -> list[tuple[float, float]]:
+    """(GT range m, match error m) for every matched pair across frames."""
+    out: list[tuple[float, float]] = []
+    for fm in frames:
+        for m in fm.matches:
+            g = fm.gt_cones[m.gt_idx]
+            out.append((gt_cone_range_m(g), m.err_m))
+    return out
+
+
+def summarize_error_by_range(
+    pairs: list[tuple[float, float]],
+    *,
+    bin_width_m: float = 2.0,
+    max_range_m: float | None = None,
+) -> list[dict[str, float | int]]:
+    """Bin matched pairs by GT cone distance; report mean/median error per bin."""
+    if not pairs or bin_width_m <= 0.0:
+        return []
+    if max_range_m is None:
+        max_range_m = max(r for r, _ in pairs)
+    n_bins = max(1, int(math.ceil(max_range_m / bin_width_m)))
+    by_bin: list[list[float]] = [[] for _ in range(n_bins)]
+    for r, err in pairs:
+        idx = min(n_bins - 1, int(r // bin_width_m))
+        by_bin[idx].append(err)
+    out: list[dict[str, float | int]] = []
+    for i, errs in enumerate(by_bin):
+        if not errs:
+            continue
+        lo = i * bin_width_m
+        out.append(
+            {
+                "bin_lo_m": lo,
+                "bin_hi_m": lo + bin_width_m,
+                "count": len(errs),
+                "mean_err_m": sum(errs) / len(errs),
+                "median_err_m": median(errs),
+            }
+        )
+    return out
+
+
 def summarize_match_bias(frames: list[FrameMetrics]) -> dict[str, float]:
     """Mean pred−GT offset over matched pairs (detects systematic BEV shift)."""
     dx: list[float] = []

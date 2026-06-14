@@ -628,8 +628,21 @@ def _chart_guide_html() -> str:
         ),
         (
             "IMU-only position error",
-            "Same OdometryFilter predict step as the EKF, but motor-RPM corrections are disabled — "
+            "Same EKF predict step as the full filter, but RPM/steering corrections are disabled — "
             "error after each IMU tick vs interpolated GT.",
+        ),
+        (
+            "Longitudinal velocity (vx) — EKF vs IMU-only vs wheel",
+            "Body-frame forward speed from each estimator at IMU rate. Wheel sets "
+            "<code>vx = rpm·k</code>; IMU-only integrates accel only (no RPM anchor), so "
+            "<code>vx</code> often fails to return to zero under braking and biases high — "
+            "the usual reason the IMU-only path is longer than wheel/steering.",
+        ),
+        (
+            "Cumulative path length (aligned frame)",
+            "Integrated step distance along each reconstructed trajectory vs GT. "
+            "Diverging IMU-only length with similar GT and wheel curves confirms "
+            "longitudinal drift, not a scale bug on the wheel model.",
         ),
         (
             "Worst moments tables",
@@ -645,6 +658,34 @@ def _load_pose_steps(path: Path) -> list[dict[str, str]]:
         return []
     with path.open(newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+def _cumulative_path_length(
+    rows: list[dict[str, str]],
+    prefix: str,
+    *,
+    event: str = "imu",
+) -> tuple[list[float], list[float]]:
+    """Integrate aligned-frame step distance for one pose prefix (IMU steps only)."""
+    t_out: list[float] = []
+    len_out: list[float] = []
+    cum = 0.0
+    prev_x: float | None = None
+    prev_y: float | None = None
+    for row in rows:
+        if row.get("event") != event:
+            continue
+        xv = row.get(f"{prefix}_x", "")
+        yv = row.get(f"{prefix}_y", "")
+        if not xv or xv == "nan" or not yv or yv == "nan":
+            continue
+        x, y = float(xv), float(yv)
+        if prev_x is not None:
+            cum += math.hypot(x - prev_x, y - prev_y)
+        prev_x, prev_y = x, y
+        t_out.append(float(row["t_s"]))
+        len_out.append(cum)
+    return t_out, len_out
 
 
 def _series_from_steps(
@@ -767,8 +808,8 @@ def render_slam_html(summary: dict[str, Any], run_dir: Path) -> str:
         )
     elif odom_src == "synthesized":
         warns.append(
-            "<code>/odom</code> was rebuilt offline from IMU/RPM/steering/brake "
-            "(sim_supervisor <code>OdometryFilter</code>), not read from the bag."
+            "<code>/odom</code> was rebuilt offline from IMU/RPM/steering with the "
+            "production 9-state EKF (<code>OdometryFilterCpp</code>), not read from the bag."
         )
     warn_html = (
         "<div class='warn'>" + "<br>".join(warns) + "</div>" if warns else ""
@@ -779,6 +820,7 @@ def render_slam_html(summary: dict[str, Any], run_dir: Path) -> str:
         f"<p class='subtitle'>GT cones from latched track, injected on <code>{trigger}</code>; "
         f"gate {summary.get('gt_min_range_m', 0.5)}–{summary.get('gt_range_m', 20.0)} m, "
         f"±{summary.get('gt_hfov_deg', 60.0)}° H-FOV; "
+        f"scan offset {summary.get('gt_scan_center_frac', 0.0)} periods; "
         f"<code>/odom</code> source: {odom_src}</p>"
     )
 
@@ -789,8 +831,10 @@ def render_slam_html(summary: dict[str, Any], run_dir: Path) -> str:
 <strong>Filter</strong> (<code>/odom</code>) already lives in a local odom frame (integrated from zero at filter calibration);
 it is re-expressed relative to the filter pose at SLAM calibration so it can be compared to GT-aligned coordinates
 (do not apply the ENU alignment transform to filter states).
-<strong>IMU-only</strong> uses the same predict step but skips RPM corrections.
-<strong>Wheel + steering</strong> is kinematic-bicycle integration from motor RPM and steering only (no IMU).
+<strong>IMU-only</strong> uses the same EKF predict step but skips RPM/steering — expect a
+<strong>longer</strong> path than wheel/steering because <code>vx</code> is not wheel-anchored
+(accel bias and residual speed integrate into extra distance). See the vx and cumulative-length charts.
+<strong>Wheel + steering</strong> sets <code>vx = rpm·k</code> and integrates yaw from steering kinematics (no IMU).
 <strong>SLAM</strong> poses are already in the GT-aligned frame. One row per IMU tick after filter calibration;
 <code>filter_err_delta_m</code> is the change in filter position error since the previous IMU.
 SLAM only commits on cone/LiDAR triggers — “held” traces sample the last commit on the GT odom timeline.
@@ -806,6 +850,10 @@ Download <code>pose_steps.csv</code> for the full log.</p>
     stats_html += _stats_block(
         "IMU-only predict vs GT (per IMU, no corrections)",
         summary.get("imu_only_odom") or {},
+    )
+    stats_html += _stats_block(
+        "Wheel + steering vs GT (per IMU)",
+        summary.get("wheel_odom") or {},
     )
     stats_html += _stats_block(
         "Recorded /odom vs GT",
@@ -843,8 +891,9 @@ Download <code>pose_steps.csv</code> for the full log.</p>
     if steps:
         charts += (
             "<h2>Odometry filter (IMU + RPM EKF) vs perfect GT</h2>"
-            "<p class='section-intro'>Dead-reckoning replay of <code>sim_supervisor</code>'s "
-            "OdometryFilter — one sample per IMU tick after calibration. All errors are position "
+            "<p class='section-intro'>Dead-reckoning replay of the production 9-state EKF "
+            "(<code>odometry_filter_node</code>, ported as <code>OdometryFilterCpp</code>) — "
+            "one sample per IMU tick after calibration. All errors are position "
             "distance to interpolated perfect GT in the aligned frame.</p>"
         )
         t_imu, e_imu = _series_from_steps(
@@ -1068,9 +1117,10 @@ Download <code>pose_steps.csv</code> for the full log.</p>
         if t_io:
             charts += (
                 "<h2>IMU-only dead reckoning (predict, no corrections)</h2>"
-                "<p class='section-intro'>Same <code>OdometryFilter</code> calibration and "
-                "IMU integration as the EKF replay, but <code>push_rpm</code> is never called — "
-                "isolates drift from accel/yaw integration alone.</p>"
+                "<p class='section-intro'>Same EKF calibration and predict step "
+                "(<code>OdometryFilterCpp</code>) as the EKF replay, but <code>push_rpm</code> "
+                "and steering are never fed — isolates drift from accel/yaw integration "
+                "(plus the non-holonomic vy constraint) alone.</p>"
             )
             charts += _svg_multi_series(
                 [("IMU-only error (m)", t_io, e_io, _SERIES_COLORS["imu_only_err"])],
@@ -1089,6 +1139,77 @@ Download <code>pose_steps.csv</code> for the full log.</p>
                     _SERIES_COLORS["imu_only_err"],
                 )
 
+            t_werr, e_werr = _series_from_steps(
+                steps, event="imu", x_col="t_s", y_col="wheel_err_m",
+            )
+            if t_werr:
+                charts += _svg_multi_series(
+                    [("Wheel + steering error (m)", t_werr, e_werr, _SERIES_COLORS["wheel"])],
+                    "Wheel + steering position error",
+                    "m",
+                )
+
+            t_fvx, fvx = _series_from_steps(
+                steps, event="imu", x_col="t_s", y_col="filter_vx",
+            )
+            t_ivx, ivx = _series_from_steps(
+                steps, event="imu", x_col="t_s", y_col="imu_only_vx",
+            )
+            t_wvx, wvx = _series_from_steps(
+                steps, event="imu", x_col="t_s", y_col="wheel_vx",
+            )
+            vx_series: list[tuple[str, list[float], list[float], str]] = []
+            if t_fvx:
+                vx_series.append(("EKF vx", t_fvx, fvx, _SERIES_COLORS["filter"]))
+            if t_ivx:
+                vx_series.append(("IMU-only vx", t_ivx, ivx, _SERIES_COLORS["imu_only"]))
+            if t_wvx:
+                vx_series.append(("Wheel vx", t_wvx, wvx, _SERIES_COLORS["wheel"]))
+            if vx_series:
+                charts += _svg_multi_series(
+                    vx_series,
+                    "Longitudinal velocity — EKF vs IMU-only vs wheel",
+                    "m/s",
+                )
+
+            t_gt_len, gt_len = _cumulative_path_length(steps, "gt")
+            t_io_len, io_len = _cumulative_path_length(steps, "imu_only")
+            t_wh_len, wh_len = _cumulative_path_length(steps, "wheel")
+            t_f_len, f_len = _cumulative_path_length(steps, "filter")
+            len_series: list[tuple[str, list[float], list[float], str]] = []
+            if t_gt_len:
+                len_series.append(("GT path length", t_gt_len, gt_len, _SERIES_COLORS["gt"]))
+            if t_io_len:
+                len_series.append(
+                    ("IMU-only path length", t_io_len, io_len, _SERIES_COLORS["imu_only"]),
+                )
+            if t_wh_len:
+                len_series.append(
+                    ("Wheel path length", t_wh_len, wh_len, _SERIES_COLORS["wheel"]),
+                )
+            if t_f_len:
+                len_series.append(
+                    ("EKF path length", t_f_len, f_len, _SERIES_COLORS["filter"]),
+                )
+            if len_series:
+                charts += _svg_multi_series(
+                    len_series,
+                    "Cumulative path length (why IMU-only can look longer)",
+                    "m",
+                )
+                if gt_len and io_len and wh_len:
+                    charts += (
+                        f"<p class='caption'>End of run — GT: {_fmt_tick(gt_len[-1])} m, "
+                        f"IMU-only: {_fmt_tick(io_len[-1])} m, "
+                        f"wheel: {_fmt_tick(wh_len[-1])} m"
+                        + (
+                            f", EKF: {_fmt_tick(f_len[-1])} m"
+                            if f_len
+                            else ""
+                        )
+                        + ".</p>"
+                    )
+
         charts += "<h2>Worst moments</h2>"
         charts += "<h3>Filter (IMU steps)</h3>"
         charts += _worst_moments_table(
@@ -1100,6 +1221,11 @@ Download <code>pose_steps.csv</code> for the full log.</p>
             charts += _worst_moments_table(
                 [r for r in steps if r.get("event") == "imu"],
                 "imu_only_err_m",
+            )
+            charts += "<h3>Wheel + steering (IMU steps)</h3>"
+            charts += _worst_moments_table(
+                [r for r in steps if r.get("event") == "imu"],
+                "wheel_err_m",
             )
         charts += "<h3>SLAM (cone commits)</h3>"
         charts += _worst_moments_table(

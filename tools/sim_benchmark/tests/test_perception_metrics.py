@@ -12,10 +12,14 @@ from perception_metrics import (
     Cone2D,
     WorldCone,
     cone_in_lidar_fov,
+    evaluate_frame,
     filter_cones_in_fov,
+    gt_cone_range_m,
     latch_track_layout,
+    match_range_err_pairs,
     odom_at_time,
     odom_for_lidar_scan,
+    summarize_error_by_range,
     track_at_or_before,
     track_cones_to_body,
     world_cones_to_body,
@@ -152,6 +156,34 @@ class OdomForLidarScanTest(unittest.TestCase):
         )
         assert end is not None
         self.assertAlmostEqual(end.pose.pose.position.x, 10.0)
+
+
+class ErrorByRangeTest(unittest.TestCase):
+    def test_gt_cone_range(self) -> None:
+        self.assertAlmostEqual(gt_cone_range_m(Cone2D(3.0, 4.0)), 5.0)
+
+    def test_summarize_error_by_range(self) -> None:
+        pairs = [(1.0, 0.1), (1.5, 0.3), (5.0, 0.5), (5.5, 0.7)]
+        bins = summarize_error_by_range(pairs, bin_width_m=2.0, max_range_m=8.0)
+        self.assertEqual(len(bins), 2)
+        self.assertAlmostEqual(bins[0]["bin_lo_m"], 0.0)
+        self.assertAlmostEqual(bins[0]["mean_err_m"], 0.2)
+        self.assertAlmostEqual(bins[1]["bin_lo_m"], 4.0)
+        self.assertAlmostEqual(bins[1]["mean_err_m"], 0.6)
+
+    def test_match_range_err_pairs_from_frames(self) -> None:
+        fm = evaluate_frame(
+            t_s=0.0,
+            latency_ms=0.0,
+            n_points=100,
+            pred=[Cone2D(5.05, 0.0), Cone2D(10.1, 0.0)],
+            gt=[Cone2D(5.0, 0.0), Cone2D(10.0, 0.0)],
+            gate_m=1.5,
+        )
+        pairs = match_range_err_pairs([fm])
+        self.assertEqual(len(pairs), 2)
+        self.assertAlmostEqual(pairs[0][0], 5.0)
+        self.assertAlmostEqual(pairs[1][0], 10.0)
 
 
 class OdomAtTimeTest(unittest.TestCase):

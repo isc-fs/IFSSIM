@@ -24,6 +24,7 @@ from perception_metrics import (
     aggregate_metrics,
     evaluate_frame,
     filter_cones_in_fov,
+    gt_cone_range_m,
     latch_track_layout,
     msg_time_ns,
     DEFAULT_LIDAR_SCAN_PERIOD_NS,
@@ -413,6 +414,9 @@ def main() -> None:
                         "n_fn": fm.n_fn,
                         "mean_match_err_m": fm.mean_match_err_m,
                         "match_errs": [m.err_m for m in fm.matches],
+                        "match_ranges_m": [
+                            gt_cone_range_m(fm.gt_cones[m.gt_idx]) for m in fm.matches
+                        ],
                     }
                 )
                 + "\n"

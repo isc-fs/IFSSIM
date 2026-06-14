@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from common import bag_storage_id, default_results_root, make_run_dir, write_csv, write_json
-from perception_metrics import latch_track_layout, msg_time_ns
+from perception_metrics import DEFAULT_LIDAR_SCAN_PERIOD_NS, latch_track_layout, msg_time_ns
 from report_html import write_run_report
 from odom_from_bag import ODOM_SENSOR_TOPICS, synthesize_supervisor_odom
 from slam_metrics import (
@@ -12,6 +12,8 @@ from slam_metrics import (
     GT_CONE_TRIGGER_TOPIC,
     aggregate_pose_steps,
     aggregate_slam,
+    estimate_imu_time_scale,
+    infer_steering_angle_units,
     map_stats_to_dict,
     map_to_rows,
     pose_steps_to_rows,
@@ -54,13 +56,14 @@ def _load_bag_events(bag: str) -> tuple[list[tuple[int, str, object]], dict[str,
     buckets: dict[str, list[tuple[int, object]]] = {t: [] for t in topics}
     events: list[tuple[int, str, object]] = []
     while reader.has_next():
-        topic, raw, t_ns = reader.read_next()
+        topic, raw, bag_t_ns = reader.read_next()
         if topic not in buckets:
             continue
         msg = deserialize_message(raw, classes[topic])
-        buckets[topic].append((t_ns, msg))
-        events.append((t_ns, topic, msg))
-    events.sort(key=lambda e: e[0])
+        buckets[topic].append((bag_t_ns, msg))
+        events.append((bag_t_ns, topic, msg))
+    # Replay sensor fusion in header-time order (bag log time can lag headers).
+    events.sort(key=lambda e: msg_time_ns(e[0], e[2]))
     return events, buckets
 
 
@@ -89,8 +92,40 @@ def main() -> None:
         default=0.5,
         help="Exclude GT cones closer than this (sim LiDAR MinRange = 0.5 m).",
     )
+    ap.add_argument(
+        "--gt-scan-period-ms",
+        type=float,
+        default=DEFAULT_LIDAR_SCAN_PERIOD_NS / 1e6,
+        help="LiDAR period used when offsetting GT cone injection timestamps.",
+    )
+    ap.add_argument(
+        "--gt-scan-center-frac",
+        type=float,
+        default=0.0,
+        help=(
+            "GT odom offset for LiDAR-triggered cone injection, in scan periods "
+            "(same convention as run_perception_benchmark.py)."
+        ),
+    )
+    ap.add_argument(
+        "--imu-time-scale",
+        default="auto",
+        help=(
+            "Rescale the IMU integration clock onto true-motion time "
+            "(the sim runs slower than wall, so bridge node->now() stamps "
+            "over-count dt and inflate distance). 'auto' = calibrate from GT "
+            "twist-vs-path, 'off' = use raw stamps, or a float (e.g. 0.77)."
+        ),
+    )
     ap.add_argument("--results-root", default=default_results_root())
     args = ap.parse_args()
+
+    if args.imu_time_scale == "auto":
+        imu_time_scale = None
+    elif args.imu_time_scale == "off":
+        imu_time_scale = 1.0
+    else:
+        imu_time_scale = float(args.imu_time_scale)
 
     events, buckets = _load_bag_events(args.bag)
     if not buckets["/imu"]:
@@ -98,14 +133,40 @@ def main() -> None:
     if not buckets["/testing_only/odom"]:
         raise RuntimeError("bag missing /testing_only/odom")
 
+    # Resolve the IMU-clock rescale once (GT twist-vs-path), then apply it to
+    # BOTH the synthesized /odom and the in-replay EKF so they agree.
+    if imu_time_scale is None:
+        imu_scale_value, _ = estimate_imu_time_scale(buckets["/testing_only/odom"])
+    else:
+        imu_scale_value = imu_time_scale
+
     odom_source = "bag" if buckets["/odom"] else "missing"
     if not buckets["/odom"]:
-        for t_ns, odom_msg in synthesize_supervisor_odom(buckets):
+        rpm_series = [
+            (msg_time_ns(bag_t, msg), float(msg.data))
+            for bag_t, msg in buckets.get("/motor_rpm", [])
+        ]
+        steer_series = [
+            (msg_time_ns(bag_t, msg), float(msg.data))
+            for bag_t, msg in buckets.get("/steering_angle", [])
+        ]
+        rpm_series.sort(key=lambda row: row[0])
+        steer_series.sort(key=lambda row: row[0])
+        steering_units = infer_steering_angle_units(
+            events,
+            rpm_series,
+            steer_series,
+        )
+        for t_ns, odom_msg in synthesize_supervisor_odom(
+            buckets,
+            steering_units=steering_units,
+            imu_time_scale=imu_scale_value,
+        ):
             buckets["/odom"].append((t_ns, odom_msg))
             events.append((t_ns, "/odom", odom_msg))
         if buckets["/odom"]:
             odom_source = "synthesized"
-            events.sort(key=lambda e: e[0])
+            events.sort(key=lambda e: msg_time_ns(e[0], e[2]))
 
     has_supervisor_odom = bool(buckets["/odom"])
     sync_ns = int(args.sync_ms * 1e6)
@@ -125,6 +186,8 @@ def main() -> None:
         "gt_range_m": args.gt_range_m,
         "gt_min_range_m": args.gt_min_range_m,
         "gt_hfov_deg": args.gt_hfov_deg,
+        "gt_scan_period_ns": int(args.gt_scan_period_ms * 1e6),
+        "gt_scan_center_frac": args.gt_scan_center_frac,
     }
 
     res = replay_slam(
@@ -133,6 +196,7 @@ def main() -> None:
         world_track=world_track,
         strategy=args.strategy,
         sync_ns=sync_ns,
+        imu_time_scale=imu_scale_value,
         **gt_kwargs,
     )
     write_csv(run_dir / "samples.csv", samples_to_rows(res.samples))
@@ -148,6 +212,11 @@ def main() -> None:
         res.pose_steps,
         event="imu",
         err_field="imu_only_err_m",
+    )
+    wheel_stats = aggregate_pose_steps(
+        res.pose_steps,
+        event="imu",
+        err_field="wheel_err_m",
     )
     slam_cone_stats = aggregate_pose_steps(
         res.pose_steps,
@@ -178,15 +247,20 @@ def main() -> None:
         "gt_range_m": args.gt_range_m,
         "gt_min_range_m": args.gt_min_range_m,
         "gt_hfov_deg": args.gt_hfov_deg,
+        "gt_scan_period_ms": args.gt_scan_period_ms,
+        "gt_scan_center_frac": args.gt_scan_center_frac,
         "gt_cones": gt_stats,
         "filter_odom": filter_stats,
         "imu_only_odom": imu_only_stats,
+        "wheel_odom": wheel_stats,
         "supervisor_odom": supervisor_stats,
         "slam_at_cones": slam_cone_stats,
         "slam_at_gt_rate": slam_gt_stats,
         "pose_steps": len(res.pose_steps),
         "map": map_stats_to_dict(res.map_stats) if res.map_stats else {},
         "wheel_steer_units": res.wheel_steer_units,
+        "imu_time_scale": res.imu_time_scale,
+        "imu_time_scale_mode": args.imu_time_scale,
         "csv": str(run_dir / "samples.csv"),
         "pose_steps_csv": str(run_dir / "pose_steps.csv"),
         "map_csv": str(run_dir / "map_cones.csv"),
@@ -196,10 +270,16 @@ def main() -> None:
     write_json(run_dir / "results.json", summary)
     print(f"Wrote {run_dir / 'results.json'}")
     print(f"Wrote {report}")
+    if abs(res.imu_time_scale - 1.0) > 1e-6:
+        print(
+            f"IMU clock rescaled by {res.imu_time_scale:.4f} "
+            f"(mode={args.imu_time_scale}; corrects ~{(1.0 / res.imu_time_scale - 1.0) * 100:.1f}% "
+            "wall-vs-sim time stretch)."
+        )
     if odom_source == "synthesized":
         print(
             f"Synthesized {len(buckets['/odom'])} /odom samples from bag sensors "
-            f"(IMU + motor_rpm + steering + brake via sim_supervisor OdometryFilter)."
+            f"(IMU + motor_rpm + steering via the 9-state EKF / OdometryFilterCpp)."
         )
     elif not has_supervisor_odom:
         print(

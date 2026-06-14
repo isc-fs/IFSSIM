@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -142,6 +143,30 @@ class AggregatePoseStepsTest(unittest.TestCase):
         self.assertEqual(stats["steps"], 2)
         self.assertAlmostEqual(stats["mean_err_m"], 2.0)
         self.assertIn("mean_step_delta_m", stats)
+
+    def test_prefix_specific_yaw_stats(self) -> None:
+        steps = [
+            PoseStepSample(
+                t_s=1.0,
+                event="imu",
+                gt_x=0.0,
+                gt_y=0.0,
+                gt_yaw=0.0,
+                wheel_err_m=1.0,
+                wheel_yaw_err_rad=math.radians(5.0),
+                supervisor_err_m=2.0,
+                supervisor_yaw_err_rad=math.radians(7.0),
+                slam_yaw_err_rad=math.radians(99.0),
+            ),
+        ]
+        wheel = aggregate_pose_steps(steps, event="imu", err_field="wheel_err_m")
+        supervisor = aggregate_pose_steps(
+            steps,
+            event="imu",
+            err_field="supervisor_err_m",
+        )
+        self.assertAlmostEqual(wheel["mean_yaw_err_deg"], 5.0)
+        self.assertAlmostEqual(supervisor["mean_yaw_err_deg"], 7.0)
 
     def test_pose_err_and_yaw(self) -> None:
         self.assertAlmostEqual(pose_err_m(0, 0, 3, 4), 5.0)

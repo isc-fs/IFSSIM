@@ -39,12 +39,29 @@ def filter_state_to_odometry(state, stamp_ns: int) -> Any:
 
 def synthesize_supervisor_odom(
     buckets: dict[str, list[tuple[int, object]]],
+    *,
+    steering_units: str = "radians",
+    imu_time_scale: float = 1.0,
 ) -> list[tuple[int, object]]:
-    """Replay IMU/RPM/steering/brake through OdometryFilter; return (t_ns, Odometry)."""
+    """Replay IMU/RPM/steering/brake through OdometryFilter; return (t_ns, Odometry).
+
+    ``imu_time_scale`` rescales the IMU integration clock onto true-motion time
+    (the sim's wall-clock stamps over-count dt; see
+    ``slam_metrics.estimate_imu_time_scale``). Published stamps stay on wall
+    time so the synthesized /odom still aligns with the rest of the replay.
+    """
     if not buckets.get("/imu"):
         return []
 
-    from sim_supervisor.odometry import OdometryFilter
+    # Match production: /odom comes from the C++ 9-state EKF
+    # (odometry_filter_node), ported here as OdometryFilterCpp. The
+    # legacy sim_supervisor complementary OdometryFilter integrated
+    # centripetal accel-y directly into vy and drifted badly in corners.
+    from odometry_filter_cpp import (
+        EkfParams,
+        OdometryFilterCpp,
+        steering_to_road_wheel_rad,
+    )
 
     events: list[tuple[int, str, object]] = []
     for topic in ODOM_SENSOR_TOPICS:
@@ -52,7 +69,7 @@ def synthesize_supervisor_odom(
             events.append((msg_time_ns(bag_t, msg), topic, msg))
     events.sort(key=lambda e: e[0])
 
-    filt = OdometryFilter()
+    filt = OdometryFilterCpp(EkfParams())
     out: list[tuple[int, object]] = []
     last_pub_ns = -1
     imu_idx = 0
@@ -64,7 +81,7 @@ def synthesize_supervisor_odom(
             if imu_idx % IMU_DECIMATION:
                 continue
             filt.push_imu(
-                t,
+                t * imu_time_scale,
                 np.array(
                     [
                         msg.linear_acceleration.x,
@@ -83,9 +100,12 @@ def synthesize_supervisor_odom(
         elif topic == "/motor_rpm":
             filt.push_rpm(t, float(msg.data))
         elif topic == "/steering_angle":
-            filt.push_steering(t, float(msg.data))
-        elif topic == "/brake_pressure":
-            filt.push_brake(t, float(msg.data))
+            filt.push_steering(
+                t,
+                steering_to_road_wheel_rad(float(msg.data), units=steering_units),
+            )
+        # /brake_pressure: the 9-state EKF dropped brake as an input
+        # (it added noise, never signal); ignored here for parity.
 
         if not filt.is_calibrated():
             continue

@@ -25,6 +25,25 @@ DEFAULT_TOPICS = [
 ]
 
 
+def _lidar_settings_snapshot() -> dict:
+    settings_path = Path(__file__).resolve().parents[2] / "settings.json"
+    if not settings_path.is_file():
+        return {}
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        sensors = settings["Vehicles"]["FSCar"]["Sensors"]
+        lidar = sensors["Lidar1"]
+    except (KeyError, json.JSONDecodeError):
+        return {"settings_path": str(settings_path), "settings_parse_error": True}
+    return {
+        "settings_path": str(settings_path),
+        "lidar_path": lidar.get("LidarPath"),
+        "points_per_second": lidar.get("PointsPerSecond"),
+        "rotations_per_second": lidar.get("RotationsPerSecond"),
+        "number_of_channels": lidar.get("NumberOfChannels"),
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Capture simulator-only benchmark rosbag.")
     ap.add_argument("--output-dir", default="tools/sim_benchmark/results/capture")
@@ -63,6 +82,7 @@ def main() -> None:
         "topics": topics,
         "duration_s": args.duration_s,
         "manual_only": bool(args.manual_only),
+        "lidar_settings": _lidar_settings_snapshot(),
     }
     (out_dir / f"{bag_name}.manifest.json").write_text(json.dumps(manifest, indent=2))
 

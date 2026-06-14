@@ -346,6 +346,14 @@ class OdometryFilterCpp:
         k[THETA] = 0.0
         k[OMEGA] = 0.0
         k[VX] = 0.0
+        # NHC observes VY only. The P[VY, BA_X] coupling (via the wz*vx Coriolis
+        # term) is spurious: with RPM present BA_X is anchored, but IMU-only the
+        # leak drives ba_x to ~-0.4 m/s^2, injecting a phantom +0.4 m/s^2 into
+        # ax = accel_x - BA_X and running vx away. Zero it (same Schmidt-Kalman
+        # partition reasoning as BG_Z in #555). Diverges from the production C++
+        # correct_nhc, which preserves K[BA_X] -- harmless there because /odom
+        # always has RPM, but the same latent leak exists if RPM ever drops.
+        k[BA_X] = 0.0
         k[BG_Z] = 0.0
         self._x += k * y
         self._x[THETA] = wrap_pi(self._x[THETA])

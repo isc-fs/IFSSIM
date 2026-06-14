@@ -13,6 +13,7 @@ from perception_metrics import (
     latch_track_layout,
     msg_time_ns,
     odom_at_time,
+    odom_for_lidar_scan,
     world_cones_to_body,
     yaw_from_odom,
 )
@@ -69,15 +70,20 @@ class PoseStepSample:
     imu_only_err_m: float | None = None
     imu_only_yaw_err_rad: float | None = None
     imu_only_err_delta_m: float | None = None
+    imu_only_vx: float | None = None
+    imu_only_vy: float | None = None
     wheel_x: float | None = None
     wheel_y: float | None = None
     wheel_yaw: float | None = None
     wheel_err_m: float | None = None
     wheel_yaw_err_rad: float | None = None
+    wheel_vx: float | None = None
+    wheel_yaw_rate: float | None = None
     supervisor_x: float | None = None
     supervisor_y: float | None = None
     supervisor_yaw: float | None = None
     supervisor_err_m: float | None = None
+    supervisor_yaw_err_rad: float | None = None
     slam_x: float | None = None
     slam_y: float | None = None
     slam_yaw: float | None = None
@@ -120,6 +126,48 @@ class ReplayResult:
     n_odom: int = 0
     n_cone_updates: int = 0
     wheel_steer_units: str = "radians"
+    imu_time_scale: float = 1.0
+
+
+def estimate_imu_time_scale(odom_msgs: list[tuple[int, object]]) -> tuple[float, dict]:
+    """Factor to rescale the IMU integration clock onto true-motion time.
+
+    The bridge stamps every sensor with ``node_->now()`` (wall clock), but UE5
+    runs slower than real-time under load, so the wall stamps span ~30% more
+    time than the car actually moved. GT odom carries both an integrated
+    position and an instantaneous twist on that same clock, so:
+
+        scale = path_length / integral(speed * dt_wall)
+
+    is the ratio of true motion time to wall time. Feeding ``t * scale`` to the
+    EKF compresses every ``dt`` back onto sim time, which removes the inflated
+    distance (``x += v * dt``). Returns ``(scale, diagnostics)``; ``1.0`` when
+    GT is unusable.
+    """
+    rows = sorted((msg_time_ns(b, m), m) for b, m in odom_msgs)
+    if len(rows) < 2:
+        return 1.0, {}
+    path = 0.0
+    integ = 0.0
+    for i in range(1, len(rows)):
+        ta, ma = rows[i - 1]
+        tb, mb = rows[i]
+        dt = (tb - ta) * 1e-9
+        if dt <= 0:
+            continue
+        pa, pb = ma.pose.pose.position, mb.pose.pose.position
+        path += math.hypot(pb.x - pa.x, pb.y - pa.y)
+        va, vb = ma.twist.twist.linear, mb.twist.twist.linear
+        integ += 0.5 * (math.hypot(va.x, va.y) + math.hypot(vb.x, vb.y)) * dt
+    if integ <= 1e-6 or path <= 1e-6:
+        return 1.0, {}
+    scale = path / integ
+    return scale, {
+        "imu_time_scale": scale,
+        "gt_path_m": path,
+        "gt_twist_integral_m": integ,
+        "clock_stretch_pct": (1.0 / scale - 1.0) * 100.0,
+    }
 
 
 def odom_to_pose3(msg):
@@ -205,7 +253,11 @@ def infer_steering_angle_units(
             break
     if n < 50:
         return "radians"
-    return "normalized" if err_norm < err_rad else "radians"
+    # Bridge #462 publishes road-wheel radians on /steering_angle; only pick
+    # normalized when it clearly fits the IMU gyro better.
+    if err_norm < 0.25 * err_rad:
+        return "normalized"
+    return "radians"
 
 
 def _sample_latest_before(
@@ -307,12 +359,19 @@ def aggregate_pose_steps(
         elif err_field.startswith("wheel"):
             yaw_f = "wheel_yaw_err_rad"
             delta_f = None
-        else:
+        elif err_field.startswith("supervisor"):
+            yaw_f = "supervisor_yaw_err_rad"
+            delta_f = None
+        elif err_field.startswith("slam"):
             yaw_f = "slam_yaw_err_rad"
             delta_f = None
-        y = getattr(s, yaw_f, None)
-        if y is not None and not math.isnan(y):
-            yaw_vals.append(abs(math.degrees(y)))
+        else:
+            yaw_f = None
+            delta_f = None
+        if yaw_f is not None:
+            y = getattr(s, yaw_f, None)
+            if y is not None and not math.isnan(y):
+                yaw_vals.append(abs(math.degrees(y)))
         if delta_f is not None:
             d = getattr(s, delta_f, None)
             if d is not None and not math.isnan(d):
@@ -604,6 +663,8 @@ def _append_pose_step(
         step.imu_only_yaw = iyaw
         step.imu_only_err_m = pose_err_m(ix, iy, gx, gy)
         step.imu_only_yaw_err_rad = yaw_err(iyaw, gyaw)
+        step.imu_only_vx = st_io.vx
+        step.imu_only_vy = st_io.vy
         if event == "imu" and prev_imu_only_err is not None:
             step.imu_only_err_delta_m = step.imu_only_err_m - prev_imu_only_err
         if event == "imu":
@@ -623,6 +684,8 @@ def _append_pose_step(
         step.wheel_yaw = wyaw
         step.wheel_err_m = pose_err_m(wx, wy, gx, gy)
         step.wheel_yaw_err_rad = yaw_err(wyaw, gyaw)
+        step.wheel_vx = st_w.vx
+        step.wheel_yaw_rate = st_w.yaw_rate
 
     if supervisor_msg is not None and filter_sync_pose is not None:
         sx, sy, syaw = odom_frame_to_gt_aligned(
@@ -635,6 +698,7 @@ def _append_pose_step(
         step.supervisor_y = sy
         step.supervisor_yaw = syaw
         step.supervisor_err_m = pose_err_m(sx, sy, gx, gy)
+        step.supervisor_yaw_err_rad = yaw_err(syaw, gyaw)
 
     if node is not None:
         slam = slam_pose_aligned(node)
@@ -661,6 +725,9 @@ def replay_slam(
     gt_range_m: float = 20.0,
     gt_min_range_m: float = 0.5,
     gt_hfov_deg: float = 60.0,
+    gt_scan_period_ns: int = 100_000_000,
+    gt_scan_center_frac: float = 0.0,
+    imu_time_scale: float | None = None,
 ) -> ReplayResult:
     import numpy as np
     import rclpy
@@ -668,8 +735,11 @@ def replay_slam(
     from lifecycle_msgs.msg import State as StateMsg
     from rclpy.lifecycle import State as LifecycleState
     from odom_from_bag import IMU_DECIMATION
-    from odometry_filter_cpp import EkfParams, OdometryFilterCpp
-    from sim_supervisor.odometry import OdometryFilter
+    from odometry_filter_cpp import (
+        EkfParams,
+        OdometryFilterCpp,
+        steering_to_road_wheel_rad,
+    )
 
     rclpy.init()
     node = ConeGraphSlamNode()
@@ -678,8 +748,16 @@ def replay_slam(
     node.on_configure(stub)
     node.on_activate(stub)
 
-    filt = OdometryFilter()
-    imu_only_filt = OdometryFilter()
+    # The production /odom is published by the C++ 9-state EKF
+    # (odometry_filter_node); sim_supervisor's Python complementary
+    # OdometryFilter is now only a legacy fallback. Replay the EKF here
+    # via the OdometryFilterCpp port so "EKF" and "IMU-only" match what
+    # the pipeline actually runs. The legacy complementary filter
+    # integrated centripetal accel-y straight into vy (no Coriolis
+    # cross-term), so vy ran to several m/s in corners and the pose
+    # diverged tens of metres — worse than wheel-only DR.
+    filt = OdometryFilterCpp(EkfParams())
+    imu_only_filt = OdometryFilterCpp(EkfParams())
     rpm_series = _scalar_series_from_bucket(
         {"/motor_rpm": [(b, m) for b, t, m in events if t == "/motor_rpm"]},
         "/motor_rpm",
@@ -699,8 +777,18 @@ def replay_slam(
         imu_decimation=IMU_DECIMATION,
     )
     wheel_filt = OdometryFilterCpp(EkfParams())
+
+    # Rescale the IMU integration clock onto true-motion time (sim ran slower
+    # than wall, so the bridge's node_->now() stamps over-count dt -> inflated
+    # distance). None = auto-calibrate from GT twist-vs-path; 1.0 = off.
+    if imu_time_scale is None:
+        imu_scale, _scale_meta = estimate_imu_time_scale(odom_msgs)
+    else:
+        imu_scale = float(imu_time_scale)
+
     out = ReplayResult(
         wheel_steer_units=steer_units,
+        imu_time_scale=imu_scale,
     )
     use_lidar_trigger = any(t == GT_CONE_TRIGGER_TOPIC for _, t, _ in events)
     imu_idx = 0
@@ -738,6 +826,9 @@ def replay_slam(
         for bag_t_ns, topic, msg in events:
             event_t_ns = msg_time_ns(bag_t_ns, msg)
             t_s = event_t_ns * 1e-9
+            # Filter integration runs on the motion-time-corrected clock; GT
+            # lookup / recording stay on the original (wall) event time.
+            t_filt = t_s * imu_scale
             if topic == "/imu":
                 imu_idx += 1
                 if imu_idx % IMU_DECIMATION == 0:
@@ -755,10 +846,10 @@ def replay_slam(
                             msg.angular_velocity.z,
                         ],
                     )
-                    filt.push_imu(t_s, accel, gyro)
-                    imu_only_filt.push_imu(t_s, accel, gyro)
+                    filt.push_imu(t_filt, accel, gyro)
+                    imu_only_filt.push_imu(t_filt, accel, gyro)
                     if not wheel_filt.is_calibrated():
-                        wheel_filt.push_imu(t_s, accel, gyro)
+                        wheel_filt.push_imu(t_filt, accel, gyro)
                     else:
                         rv = _sample_latest_before(rpm_series, event_t_ns)
                         sv = _sample_latest_before(steer_series, event_t_ns)
@@ -767,14 +858,33 @@ def replay_slam(
                             if rv is not None
                             else wheel_filt.latest_rpm
                         )
-                        steer = (
-                            sv
-                            if sv is not None
-                            else wheel_filt.latest_steering_rad
-                        )
+                        if sv is None:
+                            steer = wheel_filt.latest_steering_rad
+                            steer_units_for_sample = "radians"
+                        else:
+                            steer = sv
+                            steer_units_for_sample = steer_units
                         wheel_filt.push_wheel_sensors(
-                            t_s, rpm, steer, steering_units=steer_units,
+                            t_filt,
+                            rpm,
+                            steer,
+                            steering_units=steer_units_for_sample,
                         )
+                # SLAM's own gtsam preintegrator integrates gyro*dt and
+                # accel*dt straight off the IMU header stamp (and the
+                # cone-trigger stamp below), so it must see the same
+                # motion-time-compressed clock as the EKF ports above
+                # (t_filt = t_s * imu_scale). Otherwise it integrates
+                # over wall dt and over-rotates ~(1/scale - 1) of every
+                # turn, blowing data association out of the gate after
+                # corners (the post-turn SLAM detonation). Restamp the
+                # message in place — replay is the last consumer of this
+                # stamp, and the EKF ports already read accel/gyro arrays
+                # directly. No-op when scale is off (1.0).
+                if imu_scale != 1.0:
+                    sns = int(event_t_ns * imu_scale)
+                    msg.header.stamp.sec = sns // 1_000_000_000
+                    msg.header.stamp.nanosec = sns % 1_000_000_000
                 node._on_imu(msg)
                 out.n_imu += 1
                 _maybe_latch_filter_sync()
@@ -824,10 +934,9 @@ def replay_slam(
                     )
             elif topic == "/steering_angle":
                 angle = float(msg.data)
-                filt.push_steering(t_s, angle)
-                wheel_filt.push_steering(t_s, angle)
-            elif topic == "/brake_pressure":
-                filt.push_brake(t_s, float(msg.data))
+                road_angle = steering_to_road_wheel_rad(angle, units=steer_units)
+                filt.push_steering(t_s, road_angle)
+                wheel_filt.push_steering(t_s, road_angle)
             elif topic == "/odom":
                 node._on_supervisor_odom(msg)
                 out.n_supervisor_odom += 1
@@ -883,7 +992,15 @@ def replay_slam(
             else:
                 continue
             if topic in (GT_CONE_TRIGGER_TOPIC, "/testing_only/track"):
-                odom = odom_at_time(odom_msgs, event_t_ns)
+                if topic == GT_CONE_TRIGGER_TOPIC:
+                    odom = odom_for_lidar_scan(
+                        odom_msgs,
+                        event_t_ns,
+                        scan_period_ns=gt_scan_period_ns,
+                        center_fraction=gt_scan_center_frac,
+                    )
+                else:
+                    odom = odom_at_time(odom_msgs, event_t_ns)
                 if odom is not None:
                     body = world_cones_to_body(
                         world_track,
@@ -892,9 +1009,19 @@ def replay_slam(
                         min_range_m=gt_min_range_m,
                         hfov_half_deg=gt_hfov_deg,
                     )
-                    stamp = getattr(getattr(odom, "header", None), "stamp", None)
-                    if stamp is None:
-                        stamp = header_at_ns(event_t_ns).stamp
+                    if imu_scale != 1.0:
+                        # Put the cone scan trigger on the same motion-time
+                        # clock as the restamped IMU samples, so the
+                        # preintegrator's integrate_to(t_scan) window lines
+                        # up with them. (t_scan only drives preintegration
+                        # timing; SLAM pose recording uses spatial frames,
+                        # so this has no effect on the GT comparison.)
+                        stamp = header_at_ns(int(event_t_ns * imu_scale)).stamp
+                    else:
+                        stamp = getattr(
+                            getattr(odom, "header", None), "stamp", None)
+                        if stamp is None:
+                            stamp = header_at_ns(event_t_ns).stamp
                     markers = cones_to_marker_array(body, stamp)
                     node._on_cones(markers)
                     out.n_cone_updates += 1
@@ -997,12 +1124,22 @@ def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | st
                 "imu_only_err_delta_m": s.imu_only_err_delta_m
                 if s.imu_only_err_delta_m is not None
                 else float("nan"),
+                "imu_only_vx": s.imu_only_vx
+                if s.imu_only_vx is not None
+                else float("nan"),
+                "imu_only_vy": s.imu_only_vy
+                if s.imu_only_vy is not None
+                else float("nan"),
                 "wheel_x": s.wheel_x if s.wheel_x is not None else float("nan"),
                 "wheel_y": s.wheel_y if s.wheel_y is not None else float("nan"),
                 "wheel_yaw": s.wheel_yaw if s.wheel_yaw is not None else float("nan"),
                 "wheel_err_m": s.wheel_err_m if s.wheel_err_m is not None else float("nan"),
                 "wheel_yaw_err_rad": s.wheel_yaw_err_rad
                 if s.wheel_yaw_err_rad is not None
+                else float("nan"),
+                "wheel_vx": s.wheel_vx if s.wheel_vx is not None else float("nan"),
+                "wheel_yaw_rate": s.wheel_yaw_rate
+                if s.wheel_yaw_rate is not None
                 else float("nan"),
                 "supervisor_x": s.supervisor_x
                 if s.supervisor_x is not None
@@ -1012,6 +1149,9 @@ def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | st
                 else float("nan"),
                 "supervisor_err_m": s.supervisor_err_m
                 if s.supervisor_err_m is not None
+                else float("nan"),
+                "supervisor_yaw_err_rad": s.supervisor_yaw_err_rad
+                if s.supervisor_yaw_err_rad is not None
                 else float("nan"),
                 "slam_x": s.slam_x if s.slam_x is not None else float("nan"),
                 "slam_y": s.slam_y if s.slam_y is not None else float("nan"),
