@@ -820,7 +820,6 @@ def render_slam_html(summary: dict[str, Any], run_dir: Path) -> str:
         f"<p class='subtitle'>GT cones from latched track, injected on <code>{trigger}</code>; "
         f"gate {summary.get('gt_min_range_m', 0.5)}–{summary.get('gt_range_m', 20.0)} m, "
         f"±{summary.get('gt_hfov_deg', 60.0)}° H-FOV; "
-        f"scan offset {summary.get('gt_scan_center_frac', 0.0)} periods; "
         f"<code>/odom</code> source: {odom_src}</p>"
     )
 

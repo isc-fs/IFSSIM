@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from perception_metrics import msg_time_ns
+from perception_metrics import aligned_time_ns, compute_bag_sim_offset_ns
 
 # Match sim_supervisor_node production settings.
 IMU_DECIMATION = 1
@@ -41,14 +41,11 @@ def synthesize_supervisor_odom(
     buckets: dict[str, list[tuple[int, object]]],
     *,
     steering_units: str = "radians",
-    imu_time_scale: float = 1.0,
 ) -> list[tuple[int, object]]:
     """Replay IMU/RPM/steering/brake through OdometryFilter; return (t_ns, Odometry).
 
-    ``imu_time_scale`` rescales the IMU integration clock onto true-motion time
-    (the sim's wall-clock stamps over-count dt; see
-    ``slam_metrics.estimate_imu_time_scale``). Published stamps stay on wall
-    time so the synthesized /odom still aligns with the rest of the replay.
+    Header stamps are UE sim time (bridge Option 2), so the EKF integrates on
+    the same clock the physics ran on — no clock-stretch rescaling needed.
     """
     if not buckets.get("/imu"):
         return []
@@ -63,10 +60,19 @@ def synthesize_supervisor_odom(
         steering_to_road_wheel_rad,
     )
 
+    # /imu carries UE sim-time headers; the std_msgs/Float32 sensor topics
+    # (/motor_rpm, /steering_angle, /brake_pressure) only have bag (wall-clock)
+    # time. Align them onto the sim clock so RPM/steering interleave with IMU
+    # instead of sorting to the end (which left /odom on IMU-only and divergent).
+    offset_ns = compute_bag_sim_offset_ns(
+        (bag_t, msg)
+        for topic in ODOM_SENSOR_TOPICS
+        for bag_t, msg in buckets.get(topic, [])
+    )
     events: list[tuple[int, str, object]] = []
     for topic in ODOM_SENSOR_TOPICS:
         for bag_t, msg in buckets.get(topic, []):
-            events.append((msg_time_ns(bag_t, msg), topic, msg))
+            events.append((aligned_time_ns(bag_t, msg, offset_ns), topic, msg))
     events.sort(key=lambda e: e[0])
 
     filt = OdometryFilterCpp(EkfParams())
@@ -81,7 +87,7 @@ def synthesize_supervisor_odom(
             if imu_idx % IMU_DECIMATION:
                 continue
             filt.push_imu(
-                t * imu_time_scale,
+                t,
                 np.array(
                     [
                         msg.linear_acceleration.x,

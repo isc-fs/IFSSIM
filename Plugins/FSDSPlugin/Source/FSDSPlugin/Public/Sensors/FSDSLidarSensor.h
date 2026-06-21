@@ -52,8 +52,16 @@ public:
 	/** Get point count (number of 3D points, not floats) */
 	int32 GetPointCount() const;
 
-	/** Get timestamp of last scan */
+	/** Get wall-clock (Cycles64) timestamp of last scan */
 	uint64 GetTimestamp() const { return LastTimestamp; }
+
+	/** Get UE game/sim time of last scan capture, in ns. This is the
+	 *  absolute sim instant the rays were cast; broadcasters put it on
+	 *  the wire so the bridge can stamp header.stamp from it directly,
+	 *  immune to GPU-readback + transport + DDS-backlog latency (which
+	 *  the capture-to-send LagNs scheme could not fully cover — it drifted
+	 *  upward over a long run). 0 until the first scan completes. */
+	uint64 GetTimestampSimNs() const { return LastTimestampSimNs; }
 
 	// --- Configuration (Hesai ATX-like defaults) ---
 
@@ -221,6 +229,10 @@ private:
 		// readback ring). Mirrors the CPU path where LastTimestamp is set
 		// at scan time. See issue #232.
 		uint64 CaptureCycles64 = 0;
+		// UE game/sim time at dispatch, in ns — the sim-clock twin of
+		// CaptureCycles64, becomes LastTimestampSimNs at consume. This is
+		// the value the bridge stamps header.stamp from under use_sim_time.
+		uint64 CaptureSimNs = 0;
 	};
 	static constexpr int32 ReadbackQueueDepth = 2;
 	FReadbackSlot ReadbackSlots[ReadbackQueueDepth];
@@ -280,7 +292,8 @@ private:
 
 	TArray<float> PointCloudBuffer;
 	int32 CachedPointCount = 0;
-	uint64 LastTimestamp = 0;
+	uint64 LastTimestamp = 0;       // wall-clock (Cycles64) at capture
+	uint64 LastTimestampSimNs = 0;  // UE game/sim time at capture, ns
 	float CurrentHorizontalAngle = 0.f;
 
 	FCriticalSection PointCloudLock;

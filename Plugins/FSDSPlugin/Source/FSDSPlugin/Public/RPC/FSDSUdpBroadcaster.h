@@ -20,7 +20,18 @@ struct FFSDSSensorFrame
 	// Header
 	uint32 Magic = 0x49465353; // "IFSS"
 	uint32 FrameID = 0;
+	// Authoritative capture clock: UE *game/sim* time at pack, in ns
+	// (GetWorld()->GetTimeSeconds() × 1e9). This is the ~0.77×-real clock
+	// the physics integrates with, so it's what the bridge writes into
+	// header.stamp and drives /clock from — restamping on this kills the
+	// wall-vs-sim "clock stretch" that corrupted EKF/SLAM integration.
+	// (Was FPlatformTime::Cycles64() wall-clock, which the bridge ignored.)
 	uint64 Timestamp = 0;
+	// Wall-clock at pack, in ns (FPlatformTime::Cycles64 × SecondsPerCycle
+	// × 1e9). Kept alongside the sim clock for latency / health metrics and
+	// offline lag(t) characterisation; NOT used for any integration. The
+	// bridge can read it via rclcpp::Clock(RCL_SYSTEM_TIME) for comparison.
+	uint64 ExternalTimestamp = 0;
 
 	// GPS (28 bytes)
 	double Latitude = 0.0;
@@ -88,6 +99,11 @@ struct FFSDSLidarChunkHeader
 	// latency or transport jitter. Self-correcting (no anchor needed).
 	// Issue #238.
 	int64 LagNs = 0;
+	// Absolute UE game/sim time of scan capture, in ns (Option 2). When
+	// >0 the bridge stamps header.stamp directly from this (immune to
+	// readback/transport/backlog latency that LagNs back-dating drifted
+	// on). LagNs is kept for old-bridge fallback + wall-clock diagnostics.
+	int64 SimCaptureNs = 0;
 	// Followed by PointsInChunk * 4 * sizeof(float) bytes of point data:
 	// (x, y, z, intensity) per point — intensity ∈ [0, 1] in #255's
 	// physically-grounded model. Stride was 3 floats pre-#255.
@@ -118,8 +134,12 @@ struct FFSDSLidarStreamHeader
 	int32  Channels = 0;
 	int32  TotalPoints = 0;
 	int64  LagNs = 0;
+	// Absolute UE game/sim time of scan capture, in ns (Option 2). Same
+	// semantics as FFSDSLidarChunkHeader::SimCaptureNs — bridge prefers
+	// this over LagNs back-dating when >0.
+	int64  SimCaptureNs = 0;
 };
-static_assert(sizeof(FFSDSLidarStreamHeader) == 24,
+static_assert(sizeof(FFSDSLidarStreamHeader) == 32,
 	"FFSDSLidarStreamHeader is the on-wire LiDAR-stream header — "
 	"its size is part of the bridge↔sim ABI. If you grow or shrink "
 	"this struct, bump a wire-version field instead of expecting "

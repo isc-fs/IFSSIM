@@ -691,6 +691,20 @@ def event_start(setup: EventSetup):
 
         # === Phase 2: prepare autonomy via SetMission (NO LOCK) ===
         if _ros_bridge_available:
+            # Tear down any autonomy still active from a previous run
+            # FIRST, so this start always begins from a clean slate.
+            # mode_manager short-circuits a re-prepare/re-activate of an
+            # already-active mission ("already active"), which means the
+            # stateful nodes (SLAM map, EKF bias) would otherwise carry
+            # the previous run's state into this one. Idempotent — a
+            # no-op if nothing is active.
+            try:
+                RosBridge.get().stop_mission()
+            except Exception as ex:
+                log_event(
+                    "event_start",
+                    f"pre-start autonomy teardown failed (continuing): {ex}",
+                )
             log_event(
                 "event_start",
                 f"SetMission(mission={mission_name!r}) — configure only, "

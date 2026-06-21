@@ -159,6 +159,7 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     results = results_dir()
     results.mkdir(parents=True, exist_ok=True)
     cone_detection_src = repo_root() / "pipeline" / "cone_detection"
+    cone_slam_src = repo_root() / "pipeline" / "cone_slam"
     image = os.environ.get("IFSSIM_DV_IMAGE", "ifssim-dv_pipeline_stack:latest")
     inner_argv = _translate_argv(argv)
     if not any(a == "--results-root" or a.startswith("--results-root=") for a in inner_argv):
@@ -168,7 +169,7 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         "set -eo pipefail; "
         "export IFSSIM_BENCHMARK_IN_DOCKER=1; "
         f"{dv_pipeline_ros_setup_shell()}"
-        "export PYTHONPATH=/dev_cone_detection:${PYTHONPATH}; "
+        "export PYTHONPATH=/dev_cone_detection:/dev_cone_slam:${PYTHONPATH}; "
         f"cd /bench && python3 {shlex.quote(script_name)} {arg_str}"
     )
     # Override image ENTRYPOINT (/entrypoint.sh launches the full sim stack).
@@ -182,6 +183,8 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         f"{bench.resolve()}:/bench:ro",
         "-v",
         f"{cone_detection_src.resolve()}:/dev_cone_detection:ro",
+        "-v",
+        f"{cone_slam_src.resolve()}:/dev_cone_slam:ro",
         "-v",
         f"{results.resolve()}:/results",
         "-e",

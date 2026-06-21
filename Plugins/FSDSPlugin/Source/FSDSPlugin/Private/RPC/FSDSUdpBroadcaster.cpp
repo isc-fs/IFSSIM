@@ -11,6 +11,7 @@
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Async/Async.h"
+#include "Engine/World.h"  // UWorld::GetTimeSeconds() — sim capture clock
 #include "HAL/PlatformProcess.h"
 
 FFSDSUdpBroadcaster::FFSDSUdpBroadcaster()
@@ -177,7 +178,21 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 {
 	Frame.Magic = 0x49465353;
 	Frame.FrameID = FrameCounter++;
-	Frame.Timestamp = FPlatformTime::Cycles64();
+	// Authoritative capture clock = UE game/sim time (the ~0.77×-real clock
+	// physics integrates with), in ns. Sensors are sampled synchronously in
+	// this same Tick, so "now" game time IS the capture time for the sensor
+	// frame. The bridge writes this into header.stamp and drives /clock from
+	// it, so EKF/SLAM integration finally runs on sim seconds, not wall
+	// seconds. GetTimeSeconds() is float — ~tens-of-µs resolution over a FS
+	// run — which is fine: the *rate* is exact and the bridge's +1 ns
+	// monotonic guard breaks any same-tick ties at 400 Hz.
+	const double SimSeconds = VehiclePawn->GetWorld()->GetTimeSeconds();
+	Frame.Timestamp = (uint64)(SimSeconds * 1e9);
+	// Wall-clock alongside it, for latency/health metrics only (never
+	// integrated). Cycles64 epoch is since-boot, so it's meaningful as a
+	// delta, not an absolute wall time.
+	Frame.ExternalTimestamp =
+		(uint64)(FPlatformTime::Cycles64() * FPlatformTime::GetSecondsPerCycle64() * 1e9);
 
 	// GPS
 	if (VehiclePawn->GpsSensor)
@@ -345,6 +360,9 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 		const double LagSeconds = (double)(NowCycles - CaptureCycles) * FPlatformTime::GetSecondsPerCycle64();
 		LagNs = (int64)(LagSeconds * 1e9);
 	}
+	// Absolute sim capture time (Option 2) — the bridge prefers this over
+	// the LagNs back-date. See FFSDSLidarChunkHeader::SimCaptureNs.
+	const int64 SimCaptureNs = (int64)VehiclePawn->LidarSensor->GetTimestampSimNs();
 	TArray<float> PointsCopy = MoveTemp(Points);
 	FSocket* SocketRef = LidarSocket;
 	TSharedPtr<FInternetAddr> AddrRef = LidarAddr;
@@ -356,7 +374,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 	std::atomic<int32>* InFlightRef = &LidarSendInFlight;
 
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask,
-	    [SocketRef, AddrRef, LocalFrameID, Channels, LagNs, PointsCopy = MoveTemp(PointsCopy), TotalPoints, RunningRef, InFlightRef]()
+	    [SocketRef, AddrRef, LocalFrameID, Channels, LagNs, SimCaptureNs, PointsCopy = MoveTemp(PointsCopy), TotalPoints, RunningRef, InFlightRef]()
 	{
 		// Always decrement the in-flight counter on any exit path.
 		struct FInFlightGuard {
@@ -422,6 +440,7 @@ void FFSDSUdpBroadcaster::BroadcastLidarFrame()
 		Header->TotalPoints = TotalPoints;
 		Header->Channels = Channels;
 		Header->LagNs = LagNs;
+			Header->SimCaptureNs = SimCaptureNs;
 
 		// Copy point data (UE5 local frame: X=forward, Y=right — SLAM uses this convention)
 		FMemory::Memcpy(

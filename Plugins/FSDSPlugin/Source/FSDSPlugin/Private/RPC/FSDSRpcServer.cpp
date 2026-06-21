@@ -1436,7 +1436,19 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		FFSDSSensorFrame Frame;
 		Frame.Magic = 0x49465353;
 		Frame.FrameID = StreamFrameCounter++;
-		Frame.Timestamp = FPlatformTime::Cycles64();
+		// Authoritative capture clock = UE game/sim time (ns), NOT wall clock
+		// — this is the primary (TCP) sensor path the bridge consumes, and it
+		// must match PackSensorFrame so header.stamp / /clock run on sim time.
+		// Reading TimeSeconds off the game thread is a benign plain-float read,
+		// same as the sensor GetOutput() calls already made from here.
+		{
+			UWorld* W = VehiclePawn->GetWorld();
+			const double SimSeconds = W ? W->GetTimeSeconds() : 0.0;
+			Frame.Timestamp = (uint64)(SimSeconds * 1e9);
+		}
+		// Wall clock alongside it (latency/health only, never integrated).
+		Frame.ExternalTimestamp =
+			(uint64)(FPlatformTime::Cycles64() * FPlatformTime::GetSecondsPerCycle64() * 1e9);
 
 		// GPS
 		if (VehiclePawn->GpsSensor)
@@ -1680,6 +1692,10 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		Header.FrameID = LidarStreamFrameCounter++;
 		Header.Channels = VehiclePawn->LidarSensor->NumberOfChannels;
 		Header.TotalPoints = TotalPoints;
+		// Absolute sim capture time (Option 2) — bridge prefers this over
+		// LagNs. NowSensorTs is the scan's wall-clock stamp we polled on; the
+		// sim-time twin is read alongside it (same scan, set together).
+		Header.SimCaptureNs = (int64)VehiclePawn->LidarSensor->GetTimestampSimNs();
 		{
 			const uint64 NowCycles = FPlatformTime::Cycles64();
 			Header.LagNs = 0;

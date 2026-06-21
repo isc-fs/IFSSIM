@@ -414,6 +414,10 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	PointCloudBuffer = MoveTemp(NewPoints);
 	CachedPointCount = HitCount;
 	LastTimestamp = FPlatformTime::Cycles64();
+	// Sim-clock capture stamp (Option 2): the absolute UE game time the rays
+	// were cast. Carried on the wire so the bridge stamps header.stamp from it
+	// directly under use_sim_time — no LagNs back-dating, no readback drift.
+	LastTimestampSimNs = InWorld ? (uint64)(InWorld->GetTimeSeconds() * 1e9) : 0;
 }
 
 TArray<float> UFSDSLidarSensor::GetPointCloud() const
@@ -1155,6 +1159,12 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// when the GPU→CPU copy finished ~50-100 ms later. Mirrors the CPU
 	// path's `LastTimestamp = Cycles64()` at scan time.
 	Slot.CaptureCycles64 = FPlatformTime::Cycles64();
+	// Sim-clock twin (Option 2): absolute UE game time at dispatch. Carried
+	// to consume → LastTimestampSimNs → wire → bridge header.stamp.
+	{
+		UWorld* W = GetWorld();
+		Slot.CaptureSimNs = W ? (uint64)(W->GetTimeSeconds() * 1e9) : 0;
+	}
 	Slot.bInFlight       = true;
 	Slot.bLockDispatched = false;
 	NextDispatchSlot     = (NextDispatchSlot + 1) % ReadbackQueueDepth;
@@ -1356,6 +1366,7 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 		// period. CPU path's LastTimestamp is set at scan time, so this
 		// matches its semantics.
 		LastTimestamp    = Slot.CaptureCycles64;
+		LastTimestampSimNs = Slot.CaptureSimNs;
 	}
 
 	if (!bGPULoggedFirstReadback)

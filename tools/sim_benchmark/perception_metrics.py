@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_right
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from statistics import median
 from types import SimpleNamespace
@@ -71,6 +72,51 @@ def msg_time_ns(bag_t_ns: int, msg: Any) -> int:
     return bag_t_ns
 
 
+def header_stamp_ns(msg: Any) -> int | None:
+    """Header stamp in ns, or ``None`` when the message has no usable header."""
+    try:
+        t = stamp_ns(msg)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return t if t > 0 else None
+
+
+def compute_bag_sim_offset_ns(items: Iterable[tuple[int, Any]]) -> int:
+    """Median ``bag_record_ns - header_stamp_ns`` over messages with a header.
+
+    Bridge "Option 2" stamps headered topics (``/imu``, ``/lidar/*``,
+    ``/testing_only/odom``) with absolute UE sim time, while headerless
+    ``std_msgs/Float32`` topics (``/motor_rpm``, ``/steering_angle``,
+    ``/brake_pressure``) only carry the bag record (wall-clock) time. Those two
+    clocks differ by ~1.78e18 ns, so mixing them makes the headerless samples
+    sort to the end of the run and never associate with IMU events. This offset
+    maps bag time back onto the sim clock. Returns 0 when no headered messages
+    are present (degrades to the previous behaviour).
+    """
+    diffs: list[int] = []
+    for bag_t_ns, msg in items:
+        h = header_stamp_ns(msg)
+        if h is not None:
+            diffs.append(int(bag_t_ns) - h)
+    if not diffs:
+        return 0
+    diffs.sort()
+    return diffs[len(diffs) // 2]
+
+
+def aligned_time_ns(bag_t_ns: int, msg: Any, offset_ns: int) -> int:
+    """Sim-clock time for a message.
+
+    Headered messages use their header stamp directly; headerless ones are
+    mapped via ``bag_t_ns - offset_ns`` (see :func:`compute_bag_sim_offset_ns`)
+    so they share the sim clock used by ``/imu`` and ``/testing_only/odom``.
+    """
+    h = header_stamp_ns(msg)
+    if h is not None:
+        return h
+    return int(bag_t_ns) - offset_ns
+
+
 def latch_track_layout(track_msgs: list[tuple[int, Any]]) -> list[WorldCone] | None:
     """First non-empty /testing_only/track (layout is static for the session)."""
     for _bag_t_ns, msg in sorted(
@@ -131,6 +177,38 @@ def cone_in_lidar_fov(
     return abs(math.atan2(by, bx)) <= half + 1e-9
 
 
+# Physical cone heights (m) for the GT vertical-FOV visibility gate. FSAE small
+# cones ≈0.325 m, big orange ≈0.505 m; defaults match the detector's apex
+# templates (cone_fit ``_CONE_SMALL_D`` / ``_CONE_BIG_D``).
+CONE_HEIGHT_SMALL_M = 0.35
+CONE_HEIGHT_BIG_M = 0.55
+FS_CONE_ORANGE_BIG = 2  # fs_msgs Cone.ORANGE_BIG
+
+
+def cone_in_vertical_fov(
+    r_m: float,
+    cone_height_m: float,
+    *,
+    lidar_height_m: float,
+    vfov_lower_deg: float,
+    vfov_upper_deg: float = 90.0,
+) -> bool:
+    """True if a ground cone's vertical extent intersects the LiDAR's vertical FOV.
+
+    A cone sitting on the ground at horizontal range ``r_m`` spans sensor-relative
+    elevation ``atan2(-lidar_height_m, r)`` (its base) up to
+    ``atan2(cone_height_m - lidar_height_m, r)`` (its tip). With a high mount and a
+    close cone the whole span drops below ``vfov_lower_deg``, so no beam can hit it
+    — the near-field blind cone (e.g. h=1.1 m, vlower=-12.4° → small cones blind
+    within ~3.4 m). The GT must not score cones the sensor physically cannot see.
+    """
+    if r_m <= 0.0:
+        return False
+    base_deg = math.degrees(math.atan2(-lidar_height_m, r_m))
+    top_deg = math.degrees(math.atan2(cone_height_m - lidar_height_m, r_m))
+    return top_deg >= vfov_lower_deg and base_deg <= vfov_upper_deg
+
+
 def track_at_or_before(msgs: list[tuple[int, Any]], t_ns: int) -> Any | None:
     """Most recent latched message at or before ``t_ns`` (for /testing_only/track)."""
     best = None
@@ -149,12 +227,23 @@ def world_cones_to_body(
     range_m: float | None = None,
     min_range_m: float = 0.5,
     hfov_half_deg: float | None = 60.0,
+    lidar_height_m: float | None = None,
+    vfov_lower_deg: float | None = None,
+    vfov_upper_deg: float = 90.0,
+    cone_height_small_m: float = CONE_HEIGHT_SMALL_M,
+    cone_height_big_m: float = CONE_HEIGHT_BIG_M,
 ) -> list[Cone2D]:
-    """Transform latched world cones into base_link at the given GT odom pose."""
+    """Transform latched world cones into base_link at the given GT odom pose.
+
+    When ``lidar_height_m`` and ``vfov_lower_deg`` are given, cones whose vertical
+    extent falls entirely outside the LiDAR vertical FOV are dropped (see
+    :func:`cone_in_vertical_fov`) so the GT only counts physically visible cones.
+    """
     ox = odom_msg.pose.pose.position.x
     oy = odom_msg.pose.pose.position.y
     yaw = yaw_from_odom(odom_msg)
     c, s = math.cos(yaw), math.sin(yaw)
+    vfov_on = lidar_height_m is not None and vfov_lower_deg is not None
     out: list[Cone2D] = []
     for cone in world:
         dx = cone.x - ox
@@ -170,6 +259,20 @@ def world_cones_to_body(
             bx, by, hfov_half_deg=hfov_half_deg, min_range_m=0.0
         ):
             continue
+        if vfov_on:
+            ch = (
+                cone_height_big_m
+                if cone.color == FS_CONE_ORANGE_BIG
+                else cone_height_small_m
+            )
+            if not cone_in_vertical_fov(
+                r,
+                ch,
+                lidar_height_m=lidar_height_m,
+                vfov_lower_deg=vfov_lower_deg,
+                vfov_upper_deg=vfov_upper_deg,
+            ):
+                continue
         out.append(Cone2D(x=bx, y=by, color=cone.color))
     return out
 
@@ -538,6 +641,97 @@ def aggregate_metrics(frames: list[FrameMetrics]) -> dict[str, Any]:
         "mean_pred_per_frame": sum(pred_counts) / len(pred_counts) if pred_counts else 0.0,
         "median_pred_per_frame": median(pred_counts) if pred_counts else 0.0,
     }
+
+
+def pick_scan_center_fraction(
+    odom_msgs: list[tuple[int, Any]],
+    scan_ts: list[int],
+    preds: list[list[Cone2D]],
+    world_track: list[WorldCone],
+    *,
+    scan_period_ns: int = DEFAULT_LIDAR_SCAN_PERIOD_NS,
+    gate_m: float = 1.5,
+    gt_gate: dict[str, Any] | None = None,
+    candidates: tuple[float, ...] = (0.0,),
+) -> tuple[float, dict[str, float]]:
+    """Diagnostic: sweep the GT scan-center offset and return the best-aligned one.
+
+    For each ``center_fraction`` in ``candidates`` this advances the GT odom
+    pose through the LiDAR sweep (``odom_for_lidar_scan``), projects the latched
+    world track into body frame, and greedy-matches it against the per-scan
+    detector predictions. The candidate is scored by F1 (primary, so it favours
+    offsets where many cones actually align rather than one lucky match), with
+    mean match error as the tie-break. Returns ``(best_fraction, meta)`` where
+    ``meta`` carries the winner's ``calib_*`` metrics consumed by
+    ``diagnose_perception_timing.py``.
+
+    With the bridge stamping absolute sim capture time (Option 2), the best
+    fraction should sit near 0 across the whole bag — a non-zero, time-varying
+    winner here would mean the LiDAR stamps are still misaligned.
+    """
+    gate = dict(gt_gate or {})
+    period_ms = scan_period_ns * 1e-6
+
+    def _empty_meta(frac: float) -> dict[str, float]:
+        return {
+            "calib_scan_offset_ms": frac * period_ms,
+            "calib_mean_match_err_m": 0.0,
+            "calib_f1": 0.0,
+            "calib_bias_x_m": 0.0,
+            "calib_bias_y_m": 0.0,
+            "calib_bias_pairs": 0.0,
+        }
+
+    if not scan_ts or not candidates:
+        return 0.0, _empty_meta(0.0)
+
+    best_frac = 0.0
+    best_meta = _empty_meta(0.0)
+    best_key: tuple[float, float] | None = None  # (f1 desc, -err) — higher is better
+
+    for frac in candidates:
+        frames: list[FrameMetrics] = []
+        for scan_t_ns, pred in zip(scan_ts, preds):
+            odom = odom_for_lidar_scan(
+                odom_msgs,
+                scan_t_ns,
+                scan_period_ns=scan_period_ns,
+                center_fraction=frac,
+            )
+            if odom is None:
+                continue
+            gt = world_cones_to_body(world_track, odom, **gate)
+            frames.append(
+                evaluate_frame(
+                    t_s=scan_t_ns * 1e-9,
+                    latency_ms=0.0,
+                    n_points=0,
+                    pred=pred,
+                    gt=gt,
+                    gate_m=gate_m,
+                )
+            )
+        if not frames:
+            continue
+        agg = aggregate_metrics(frames)
+        bias = summarize_match_bias(frames)
+        prec, rec = agg["precision"], agg["recall"]
+        f1 = 2.0 * prec * rec / (prec + rec) if (prec + rec) > 0.0 else 0.0
+        mean_err = agg["mean_match_err_m"]
+        key = (f1, -mean_err)
+        if best_key is None or key > best_key:
+            best_key = key
+            best_frac = frac
+            best_meta = {
+                "calib_scan_offset_ms": frac * period_ms,
+                "calib_mean_match_err_m": mean_err,
+                "calib_f1": f1,
+                "calib_bias_x_m": bias.get("mean_bias_x_m", 0.0),
+                "calib_bias_y_m": bias.get("mean_bias_y_m", 0.0),
+                "calib_bias_pairs": bias.get("n_bias_pairs", 0.0),
+            }
+
+    return best_frac, best_meta
 
 
 def nearest_by_time(msgs: list[tuple[int, Any]], t_ns: int, max_delta_ns: int) -> Any | None:

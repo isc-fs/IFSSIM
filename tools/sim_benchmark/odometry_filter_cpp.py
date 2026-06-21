@@ -72,6 +72,8 @@ class EkfParams:
     wheelbase_m: float = WHEELBASE_M
     rpm_to_ms: float = RPM_TO_MS
     calibration_seconds: float = CALIBRATION_SECONDS
+    # Wheel speed below this (m/s) counts as a standstill for bias calibration.
+    stationary_speed_ms: float = 0.1
     sigma_ax: float = 0.05
     sigma_ay: float = 0.05
     sigma_gz: float = 0.01
@@ -161,9 +163,28 @@ class OdometryFilterCpp:
         self.latest_steering_rad = 0.0
         self.latest_rpm = 0.0
         self._have_steering = False
+        self._have_rpm = False
 
     def is_calibrated(self) -> bool:
         return self._calib.completed
+
+    def seed_forward_velocity(self, vx: float) -> None:
+        """Seed the post-calibration forward velocity for unaided dead-reckoning.
+
+        The accel-bias calibration zeroes every state, which is only correct if
+        the car is stationary at calibration. When a bag starts mid-motion (the
+        recorder misses the pre-launch standstill — DDS discovery latency) the
+        IMU-only filter can never recover absolute speed: at constant speed there
+        is no forward accel to integrate, so vx stays ~0. The path then collapses
+        onto the lateral (+y/left) leak, i.e. it comes out as the true path
+        rotated +90 deg CCW and shrunk. Seeding vx once from a wheel/GT speed
+        sample fixes only the initial condition — no continuous aiding, so this
+        stays a genuine IMU dead-reckoning diagnostic.
+        """
+        if not self._calib.completed:
+            return
+        self._x[VX] = float(vx)
+        self._publish_state_view()
 
     def push_imu(
         self,
@@ -192,6 +213,10 @@ class OdometryFilterCpp:
 
     def push_rpm(self, t: float, rpm: float) -> None:
         del t
+        # Track wheel speed even before calibration completes so the bias
+        # calibration can gate on a genuine standstill (rpm ~ 0).
+        self.latest_rpm = float(rpm)
+        self._have_rpm = True
         if not self._calib.completed:
             return
         z_vx = float(rpm) * self.params.rpm_to_ms
@@ -350,9 +375,8 @@ class OdometryFilterCpp:
         # term) is spurious: with RPM present BA_X is anchored, but IMU-only the
         # leak drives ba_x to ~-0.4 m/s^2, injecting a phantom +0.4 m/s^2 into
         # ax = accel_x - BA_X and running vx away. Zero it (same Schmidt-Kalman
-        # partition reasoning as BG_Z in #555). Diverges from the production C++
-        # correct_nhc, which preserves K[BA_X] -- harmless there because /odom
-        # always has RPM, but the same latent leak exists if RPM ever drops.
+        # partition reasoning as BG_Z in #555). Production C++ correct_nhc zeros
+        # K[BA_X] too, for the same reason.
         k[BA_X] = 0.0
         k[BG_Z] = 0.0
         self._x += k * y
@@ -409,20 +433,36 @@ class OdometryFilterCpp:
         if self._calib.t_first is None:
             self._calib.t_first = t
 
-        self._calib.accel_sum += accel
-        self._calib.gyro_sum += gyro
-        self._calib.n_samples += 1
+        # Only fold in samples taken at a genuine standstill (wheel speed ~0).
+        # A non-stationary window soaks real motion into the bias: a measured
+        # +5.2 deg/s turn during the 3 s window became a +5.2 deg/s gyro-bias
+        # error that drifted SLAM's heading until it lost lock (the true gyro
+        # bias is ~0; the sensor slope vs GT yaw-rate is 0.992). Require at least
+        # one /motor_rpm sample so a not-yet-seen rpm (latest_rpm still 0.0)
+        # can't masquerade as standstill.
+        speed = abs(self.latest_rpm) * self.params.rpm_to_ms
+        if self._have_rpm and speed <= self.params.stationary_speed_ms:
+            self._calib.accel_sum += accel
+            self._calib.gyro_sum += gyro
+            self._calib.n_samples += 1
 
         if (t - self._calib.t_first) < self.params.calibration_seconds:
             return
-        if self._calib.n_samples == 0:
-            return
 
-        n = float(self._calib.n_samples)
-        accel_mean = self._calib.accel_sum / n
-        gyro_mean = self._calib.gyro_sum / n
-        self._calib.accel_bias = accel_mean - np.array([0.0, 0.0, G])
-        self._calib.gyro_bias = gyro_mean
+        if self._calib.n_samples > 0:
+            n = float(self._calib.n_samples)
+            accel_mean = self._calib.accel_sum / n
+            gyro_mean = self._calib.gyro_sum / n
+            self._calib.accel_bias = accel_mean - np.array([0.0, 0.0, G])
+            self._calib.gyro_bias = gyro_mean
+        else:
+            # No standstill captured in the window (recorder opened late / bag
+            # starts mid-motion). Don't fabricate a bias from moving data —
+            # default to zero. The gyro is accurate (slope ~1), so 0 is far
+            # closer to truth than a contaminated mean, and RPM aiding anchors
+            # vx regardless of the accel bias.
+            self._calib.accel_bias = np.zeros(3)
+            self._calib.gyro_bias = np.zeros(3)
         self._calib.completed = True
 
         self._x.fill(0.0)

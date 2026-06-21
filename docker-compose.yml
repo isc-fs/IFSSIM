@@ -76,6 +76,15 @@ services:
       # on-first-observation is triggering wrong-side classifications
       # in tight corners (#188).
       - DV_SLAM_LANDMARK_CAPTURE=${DV_SLAM_LANDMARK_CAPTURE:-}
+      # SIM-ONLY SLAM diagnostic: when truthy (1/true/yes/on), slam_node
+      # ignores perceived cones on /Conos_raw and feeds itself perfect
+      # cone positions from the sim GT track (/testing_only/track)
+      # projected through the GT pose. Sets the default for the node's
+      # `debug_gt_cones` parameter so it survives container restarts;
+      # a `ros2 param set` override is still possible but ephemeral.
+      # Isolation test for "is loss-of-lock perception or odom/IMU?".
+      # Never set on the real car (GT topics are sim-only). Default off.
+      - DV_SLAM_GT_CONES=${DV_SLAM_GT_CONES:-false}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed

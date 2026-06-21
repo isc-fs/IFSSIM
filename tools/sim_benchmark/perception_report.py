@@ -383,8 +383,13 @@ def _svg_time_series(
     )
 
 
-def _svg_bev_frame(frame: FrameMetrics, size: float = 280.0) -> str:
-    cones = frame.gt_cones + frame.pred_cones
+def _svg_bev_frame(
+    frame: FrameMetrics,
+    clusters: list[Cone2D] | None = None,
+    size: float = 280.0,
+) -> str:
+    clusters = clusters or []
+    cones = frame.gt_cones + frame.pred_cones + clusters
     if not cones:
         return "<p>Empty frame</p>"
     xs = [c.x for c in cones]
@@ -405,6 +410,12 @@ def _svg_bev_frame(frame: FrameMetrics, size: float = 280.0) -> str:
         f"<rect width='{int(size)}' height='{int(size)}' fill='#fafafa'/>",
         f"<polygon points='{size/2},{size/2 - 8} {size/2 - 6},{size/2 + 10} {size/2 + 6},{size/2 + 10}' fill='#333'/>",
     ]
+    for c in clusters:  # DBSCAN centroids: hollow grey squares, drawn underneath
+        px, py = to_px(c.x, c.y)
+        parts.append(
+            f"<rect x='{px - 3.5:.1f}' y='{py - 3.5:.1f}' width='7' height='7' "
+            f"fill='none' stroke='#777' stroke-width='1.2'/>"
+        )
     for m in frame.matches:
         p = frame.pred_cones[m.pred_idx]
         g = frame.gt_cones[m.gt_idx]
@@ -430,6 +441,7 @@ def _svg_bev_frame(frame: FrameMetrics, size: float = 280.0) -> str:
     parts.append("</svg>")
     cap = (
         f"t={frame.t_s:.1f}s · GT {frame.n_gt} · pred {frame.n_pred} · "
+        f"clusters {len(clusters)} · "
         f"TP {frame.n_tp} FP {frame.n_fp} FN {frame.n_fn} · err μ={frame.mean_match_err_m:.2f}m"
     )
     return f"<div class='chart'><p><small>{cap}</small>{''.join(parts)}</div>"
@@ -512,6 +524,20 @@ def render_perception_html(summary: dict[str, Any], run_dir: Path) -> str:
     ]
     gt = summary.get("gt_metrics") or {}
 
+    vfov_note = ""
+    if has_gt and summary.get("gt_vfov_gate"):
+        h = float(summary.get("lidar_height_m") or 0.0)
+        vlo = float(summary.get("vfov_lower_deg") or 0.0)
+        blind = ""
+        if h > 0.0 and vlo < 0.0:
+            r = (h - 0.35) / math.tan(math.radians(-vlo))
+            blind = f" → small cones blind within ~{r:.1f} m"
+        vfov_note = (
+            f"<p class='caption'>GT vertical-FOV gate ON (mount {h:g} m, "
+            f"vFOV {vlo:g}°{blind}): GT no longer counts cones below the lowest "
+            f"beam. Disable with <code>--no-vfov-gate</code>.</p>"
+        )
+
     charts = ""
     details_path = run_dir / "frame_details.jsonl"
     if has_gt and details_path.is_file():
@@ -557,11 +583,21 @@ def render_perception_html(summary: dict[str, Any], run_dir: Path) -> str:
         sample_path = run_dir / "frame_samples.json"
         if sample_path.is_file():
             samples = json.loads(sample_path.read_text())
-            bev = "".join(_svg_bev_frame(_frame_from_sample(s)) for s in samples)
+            bev = "".join(
+                _svg_bev_frame(
+                    _frame_from_sample(s),
+                    [Cone2D(**c) for c in s.get("clusters", [])],
+                )
+                for s in samples
+            )
             charts += (
                 "<h2>GT vs prediction (sample frames, base_link)</h2>"
                 "<p class='legend'><span class='gt'>● GT</span> "
-                "<span class='pred'>● Pred</span> <span class='match'>— match</span> ▲ ego</p>"
+                "<span class='pred'>● Pred</span> <span class='match'>— match</span> "
+                "<span style='color:#777'>▢ DBSCAN cluster</span> ▲ ego</p>"
+                "<p class='caption'>A grey square with no red dot = a cluster the fit/"
+                "residual gate rejected. A blue GT cone with no nearby square = no cluster "
+                "(points missing — sensor/clustering gap).</p>"
                 f"<div class='frame-grid'>{bev}</div>"
             )
 
@@ -601,6 +637,7 @@ def render_perception_html(summary: dict[str, Any], run_dir: Path) -> str:
 {_stats_html(summary, perf_keys)}
 {profile_html}
 <h2>Detection vs sim GT</h2>
+{vfov_note}
 {_stats_html(gt, gt_keys) if has_gt else '<p>—</p>'}
 {charts}
 <details><summary>Raw JSON</summary><pre>{json.dumps(summary, indent=2)}</pre></details>

@@ -12,6 +12,7 @@ from perception_metrics import (
     Cone2D,
     WorldCone,
     cone_in_lidar_fov,
+    cone_in_vertical_fov,
     evaluate_frame,
     filter_cones_in_fov,
     gt_cone_range_m,
@@ -205,6 +206,45 @@ class OdomAtTimeTest(unittest.TestCase):
         assert mid is not None
         self.assertEqual(mid.header.stamp.sec, 0)
         self.assertEqual(mid.header.stamp.nanosec, 500_000_000)
+
+class VerticalFovGateTest(unittest.TestCase):
+    # Hesai-like mount: h=1.1 m, vlower=-12.4° → small cone (0.35 m) blind below
+    # ~3.4 m, visible beyond.
+    H = 1.1
+    VLO = -12.4
+
+    def _vis(self, r: float, ch: float = 0.35) -> bool:
+        return cone_in_vertical_fov(
+            r, ch, lidar_height_m=self.H, vfov_lower_deg=self.VLO
+        )
+
+    def test_near_cone_below_lowest_beam_is_blind(self) -> None:
+        self.assertFalse(self._vis(2.0))
+
+    def test_far_cone_is_visible(self) -> None:
+        self.assertTrue(self._vis(10.0))
+
+    def test_blind_radius_matches_geometry(self) -> None:
+        r_edge = (self.H - 0.35) / math.tan(math.radians(-self.VLO))
+        self.assertFalse(self._vis(r_edge - 0.2))
+        self.assertTrue(self._vis(r_edge + 0.2))
+
+    def test_big_cone_sees_closer_than_small(self) -> None:
+        # Taller cone clears the lowest beam at a shorter range.
+        r = 2.7
+        self.assertFalse(cone_in_vertical_fov(r, 0.35, lidar_height_m=self.H, vfov_lower_deg=self.VLO))
+        self.assertTrue(cone_in_vertical_fov(r, 0.55, lidar_height_m=self.H, vfov_lower_deg=self.VLO))
+
+    def test_gate_drops_near_cones_in_world_transform(self) -> None:
+        odom = _Odom(0.0, 0.0, 0.0)
+        cones = [WorldCone(2.0, 0.0, color=1), WorldCone(10.0, 0.0, color=1)]
+        gated = world_cones_to_body(
+            cones, odom, lidar_height_m=self.H, vfov_lower_deg=self.VLO
+        )
+        ungated = world_cones_to_body(cones, odom)
+        self.assertEqual(len(ungated), 2)
+        self.assertEqual([round(c.x) for c in gated], [10])
+
 
 if __name__ == "__main__":
     unittest.main()

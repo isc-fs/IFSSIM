@@ -40,6 +40,9 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("port",         default_value="41451"),
         DeclareLaunchArgument("mission_name", default_value="trackdrive"),
         DeclareLaunchArgument("track_name",   default_value="A"),
+        # Sim container runs on the bridge's /clock. Forwarded so the
+        # entrypoint can override (e.g. =false to debug against wall time).
+        DeclareLaunchArgument("use_sim_time",  default_value="true"),
     ]
 
     full_pipeline = IncludeLaunchDescription(
@@ -55,6 +58,7 @@ def generate_launch_description() -> LaunchDescription:
             "port":         LaunchConfiguration("port"),
             "mission_name": LaunchConfiguration("mission_name"),
             "track_name":   LaunchConfiguration("track_name"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
         }.items(),
     )
 

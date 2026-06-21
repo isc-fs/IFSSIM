@@ -9,6 +9,8 @@ from typing import Any
 from perception_metrics import (
     Cone2D,
     WorldCone,
+    aligned_time_ns,
+    compute_bag_sim_offset_ns,
     header_at_ns,
     latch_track_layout,
     msg_time_ns,
@@ -126,23 +128,23 @@ class ReplayResult:
     n_odom: int = 0
     n_cone_updates: int = 0
     wheel_steer_units: str = "radians"
-    imu_time_scale: float = 1.0
 
 
 def estimate_imu_time_scale(odom_msgs: list[tuple[int, object]]) -> tuple[float, dict]:
-    """Factor to rescale the IMU integration clock onto true-motion time.
+    """Diagnostic: ratio of true-motion time to the bag's header-stamp time.
 
-    The bridge stamps every sensor with ``node_->now()`` (wall clock), but UE5
-    runs slower than real-time under load, so the wall stamps span ~30% more
-    time than the car actually moved. GT odom carries both an integrated
-    position and an instantaneous twist on that same clock, so:
+    GT odom carries both an integrated position and an instantaneous twist on
+    the header clock, so:
 
-        scale = path_length / integral(speed * dt_wall)
+        scale = path_length / integral(speed * dt_header)
 
-    is the ratio of true motion time to wall time. Feeding ``t * scale`` to the
-    EKF compresses every ``dt`` back onto sim time, which removes the inflated
-    distance (``x += v * dt``). Returns ``(scale, diagnostics)``; ``1.0`` when
-    GT is unusable.
+    A value near 1.0 means the header stamps span the same time the car
+    actually moved. This used to read ~0.77 because the bridge stamped sensors
+    with wall-clock ``node_->now()`` while UE5 ran slower than real-time (the
+    "clock stretch"); the replay code then rescaled by this factor to undo it.
+    With the bridge now stamping UE sim time (Option 2), the scale should sit
+    at ~1.0 and no correction is applied — run this on a fresh bag to confirm
+    the fix. Returns ``(scale, diagnostics)``; ``1.0`` when GT is unusable.
     """
     rows = sorted((msg_time_ns(b, m), m) for b, m in odom_msgs)
     if len(rows) < 2:
@@ -196,13 +198,16 @@ def pose_err_m(ax: float, ay: float, bx: float, by: float) -> float:
 def _scalar_series_from_bucket(
     buckets: dict[str, list[tuple[int, object]]],
     topic: str,
+    offset_ns: int = 0,
 ) -> list[tuple[int, float]]:
-    """Build a (header_stamp_ns, value) series sorted by time."""
-    from perception_metrics import msg_time_ns
+    """Build a (sim_time_ns, value) series sorted by time.
 
+    Headerless ``std_msgs/Float32`` topics are mapped onto the sim clock via
+    ``offset_ns`` so they align with the headered IMU/odom event times.
+    """
     series: list[tuple[int, float]] = []
     for bag_t, msg in buckets.get(topic, []):
-        series.append((msg_time_ns(bag_t, msg), float(msg.data)))
+        series.append((aligned_time_ns(bag_t, msg, offset_ns), float(msg.data)))
     series.sort(key=lambda row: row[0])
     return series
 
@@ -217,6 +222,7 @@ def infer_steering_angle_units(
     rpm_to_ms: float = 0.00821,
     max_steer_rad: float = 0.5,
     max_samples: int = 3000,
+    offset_ns: int = 0,
 ) -> str:
     """Pick ``'radians'`` vs ``'normalized'`` for ``/steering_angle`` bag samples.
 
@@ -233,7 +239,7 @@ def infer_steering_angle_units(
         imu_idx += 1
         if imu_idx % imu_decimation != 0:
             continue
-        event_t_ns = msg_time_ns(_bag_t_ns, msg)
+        event_t_ns = aligned_time_ns(_bag_t_ns, msg, offset_ns)
         wz = float(msg.angular_velocity.z)
         steer = _sample_latest_before(steer_series, event_t_ns)
         rpm = _sample_latest_before(rpm_series, event_t_ns)
@@ -726,11 +732,11 @@ def replay_slam(
     gt_min_range_m: float = 0.5,
     gt_hfov_deg: float = 60.0,
     gt_scan_period_ns: int = 100_000_000,
-    gt_scan_center_frac: float = 0.0,
-    imu_time_scale: float | None = None,
+    motion_model: str = "odom",
 ) -> ReplayResult:
     import numpy as np
     import rclpy
+    from rclpy.parameter import Parameter
     from cone_slam.cone_graph_slam_node import ConeGraphSlamNode
     from lifecycle_msgs.msg import State as StateMsg
     from rclpy.lifecycle import State as LifecycleState
@@ -745,6 +751,10 @@ def replay_slam(
     node = ConeGraphSlamNode()
     stub = LifecycleState(StateMsg.PRIMARY_STATE_UNCONFIGURED, "unconfigured")
     node._behavior = strategy
+    # Select the SLAM motion model before configure reads the parameter.
+    # "odom" (default) = EKF /odom delta is the primary motion constraint;
+    # "imu" = legacy IMU-preintegration path. Lets the benchmark A/B the two.
+    node.set_parameters([Parameter("motion_model", value=str(motion_model))])
     node.on_configure(stub)
     node.on_activate(stub)
 
@@ -756,11 +766,20 @@ def replay_slam(
     # integrated centripetal accel-y straight into vy (no Coriolis
     # cross-term), so vy ran to several m/s in corners and the pose
     # diverged tens of metres — worse than wheel-only DR.
+    # Headerless std_msgs/Float32 topics (/motor_rpm, /steering_angle) carry bag
+    # (wall-clock) time while /imu & /testing_only/odom headers carry UE sim
+    # time. Align the former onto the sim clock, then (re)sort events so RPM and
+    # steering interleave with IMU instead of all landing after the run — the
+    # bug that left the EKF running IMU-only and the wheel DR pinned at origin.
+    offset_ns = compute_bag_sim_offset_ns((b, m) for b, _t, m in events)
+    events = sorted(events, key=lambda e: aligned_time_ns(e[0], e[2], offset_ns))
+
     filt = OdometryFilterCpp(EkfParams())
     imu_only_filt = OdometryFilterCpp(EkfParams())
     rpm_series = _scalar_series_from_bucket(
         {"/motor_rpm": [(b, m) for b, t, m in events if t == "/motor_rpm"]},
         "/motor_rpm",
+        offset_ns,
     )
     steer_series = _scalar_series_from_bucket(
         {
@@ -769,27 +788,22 @@ def replay_slam(
             ],
         },
         "/steering_angle",
+        offset_ns,
     )
     steer_units = infer_steering_angle_units(
         events,
         rpm_series,
         steer_series,
         imu_decimation=IMU_DECIMATION,
+        offset_ns=offset_ns,
     )
     wheel_filt = OdometryFilterCpp(EkfParams())
 
-    # Rescale the IMU integration clock onto true-motion time (sim ran slower
-    # than wall, so the bridge's node_->now() stamps over-count dt -> inflated
-    # distance). None = auto-calibrate from GT twist-vs-path; 1.0 = off.
-    if imu_time_scale is None:
-        imu_scale, _scale_meta = estimate_imu_time_scale(odom_msgs)
-    else:
-        imu_scale = float(imu_time_scale)
-
-    out = ReplayResult(
-        wheel_steer_units=steer_units,
-        imu_time_scale=imu_scale,
-    )
+    # Bags now carry UE sim time in every header.stamp (bridge Option 2), so
+    # the filter integrates on the same clock the physics ran on — no
+    # wall-vs-sim clock-stretch to undo. (estimate_imu_time_scale is kept as a
+    # standalone diagnostic: run it on a fresh bag to confirm scale ~ 1.0.)
+    out = ReplayResult(wheel_steer_units=steer_units)
     use_lidar_trigger = any(t == GT_CONE_TRIGGER_TOPIC for _, t, _ in events)
     imu_idx = 0
     prev_filter_err: float | None = None
@@ -797,6 +811,7 @@ def replay_slam(
     filter_sync_pose = None  # filter /odom pose at SLAM GT-alignment instant
     imu_only_sync_pose = None
     wheel_sync_pose = None
+    imu_only_seeded = False  # one-shot forward-velocity seed (see below)
 
     def _maybe_latch_filter_sync() -> None:
         nonlocal filter_sync_pose, imu_only_sync_pose, wheel_sync_pose
@@ -824,11 +839,8 @@ def replay_slam(
 
     try:
         for bag_t_ns, topic, msg in events:
-            event_t_ns = msg_time_ns(bag_t_ns, msg)
+            event_t_ns = aligned_time_ns(bag_t_ns, msg, offset_ns)
             t_s = event_t_ns * 1e-9
-            # Filter integration runs on the motion-time-corrected clock; GT
-            # lookup / recording stay on the original (wall) event time.
-            t_filt = t_s * imu_scale
             if topic == "/imu":
                 imu_idx += 1
                 if imu_idx % IMU_DECIMATION == 0:
@@ -846,10 +858,24 @@ def replay_slam(
                             msg.angular_velocity.z,
                         ],
                     )
-                    filt.push_imu(t_filt, accel, gyro)
-                    imu_only_filt.push_imu(t_filt, accel, gyro)
+                    filt.push_imu(t_s, accel, gyro)
+                    imu_only_filt.push_imu(t_s, accel, gyro)
+                    # Seed the IMU-only forward velocity once, right after its
+                    # accel-bias calibration completes. Bags routinely start
+                    # mid-motion (recorder DDS-discovery latency drops the
+                    # pre-launch standstill), and an unaided accel integrator
+                    # started from v=0 can never recover absolute speed — vx
+                    # collapses and the path rotates 90 deg onto the lateral
+                    # leak. One wheel-speed sample fixes the initial condition.
+                    if not imu_only_seeded and imu_only_filt.is_calibrated():
+                        rv0 = _sample_latest_before(rpm_series, event_t_ns)
+                        if rv0 is not None:
+                            imu_only_filt.seed_forward_velocity(
+                                rv0 * imu_only_filt.params.rpm_to_ms,
+                            )
+                            imu_only_seeded = True
                     if not wheel_filt.is_calibrated():
-                        wheel_filt.push_imu(t_filt, accel, gyro)
+                        wheel_filt.push_imu(t_s, accel, gyro)
                     else:
                         rv = _sample_latest_before(rpm_series, event_t_ns)
                         sv = _sample_latest_before(steer_series, event_t_ns)
@@ -865,26 +891,14 @@ def replay_slam(
                             steer = sv
                             steer_units_for_sample = steer_units
                         wheel_filt.push_wheel_sensors(
-                            t_filt,
+                            t_s,
                             rpm,
                             steer,
                             steering_units=steer_units_for_sample,
                         )
-                # SLAM's own gtsam preintegrator integrates gyro*dt and
-                # accel*dt straight off the IMU header stamp (and the
-                # cone-trigger stamp below), so it must see the same
-                # motion-time-compressed clock as the EKF ports above
-                # (t_filt = t_s * imu_scale). Otherwise it integrates
-                # over wall dt and over-rotates ~(1/scale - 1) of every
-                # turn, blowing data association out of the gate after
-                # corners (the post-turn SLAM detonation). Restamp the
-                # message in place — replay is the last consumer of this
-                # stamp, and the EKF ports already read accel/gyro arrays
-                # directly. No-op when scale is off (1.0).
-                if imu_scale != 1.0:
-                    sns = int(event_t_ns * imu_scale)
-                    msg.header.stamp.sec = sns // 1_000_000_000
-                    msg.header.stamp.nanosec = sns % 1_000_000_000
+                # SLAM's gtsam preintegrator reads gyro*dt / accel*dt straight
+                # off the IMU header stamp, which is now sim time — same clock
+                # the EKF ports above integrate on. No restamping needed.
                 node._on_imu(msg)
                 out.n_imu += 1
                 _maybe_latch_filter_sync()
@@ -997,10 +1011,16 @@ def replay_slam(
                         odom_msgs,
                         event_t_ns,
                         scan_period_ns=gt_scan_period_ns,
-                        center_fraction=gt_scan_center_frac,
                     )
+                    # Scan trigger time must be the LiDAR capture stamp, not an
+                    # interpolated GT-odom header (boundary clamps can differ).
+                    stamp = msg.header.stamp
                 else:
                     odom = odom_at_time(odom_msgs, event_t_ns)
+                    stamp = getattr(
+                        getattr(odom, "header", None), "stamp", None)
+                    if stamp is None:
+                        stamp = header_at_ns(event_t_ns).stamp
                 if odom is not None:
                     body = world_cones_to_body(
                         world_track,
@@ -1009,19 +1029,6 @@ def replay_slam(
                         min_range_m=gt_min_range_m,
                         hfov_half_deg=gt_hfov_deg,
                     )
-                    if imu_scale != 1.0:
-                        # Put the cone scan trigger on the same motion-time
-                        # clock as the restamped IMU samples, so the
-                        # preintegrator's integrate_to(t_scan) window lines
-                        # up with them. (t_scan only drives preintegration
-                        # timing; SLAM pose recording uses spatial frames,
-                        # so this has no effect on the GT comparison.)
-                        stamp = header_at_ns(int(event_t_ns * imu_scale)).stamp
-                    else:
-                        stamp = getattr(
-                            getattr(odom, "header", None), "stamp", None)
-                        if stamp is None:
-                            stamp = header_at_ns(event_t_ns).stamp
                     markers = cones_to_marker_array(body, stamp)
                     node._on_cones(markers)
                     out.n_cone_updates += 1

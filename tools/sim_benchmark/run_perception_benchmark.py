@@ -89,6 +89,33 @@ def _cone_dict(c: Cone2D) -> dict:
     return {"x": c.x, "y": c.y, "color": c.color}
 
 
+def _cluster_centroids(xyz, cfg) -> list[Cone2D]:
+    """DBSCAN cluster centroids (body frame) for the BEV diagnostic overlay.
+
+    Re-runs ground removal + DBSCAN with the detection config and averages each
+    cluster's xy. Lets the report show whether a missed GT cone had *any* cluster
+    (points present, but the fit/residual gate dropped it) versus no cluster at
+    all (points missing — sensor/clustering gap). RANSAC subsampling makes this
+    mildly non-deterministic vs the scored pass, which is fine for "is there a
+    cluster here?".
+    """
+    import numpy as np
+    from cone_detection.cone_detection import clustering_separation_rt
+
+    labels, clean_data, _ = clustering_separation_rt(xyz, cfg)
+    if len(labels) == 0:
+        return []
+    out: list[Cone2D] = []
+    for lab in np.unique(labels):
+        if lab == -1:  # DBSCAN noise
+            continue
+        pts = clean_data[labels == lab]
+        if pts.shape[0] == 0:
+            continue
+        out.append(Cone2D(x=float(pts[:, 0].mean()), y=float(pts[:, 1].mean()), color=4))
+    return out
+
+
 def _frame_sample_dict(fm) -> dict:
     return {
         "t_s": fm.t_s,
@@ -142,10 +169,29 @@ def main() -> None:
         help="LiDAR sweep period for GT pose centre (10 Hz sim → 100 ms).",
     )
     ap.add_argument(
-        "--gt-scan-center-frac",
+        "--lidar-height-m",
         type=float,
-        default=0.0,
-        help="Advance GT odom into the LiDAR sweep (0 = header stamp; try 0.3–0.5 if late BEV looks shifted).",
+        default=1.1,
+        help="LiDAR mount height (settings.json Lidar Z) for the GT vertical-FOV gate.",
+    )
+    ap.add_argument(
+        "--vfov-lower-deg",
+        type=float,
+        default=-12.4,
+        help="LiDAR VerticalFOVLower; GT cones whose tip falls below this are unseeable.",
+    )
+    ap.add_argument(
+        "--vfov-upper-deg",
+        type=float,
+        default=5.9,
+        help="LiDAR VerticalFOVUpper (matches settings.json).",
+    )
+    ap.add_argument("--cone-height-small-m", type=float, default=0.35)
+    ap.add_argument("--cone-height-big-m", type=float, default=0.55)
+    ap.add_argument(
+        "--no-vfov-gate",
+        action="store_true",
+        help="Disable the GT vertical-FOV gate (count cones the sensor physically can't see).",
     )
     ap.add_argument(
         "--max-frames",
@@ -191,8 +237,9 @@ def main() -> None:
 
     has_gt = bool(buckets[args.odom_topic] and buckets[args.track_topic])
     odom_msgs = sorted(
-        (msg_time_ns(bag_t, msg), msg)
-        for bag_t, msg in buckets[args.odom_topic]
+        ((msg_time_ns(bag_t, msg), msg)
+         for bag_t, msg in buckets[args.odom_topic]),
+        key=lambda item: item[0],
     )
     world_track = latch_track_layout(buckets[args.track_topic]) if has_gt else None
     has_gt = has_gt and world_track is not None
@@ -201,6 +248,15 @@ def main() -> None:
         min_range_m=args.gt_min_range_m,
         hfov_half_deg=args.gt_hfov_deg,
     )
+    vfov_gate: dict[str, float] = {}
+    if not args.no_vfov_gate:
+        vfov_gate = dict(
+            lidar_height_m=args.lidar_height_m,
+            vfov_lower_deg=args.vfov_lower_deg,
+            vfov_upper_deg=args.vfov_upper_deg,
+            cone_height_small_m=args.cone_height_small_m,
+            cone_height_big_m=args.cone_height_big_m,
+        )
     scan_period_ns = int(args.gt_scan_period_ms * 1e6)
 
     strategy = BaseConeDetection(logger=_NullLogger())
@@ -251,10 +307,9 @@ def main() -> None:
                 odom_msgs,
                 scan_t_ns,
                 scan_period_ns=scan_period_ns,
-                center_fraction=args.gt_scan_center_frac,
             )
             if odom is not None:
-                gt = world_cones_to_body(world_track, odom, **gt_gate)
+                gt = world_cones_to_body(world_track, odom, **gt_gate, **vfov_gate)
 
         fm = evaluate_frame(
             t_s=scan_t_ns * 1e-9,
@@ -295,7 +350,10 @@ def main() -> None:
         "gt_min_range_m": args.gt_min_range_m,
         "gt_hfov_deg": args.gt_hfov_deg,
         "gt_scan_period_ms": args.gt_scan_period_ms,
-        "gt_scan_center_frac": args.gt_scan_center_frac,
+        "gt_vfov_gate": not args.no_vfov_gate,
+        "lidar_height_m": args.lidar_height_m,
+        "vfov_lower_deg": args.vfov_lower_deg,
+        "vfov_upper_deg": args.vfov_upper_deg,
         "gt_track_cones": len(world_track) if world_track else 0,
         "csv": str(run_dir / "results.csv"),
     }
@@ -423,11 +481,21 @@ def main() -> None:
             )
 
     if frame_metrics and args.bev_samples > 0:
+        from cone_detection.cone_detection import ConeDetectionConfig
+
+        cfg_bev = strategy.CONE_DETECTION_CONFIG or ConeDetectionConfig()
         with_gt_idx = [i for i, f in enumerate(frame_metrics) if f.n_gt > 0]
         pool = with_gt_idx if with_gt_idx else list(range(len(frame_metrics)))
         step = max(1, len(pool) // args.bev_samples)
         indices = pool[::step][: args.bev_samples]
-        samples = [_frame_sample_dict(frame_metrics[i]) for i in indices]
+        samples = []
+        for i in indices:
+            s = _frame_sample_dict(frame_metrics[i])
+            _, cloud_i = lidar_msgs[i]
+            cents = _cluster_centroids(_pointcloud_to_xyz(cloud_i), cfg_bev)
+            cents = filter_cones_in_fov(cents, **gt_gate)
+            s["clusters"] = [_cone_dict(c) for c in cents]
+            samples.append(s)
         (run_dir / "frame_samples.json").write_text(json.dumps(samples, indent=2))
 
     report = write_run_report(summary, run_dir, Path(args.results_root))

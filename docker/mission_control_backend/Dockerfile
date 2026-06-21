@@ -54,7 +54,7 @@ RUN pip3 install --no-cache-dir "docker>=7,<8"
 WORKDIR /msgs_ws
 RUN mkdir -p src
 COPY pipeline/dv_msgs/   src/dv_msgs/
-COPY ros2/src/fs_msgs/   src/fs_msgs/
+COPY pipeline/fs_msgs/   src/fs_msgs/
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --packages-select fs_msgs dv_msgs \
                     --cmake-args -DCMAKE_BUILD_TYPE=Release
