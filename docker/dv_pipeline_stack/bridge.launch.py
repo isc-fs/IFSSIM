@@ -72,7 +72,7 @@ def generate_launch_description():
                 # the bridge-only launch (replay / debug flows) gets
                 # the same CPU-mitigated config.
                 'topic_whitelist': [
-                    "/Conos", "/Conos_Orange", "/Conos_raw",
+                    "/Conos", "/Conos_full", "/Conos_Orange", "/Conos_raw",
                     "/Path", "/path_planning/debug",
                     "/slam/pose", "/cone_slam/gt_aligned",
                     "/cone_slam/gt_error_m",

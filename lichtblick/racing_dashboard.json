@@ -1064,7 +1064,13 @@
         }
       },
       "topics": {
+        "/Conos_full": {
+          "visible": true
+        },
         "/Conos": {
+          "visible": false
+        },
+        "/slam/pose": {
           "visible": true
         },
         "/studio_script/gt_cones_odom": {
@@ -1096,7 +1102,7 @@
       "xAxisVal": "timestamp",
       "paths": [
         {
-          "value": "/Conos.markers[:]{id}.id",
+          "value": "/Conos_full.markers[:]{id}.id",
           "enabled": true,
           "label": "Mapped cones",
           "color": "#00cc88",
