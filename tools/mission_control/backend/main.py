@@ -1295,6 +1295,18 @@ def track_load(name: str):
     # mounted tracks volume on the sim side too.
     ue5_path = os.path.join(UE5_TRACKS_DIR, name)
     event_type = BUILTIN_TRACKS.get(name)
+    # Recentre the track on the sim's origin-centred track area before loading,
+    # so older gate-at-origin tracks don't spill outside it. We rewrite the
+    # backend-visible file at `filepath`; `ue5_path` points at the same volume
+    # (UE5_TRACKS_DIR defaults to TRACKS_DIR), so the sim reads the rewritten
+    # bytes. Cheap when already centred — one min/max pass, no rewrite — so
+    # newly generated tracks pass straight through. See track_centering.
+    try:
+        from track_centering import ensure_centered
+        if ensure_centered(filepath):
+            log_event("track_recenter", f"Recentred {name} on origin before load")
+    except Exception as e:
+        _state_logger.warning("track centering skipped for %s: %s", name, e)
     with _state_lock:
         result = sim.load_track(ue5_path)
         if event_type:
