@@ -1,8 +1,21 @@
-"""Python port of ``pipeline/odometry_filter`` (C++ 9-state EKF).
+"""Production C++ 9-state odometry EKF for the SLAM benchmark.
 
-Used by the SLAM benchmark for wheel/RPM + steering dead reckoning so
-offline replay matches ``odometry_filter_node`` rather than a separate
-kinematic integrator. Keep in sync with ``odometry_filter.cpp``.
+``OdometryFilterCpp`` runs the REAL filter from ``pipeline/odometry_filter``
+via its pybind11 bindings (``odometry_filter_py``) whenever they're
+importable, so offline replay exercises exactly what
+``odometry_filter_node`` runs — no separately-maintained re-implementation
+to drift out of sync (a stale port once made a filter change look like a
+benchmark regression; that's why this now binds the real code).
+
+If the compiled module isn't on the path (e.g. a host shell with no built
+workspace), it transparently falls back to ``_PyOdometryFilter`` below — a
+line-for-line Python mirror kept only as that fallback + a readable
+reference. The open-loop wheel dead-reckoning (``push_wheel_sensors``) is a
+deliberately-degraded *diagnostic*, not a port of any production code, so it
+lives in the wrapper in Python regardless of backend.
+
+Check ``OdometryFilterCpp(...).backend`` (``"cpp"`` / ``"python"``) to see
+which is active.
 """
 
 from __future__ import annotations
@@ -137,8 +150,38 @@ def kinematic_omega(
     )
 
 
-class OdometryFilterCpp:
-    """ROS-free port of ``odometry_filter::OdometryFilter``."""
+# --- production C++ bindings (preferred backend) -----------------------------
+try:
+    import odometry_filter_py as _native  # compiled pybind11 module
+
+    _NATIVE_AVAILABLE = True
+except ImportError:  # no built workspace on the path → Python fallback
+    _native = None
+    _NATIVE_AVAILABLE = False
+
+
+_EKF_PARAM_FIELDS = (
+    "wheelbase_m", "rpm_to_ms", "calibration_seconds", "stationary_speed_ms",
+    "sigma_ax", "sigma_ay", "sigma_gz", "sigma_ba_walk", "sigma_bg_walk",
+    "sigma_rpm", "sigma_steer", "sigma_vy_nhc", "sigma_vy_nhc_slip",
+    "slip_yaw_residual_threshold", "min_vx_for_steering_correct",
+    "dt_min", "dt_max",
+)
+
+
+def _to_native_params(params: EkfParams):
+    """Copy a Python EkfParams dataclass into a native EkfParams struct."""
+    np_params = _native.EkfParams()
+    for field_name in _EKF_PARAM_FIELDS:
+        setattr(np_params, field_name, getattr(params, field_name))
+    return np_params
+
+
+class _PyOdometryFilter:
+    """Pure-Python mirror of ``odometry_filter::OdometryFilter`` — the
+    fallback used only when the compiled ``odometry_filter_py`` bindings
+    aren't importable. Kept line-for-line faithful to ``odometry_filter.cpp``
+    as a readable reference; the wrapper below prefers the real C++."""
 
     def __init__(self, params: EkfParams | None = None) -> None:
         self.params = params or EkfParams()
@@ -227,63 +270,6 @@ class OdometryFilterCpp:
         del t
         self.latest_steering_rad = float(angle_rad)
         self._have_steering = True
-
-    def push_wheel_sensors(
-        self,
-        t: float,
-        rpm: float,
-        steering_rad: float,
-        *,
-        steering_units: str = "radians",
-    ) -> None:
-        """Open-loop wheel DR: RPM + steering through C++ predict kinematics.
-
-        Uses measured ``vx = rpm * rpm_to_ms`` and
-        ``omega = (vx / L) * tan(delta_road)`` (no IMU, no EKF). ``steering_rad``
-        is the raw ``/steering_angle`` sample; ``steering_units`` selects rad vs
-        normalized→rad conversion. Position integration matches ``predict_step``
-        with ``vy = 0``.
-        """
-        if not self._calib.completed:
-            return
-
-        self.latest_rpm = float(rpm)
-        road = steering_to_road_wheel_rad(steering_rad, units=steering_units)
-        self.latest_steering_rad = road
-        self._have_steering = True
-
-        if self._t_imu_last is None:
-            self._t_imu_last = t
-            return
-
-        dt = t - self._t_imu_last
-        self._t_imu_last = t
-        if dt < self.params.dt_min or dt > self.params.dt_max:
-            return
-
-        vx = self.latest_rpm * self.params.rpm_to_ms
-        omega = kinematic_omega(
-            vx, self.latest_steering_rad, self.params.wheelbase_m,
-        )
-        self.diagnostics.yaw_residual_rad_s = omega
-        self.diagnostics.slip_flag = (
-            abs(omega) > self.params.slip_yaw_residual_threshold
-        )
-        self.diagnostics.low_vx_gate_on = (
-            vx < self.params.min_vx_for_steering_correct
-        )
-
-        theta = self._x[THETA]
-        theta_mid = theta + 0.5 * omega * dt
-        c = math.cos(theta_mid)
-        s = math.sin(theta_mid)
-        self._x[X] += vx * c * dt
-        self._x[Y] += vx * s * dt
-        self._x[THETA] = wrap_pi(theta + omega * dt)
-        self._x[VX] = vx
-        self._x[VY] = 0.0
-        self._x[OMEGA] = omega
-        self._publish_state_view()
 
     def _predict_step(
         self,
@@ -480,3 +466,139 @@ class OdometryFilterCpp:
         self.state.vx = self._x[VX]
         self.state.vy = self._x[VY]
         self.state.yaw_rate = self._x[OMEGA]
+
+
+class OdometryFilterCpp:
+    """The production 9-state EKF for benchmark replay.
+
+    Delegates the EKF (predict + RPM/steering/NHC corrections + stationary
+    calibration) to the compiled C++ ``odometry_filter_py`` bindings when
+    available — exactly what ``odometry_filter_node`` runs — and to
+    ``_PyOdometryFilter`` otherwise. ``backend`` reports which.
+
+    ``push_wheel_sensors`` is an open-loop wheel/steering dead-reckoner used
+    only as a comparison baseline. It is NOT the EKF and not a port of any
+    production code, so it integrates a small Python "shadow" pose here
+    regardless of backend; once it's used on an instance, ``state`` returns
+    that shadow (the EKF and the wheel DR are never mixed on one instance —
+    the benchmark dedicates a separate filter to each).
+    """
+
+    def __init__(self, params: EkfParams | None = None) -> None:
+        self.params = params or EkfParams()
+        if _NATIVE_AVAILABLE:
+            self._ekf = _native.OdometryFilter(_to_native_params(self.params))
+            self.backend = "cpp"
+        else:
+            self._ekf = _PyOdometryFilter(self.params)
+            self.backend = "python"
+        # Latest raw wheel inputs (read/written by the benchmark for the
+        # wheel-DR path; mirror the legacy port's public attributes).
+        self.latest_rpm: float = 0.0
+        self.latest_steering_rad: float = 0.0
+        # Open-loop wheel-DR shadow state (only active once
+        # push_wheel_sensors is called on this instance).
+        self._wheel_mode = False
+        self._wx = np.zeros(STATE_DIM)
+        self._wheel_t_last: float | None = None
+        self._wheel_state = OdometryState()
+        self._wheel_diag = FilterDiagnostics()
+
+    # ----- EKF API: straight delegation to the active backend -------------
+    def reset(self) -> None:
+        self._ekf.reset()
+        self.latest_rpm = 0.0
+        self.latest_steering_rad = 0.0
+        self._wheel_mode = False
+        self._wx.fill(0.0)
+        self._wheel_t_last = None
+        self._wheel_state = OdometryState()
+        self._wheel_diag = FilterDiagnostics()
+
+    def is_calibrated(self) -> bool:
+        return self._ekf.is_calibrated()
+
+    @property
+    def state(self) -> OdometryState:
+        return self._wheel_state if self._wheel_mode else self._ekf.state
+
+    @property
+    def diagnostics(self) -> FilterDiagnostics:
+        return self._wheel_diag if self._wheel_mode else self._ekf.diagnostics
+
+    def push_imu(self, t: float, accel: np.ndarray, gyro: np.ndarray) -> None:
+        self._ekf.push_imu(t, accel, gyro)
+
+    def push_rpm(self, t: float, rpm: float) -> None:
+        self.latest_rpm = float(rpm)
+        self._ekf.push_rpm(t, rpm)
+
+    def push_steering(self, t: float, angle_rad: float) -> None:
+        self.latest_steering_rad = float(angle_rad)
+        self._ekf.push_steering(t, angle_rad)
+
+    def seed_forward_velocity(self, vx: float) -> None:
+        self._ekf.seed_forward_velocity(vx)
+
+    # ----- Open-loop wheel dead-reckoning (diagnostic baseline) -----------
+    def push_wheel_sensors(
+        self,
+        t: float,
+        rpm: float,
+        steering_rad: float,
+        *,
+        steering_units: str = "radians",
+    ) -> None:
+        """Open-loop wheel DR: ``vx = rpm·rpm_to_ms``,
+        ``omega = (vx/L)·tan(delta_road)`` (no IMU, no EKF), integrated with a
+        midpoint heading. Anchors at the EKF's calibrated origin on first use.
+        """
+        if not self._ekf.is_calibrated():
+            return
+        road = steering_to_road_wheel_rad(steering_rad, units=steering_units)
+        self.latest_rpm = float(rpm)
+        self.latest_steering_rad = road
+
+        if not self._wheel_mode:
+            # Hand over from the EKF: seed the shadow at the current
+            # (calibrated, origin) pose and establish the time baseline.
+            st = self._ekf.state
+            self._wx.fill(0.0)
+            self._wx[X], self._wx[Y], self._wx[THETA] = st.x, st.y, st.yaw
+            self._wheel_mode = True
+            self._wheel_t_last = t
+            self._publish_wheel_view()
+            return
+
+        dt = t - self._wheel_t_last
+        self._wheel_t_last = t
+        if dt < self.params.dt_min or dt > self.params.dt_max:
+            return
+
+        vx = self.latest_rpm * self.params.rpm_to_ms
+        omega = kinematic_omega(vx, road, self.params.wheelbase_m)
+        self._wheel_diag.yaw_residual_rad_s = omega
+        self._wheel_diag.slip_flag = (
+            abs(omega) > self.params.slip_yaw_residual_threshold
+        )
+        self._wheel_diag.low_vx_gate_on = (
+            vx < self.params.min_vx_for_steering_correct
+        )
+
+        theta = self._wx[THETA]
+        theta_mid = theta + 0.5 * omega * dt
+        c = math.cos(theta_mid)
+        s = math.sin(theta_mid)
+        self._wx[X] += vx * c * dt
+        self._wx[Y] += vx * s * dt
+        self._wx[THETA] = wrap_pi(theta + omega * dt)
+        self._wx[VX] = vx
+        self._wx[VY] = 0.0
+        self._wx[OMEGA] = omega
+        self._publish_wheel_view()
+
+    def _publish_wheel_view(self) -> None:
+        self._wheel_state = OdometryState(
+            x=self._wx[X], y=self._wx[Y], yaw=self._wx[THETA],
+            vx=self._wx[VX], vy=self._wx[VY], yaw_rate=self._wx[OMEGA],
+        )

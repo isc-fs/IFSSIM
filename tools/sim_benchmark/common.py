@@ -165,11 +165,21 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     if not any(a == "--results-root" or a.startswith("--results-root=") for a in inner_argv):
         inner_argv = ["--results-root", "/results", *inner_argv]
     arg_str = " ".join(shlex.quote(a) for a in inner_argv)
+
+    # Compiled odometry_filter_py bindings (built by build_native_filter.sh).
+    # Mounting them lets the benchmark run the REAL C++ EKF instead of the
+    # Python fallback. Optional: absent → OdometryFilterCpp falls back.
+    native_dir = bench / "_native"
+    have_native = native_dir.is_dir() and any(native_dir.glob("odometry_filter_py*.so"))
+    pythonpath_dirs = "/dev_cone_detection:/dev_cone_slam"
+    if have_native:
+        pythonpath_dirs = "/native:" + pythonpath_dirs
+
     inner = (
         "set -eo pipefail; "
         "export IFSSIM_BENCHMARK_IN_DOCKER=1; "
         f"{dv_pipeline_ros_setup_shell()}"
-        "export PYTHONPATH=/dev_cone_detection:/dev_cone_slam:${PYTHONPATH}; "
+        f"export PYTHONPATH={pythonpath_dirs}:${{PYTHONPATH}}; "
         f"cd /bench && python3 {shlex.quote(script_name)} {arg_str}"
     )
     # Override image ENTRYPOINT (/entrypoint.sh launches the full sim stack).
@@ -187,6 +197,10 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         f"{cone_slam_src.resolve()}:/dev_cone_slam:ro",
         "-v",
         f"{results.resolve()}:/results",
+    ]
+    if have_native:
+        cmd += ["-v", f"{native_dir.resolve()}:/native:ro"]
+    cmd += [
         "-e",
         "IFSSIM_BENCHMARK_IN_DOCKER=1",
         image,

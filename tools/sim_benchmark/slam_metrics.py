@@ -776,6 +776,10 @@ def replay_slam(
 
     filt = OdometryFilterCpp(EkfParams())
     imu_only_filt = OdometryFilterCpp(EkfParams())
+    print(
+        f"odometry EKF backend: {filt.backend} "
+        f"({'real C++ bindings' if filt.backend == 'cpp' else 'Python fallback'})"
+    )
     rpm_series = _scalar_series_from_bucket(
         {"/motor_rpm": [(b, m) for b, t, m in events if t == "/motor_rpm"]},
         "/motor_rpm",
