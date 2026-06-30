@@ -69,6 +69,17 @@ PATH_HORIZON_ARC_M = 12.0
 # cannot snap to the far side of a nearly-closed polyline.
 LOOP_TRIM_MIN_TRAVEL_M = 20.0
 LOOP_TRIM_CLOSE_M = 8.0
+# Centerline resampling. The ordered cone-midpoint polyline is coarse
+# (one point per blue cone, ~3-5 m, uneven), which makes the controller-
+# side finite-difference curvature noisy and the Pure Pursuit chase
+# target snap between sparse points. The live pipeline feeds /Path
+# resampled to ~0.5 m with analytical spline κ — match that here so the
+# (unchanged) pipeline Pure Pursuit behaves the same on the GT setup.
+CENTERLINE_SPACING_M = 0.5
+# splprep smoothing as a per-point positional tolerance (m). The total
+# smoothing condition is s = (tol² · n_points); 0.1 m lightly de-noises
+# the midpoints without cutting corners.
+CENTERLINE_SMOOTH_TOL_M = 0.1
 
 
 def _control_pkg_candidates() -> list[Path]:
@@ -182,6 +193,96 @@ def trim_loop_closure(
         if float(np.linalg.norm(pts[i] - gate_xy)) < close_m:
             return pts[:i]
     return pts
+
+
+def _dedup_consecutive(pts: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """Drop consecutive duplicate points (splprep rejects zero-length segs)."""
+    if len(pts) < 2:
+        return pts
+    keep = [0]
+    for i in range(1, len(pts)):
+        if np.linalg.norm(pts[i] - pts[keep[-1]]) > eps:
+            keep.append(i)
+    return pts[keep]
+
+
+def _resample_linear(
+    pts: np.ndarray, spacing: float,
+) -> tuple[list[float], list[float], None]:
+    """Fallback resample: piecewise-linear interpolation at uniform arc length.
+
+    No smoothing/curvature — used only when scipy is unavailable. Still
+    fixes the sparse-target snapping by giving Pure Pursuit a dense path.
+    """
+    seg = np.hypot(np.diff(pts[:, 0]), np.diff(pts[:, 1]))
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    total = float(s[-1])
+    if total < spacing:
+        return [float(p[0]) for p in pts], [float(p[1]) for p in pts], None
+    n_out = max(2, int(round(total / spacing)) + 1)
+    s_target = np.linspace(0.0, total, n_out)
+    xs = np.interp(s_target, s, pts[:, 0])
+    ys = np.interp(s_target, s, pts[:, 1])
+    return [float(v) for v in xs], [float(v) for v in ys], None
+
+
+def resample_centerline(
+    waypoints: np.ndarray,
+    spacing: float = CENTERLINE_SPACING_M,
+    smooth_tol_m: float = CENTERLINE_SMOOTH_TOL_M,
+) -> tuple[list[float], list[float], list[float] | None]:
+    """Fit a smooth spline through ordered midpoints and resample uniformly.
+
+    Returns (xs, ys, kappa) at ~``spacing`` m arc length, mirroring the live
+    pipeline's /Path. ``kappa`` is the analytical spline curvature (signed,
+    1/m) — parameterization-invariant, so valid regardless of the spline's
+    internal u-parameter; ``None`` from the linear fallback. Falls back to a
+    linear resample when scipy is missing or the path is too short to spline.
+    """
+    pts = _dedup_consecutive(np.asarray(waypoints, dtype=float))
+    if len(pts) < 4:
+        return (
+            [float(p[0]) for p in pts],
+            [float(p[1]) for p in pts],
+            None,
+        )
+
+    try:
+        from scipy.interpolate import splev, splprep
+    except ImportError:
+        return _resample_linear(pts, spacing)
+
+    n = len(pts)
+    smoothing = (smooth_tol_m ** 2) * n
+    k = min(3, n - 1)
+    try:
+        tck, _ = splprep([pts[:, 0], pts[:, 1]], s=smoothing, k=k, per=0)
+    except Exception:
+        return _resample_linear(pts, spacing)
+
+    # Dense eval → arc-length table → invert for uniform-arc sampling.
+    seg = np.hypot(np.diff(pts[:, 0]), np.diff(pts[:, 1]))
+    rough_len = float(seg.sum())
+    dense_n = max(200, int(rough_len / (spacing * 0.2)))
+    ud = np.linspace(0.0, 1.0, dense_n)
+    xd, yd = splev(ud, tck)
+    sd = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(xd), np.diff(yd)))])
+    arclen = float(sd[-1])
+    if arclen < spacing:
+        return _resample_linear(pts, spacing)
+
+    n_out = max(2, int(round(arclen / spacing)) + 1)
+    u_target = np.interp(np.linspace(0.0, arclen, n_out), sd, ud)
+    xs, ys = splev(u_target, tck)
+    dx, dy = splev(u_target, tck, der=1)
+    ddx, ddy = splev(u_target, tck, der=2)
+    denom = (dx * dx + dy * dy) ** 1.5
+    kappa = np.where(denom > 1e-9, (dx * ddy - dy * ddx) / denom, 0.0)
+    return (
+        [float(v) for v in xs],
+        [float(v) for v in ys],
+        [float(v) for v in kappa],
+    )
 
 
 def order_by_walk(pts, start_idx, max_step_m=8.0):
@@ -502,6 +603,12 @@ def main():
                    help=f"min metres before gate counts as finish (default {LAP_MIN_TRAVEL_M})")
     p.add_argument("--lap-finish-radius", type=float, default=LAP_FINISH_RADIUS_M,
                    help=f"metres to start gate to end lap (default {LAP_FINISH_RADIUS_M})")
+    p.add_argument("--centerline-spacing", type=float, default=CENTERLINE_SPACING_M,
+                   help=f"resampled centerline arc-length spacing in m "
+                        f"(default {CENTERLINE_SPACING_M}, matches live /Path)")
+    p.add_argument("--centerline-smooth", type=float, default=CENTERLINE_SMOOTH_TOL_M,
+                   help=f"spline smoothing tolerance in m (default "
+                        f"{CENTERLINE_SMOOTH_TOL_M}; 0 = interpolate exactly)")
     p.add_argument("--no-rotate", action="store_true",
                    help="skip the CSV→world 90° CCW rotation (only set this "
                         "if your CSV is already in the GT-odometry frame)")
@@ -530,9 +637,17 @@ def main():
     print(f"centerline: {len(waypoints)} waypoints, "
           f"start near gate=({gate[0]:.1f},{gate[1]:.1f}) idx={start}")
 
-    xs = [float(p[0]) for p in waypoints]
-    ys = [float(p[1]) for p in waypoints]
-    ref = ReferenceTrajectory.from_xy(xs, ys)
+    xs, ys, kappa = resample_centerline(
+        waypoints,
+        spacing=args.centerline_spacing,
+        smooth_tol_m=args.centerline_smooth,
+    )
+    print(
+        f"centerline: resampled {len(waypoints)} → {len(xs)} pts "
+        f"@ {args.centerline_spacing:.2f} m spacing "
+        f"({'spline κ' if kappa is not None else 'linear, no κ'})"
+    )
+    ref = ReferenceTrajectory.from_xy(xs, ys, kappa=kappa)
     if ref.empty:
         print("centerline too short after ordering", file=sys.stderr)
         sys.exit(2)

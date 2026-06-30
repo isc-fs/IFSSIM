@@ -164,7 +164,7 @@ def start(centerline_csv: str) -> dict:
             [
                 str(csv_path.resolve()),
                 "--target-speed",
-                "3.0",
+                "5.0",
                 "--steer",
                 "1.0",
             ],
