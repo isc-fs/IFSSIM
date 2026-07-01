@@ -71,6 +71,7 @@ from mission_control.interface_contract import (
     TOPIC_SIM_MISSION,
     ami_index_to_mission_id,
 )
+from mission_control.interface_qos import UPLINK_QOS
 from sim_supervisor.as_state_machine import OperatorIntent, next_as_state
 from sim_supervisor.odometry import OdometryFilter
 
@@ -197,10 +198,15 @@ class SimSupervisorNode(LifecycleNode):
                 "+ odom→base_link TF owned by odometry_filter_node (C++)")
 
         # --- uDV uplink publishers (the stock interface) ---
+        # BEST_EFFORT/VOLATILE (UPLINK_QOS), matching the real uDV's
+        # micro-ROS heartbeat idiom so mission_control's reader connects
+        # identically in sim and on the car. Published every _as_tick, so
+        # the steady heartbeat — not durability — covers late join. See
+        # mission_control.interface_qos.
         self._assi_state_pub = self.create_lifecycle_publisher(
-            UInt8, TOPIC_ASSI_STATE, LATCHED_QOS)
+            UInt8, TOPIC_ASSI_STATE, UPLINK_QOS)
         self._ami_mission_pub = self.create_lifecycle_publisher(
-            Int32, TOPIC_AMI_MISSION, LATCHED_QOS)
+            Int32, TOPIC_AMI_MISSION, UPLINK_QOS)
 
         # --- downlink subscriptions ---
         self._ctrl_cmd_sub = self.create_subscription(
