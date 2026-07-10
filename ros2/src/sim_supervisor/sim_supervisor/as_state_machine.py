@@ -33,6 +33,7 @@ from mission_control.interface_contract import (
     DV_EMERGENCY,
     DV_FINISHED,
     DV_READY,
+    DV_RUNNING,
 )
 
 
@@ -85,5 +86,12 @@ def next_as_state(
     if cur == AS_FINISHED:
         # Latch finished until the operator drops to READY (re-arm) or OFF.
         return AS_FINISHED
-    # Not yet driving — gate the go on the pipeline being prepared.
-    return AS_DRIVING if dv == DV_READY else AS_READY
+    # Not yet driving — gate the go on the pipeline being prepared. Accept
+    # DV_RUNNING as well as DV_READY: mission_control can race /dv/status ahead
+    # to DV_RUNNING (it flips to RUNNING the moment it activates + sees
+    # /ctrl/cmd) before this state machine ticks the Ready→Driving edge. With
+    # an exact `== DV_READY` gate that left the emulator latched at AS_READY
+    # forever — it never relays /ctrl/cmd, so the car stays pinned under EBS
+    # despite the pipeline commanding throttle. DV_RUNNING is strictly "more
+    # prepared" than DV_READY, so it must also open the go.
+    return AS_DRIVING if dv in (DV_READY, DV_RUNNING) else AS_READY
