@@ -869,7 +869,11 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
         sensor_msgs::msg::Imu msg;
         msg.header.stamp = imu_stamp;
-        msg.header.frame_id = "fsds/IMU";
+        // Real-car parity (uDV bag-lift): the firmware publishes /imu with
+        // frame_id "imu_link"; the pipeline's cone_detection resolves TF
+        // dynamically off this frame, so matching the name lets a sim bag
+        // replay on the car without a TF-lookup failure. Was "fsds/IMU".
+        msg.header.frame_id = "imu_link";
         // Convert UE5 body frame (left-handed: X=fwd, Y=right, Z=up) to
         // ROS REP-103 body frame (right-handed: X=fwd, Y=left, Z=up).
         // The UDP broadcaster forwards FSDSImuSensor's body-frame outputs
@@ -1041,7 +1045,10 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = lidar_stamp;
-    msg.header.frame_id = "fsds/Lidar";
+    // Real-car parity (uDV bag-lift): the Hesai driver on the car publishes
+    // the cloud in frame "hesai_lidar"; matching it lets a sim bag replay on
+    // the car so cone_detection's TF lookup resolves. Was "fsds/Lidar".
+    msg.header.frame_id = "hesai_lidar";
     msg.height = 1;
     msg.width = total_points;
     msg.is_dense = true;
@@ -1309,8 +1316,13 @@ void IFSSIMRosWrapper::staticTfCb()
         static_tf_broadcaster_->sendTransform(tf);
     };
 
-    publishIdentityStatic("base_link", "fsds/IMU");
-    publishIdentityStatic("base_link", "fsds/Lidar");
+    // Sensor frames renamed to the real-car names (imu_link / hesai_lidar)
+    // so a sim-recorded bag lifts onto the car — see the frame_id comments
+    // on the IMU + LiDAR publishers. Identity offsets here; the car's real
+    // sensor z-offsets live in car_bringup, and the pipeline consumers key
+    // off the frame NAME (not the offset) for the TF lookup to resolve.
+    publishIdentityStatic("base_link", "imu_link");
+    publishIdentityStatic("base_link", "hesai_lidar");
     publishIdentityStatic("base_link", "fsds/GPS");
 
     // Camera static TFs and the camera sensors they referred to were
