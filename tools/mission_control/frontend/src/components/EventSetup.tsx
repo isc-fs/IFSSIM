@@ -153,7 +153,7 @@ export default function EventSetup({ telemetry }: { telemetry: TelemetryData }) 
           <span className="text-gray-500 text-xs">
             {selected?.kind === 'sim_benchmark_control'
               ? '— not used for benchmark control (use capture_benchmark_bag.py)'
-              : '— full topic dump; auto-pulled onto host bags/ when the session stops'}
+              : '— full dump + a car-liftable <name>_carparity (LiDAR+IMU); both auto-pulled to bags/ on stop'}
           </span>
         </label>
 

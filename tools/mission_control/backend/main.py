@@ -1111,6 +1111,17 @@ def pipeline_stop():
                     if pull.get("ok"):
                         bag_info["host_path"] = pull["host_path"]
                         _active_recording["host_path"] = pull["host_path"]
+                        # Car-liftable derivative (LiDAR+IMU only), if produced.
+                        cp = pull.get("car_parity_path")
+                        if cp:
+                            bag_info["car_parity_path"] = cp
+                            _active_recording["car_parity_path"] = cp
+                            log_event("record_bag", f"car-parity bag → {cp}")
+                        elif pull.get("car_parity_error"):
+                            log_event(
+                                "record_bag",
+                                f"car-parity derive skipped: "
+                                f"{pull['car_parity_error']}")
                         if pull.get("error"):
                             # Cleanup partial-failure path: bag is on host,
                             # but the volume-side rm failed. Surface as a

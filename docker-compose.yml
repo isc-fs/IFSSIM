@@ -384,6 +384,13 @@ services:
       # to "0" / "false" to keep the manual flow (volume stays
       # populated, retrieve with `tools/pull-bag.sh`).
       - IFSSIM_BAG_AUTO_PULL=${IFSSIM_BAG_AUTO_PULL:-1}
+      # When set (default 1), each auto-pulled full bag also gets a
+      # car-liftable derivative alongside it: `<name>_carparity` (mcap,
+      # LiDAR+IMU only) built via `ros2 bag convert` inside dv_pipeline_stack.
+      # That's the sensor set the real car needs replayed on the stand — the
+      # car supplies motor_rpm/steering/TF live (see tools/lift_to_car.sh).
+      # Set to "0" to record the full dump only.
+      - IFSSIM_BAG_CAR_PARITY=${IFSSIM_BAG_CAR_PARITY:-1}
       # Container name of the dv_pipeline_stack — mc_backend's auto-pull
       # talks to the docker daemon via the Python SDK and addresses the
       # source container by this name. Compose names it
