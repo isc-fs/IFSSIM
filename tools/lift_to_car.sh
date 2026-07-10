@@ -57,14 +57,21 @@ YAML
 echo "==> Lifting $BAG onto the car pipeline"
 echo "    remap: /lidar/Lidar1->/lidar_points  (/imu stays /imu — no remap)"
 echo "    /tf_static: reliable+transient_local"
-echo "    excluding any sim-only/command/GT topics (defensive, for legacy bags)"
+echo "    playing only the car-parity sensor set (sim-only/command/GT topics dropped)"
 
-# --exclude is a defensive belt-and-braces for legacy full bags; a --car-parity
-# bag already contains none of these. Regex matches the ros2bag topic name.
+# --topics WHITELISTS exactly the car-parity sensor set. A --car-parity bag
+# already contains only these (no-op filter); for a legacy full bag this is
+# the belt-and-braces that keeps sim-only topics OFF the wire — /testing_only/*
+# would inject GT into slam_node on the car, /Conos_raw would double the car's
+# own cone_detection, /gps + command topics have no car use.
+# NB: Humble `ros2 bag play` has NO --exclude flag; --topics (whitelist) is the
+# portable way to filter. The /lidar/Lidar1 remap still applies to the
+# whitelisted topic. Verified on a live parity bag (2026-07-10): /lidar_points
+# + /imu receive and base_link->hesai_lidar / ->imu_link TF both resolve.
 ros2 bag play "$BAG" \
     --remap /lidar/Lidar1:=/lidar_points \
     --qos-profile-overrides-path "$QOS_YAML" \
-    --exclude '^/(control_command|signal/.*|testing_only/.*|Conos_raw|gps|ctrl/cmd.*)$' \
+    --topics /imu /lidar/Lidar1 /motor_rpm /steering_angle /tf_static \
     "$@"
 
 echo "==> Playback finished."
