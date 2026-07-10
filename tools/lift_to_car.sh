@@ -8,9 +8,13 @@
 #  already free of the sim-only topics that must never reach the car).
 #
 # This script plays that bag with the transforms the car pipeline expects:
-#   - /imu          -> /imu/data_raw   (pipeline car profile reads data_raw;
-#                                        see topic_contract.py REMAP_IMU_CAR)
-#   - /lidar/Lidar1 -> /lidar_points   (REMAP_LIDAR_CAR)
+#   - /imu          -> NO REMAP. IMU is canonical /imu on BOTH sides: the uDV
+#                      firmware publishes /imu and odometry_filter/slam
+#                      subscribe to /imu in code (settled 2026-07-04, pipeline
+#                      dev/v1.0.0 — the old /imu/data_raw car remap was
+#                      dropped). Do NOT remap /imu.
+#   - /lidar/Lidar1 -> /lidar_points   (REMAP_LIDAR_CAR — the only sensor remap
+#                      the car needs; Hesai driver publishes /lidar_points)
 #   - /tf_static replayed RELIABLE + TRANSIENT_LOCAL so late-joining TF
 #     listeners (cone_detection) latch base_link->imu_link / ->hesai_lidar.
 #
@@ -51,19 +55,18 @@ cat > "$QOS_YAML" <<'YAML'
 YAML
 
 echo "==> Lifting $BAG onto the car pipeline"
-echo "    remaps: /imu->/imu/data_raw  /lidar/Lidar1->/lidar_points"
+echo "    remap: /lidar/Lidar1->/lidar_points  (/imu stays /imu — no remap)"
 echo "    /tf_static: reliable+transient_local"
 echo "    excluding any sim-only/command/GT topics (defensive, for legacy bags)"
 
 # --exclude is a defensive belt-and-braces for legacy full bags; a --car-parity
 # bag already contains none of these. Regex matches the ros2bag topic name.
 ros2 bag play "$BAG" \
-    --remap /imu:=/imu/data_raw \
     --remap /lidar/Lidar1:=/lidar_points \
     --qos-profile-overrides-path "$QOS_YAML" \
     --exclude '^/(control_command|signal/.*|testing_only/.*|Conos_raw|gps|ctrl/cmd.*)$' \
     "$@"
 
 echo "==> Playback finished."
-echo "    Validate: ros2 topic hz /imu/data_raw ; ros2 topic hz /lidar_points"
+echo "    Validate: ros2 topic hz /imu ; ros2 topic hz /lidar_points"
 echo "    and confirm cone_detection emits cones with no TF-lookup errors."
