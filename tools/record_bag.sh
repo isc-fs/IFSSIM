@@ -12,20 +12,28 @@
 #                            skip the numba-JIT warmup)
 #
 # CAR-PARITY (--car-parity) — a bag that LIFTS onto the real car
-# (isc-fs/IFS08-DV-uDV). Records exactly the sensor stream the real uDV +
-# Hesai driver put on the wire, so replaying it on the car looks like real
-# hardware to the pipeline. See tools/lift_to_car.sh for the replay recipe.
-#   /imu                  — frame_id imu_link (renamed to match firmware)
-#   /lidar/Lidar1         — frame_id hesai_lidar (renamed to match driver);
-#                            remapped to /lidar_points at replay time
-#   /motor_rpm            — Float32 (mechanical shaft rpm; see rpm-scaling
-#                            note in tools/lift_to_car.sh)
-#   /steering_angle       — Float32 rad, pipeline odometry_filter input
-#   /tf_static            — base_link->imu_link / ->hesai_lidar so the car's
-#                            cone_detection TF lookup resolves
-#   NB: /gps, /testing_only/*, /Conos_raw are DELIBERATELY EXCLUDED — on the
-#   car /testing_only/* would activate slam_node's dead GT subscription and
-#   inject ground truth; /Conos_raw would double the car's own cone_detection.
+# (isc-fs/IFS08-DV-uDV) with the car UP ON STANDS ("thinking it's moving").
+# Records ONLY the two sensors the live car cannot produce on the bench; every
+# other input comes LIVE from the car. See tools/lift_to_car.sh for the replay
+# recipe + the full rationale.
+#   /imu                  — frame_id imu_link. REPLAYED because the car is
+#                            stationary on stands: the real IMU reads zero
+#                            motion, so odometry/SLAM need the sim IMU's yaw+accel
+#                            to stay consistent with the replayed LiDAR.
+#   /lidar/Lidar1         — frame_id hesai_lidar. REPLAYED because the Hesai sees
+#                            the empty garage (no cones); remapped to
+#                            /lidar_points at replay time.
+#
+#   DELIBERATELY OMITTED — the uDV is the ROS<->CAN bridge and publishes these
+#   LIVE from real hardware while the actuators move on the stands; replaying
+#   them would double-publish and defeat the point of testing the real loop:
+#     /motor_rpm       — live from the ECU (CAN 0x506)
+#     /steering_angle  — live from the steering board (CAN 0x528)
+#     /tf_static       — live from the car's URDF/robot_state_publisher
+#   And the usual sim-only offenders stay out too: /gps, /testing_only/* (would
+#   wake slam_node's dead GT subscription), /Conos_raw (would double the car's
+#   own cone_detection), /ctrl/cmd + /control_command (produced live; would send
+#   stale commands to real motors).
 #
 # Usage (from the repo root):
 #   tools/record_bag.sh <bag-name> [duration-seconds] [--car-parity]
@@ -57,8 +65,10 @@ if [ -z "$BAG_NAME" ]; then
 fi
 
 if [ "$CAR_PARITY" -eq 1 ]; then
-    TOPICS="/imu /lidar/Lidar1 /motor_rpm /steering_angle /tf_static"
-    echo "==> mode: CAR-PARITY (uDV bag-lift set) — $TOPICS"
+    # Only the two sensors the car-on-stands can't produce; rpm/steering/TF
+    # come live from the car. See the CAR-PARITY note above + tools/lift_to_car.sh.
+    TOPICS="/imu /lidar/Lidar1"
+    echo "==> mode: CAR-PARITY (bench lift set: replay LiDAR+IMU only) — $TOPICS"
 else
     TOPICS="/imu /lidar/Lidar1 /gps /motor_rpm /testing_only/odom /Conos_raw"
 fi
