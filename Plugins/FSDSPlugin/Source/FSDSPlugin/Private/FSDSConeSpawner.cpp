@@ -426,6 +426,97 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 	for (const FVector& P : BigOrangePositions) OrangeCentroid += P;
 	OrangeCentroid /= BigOrangePositions.Num();
 
+	// --- Multi-gate tracks (acceleration / skidpad) -----------------------
+	// The PCA path below assumes ONE start gate (wider-than-deep, so the
+	// smaller-variance axis is along-track = forward). Acceleration and
+	// skidpad have TWO orange gates at opposite ends of the track. PCA over
+	// both makes the ~80 m start->finish span the dominant axis, so
+	// "smaller variance = forward" picks the CROSS-track axis and the car
+	// spawns rotated 90 deg (near the track middle, since the centroid of
+	// both gates sits between them). Detect this by clustering the orange
+	// cones into gates: with >= 2 gates, forward is the gate-to-gate axis
+	// and the car spawns behind the START gate (the one nearest the first
+	// track cone). Closed loops (one gate) fall through to the PCA path
+	// unchanged.
+	{
+		const float GateClusterDistSq = FMath::Square(1000.f); // 10 m in cm
+		TArray<int32> ClusterOf;
+		ClusterOf.Init(-1, BigOrangePositions.Num());
+		TArray<FVector> GateCentroids;
+		TArray<int32> GateCounts;
+		for (int32 i = 0; i < BigOrangePositions.Num(); ++i)
+		{
+			if (ClusterOf[i] != -1) continue;
+			const int32 g = GateCentroids.Num();
+			GateCentroids.Add(FVector::ZeroVector);
+			GateCounts.Add(0);
+			TArray<int32> Stack;
+			Stack.Add(i);
+			ClusterOf[i] = g;
+			while (Stack.Num() > 0)
+			{
+				const int32 c = Stack.Pop();
+				GateCentroids[g] += BigOrangePositions[c];
+				GateCounts[g] += 1;
+				for (int32 j = 0; j < BigOrangePositions.Num(); ++j)
+				{
+					if (ClusterOf[j] == -1 &&
+						FVector::DistSquaredXY(BigOrangePositions[c],
+							BigOrangePositions[j]) <= GateClusterDistSq)
+					{
+						ClusterOf[j] = g;
+						Stack.Add(j);
+					}
+				}
+			}
+			GateCentroids[g] /= FMath::Max(1, GateCounts[g]);
+		}
+
+		if (GateCentroids.Num() >= 2)
+		{
+			// Start gate = the gate nearest the first track cone (the start
+			// of the blue/yellow corridor as authored in the CSV).
+			const FVector TrackStart = BlueYellowPositions[0];
+			int32 StartG = 0;
+			double BestSq = TNumericLimits<double>::Max();
+			for (int32 g = 0; g < GateCentroids.Num(); ++g)
+			{
+				const double d = FVector::DistSquaredXY(GateCentroids[g], TrackStart);
+				if (d < BestSq) { BestSq = d; StartG = g; }
+			}
+			// Forward = from the start gate toward the mean of the others.
+			FVector OtherCentroid = FVector::ZeroVector;
+			int32 OtherN = 0;
+			for (int32 g = 0; g < GateCentroids.Num(); ++g)
+			{
+				if (g != StartG) { OtherCentroid += GateCentroids[g]; ++OtherN; }
+			}
+			OtherCentroid /= FMath::Max(1, OtherN);
+
+			FVector GateForward = OtherCentroid - GateCentroids[StartG];
+			GateForward.Z = 0.f;
+			if (!GateForward.IsNearlyZero())
+			{
+				GateForward.Normalize();
+				OrangeCentroid = GateCentroids[StartG]; // anchor at the START gate
+				OutLocation = OrangeCentroid - GateForward * BackupCm;
+				OutLocation.Z = HeightOffset + 50.f;
+				const float MgYaw = FMath::RadiansToDegrees(
+					FMath::Atan2(GateForward.Y, GateForward.X));
+				OutRotation = FRotator(0.f, MgYaw, 0.f).Quaternion();
+				UE_LOG(LogTemp, Log,
+					TEXT("FSDS ConeSpawner: multi-gate start pose — %d gates, "
+						 "start gate (%.1f, %.1f), forward (%.2f, %.2f), "
+						 "spawn (%.1f, %.1f), yaw %.1f°"),
+					GateCentroids.Num(),
+					GateCentroids[StartG].X, GateCentroids[StartG].Y,
+					GateForward.X, GateForward.Y,
+					OutLocation.X, OutLocation.Y, MgYaw);
+				return true;
+			}
+		}
+	}
+
 	// PCA on the 4 orange cones to recover the gate axes.
 	//
 	// FSG start gates are wider than deep (4.4 m × 2.6 m for the standard
