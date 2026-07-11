@@ -60,7 +60,7 @@
         }
       },
       "topics": {
-        "/lidar_points": {
+        "/lidar/Lidar1/viz": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
