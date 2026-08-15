@@ -319,8 +319,15 @@ def _patch_docker_sdk(monkeypatch, container=None, ping_ok=True,
 
 
 def _env(monkeypatch, **kw):
-    """Set env vars + reset the docker client cache."""
+    """Set env vars + reset the docker client cache.
+
+    Car-parity derivation defaults OFF here so the existing full-pull tests
+    exercise only the full-bag path (one exec_run = the rm). Tests that want
+    the car-parity step pass IFSSIM_BAG_CAR_PARITY="1".
+    """
     monkeypatch.setenv("IFSSIM_BAG_AUTO_PULL", kw.pop("IFSSIM_BAG_AUTO_PULL", "1"))
+    monkeypatch.setenv(
+        "IFSSIM_BAG_CAR_PARITY", kw.pop("IFSSIM_BAG_CAR_PARITY", "0"))
     monkeypatch.setenv(
         "DV_PIPELINE_STACK_CONTAINER",
         kw.pop("DV_PIPELINE_STACK_CONTAINER", "ifssim-dv_pipeline_stack-1"),
@@ -356,10 +363,97 @@ def test_auto_pull_happy_path(monkeypatch, tmp_path):
     extracted = tmp_path / name
     assert (extracted / "metadata.yaml").read_bytes() == b"version: 5\nstorage_id: mcap\n"
     assert (extracted / "bag_0.mcap").read_bytes() == b"fake_mcap_data"
-    # Cleanup was called once with the right rm command.
+    # Cleanup was called once with the right rm command (car-parity off).
     container.exec_run.assert_called_once()
     cmd_arg = container.exec_run.call_args[0][0]
     assert cmd_arg == ["rm", "-rf", f"/bags/{name}"]
+
+
+def test_auto_pull_car_parity(monkeypatch, tmp_path):
+    """With IFSSIM_BAG_CAR_PARITY on, auto_pull also runs `ros2 bag convert`
+    to derive <name>_carparity, pulls it beside the full dump, and cleans both
+    volume copies."""
+    _env(monkeypatch, IFSSIM_BAG_CAR_PARITY="1")
+    monkeypatch.setattr(br, "_HOST_BAGS_DIR", str(tmp_path))
+
+    name = "trackdrive_autocross_20260711_010000"
+    cp_name = f"{name}_carparity"
+    full_tar = _make_tarball_bytes(name, {
+        "metadata.yaml": b"version: 5\nstorage_id: mcap\n",
+        f"{name}_0.mcap": b"full_mcap",
+    })
+    cp_tar = _make_tarball_bytes(cp_name, {
+        "metadata.yaml": b"version: 5\nstorage_id: mcap\n",
+        f"{cp_name}_0.mcap": b"carparity_mcap",
+    })
+
+    def _get_archive(path):
+        if path == f"/bags/{name}":
+            return (iter([full_tar]), {"size": len(full_tar)})
+        if path == f"/bags/{cp_name}":
+            return (iter([cp_tar]), {"size": len(cp_tar)})
+        raise AssertionError(f"unexpected get_archive path: {path}")
+
+    exec_calls = []
+
+    def _exec_run(cmd, **kw):
+        exec_calls.append(cmd)
+        return (0, b"")
+
+    container = _fake_container_factory(
+        get_archive=_get_archive, exec_run=_exec_run)
+    _patch_docker_sdk(monkeypatch, container=container)
+
+    out = br.auto_pull_and_clean(name)
+
+    assert out["ok"] is True, out
+    assert out["host_path"] == f"{tmp_path}/{name}"
+    assert out["car_parity_path"] == f"{tmp_path}/{cp_name}", out
+    assert out.get("car_parity_error", "") == "", out
+    # Both bags actually landed on the host.
+    assert (tmp_path / name / f"{name}_0.mcap").read_bytes() == b"full_mcap"
+    assert (tmp_path / cp_name / f"{cp_name}_0.mcap").read_bytes() == b"carparity_mcap"
+    # exec_run called twice: the ros2 bag convert, then the combined rm.
+    assert len(exec_calls) == 2, exec_calls
+    convert_cmd = exec_calls[0]
+    assert convert_cmd[0] == "bash"
+    assert "ros2 bag convert" in convert_cmd[2]
+    assert f"/bags/{name}" in convert_cmd[2]
+    # rm removes BOTH volume copies.
+    rm_cmd = exec_calls[1]
+    assert rm_cmd[:2] == ["rm", "-rf"]
+    assert set(rm_cmd[2:]) == {f"/bags/{name}", f"/bags/{cp_name}"}
+
+
+def test_auto_pull_car_parity_convert_failure_is_soft(monkeypatch, tmp_path):
+    """If `ros2 bag convert` fails, the full pull still succeeds; the car-parity
+    error is surfaced but ok stays True."""
+    _env(monkeypatch, IFSSIM_BAG_CAR_PARITY="1")
+    monkeypatch.setattr(br, "_HOST_BAGS_DIR", str(tmp_path))
+
+    name = "trackdrive_autocross_20260711_010500"
+    full_tar = _make_tarball_bytes(name, {"m.yaml": b"x"})
+
+    def _get_archive(path):
+        assert path == f"/bags/{name}"
+        return (iter([full_tar]), {"size": len(full_tar)})
+
+    def _exec_run(cmd, **kw):
+        # First call is the convert (bash -lc) — fail it; second is the rm.
+        if cmd[0] == "bash":
+            return (1, b"ros2: bag convert: no such topic")
+        return (0, b"")
+
+    container = _fake_container_factory(
+        get_archive=_get_archive, exec_run=_exec_run)
+    _patch_docker_sdk(monkeypatch, container=container)
+
+    out = br.auto_pull_and_clean(name)
+
+    assert out["ok"] is True, out
+    assert out["host_path"] == f"{tmp_path}/{name}"
+    assert "car_parity_path" not in out
+    assert "convert" in out.get("car_parity_error", "").lower(), out
 
 
 def test_auto_pull_disabled_by_env(monkeypatch):

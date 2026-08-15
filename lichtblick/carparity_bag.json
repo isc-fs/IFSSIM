@@ -60,7 +60,7 @@
         }
       },
       "topics": {
-        "/lidar_points/viz": {
+        "/lidar_points": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -171,7 +171,7 @@
         }
       },
       "topics": {
-        "/lidar_points/viz": {
+        "/lidar_points": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
@@ -214,7 +214,7 @@
       }
     },
     "Plot!speed_rpm": {
-      "title": "Speed: GT body-frame v_x vs RPM-derived",
+      "title": "IMU forward accel \u2014 X (m/s\u00b2)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -225,28 +225,10 @@
       "minYValue": -0.5,
       "paths": [
         {
-          "value": "/testing_only/odom.twist.twist.linear.x",
+          "value": "/imu.linear_acceleration.x",
           "enabled": true,
-          "label": "GT v_body_x (m/s)",
-          "color": "#44ffaa",
-          "lineSize": 1.5,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        },
-        {
-          "value": "/motor_rpm.data * 0.00821",
-          "enabled": true,
-          "label": "RPM \u00d7 0.00821 (m/s)",
-          "color": "#aa44ff",
-          "lineSize": 1.5,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        },
-        {
-          "value": "/odom.twist.twist.linear.x",
-          "enabled": true,
-          "label": "Filter v_body_x (m/s)",
-          "color": "#4488ff",
+          "label": "accel X (forward)",
+          "color": "#ffb81c",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true
@@ -255,7 +237,111 @@
       "sidebarDimension": 200
     },
     "Plot!yaw_rate": {
-      "title": "Yaw rate (IMU vs filter vs GT)",
+      "title": "IMU angular velocity (rad/s)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.x",
+          "enabled": true,
+          "label": "gyro X (roll)",
+          "color": "#ff6644",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.angular_velocity.y",
+          "enabled": true,
+          "label": "gyro Y (pitch)",
+          "color": "#44ff88",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "label": "gyro Z (yaw)",
+          "color": "#4488ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+    "Plot!slam_gt_error": {
+      "title": "IMU linear acceleration (m/s\u00b2)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/imu.linear_acceleration.x",
+          "enabled": true,
+          "label": "accel X",
+          "color": "#ffb81c",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.linear_acceleration.y",
+          "enabled": true,
+          "label": "accel Y",
+          "color": "#44ffaa",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.linear_acceleration.z",
+          "enabled": true,
+          "label": "accel Z",
+          "color": "#aa88ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!map_to_odom_drift": {
+      "title": "IMU lateral accel \u2014 Y (m/s\u00b2)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/imu.linear_acceleration.y",
+          "enabled": true,
+          "label": "accel Y (lateral)",
+          "color": "#44ffaa",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!yaw_drift_integrated": {
+      "title": "IMU yaw rate \u2014 Z (rad/s)",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -267,94 +353,8 @@
         {
           "value": "/imu.angular_velocity.z",
           "enabled": true,
-          "label": "IMU yaw rate (rad/s)",
-          "color": "#aaff44",
-          "lineSize": 1.5,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        },
-        {
-          "value": "/odom.twist.twist.angular.z",
-          "enabled": true,
-          "label": "Filter yaw rate (rad/s)",
+          "label": "gyro Z (yaw)",
           "color": "#4488ff",
-          "lineSize": 1.5,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        },
-        {
-          "value": "/testing_only/odom.twist.twist.angular.z",
-          "enabled": true,
-          "label": "GT yaw rate (rad/s)",
-          "color": "#44ffaa",
-          "lineSize": 1.0,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        }
-      ],
-      "sidebarDimension": 200
-    },
-    "Plot!slam_gt_error": {
-      "title": "SLAM-vs-GT position error [m]",
-      "isSynced": true,
-      "legendDisplay": "floating",
-      "showLegend": true,
-      "showPlotValuesInLegend": true,
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "xAxisVal": "timestamp",
-      "minYValue": 0,
-      "paths": [
-        {
-          "value": "/cone_slam/gt_error_m.data",
-          "enabled": true,
-          "label": "||SLAM - GT|| (m)",
-          "color": "#ff8844",
-          "lineSize": 1.5,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        }
-      ],
-      "sidebarDimension": 240
-    },
-    "Plot!map_to_odom_drift": {
-      "title": "||map \u2192 odom|| [m] \u2014 cumulative SLAM drift correction (low = healthy)",
-      "isSynced": true,
-      "legendDisplay": "floating",
-      "showLegend": true,
-      "showPlotValuesInLegend": true,
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "xAxisVal": "timestamp",
-      "minYValue": 0,
-      "paths": [
-        {
-          "value": "/studio_script/map_to_odom_norm.data",
-          "enabled": true,
-          "label": "||map \u2192 odom|| (m)",
-          "color": "#ff44ff",
-          "lineSize": 1.5,
-          "timestampMethod": "receiveTime",
-          "showLine": true
-        }
-      ],
-      "sidebarDimension": 240
-    },
-    "Plot!yaw_drift_integrated": {
-      "title": "Yaw drift integrated [deg] \u2014 Filter \u2212 GT (anchor-aligned)",
-      "isSynced": true,
-      "legendDisplay": "floating",
-      "showLegend": true,
-      "showPlotValuesInLegend": true,
-      "showXAxisLabels": true,
-      "showYAxisLabels": true,
-      "xAxisVal": "timestamp",
-      "paths": [
-        {
-          "value": "/studio_script/yaw_drift_deg.data",
-          "enabled": true,
-          "label": "yaw error [deg]",
-          "color": "#ff5566",
           "lineSize": 1.5,
           "timestampMethod": "receiveTime",
           "showLine": true

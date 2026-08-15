@@ -119,6 +119,7 @@ COPY docker/dv_pipeline_stack/fastdds_profile.xml     /dv_pipeline_stack_ws/fast
 COPY docker/dv_pipeline_stack/bridge.launch.py        /dv_pipeline_stack_ws/bridge.launch.py
 COPY docker/dv_pipeline_stack/pipeline.launch.py      /dv_pipeline_stack_ws/pipeline.launch.py
 COPY docker/dv_pipeline_stack/pipeline_only.launch.py /dv_pipeline_stack_ws/pipeline_only.launch.py
+COPY docker/dv_pipeline_stack/warmup_numba.py    /dv_pipeline_stack_ws/warmup_numba.py
 COPY docker/dv_pipeline_stack/teleop_keyboard.py /dv_pipeline_stack_ws/teleop_keyboard.py
 COPY docker/dv_pipeline_stack/teleop.sh          /dv_pipeline_stack_ws/teleop.sh
 COPY docker/dv_pipeline_stack/entrypoint.sh /entrypoint.sh

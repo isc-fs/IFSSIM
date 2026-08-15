@@ -418,9 +418,17 @@ class SimSupervisorNode(LifecycleNode):
             return
         cmd = ControlCommand()
         cmd.header.stamp = self.get_clock().now().to_msg()
-        cmd.throttle = float(msg.linear.x)
+        # Decode the signed /ctrl/cmd convention (linear.x ∈ [-1, 1],
+        # negative = regen) back into the bridge's split unsigned channels
+        # (throttle = motor demand, brake = regen demand). Previously this
+        # took throttle = linear.x and hardcoded brake = 0.0, discarding
+        # every braking command — the car physically could not slow itself
+        # (it only coasted), which capped safe speed and made it overshoot
+        # corners at anything above a crawl.
+        v = float(msg.linear.x)
+        cmd.throttle = max(0.0, v)
+        cmd.brake = max(0.0, -v)
         cmd.steering = float(msg.angular.z)
-        cmd.brake = 0.0
         self._control_pub.publish(cmd)
 
     def _on_force_ebs(self, request, response):

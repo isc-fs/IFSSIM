@@ -264,7 +264,7 @@ IFSSIMRosWrapper::Vec3 IFSSIMRosWrapper::querySensorOffset(const std::string& na
 
 void IFSSIMRosWrapper::initializePublishers()
 {
-    // High-rate sensors use BEST_EFFORT QoS for the same reason /lidar/Lidar1
+    // High-rate sensors use BEST_EFFORT QoS for the same reason /lidar_points
     // does (see comment below). With the default RELIABLE keep_last(10), a
     // single slow subscriber stalled the publish thread → kernel TCP recv
     // buffer filled → plugin SendAll hit its 1 s timeout → stream tear-down,
@@ -316,7 +316,7 @@ void IFSSIMRosWrapper::initializePublishers()
     // box; the autonomy can read it for grip-aware velocity targets.
     tire_loads_pub_ = node_->create_publisher<std_msgs::msg::Float32MultiArray>(
         "tire_loads", sensor_qos);
-    // /lidar/Lidar1 uses BEST_EFFORT QoS (rather than the default RELIABLE
+    // /lidar_points uses BEST_EFFORT QoS (rather than the default RELIABLE
     // keep_last(10)) so a slow subscriber — most notably the numba-JIT
     // cone-detection node during its first ~15 s of warmup, but also any
     // foxglove_bridge consumer that pauses to render a frame — drops
@@ -329,14 +329,19 @@ void IFSSIMRosWrapper::initializePublishers()
     // pipeline subscribers come online. Sensor data is fundamentally a
     // best-effort stream — drops are fine, backpressure is not.
     auto lidar_qos = rclcpp::QoS(rclcpp::KeepLast(50)).best_effort();
-    lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar/Lidar1", lidar_qos);
+    // Publish on /lidar_points — the SAME topic the car's Hesai driver uses —
+    // so the sim and the real car are topic-identical for perception. A sim
+    // bag then replays straight into either profile with no --remap, and
+    // cone_detection's /fsds/lidar_points remaps to /lidar_points on both
+    // sides. (Historically this was /lidar_points; unified 2026-07-12.)
+    lidar_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("lidar_points", lidar_qos);
     if (lidar_viz_decimation_ >= 2) {
         // Same QoS as the full cloud — BEST_EFFORT lets a slow tab drop
         // frames instead of backpressuring the bridge.
         lidar_viz_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>(
-            "lidar/Lidar1/viz", lidar_qos);
+            "lidar_points/viz", lidar_qos);
         RCLCPP_INFO(node_->get_logger(),
-            "/lidar/Lidar1/viz enabled — every %u-th point published alongside the full cloud",
+            "/lidar_points/viz enabled — every %u-th point published alongside the full cloud",
             lidar_viz_decimation_);
     }
     go_signal_pub_ = node_->create_publisher<fs_msgs::msg::GoSignal>("signal/go", 10);
@@ -894,7 +899,11 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
         sensor_msgs::msg::Imu msg;
         msg.header.stamp = imu_stamp;
-        msg.header.frame_id = "fsds/IMU";
+        // Real-car parity (uDV bag-lift): the firmware publishes /imu with
+        // frame_id "imu_link"; the pipeline's cone_detection resolves TF
+        // dynamically off this frame, so matching the name lets a sim bag
+        // replay on the car without a TF-lookup failure. Was "fsds/IMU".
+        msg.header.frame_id = "imu_link";
         // Convert UE5 body frame (left-handed: X=fwd, Y=right, Z=up) to
         // ROS REP-103 body frame (right-handed: X=fwd, Y=left, Z=up).
         // The UDP broadcaster forwards FSDSImuSensor's body-frame outputs
@@ -1067,7 +1076,7 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
         }
     }
     // Monotonic guard — same rationale as the IMU clamp in onSensorFrame.
-    // GLIM expects strictly increasing timestamps on /lidar/Lidar1.
+    // GLIM expects strictly increasing timestamps on /lidar_points.
     if (last_lidar_stamp_.nanoseconds() > 0 && lidar_stamp <= last_lidar_stamp_) {
         lidar_stamp = last_lidar_stamp_ + rclcpp::Duration::from_nanoseconds(1);
     }
@@ -1075,7 +1084,10 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = lidar_stamp;
-    msg.header.frame_id = "fsds/Lidar";
+    // Real-car parity (uDV bag-lift): the Hesai driver on the car publishes
+    // the cloud in frame "hesai_lidar"; matching it lets a sim bag replay on
+    // the car so cone_detection's TF lookup resolves. Was "fsds/Lidar".
+    msg.header.frame_id = "hesai_lidar";
     msg.height = 1;
     msg.width = total_points;
     msg.is_dense = true;
@@ -1114,11 +1126,11 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
 
     lidar_pub_->publish(msg);
 
-    // Optional /lidar/Lidar1/viz — every Nth point as a separate cloud
+    // Optional /lidar_points/viz — every Nth point as a separate cloud
     // for browser-based visualisers (Foxglove web, Lichtblick web) that
     // burn 30-40 % CPU deserialising the full 1.5 MB/scan stream.
     // Off by default (lidar_viz_decimation_ == 0); when enabled, the
-    // autonomy stack still gets the full /lidar/Lidar1 cloud, only
+    // autonomy stack still gets the full /lidar_points cloud, only
     // viz tools subscribe to /viz. Header (stamp, frame_id) is
     // identical so the two clouds line up frame-for-frame.
     if (lidar_viz_pub_ && lidar_viz_decimation_ >= 2) {
@@ -1343,8 +1355,13 @@ void IFSSIMRosWrapper::staticTfCb()
         static_tf_broadcaster_->sendTransform(tf);
     };
 
-    publishIdentityStatic("base_link", "fsds/IMU");
-    publishIdentityStatic("base_link", "fsds/Lidar");
+    // Sensor frames renamed to the real-car names (imu_link / hesai_lidar)
+    // so a sim-recorded bag lifts onto the car — see the frame_id comments
+    // on the IMU + LiDAR publishers. Identity offsets here; the car's real
+    // sensor z-offsets live in car_bringup, and the pipeline consumers key
+    // off the frame NAME (not the offset) for the TF lookup to resolve.
+    publishIdentityStatic("base_link", "imu_link");
+    publishIdentityStatic("base_link", "hesai_lidar");
     publishIdentityStatic("base_link", "fsds/GPS");
 
     // Camera static TFs and the camera sensors they referred to were
