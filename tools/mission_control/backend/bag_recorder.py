@@ -327,7 +327,14 @@ def _ensure_host_dir() -> Optional[str]:
 # stands: LiDAR (the Hesai sees an empty garage) and IMU (the jacked car reads
 # zero motion). Everything else — motor_rpm, steering_angle, tf_static — the
 # live car supplies. See tools/lift_to_car.sh for the full rationale.
-_CAR_PARITY_TOPICS = ("/imu", "/lidar/Lidar1")
+#
+# LiDAR is /lidar_points — the bridge was unified onto the car's Hesai topic
+# (2026-07-12), so the extracted cloud lands on the car's native perception
+# topic with no remap on replay. /lidar/Lidar1 is kept as a legacy fallback so
+# re-deriving a PRE-rename bag still captures its LiDAR (ros2 bag convert
+# `topics:` is a filter — names absent from the input are simply skipped, and a
+# bag only ever has one of the two names).
+_CAR_PARITY_TOPICS = ("/imu", "/lidar_points", "/lidar/Lidar1")
 
 # `tarfile` grew the `filter=` extraction policy (+ tarfile.data_filter) in
 # Python 3.12; older runtimes reject the kwarg with a TypeError. We gate on it

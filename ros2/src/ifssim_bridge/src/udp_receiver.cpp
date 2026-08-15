@@ -218,7 +218,7 @@ void UdpReceiver::lidarListenerThread(int port)
         // All chunks received? Deliver, then mark delivered so subsequent
         // late/duplicate chunks for this same frame_id don't re-fire the
         // callback (the publish thread would otherwise see a flood of
-        // identical PointCloud2 messages and /lidar/Lidar1 hz would
+        // identical PointCloud2 messages and /lidar_points hz would
         // explode well above the LiDAR's true rate).
         if (pending_lidar_.chunks_received >= pending_lidar_.total_chunks) {
             if (lidar_cb_) {
