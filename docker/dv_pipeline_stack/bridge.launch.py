@@ -64,13 +64,15 @@ def generate_launch_description():
                 # as LiDAR flicker. 64 MB gives ~4 seconds of headroom,
                 # well past any normal client-side stutter.
                 'send_buffer_limit': 64 * 1024 * 1024,
-                'use_sim_time': False,
+                # Bridge-only launch always talks to the UE sim, which now
+                # publishes /clock — view on sim time so stamps line up.
+                'use_sim_time': True,
                 # See pipeline.launch.py for the full rationale on
                 # topic_whitelist + use_compression. Same list here so
                 # the bridge-only launch (replay / debug flows) gets
                 # the same CPU-mitigated config.
                 'topic_whitelist': [
-                    "/Conos", "/Conos_Orange", "/Conos_raw",
+                    "/Conos", "/Conos_full", "/Conos_Orange", "/Conos_raw",
                     "/Path", "/path_planning/debug",
                     "/slam/pose", "/cone_slam/gt_aligned",
                     "/cone_slam/gt_error_m",

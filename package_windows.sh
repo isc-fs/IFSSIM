@@ -33,6 +33,27 @@ export MSYS2_ARG_CONV_EXCL="*"
 UE_ROOT="${UE_ROOT:-/c/Program Files/Epic Games/UE_5.7}"
 RUN_UAT="$UE_ROOT/Engine/Build/BatchFiles/RunUAT.bat"
 
+# Convert a unix-style path to a native Windows path (C:/…) for the
+# cmd.exe-launched RunUAT.bat and PowerShell. We deliberately DON'T use
+# `cygpath -w` here: anaconda's bundled MSYS2 ships a cygpath with a
+# non-standard mount table (root `/` = the conda Library dir, with no
+# `/c` drive mount), so `cygpath -w /c/Users/foo` silently yields the
+# bogus `…\anaconda3\Library\c\Users\foo` instead of `C:\Users\foo`.
+# It returns success with garbage, so a `|| fallback` never fires.
+# `pwd -W` consults the real Windows drive mapping and is reliable on
+# both Git Bash and anaconda's MSYS2. It needs an existing directory,
+# so for a file we convert its parent and re-append the basename.
+to_win() {
+    local p="$1" dir base
+    if [ -d "$p" ]; then
+        ( cd "$p" && pwd -W )
+    else
+        dir="$(dirname "$p")"
+        base="$(basename "$p")"
+        echo "$( cd "$dir" && pwd -W )/$base"
+    fi
+}
+
 # Project version — read from Config/DefaultGame.ini's ProjectVersion
 # field so the build artifact name tracks the in-binary version that
 # UE5 stamps into the cooked .exe's VERSIONINFO resource. Bump the
@@ -71,7 +92,7 @@ echo "    UE_ROOT: $UE_ROOT"
 echo "[1/3] Building (Win64 Shipping)…"
 # CMD-equivalent path for -project=, since RunUAT.bat is invoked by
 # cmd.exe and won't accept /c/-style paths. pwd -W gives us C:/… form.
-PROJECT_WIN="$(cygpath -w "$SCRIPT_DIR/IFSSIM.uproject" 2>/dev/null || echo "$SCRIPT_DIR/IFSSIM.uproject")"
+PROJECT_WIN="$(to_win "$SCRIPT_DIR/IFSSIM.uproject")"
 
 "$RUN_UAT" \
     BuildCookRun \
@@ -154,7 +175,7 @@ IFSSIM_MAX_FPS="${IFSSIM_MAX_FPS:-0}"
 IFSSIM_WIN_W="${IFSSIM_WIN_W:-1280}"
 IFSSIM_WIN_H="${IFSSIM_WIN_H:-720}"
 CMDLINE="$STAGED_DIR/UECommandLine.txt"
-PROJECT_ABS_WIN="$(cygpath -w "$SCRIPT_DIR/IFSSIM.uproject" 2>/dev/null || echo "$SCRIPT_DIR/IFSSIM.uproject")"
+PROJECT_ABS_WIN="$(to_win "$SCRIPT_DIR/IFSSIM.uproject")"
 # Conditional t.MaxFPS — see the long comment in package_mac.sh for
 # why we don't always emit it (it would override the .ini's 60).
 if [ "$IFSSIM_MAX_FPS" = "0" ]; then
@@ -192,8 +213,8 @@ else
     rm -f "$ARCHIVE_PATH"
     # Compress-Archive's -Path takes a single source dir's contents.
     # Native Windows path required.
-    STAGED_WIN="$(cygpath -w "$STAGED_DIR" 2>/dev/null || echo "$STAGED_DIR")"
-    ARCHIVE_WIN="$(cygpath -w "$ARCHIVE_PATH" 2>/dev/null || echo "$ARCHIVE_PATH")"
+    STAGED_WIN="$(to_win "$STAGED_DIR")"
+    ARCHIVE_WIN="$(to_win "$ARCHIVE_PATH")"
     powershell -NoProfile -Command \
         "Compress-Archive -Path '$STAGED_WIN\\*' -DestinationPath '$ARCHIVE_WIN' -CompressionLevel Optimal -Force"
     if [ -f "$ARCHIVE_PATH" ]; then

@@ -114,3 +114,6 @@ docker-compose.override.yml
 # not source; uploaded to GitHub Releases via `gh release create`
 # at tag time.
 dist/
+
+# Compiled odometry_filter pybind module (rebuild: tools/sim_benchmark/build_native_filter.sh)
+tools/sim_benchmark/_native/

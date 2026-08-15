@@ -103,7 +103,11 @@ COPY pipeline/ src/
 # Build everything. With fast_LIMO removed, this is just the bridge
 # C++ + a handful of Python packages (--symlink-install means edits
 # under src/ are live without re-running colcon).
-RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
+# RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
+# Testing deleting build/install directories
+RUN rm -rf build install log && \
+    . /opt/ros/humble/setup.sh && \
+    colcon build --symlink-install
 
 # Copy launch files, teleop, entrypoint, and DDS profile.
 # fastdds_profile.xml used to be bind-mounted at runtime so we could

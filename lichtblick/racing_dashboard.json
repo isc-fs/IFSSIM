@@ -1,6 +1,5 @@
 {
   "configById": {
-
     "Tab!main": {
       "activeTabIdx": 0,
       "tabs": [
@@ -80,18 +79,82 @@
             },
             "splitPercentage": 25
           }
+        },
+        {
+          "title": "Perception",
+          "layout": {
+            "direction": "row",
+            "first": {
+              "direction": "column",
+              "first": "3D!perc_bev",
+              "second": "3D!perc_world",
+              "splitPercentage": 58
+            },
+            "second": {
+              "direction": "column",
+              "first": "Plot!perc_cone_counts",
+              "second": {
+                "direction": "column",
+                "first": "Plot!perc_orange",
+                "second": "RawMessages!conos_raw",
+                "splitPercentage": 35
+              },
+              "splitPercentage": 42
+            },
+            "splitPercentage": 68
+          }
+        },
+        {
+          "title": "Path Recon",
+          "layout": {
+            "direction": "row",
+            "first": "3D!recon_path",
+            "second": {
+              "direction": "column",
+              "first": "Plot!recon_pos_err",
+              "second": "Plot!recon_drift",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 74
+          }
+        },
+        {
+          "title": "Map Recon",
+          "layout": {
+            "direction": "row",
+            "first": "3D!recon_map",
+            "second": {
+              "direction": "column",
+              "first": "Plot!recon_cones",
+              "second": "RawMessages!recon_pose",
+              "splitPercentage": 55
+            },
+            "splitPercentage": 74
+          }
         }
       ]
     },
-
     "3D!control_map": {
       "cameraState": {
         "distance": 50,
         "perspective": false,
         "phi": 0,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 0,
         "fovy": 45,
         "near": 0.01,
@@ -101,8 +164,14 @@
       "followMode": "follow-position",
       "scene": {
         "syncCamera": false,
-        "transforms": { "showAxes": false, "showLabels": false, "axisScale": 1 },
-        "background": { "color": "#0a0a0a" }
+        "transforms": {
+          "showAxes": false,
+          "showLabels": false,
+          "axisScale": 1
+        },
+        "background": {
+          "color": "#0a0a0a"
+        }
       },
       "transforms": {},
       "topics": {
@@ -117,24 +186,48 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/Conos_raw": { "visible": false },
-        "/Conos": { "visible": true },
-        "/Conos_Orange": { "visible": true },
-        "/Path": { "visible": true },
-        "/path_planning/debug": { "visible": true },
-        "/testing_only/track": { "visible": false }
+        "/Conos_raw": {
+          "visible": false
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/testing_only/track": {
+          "visible": false
+        }
       },
       "layers": []
     },
-
     "3D!slam_map": {
       "cameraState": {
         "distance": 60,
         "perspective": false,
         "phi": 0,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 0,
         "fovy": 45,
         "near": 0.01,
@@ -144,8 +237,14 @@
       "followMode": "follow-none",
       "scene": {
         "syncCamera": false,
-        "transforms": { "showAxes": true, "showLabels": true, "axisScale": 1 },
-        "background": { "color": "#111111" }
+        "transforms": {
+          "showAxes": true,
+          "showLabels": true,
+          "axisScale": 1
+        },
+        "background": {
+          "color": "#111111"
+        }
       },
       "transforms": {},
       "topics": {
@@ -160,26 +259,54 @@
           "pointShape": "circle",
           "decayTime": 0
         },
-        "/Conos_raw": { "visible": true },
-        "/Conos": { "visible": true },
-        "/Conos_Orange": { "visible": true },
-        "/Path": { "visible": true },
-        "/path_planning/debug": { "visible": true },
-        "/testing_only/track": { "visible": false },
-        "/testing_only/odom": { "visible": true },
-        "/slam/pose": { "visible": true }
+        "/Conos_raw": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/testing_only/track": {
+          "visible": false
+        },
+        "/testing_only/odom": {
+          "visible": true
+        },
+        "/slam/pose": {
+          "visible": true
+        }
       },
       "layers": []
     },
-
     "3D!imu_view": {
       "cameraState": {
         "distance": 15,
         "perspective": true,
         "phi": 60,
-        "target": [0, 0, 0],
-        "targetOffset": [0, 0, 0],
-        "targetOrientation": [0, 0, 0, 1],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
         "thetaOffset": 45,
         "fovy": 45,
         "near": 0.01,
@@ -189,8 +316,14 @@
       "followMode": "follow-pose",
       "scene": {
         "syncCamera": false,
-        "transforms": { "showAxes": true, "showLabels": true, "axisScale": 1 },
-        "background": { "color": "#0a0a0a" }
+        "transforms": {
+          "showAxes": true,
+          "showLabels": true,
+          "axisScale": 1
+        },
+        "background": {
+          "color": "#0a0a0a"
+        }
       },
       "transforms": {},
       "topics": {
@@ -205,13 +338,139 @@
           "pointShape": "circle",
           "decayTime": 0.5
         },
-        "/Path": { "visible": true }
+        "/Path": {
+          "visible": true
+        }
       },
       "layers": []
     },
-
+    "3D!perc_bev": {
+      "cameraState": {
+        "distance": 28,
+        "perspective": false,
+        "phi": 0,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          8,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "base_link",
+      "followMode": "follow-position",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 0.8
+        },
+        "background": {
+          "color": "#0a0a12"
+        }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar/Lidar1/viz": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -0.5,
+          "maxValue": 1.5,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/Conos_raw": {
+          "visible": true
+        },
+        "/studio_script/gt_cones_body": {
+          "visible": true,
+          "type": "visualization_msgs/msg/MarkerArray"
+        },
+        "/Conos_Orange": {
+          "visible": true
+        }
+      },
+      "layers": []
+    },
+    "3D!perc_world": {
+      "cameraState": {
+        "distance": 70,
+        "perspective": false,
+        "phi": 0,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "odom",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 1
+        },
+        "background": {
+          "color": "#0a0a12"
+        }
+      },
+      "transforms": {},
+      "topics": {
+        "/studio_script/gt_cones_odom": {
+          "visible": true,
+          "type": "visualization_msgs/msg/MarkerArray"
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_raw": {
+          "visible": false
+        },
+        "/testing_only/odom": {
+          "visible": true,
+          "type": "nav_msgs/msg/Odometry",
+          "covariance": false,
+          "axisScale": 0.6
+        }
+      },
+      "layers": []
+    },
     "Plot!steering": {
-      "title": "Steering [-1…1]",
+      "title": "Steering [-1\u20261]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -232,7 +491,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!speed": {
       "title": "Speed [m/s]",
       "isSynced": true,
@@ -265,7 +523,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!throttle_brake": {
       "title": "Throttle / brake",
       "isSynced": true,
@@ -299,9 +556,8 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!imu_accel": {
-      "title": "Acceleration [m/s²]",
+      "title": "Acceleration [m/s\u00b2]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -331,7 +587,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!yaw_rate": {
       "title": "Yaw rate [rad/s]",
       "isSynced": true,
@@ -363,7 +618,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!cone_count": {
       "title": "Mapped cones",
       "isSynced": true,
@@ -387,7 +641,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!cone_count_slam": {
       "title": "Mapped cones",
       "isSynced": true,
@@ -411,7 +664,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!pose_drift": {
       "title": "Position (SLAM vs GT)",
       "isSynced": true,
@@ -461,9 +713,8 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!imu_accel_xyz": {
-      "title": "IMU linear acceleration [m/s²]",
+      "title": "IMU linear acceleration [m/s\u00b2]",
       "isSynced": true,
       "legendDisplay": "floating",
       "showLegend": true,
@@ -502,7 +753,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!angular_vel": {
       "title": "IMU angular velocity [rad/s]",
       "isSynced": true,
@@ -543,7 +793,6 @@
       ],
       "sidebarDimension": 240
     },
-
     "Plot!speed_imu": {
       "title": "Speed (SLAM state) [m/s]",
       "isSynced": true,
@@ -576,19 +825,336 @@
       ],
       "sidebarDimension": 240
     },
-
+    "Plot!perc_cone_counts": {
+      "title": "Cones in range (20 m) \u2014 detected vs GT",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/perc_detected_count.data",
+          "enabled": true,
+          "label": "Detected (/Conos_raw)",
+          "color": "#e040fb",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/studio_script/gt_cone_count_fov.data",
+          "enabled": true,
+          "label": "GT in FOV",
+          "color": "#42a5f5",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/Conos.markers[:]{id}.id",
+          "enabled": true,
+          "label": "SLAM map size",
+          "color": "#00cc88",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!perc_orange": {
+      "title": "Big-orange detections",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/perc_orange_count.data",
+          "enabled": true,
+          "label": "Orange cones detected",
+          "color": "#ff9800",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
     "RawMessages!cmd": {
       "topicPath": "/ctrl/cmd_internal"
     },
-
     "RawMessages!conos": {
       "topicPath": "/Conos"
+    },
+    "RawMessages!conos_raw": {
+      "topicPath": "/Conos_raw"
+    },
+    "3D!recon_path": {
+      "cameraState": {
+        "distance": 110,
+        "perspective": false,
+        "phi": 0,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "odom",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 1
+        },
+        "background": {
+          "color": "#0d0d0d"
+        }
+      },
+      "transforms": {
+        "frame:map": {
+          "visible": true
+        },
+        "frame:odom": {
+          "visible": true
+        },
+        "frame:base_link": {
+          "visible": true
+        }
+      },
+      "topics": {
+        "/studio_script/recon_paths": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": true
+        },
+        "/studio_script/gt_cones_odom": {
+          "visible": false
+        },
+        "/slam/pose": {
+          "visible": true
+        },
+        "/Path": {
+          "visible": false
+        }
+      },
+      "layers": []
+    },
+    "Plot!recon_pos_err": {
+      "title": "Live drift: ||SLAM - GT|| [m]",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/cone_slam/gt_error_m.data",
+          "enabled": true,
+          "label": "||SLAM - GT||",
+          "color": "#ff8844",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200,
+      "minYValue": 0
+    },
+    "Plot!recon_drift": {
+      "title": "Live ||map -> odom|| [m] (cumulative correction)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/studio_script/map_to_odom_norm.data",
+          "enabled": true,
+          "label": "||map -> odom||",
+          "color": "#ff44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200,
+      "minYValue": 0
+    },
+    "3D!recon_map": {
+      "cameraState": {
+        "distance": 110,
+        "perspective": false,
+        "phi": 0,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "odom",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": {
+          "showAxes": true,
+          "showLabels": false,
+          "axisScale": 1
+        },
+        "background": {
+          "color": "#0d0d0d"
+        }
+      },
+      "transforms": {
+        "frame:map": {
+          "visible": true
+        },
+        "frame:odom": {
+          "visible": true
+        },
+        "frame:base_link": {
+          "visible": true
+        }
+      },
+      "topics": {
+        "/Conos_full": {
+          "visible": true
+        },
+        "/Conos": {
+          "visible": false
+        },
+        "/slam/pose": {
+          "visible": true
+        },
+        "/studio_script/gt_cones_odom": {
+          "visible": true
+        },
+        "/studio_script/recon_paths": {
+          "visible": true
+        },
+        "/Conos_raw": {
+          "visible": false
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/studio_script/gt_pose_point": {
+          "visible": true
+        }
+      },
+      "layers": []
+    },
+    "Plot!recon_cones": {
+      "title": "SLAM map size: mapped cone count",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/Conos_full.markers[:]{id}.id",
+          "enabled": true,
+          "label": "Mapped cones",
+          "color": "#00cc88",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200,
+      "minYValue": 0
+    },
+    "RawMessages!recon_pose": {
+      "topicPath": "/slam/pose"
     }
   },
-
   "globalVariables": {},
-  "userNodes": {},
-  "playbackConfig": { "speed": 1 },
-
+  "userNodes": {
+    "gt_cones_body": {
+      "name": "gt_cones_body",
+      "sourceCode": "// GT cones transformed into base_link for BEV perception debug.\n// Blue cubes = sim ground truth; compare against magenta /Conos_raw.\n// Matches benchmark GT gate: 0.5\u201320 m radial, \u00b160\u00b0 H-FOV (sim LiDAR MinRange + perception).\n\nimport { Input } from \"./types\";\n\ntype Marker = {\n  header: { frame_id: string; stamp: { sec: number; nsec: number } };\n  ns: string;\n  id: number;\n  type: number;\n  action: number;\n  pose: {\n    position: { x: number; y: number; z: number };\n    orientation: { x: number; y: number; z: number; w: number };\n  };\n  scale: { x: number; y: number; z: number };\n  color: { r: number; g: number; b: number; a: number };\n};\n\ntype MarkerArray = { markers: Marker[] };\n\nconst MIN_RANGE_M = 0.5;\nconst RANGE_M = 20.0;\nconst HFOV_HALF_DEG = 60.0;\nconst CUBE = 1;\nconst DELETEALL = 3;\nconst ADD = 0;\n\nlet latestTrack:\n  | { track: Array<{ location: { x: number; y: number; z: number } }> }\n  | undefined;\nlet latestOdom:\n  | {\n      header: { stamp: { sec: number; nsec: number } };\n      pose: {\n        pose: {\n          position: { x: number; y: number };\n          orientation: { w: number; x: number; y: number; z: number };\n        };\n      };\n    }\n  | undefined;\n\nfunction quatYaw(q: { w: number; x: number; y: number; z: number }): number {\n  return Math.atan2(\n    2 * (q.w * q.z + q.x * q.y),\n    1 - 2 * (q.y * q.y + q.z * q.z),\n  );\n}\n\nfunction build(): MarkerArray | undefined {\n  if (!latestTrack || !latestOdom) return undefined;\n  const odom = latestOdom;\n  const ox = odom.pose.pose.position.x;\n  const oy = odom.pose.pose.position.y;\n  const yaw = quatYaw(odom.pose.pose.orientation);\n  const cosY = Math.cos(yaw);\n  const sinY = Math.sin(yaw);\n  const stamp = odom.header.stamp;\n  const markers: Marker[] = [];\n  let id = 0;\n  markers.push({\n    header: { frame_id: \"base_link\", stamp },\n    ns: \"gt\",\n    id: id++,\n    type: CUBE,\n    action: DELETEALL,\n    pose: {\n      position: { x: 0, y: 0, z: 0 },\n      orientation: { x: 0, y: 0, z: 0, w: 1 },\n    },\n    scale: { x: 0.01, y: 0.01, z: 0.01 },\n    color: { r: 0, g: 0, b: 0, a: 0 },\n  });\n  for (const cone of latestTrack.track) {\n    const dx = cone.location.x - ox;\n    const dy = cone.location.y - oy;\n    const x = cosY * dx + sinY * dy;\n    const y = -sinY * dx + cosY * dy;\n    const r = Math.hypot(x, y);\n    if (r < MIN_RANGE_M || r > RANGE_M) continue;\n    if (x <= 0) continue;\n    if (Math.abs(Math.atan2(y, x)) > (HFOV_HALF_DEG * Math.PI) / 180) continue;\n    markers.push({\n      header: { frame_id: \"base_link\", stamp },\n      ns: \"gt\",\n      id: id++,\n      type: CUBE,\n      action: ADD,\n      pose: {\n        position: { x, y, z: 0.15 },\n        orientation: { x: 0, y: 0, z: 0, w: 1 },\n      },\n      scale: { x: 0.24, y: 0.24, z: 0.35 },\n      color: { r: 0.15, g: 0.55, b: 1.0, a: 0.85 },\n    });\n  }\n  return { markers };\n}\n\nexport const inputs = [\"/testing_only/track\", \"/testing_only/odom\"];\nexport const output = \"/studio_script/gt_cones_body\";\n\nexport default function node(\n  event: Input<\"/testing_only/track\"> | Input<\"/testing_only/odom\">,\n): MarkerArray | undefined {\n  if (event.topic === \"/testing_only/track\") {\n    latestTrack = event.message;\n  } else {\n    latestOdom = event.message;\n  }\n  return build();\n}\n"
+    },
+    "gt_cones_odom": {
+      "name": "gt_cones_odom",
+      "sourceCode": "// Full GT track in odom/world frame (all cones, not range-gated).\n\nimport { Input } from \"./types\";\n\ntype Marker = {\n  header: { frame_id: string; stamp: { sec: number; nsec: number } };\n  ns: string;\n  id: number;\n  type: number;\n  action: number;\n  pose: {\n    position: { x: number; y: number; z: number };\n    orientation: { x: number; y: number; z: number; w: number };\n  };\n  scale: { x: number; y: number; z: number };\n  color: { r: number; g: number; b: number; a: number };\n};\n\ntype MarkerArray = { markers: Marker[] };\n\nconst CUBE = 1;\nconst DELETEALL = 3;\nconst ADD = 0;\n\nfunction coneColor(\n  color: number,\n): { r: number; g: number; b: number; a: number } {\n  if (color === 0) return { r: 1.0, g: 0.85, b: 0.0, a: 0.9 };\n  if (color === 1) return { r: 0.2, g: 0.45, b: 1.0, a: 0.9 };\n  if (color === 2) return { r: 1.0, g: 0.45, b: 0.0, a: 0.9 };\n  return { r: 0.7, g: 0.7, b: 0.7, a: 0.7 };\n}\n\nexport const inputs = [\"/testing_only/track\"];\nexport const output = \"/studio_script/gt_cones_odom\";\n\nexport default function node(\n  event: Input<\"/testing_only/track\">,\n): MarkerArray | undefined {\n  const track = event.message;\n  const stamp = event.receiveTime;\n  const markers: Marker[] = [];\n  let id = 0;\n  markers.push({\n    header: { frame_id: \"odom\", stamp },\n    ns: \"gt_track\",\n    id: id++,\n    type: CUBE,\n    action: DELETEALL,\n    pose: {\n      position: { x: 0, y: 0, z: 0 },\n      orientation: { x: 0, y: 0, z: 0, w: 1 },\n    },\n    scale: { x: 0.01, y: 0.01, z: 0.01 },\n    color: { r: 0, g: 0, b: 0, a: 0 },\n  });\n  for (const cone of track.track) {\n    const c = coneColor(cone.color);\n    markers.push({\n      header: { frame_id: \"odom\", stamp },\n      ns: \"gt_track\",\n      id: id++,\n      type: CUBE,\n      action: ADD,\n      pose: {\n        position: {\n          x: cone.location.x,\n          y: cone.location.y,\n          z: cone.location.z,\n        },\n        orientation: { x: 0, y: 0, z: 0, w: 1 },\n      },\n      scale: { x: 0.24, y: 0.24, z: 0.35 },\n      color: c,\n    });\n  }\n  return { markers };\n}\n"
+    },
+    "gt_cone_count_fov": {
+      "name": "gt_cone_count_fov",
+      "sourceCode": "// GT cone count in LiDAR-visible zone (0.5\u201320 m, \u00b160\u00b0 H-FOV).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nconst MIN_RANGE_M = 0.5;\nconst RANGE_M = 20.0;\nconst HFOV_HALF_DEG = 60.0;\n\nlet latestTrack:\n  | { track: Array<{ location: { x: number; y: number } }> }\n  | undefined;\nlet latestOdom:\n  | {\n      pose: {\n        pose: {\n          position: { x: number; y: number };\n          orientation: { w: number; x: number; y: number; z: number };\n        };\n      };\n    }\n  | undefined;\n\nfunction quatYaw(q: { w: number; x: number; y: number; z: number }): number {\n  return Math.atan2(\n    2 * (q.w * q.z + q.x * q.y),\n    1 - 2 * (q.y * q.y + q.z * q.z),\n  );\n}\n\nfunction countInFov(): number | undefined {\n  if (!latestTrack || !latestOdom) return undefined;\n  const ox = latestOdom.pose.pose.position.x;\n  const oy = latestOdom.pose.pose.position.y;\n  const yaw = quatYaw(latestOdom.pose.pose.orientation);\n  const cosY = Math.cos(yaw);\n  const sinY = Math.sin(yaw);\n  let n = 0;\n  for (const cone of latestTrack.track) {\n    const dx = cone.location.x - ox;\n    const dy = cone.location.y - oy;\n    const x = cosY * dx + sinY * dy;\n    const y = -sinY * dx + cosY * dy;\n    const r = Math.hypot(x, y);\n    if (r >= MIN_RANGE_M && r <= RANGE_M && x > 0 && Math.abs(Math.atan2(y, x)) <= (HFOV_HALF_DEG * Math.PI) / 180) n++;\n  }\n  return n;\n}\n\nexport const inputs = [\"/testing_only/track\", \"/testing_only/odom\"];\nexport const output = \"/studio_script/gt_cone_count_fov\";\n\nexport default function node(\n  event: Input<\"/testing_only/track\"> | Input<\"/testing_only/odom\">,\n): Output | undefined {\n  if (event.topic === \"/testing_only/track\") {\n    latestTrack = event.message;\n  } else {\n    latestOdom = event.message;\n  }\n  const n = countInFov();\n  if (n === undefined) return undefined;\n  return { data: n };\n}\n"
+    },
+    "perc_detected_count": {
+      "name": "perc_detected_count",
+      "sourceCode": "// Per-scan cone count from /Conos_raw (excludes DELETEALL marker).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nconst ADD = 0;\n\nexport const inputs = [\"/Conos_raw\"];\nexport const output = \"/studio_script/perc_detected_count\";\n\nexport default function node(\n  event: Input<\"/Conos_raw\">,\n): Output | undefined {\n  let n = 0;\n  for (const m of event.message.markers) {\n    if (m.action === ADD) n++;\n  }\n  return { data: n };\n}\n"
+    },
+    "perc_orange_count": {
+      "name": "perc_orange_count",
+      "sourceCode": "// Big-orange cone count from /Conos_Orange.\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nconst ADD = 0;\n\nexport const inputs = [\"/Conos_Orange\"];\nexport const output = \"/studio_script/perc_orange_count\";\n\nexport default function node(\n  event: Input<\"/Conos_Orange\">,\n): Output | undefined {\n  let n = 0;\n  for (const m of event.message.markers) {\n    if (m.action === ADD) n++;\n  }\n  return { data: n };\n}\n"
+    },
+    "recon_paths": {
+      "name": "recon_paths",
+      "sourceCode": "// Reconstructed trajectories: SLAM (blue) vs EKF /odom (red) vs GT (green).\n//\n// Three accumulated LINE_STRIPs in one MarkerArray, drawn in the `odom`\n// render frame using raw positions - the same world-as-odom convention the\n// dashboard already uses (Plot!pose_drift, gt_cones_odom). Divergence of the\n// red EKF line from blue SLAM / green GT is accumulated dead-reckoning drift;\n// divergence of blue from green is residual SLAM error.\n//\n// AUTO-REFRESH: the trails clear themselves when a new run starts, so no stale\n// data carries over on a live stream. A reset is detected when either\n//   (a) the message stamp jumps backwards (sim /clock restarted / replay loop), or\n//   (b) the pose teleports (car snapped back to the start gate).\n// To wipe everything manually instead, reconnect the data source in Lichtblick.\n//\n// Output: /studio_script/recon_paths (visualization_msgs/MarkerArray).\n\nimport { Input } from \"./types\";\n\ntype Point = { x: number; y: number; z: number };\ntype RGBA = { r: number; g: number; b: number; a: number };\ntype Marker = {\n  header: { frame_id: string; stamp: { sec: number; nsec: number } };\n  ns: string; id: number; type: number; action: number;\n  pose: { position: Point; orientation: { x: number; y: number; z: number; w: number } };\n  scale: Point; color: RGBA; points: Point[];\n};\ntype MarkerArray = { markers: Marker[] };\n\nconst LINE_STRIP = 4;\nconst ADD = 0;\nconst MAX_PTS = 6000;\nconst STAMP_REWIND_S = 0.5; // stamp going back this far => new run\nconst TELEPORT_M = 10.0;    // jump this far between samples => reset\n\nexport const inputs = [\"/slam/pose\", \"/odom\", \"/testing_only/odom\"];\nexport const output = \"/studio_script/recon_paths\";\n\nconst slamPts: Point[] = [];\nconst ekfPts: Point[] = [];\nconst gtPts: Point[] = [];\nconst lastPos: { [topic: string]: Point } = {};\nlet maxStamp = -1;\nlet lastStamp = { sec: 0, nsec: 0 };\n\nfunction toSec(s: { sec: number; nsec: number }): number {\n  return s.sec + s.nsec * 1e-9;\n}\n\nfunction clearAll(): void {\n  slamPts.length = 0;\n  ekfPts.length = 0;\n  gtPts.length = 0;\n  for (const k of Object.keys(lastPos)) delete lastPos[k];\n}\n\nfunction push(arr: Point[], p: Point): void {\n  arr.push({ x: p.x, y: p.y, z: 0.05 });\n  if (arr.length > MAX_PTS) arr.shift();\n}\n\nfunction line(id: number, pts: Point[], color: RGBA): Marker {\n  return {\n    header: { frame_id: \"odom\", stamp: lastStamp },\n    ns: \"recon_paths\", id, type: LINE_STRIP, action: ADD,\n    pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },\n    scale: { x: 0.15, y: 0, z: 0 },\n    color, points: pts.map((q) => ({ x: q.x, y: q.y, z: q.z })),\n  };\n}\n\nexport default function node(\n  event: Input<\"/slam/pose\"> | Input<\"/odom\"> | Input<\"/testing_only/odom\">,\n): MarkerArray | undefined {\n  const stamp = event.message.header.stamp;\n  const t = toSec(stamp);\n  const p = event.message.pose.pose.position;\n\n  // (a) clock rewound -> new run / replay loop.\n  if (maxStamp >= 0 && t < maxStamp - STAMP_REWIND_S) clearAll();\n  if (t > maxStamp) maxStamp = t;\n\n  // (b) teleport on this stream -> car snapped back to start.\n  const prev = lastPos[event.topic];\n  if (prev !== undefined && Math.hypot(p.x - prev.x, p.y - prev.y) > TELEPORT_M) {\n    clearAll();\n  }\n  lastPos[event.topic] = { x: p.x, y: p.y, z: 0 };\n  lastStamp = stamp;\n\n  if (event.topic === \"/slam/pose\") push(slamPts, p);\n  else if (event.topic === \"/odom\") push(ekfPts, p);\n  else push(gtPts, p);\n\n  const markers: Marker[] = [];\n  if (slamPts.length > 1) markers.push(line(0, slamPts, { r: 0.27, g: 0.53, b: 1.0, a: 0.95 }));\n  if (ekfPts.length > 1) markers.push(line(1, ekfPts, { r: 1.0, g: 0.27, b: 0.27, a: 0.95 }));\n  if (gtPts.length > 1) markers.push(line(2, gtPts, { r: 0.27, g: 0.87, b: 0.53, a: 0.95 }));\n  return { markers };\n}\n"
+    },
+    "map_to_odom_norm": {
+      "name": "map_to_odom_norm",
+      "sourceCode": "// ||map -> odom|| translation magnitude from /tf.\n//\n// `map -> odom` is SLAM's drift-correction transform: how far it has had to\n// drag the odom frame to keep dead-reckoning agreeing with the cone map. A\n// healthy lap stays sub-metre; tens of metres means dead-reckoning is the\n// upstream problem.\n//\n// Output: /studio_script/map_to_odom_norm (m, Float32-shaped).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nexport const inputs = [\"/tf\"];\nexport const output = \"/studio_script/map_to_odom_norm\";\n\nexport default function node(event: Input<\"/tf\">): Output | undefined {\n  for (const t of event.message.transforms) {\n    if (t.header.frame_id === \"map\" && t.child_frame_id === \"odom\") {\n      const tx = t.transform.translation.x;\n      const ty = t.transform.translation.y;\n      return { data: Math.hypot(tx, ty) };\n    }\n  }\n  return undefined;\n}\n"
+    },
+    "gt_pose_point": {
+      "name": "gt_pose_point",
+      "sourceCode": "// Current GT car position (/testing_only/odom) as a single sphere, drawn in\n// the odom render frame with the raw position - the same world-as-odom\n// convention as recon_paths. Bright green = ground-truth \"now\".\n//\n// Diagnostic intent: compare this sphere against the /Path near end and the\n// SLAM/EKF trails. If GT sits AHEAD of the path's first waypoints, the path\n// is lagging the real car (live transport delay) - the failure under\n// investigation. On a straight the gap is invisible; at a corner it spikes.\n//\n// Output: /studio_script/gt_pose_point (visualization_msgs/MarkerArray).\n\nimport { Input } from \"./types\";\n\ntype Pt = { x: number; y: number; z: number };\ntype Marker = {\n  header: { frame_id: string; stamp: { sec: number; nsec: number } };\n  ns: string; id: number; type: number; action: number;\n  pose: { position: Pt; orientation: { x: number; y: number; z: number; w: number } };\n  scale: Pt; color: { r: number; g: number; b: number; a: number };\n};\ntype MarkerArray = { markers: Marker[] };\n\nconst SPHERE = 2;\nconst ADD = 0;\n\nexport const inputs = [\"/testing_only/odom\"];\nexport const output = \"/studio_script/gt_pose_point\";\n\nexport default function node(\n  event: Input<\"/testing_only/odom\">,\n): MarkerArray {\n  const p = event.message.pose.pose.position;\n  const stamp = event.message.header.stamp;\n  return {\n    markers: [\n      {\n        header: { frame_id: \"odom\", stamp },\n        ns: \"gt_pose\",\n        id: 0,\n        type: SPHERE,\n        action: ADD,\n        pose: {\n          position: { x: p.x, y: p.y, z: 0.3 },\n          orientation: { x: 0, y: 0, z: 0, w: 1 },\n        },\n        scale: { x: 0.6, y: 0.6, z: 0.6 },\n        color: { r: 0.1, g: 1.0, b: 0.3, a: 1.0 },\n      },\n    ],\n  };\n}\n"
+    }
+  },
+  "playbackConfig": {
+    "speed": 1
+  },
   "layout": "Tab!main"
 }

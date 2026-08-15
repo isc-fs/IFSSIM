@@ -76,6 +76,15 @@ services:
       # on-first-observation is triggering wrong-side classifications
       # in tight corners (#188).
       - DV_SLAM_LANDMARK_CAPTURE=${DV_SLAM_LANDMARK_CAPTURE:-}
+      # SIM-ONLY SLAM diagnostic: when truthy (1/true/yes/on), slam_node
+      # ignores perceived cones on /Conos_raw and feeds itself perfect
+      # cone positions from the sim GT track (/testing_only/track)
+      # projected through the GT pose. Sets the default for the node's
+      # `debug_gt_cones` parameter so it survives container restarts;
+      # a `ros2 param set` override is still possible but ephemeral.
+      # Isolation test for "is loss-of-lock perception or odom/IMU?".
+      # Never set on the real car (GT topics are sim-only). Default off.
+      - DV_SLAM_GT_CONES=${DV_SLAM_GT_CONES:-false}
       # Unified numba JIT cache dir — ensures all pipeline nodes (slam, control,
       # path_planning) share one persisted location regardless of where their
       # source happens to live. Previous per-module __pycache__ volumes missed
@@ -382,6 +391,11 @@ services:
       # `ifssim` (pinned by `image:` in this file) so the full name is
       # stable.
       - DV_PIPELINE_STACK_CONTAINER=ifssim-dv_pipeline_stack-1
+      - IFSSIM_TOOLS_DIR=/ifssim_tools
+      # pipeline/control sources for track_driver Pure Pursuit import.
+      - IFSSIM_CONTROL_PKG=/control_pkg
+      # Writable benchmark artifacts (tools/ is :ro at /ifssim_tools).
+      - IFSSIM_BENCHMARK_RESULTS_ROOT=/benchmark_results
     volumes:
       # Tracks dir: STAYS as a bind mount on purpose. mc_backend's
       # track_generate writes a CSV here; UE5 (the host process,
@@ -413,6 +427,10 @@ services:
       # the per-import startup cost #490 was avoiding doesn't apply
       # here.
       - ./bags:/host_bags
+      # Sim-only tools (track_driver, sim_benchmark) for benchmark_control sessions.
+      - ./tools:/ifssim_tools:ro
+      - ./pipeline/control:/control_pkg:ro
+      - ./tools/sim_benchmark/results:/benchmark_results
       # `pipeline_ctrl` shared-volume mount removed in #381 — flag-file
       # path retired; autonomy bring-up is via StartMission action chain.
       #
