@@ -1,4 +1,5 @@
 #include "FSDSConeSpawner.h"
+#include "FSDSRandom.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -7,6 +8,28 @@
 #include "Engine/World.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
+
+namespace
+{
+	/**
+	 * Cone yaw randomisation. Cones are visually round but their MESHES are
+	 * not perfectly symmetric, so yaw changes which facets the LiDAR sees and
+	 * therefore the returned point pattern. Unseeded, that made every run's
+	 * perception input subtly different. One stream for the whole spawn pass,
+	 * seeded from the scenario seed.
+	 */
+	FRandomStream& ConeYawStream()
+	{
+		static FRandomStream Stream;
+		static int32 SeededFor = MIN_int32;
+		if (SeededFor != FSDSRandom::GetScenarioSeed())
+		{
+			Stream = FSDSRandom::MakeStream(TEXT("ConeSpawner.yaw"));
+			SeededFor = FSDSRandom::GetScenarioSeed();
+		}
+		return Stream;
+	}
+}
 
 AFSDSConeSpawner::AFSDSConeSpawner()
 {
@@ -281,11 +304,11 @@ void AFSDSConeSpawner::SpawnTestTrack()
 
 		// Blue cones on the left (inside)
 		FVector BluePos = TrackCenter + FVector(OvalX, OvalY, HeightOffset) - TrackDir * HalfWidth;
-		SpawnStaticMeshCone(BlueMesh, BluePos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), EFSDSConeColor::Blue);
+		SpawnStaticMeshCone(BlueMesh, BluePos, FRotator(0.f, ConeYawStream().GetFraction() * 360.f, 0.f), EFSDSConeColor::Blue);
 
 		// Yellow cones on the right (outside)
 		FVector YellowPos = TrackCenter + FVector(OvalX, OvalY, HeightOffset) + TrackDir * HalfWidth;
-		SpawnStaticMeshCone(YellowMesh, YellowPos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), EFSDSConeColor::Yellow);
+		SpawnStaticMeshCone(YellowMesh, YellowPos, FRotator(0.f, ConeYawStream().GetFraction() * 360.f, 0.f), EFSDSConeColor::Yellow);
 	}
 
 	// Orange big cones at start/finish
@@ -386,7 +409,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		else if (Type == TEXT("small_orange") || Type == TEXT("orange")) ConeMesh = OrangeConeMesh;
 
 		FVector Location(X, Y, HeightOffset);
-		FRotator Rotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
+		FRotator Rotation(0.f, ConeYawStream().GetFraction() * 360.f, 0.f);
 		SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
 
 		// Record positions for the start-gate-pose derivation. We capture

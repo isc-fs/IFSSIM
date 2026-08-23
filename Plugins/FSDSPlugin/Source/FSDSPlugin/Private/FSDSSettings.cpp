@@ -90,6 +90,10 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 	Root->TryGetStringField(TEXT("SimMode"), SimMode);
 	Root->TryGetStringField(TEXT("ViewMode"), ViewMode);
 	Root->TryGetNumberField(TEXT("ClockSpeed"), ClockSpeed);
+	{
+		double SeedVal = 0.0;
+		if (Root->TryGetNumberField(TEXT("ScenarioSeed"), SeedVal)) ScenarioSeed = (int32)SeedVal;
+	}
 	Root->TryGetStringField(TEXT("SpectatorServerPassword"), SpectatorServerPassword);
 
 	// Vehicles

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "Components/ActorComponent.h"
 #include "FSDSGssSensor.generated.h"
 
@@ -33,4 +34,12 @@ public:
 
 private:
 	FGssOutput CachedOutput;
+
+	// Deterministic noise source. Lazily seeded from the scenario seed on first
+	// use (the seed is set after component construction). Each sensor has its
+	// own stream so sensors cannot perturb each other's sequences.
+	// See FSDSRandom.h.
+	FRandomStream NoiseStream;
+	bool bNoiseStreamReady = false;
+	FRandomStream& Noise();
 };

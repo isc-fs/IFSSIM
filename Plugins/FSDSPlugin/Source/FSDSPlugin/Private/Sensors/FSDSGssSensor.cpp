@@ -1,4 +1,5 @@
 #include "Sensors/FSDSGssSensor.h"
+#include "FSDSRandom.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -32,10 +33,20 @@ void UFSDSGssSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	// to any consumer EKF.
 	if (VelocityNoiseStd > 0.f)
 	{
-		Output.LinearVelocity.X += VelocityNoiseStd * RandStandardNormal();
-		Output.LinearVelocity.Y += VelocityNoiseStd * RandStandardNormal();
-		Output.LinearVelocity.Z += VelocityNoiseStd * RandStandardNormal();
+		Output.LinearVelocity.X += VelocityNoiseStd * RandStandardNormal(Noise());
+		Output.LinearVelocity.Y += VelocityNoiseStd * RandStandardNormal(Noise());
+		Output.LinearVelocity.Z += VelocityNoiseStd * RandStandardNormal(Noise());
 	}
 
 	CachedOutput = Output;
+}
+
+FRandomStream& UFSDSGssSensor::Noise()
+{
+	if (!bNoiseStreamReady)
+	{
+		NoiseStream = FSDSRandom::MakeStream(TEXT("Gss.noise"));
+		bNoiseStreamReady = true;
+	}
+	return NoiseStream;
 }

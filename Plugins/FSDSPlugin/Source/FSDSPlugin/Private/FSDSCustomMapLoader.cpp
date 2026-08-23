@@ -1,4 +1,5 @@
 #include "FSDSCustomMapLoader.h"
+#include "FSDSRandom.h"
 #include <cstdlib>
 #include <cmath>
 
@@ -23,6 +24,12 @@ TArray<FString> UFSDSCustomMapLoader::ProcessFile(FString Data, TArray<FTransfor
 	}
 	Lines.Add(Right);
 
+	// Deterministic cone yaw for this load. Cone meshes are not perfectly
+	// symmetric, so yaw changes which facets the LiDAR sees and therefore the
+	// returned points — unseeded, every load produced different perception
+	// input. Seeded once per load so the whole track replays identically.
+	FRandomStream MapConeYaw = FSDSRandom::MakeStream(TEXT("CustomMapLoader.coneYaw"));
+
 	for (FString& Line : Lines)
 	{
 		FString Type, Value;
@@ -35,7 +42,9 @@ TArray<FString> UFSDSCustomMapLoader::ProcessFile(FString Data, TArray<FTransfor
 
 		// Skip remaining fields (heading, variances)
 		FTransform Transform(
-			FRotator(0.f, (float)(rand() % 360), 0.f),
+			// was C stdlib rand(): unseeded, and shares global state with anything
+			// else in the process that calls it. Now a named deterministic stream.
+			FRotator(0.f, MapConeYaw.GetFraction() * 360.f, 0.f),
 			FVector(X, -Y, 5.f),
 			FVector(1.f, 1.f, 1.f)
 		);

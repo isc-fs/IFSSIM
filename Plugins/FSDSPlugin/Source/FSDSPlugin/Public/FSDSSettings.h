@@ -164,6 +164,18 @@ public:
 	float ClockSpeed = 1.0f;
 	FString SpectatorServerPassword;
 
+	// Scenario seed for all stochastic sources (sensor noise, LiDAR dropout,
+	// cone yaw). Same seed => same run.
+	//
+	// Defaults to 1, i.e. REPRODUCIBLE BY DEFAULT — a validation platform
+	// should not depend on someone remembering to enable determinism, and a
+	// silently non-reproducible run is the failure mode this whole change
+	// exists to remove. Override with "ScenarioSeed": N in settings.json to
+	// draw a different sample; set 0 to opt out entirely, in which case
+	// randomness falls back to the clock and the run logs itself as
+	// non-reproducible. See FSDSRandom.h.
+	int32 ScenarioSeed = 1;
+
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 
 	/** Get the first (default) vehicle settings */

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Math/UnrealMathUtility.h"
+#include "Math/RandomStream.h"
+#include "FSDSRandom.h"
 
 /**
  * Sensor-noise helpers shared by the four sensor TickComponents.
@@ -20,15 +22,18 @@
  *
  * Inline / static so each translation unit gets its own copy and
  * we don't need a shared library / ODR worries.
+ *
+ * DETERMINISM: these take an FRandomStream& rather than drawing from
+ * process-global FMath::FRand. Each sensor owns a stream seeded from the
+ * scenario seed, so the same seed reproduces the same noise exactly, and
+ * sensors do not perturb each other's sequences. See FSDSRandom.h.
  */
 namespace FSDSNoise
 {
-	/** One sample from N(0, 1). */
-	static inline float RandStandardNormal()
+	/** One sample from N(0, 1), drawn from the caller's stream. */
+	static inline float RandStandardNormal(FRandomStream& Stream)
 	{
-		const float u1 = FMath::Max(FMath::FRand(), 1e-7f);
-		const float u2 = FMath::FRand();
-		return FMath::Sqrt(-2.f * FMath::Loge(u1)) * FMath::Cos(2.f * PI * u2);
+		return FSDSRandom::StandardNormal(Stream);
 	}
 
 	/**
@@ -41,11 +46,11 @@ namespace FSDSNoise
 	 * sensors — GPS bias is dominated by sat geometry, GSS is optical,
 	 * LiDAR is shot-noise dominated).
 	 */
-	static inline float StepOrnsteinUhlenbeck(float Bias, float Dt, float Tau, float SteadyStd)
+	static inline float StepOrnsteinUhlenbeck(FRandomStream& Stream, float Bias, float Dt, float Tau, float SteadyStd)
 	{
 		if (Tau <= 0.f || SteadyStd <= 0.f) return Bias;
 		const float Decay = FMath::Exp(-Dt / Tau);
 		const float Sigma = SteadyStd * FMath::Sqrt(1.f - Decay * Decay);
-		return Bias * Decay + Sigma * RandStandardNormal();
+		return Bias * Decay + Sigma * RandStandardNormal(Stream);
 	}
 }

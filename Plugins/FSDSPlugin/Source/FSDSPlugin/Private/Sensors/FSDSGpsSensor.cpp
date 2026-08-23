@@ -1,4 +1,5 @@
 #include "Sensors/FSDSGpsSensor.h"
+#include "FSDSRandom.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -43,17 +44,27 @@ void UFSDSGpsSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	// silently overstating noise to any consumer EKF.
 	if (GpsPositionNoiseStd > 0.f)
 	{
-		Output.Latitude  += GpsPositionNoiseStd * RandStandardNormal() / MetersPerDegreeLat;
-		Output.Longitude += GpsPositionNoiseStd * RandStandardNormal() / MetersPerDegreeLon;
-		Output.Altitude  += GpsPositionNoiseStd * RandStandardNormal();
+		Output.Latitude  += GpsPositionNoiseStd * RandStandardNormal(Noise()) / MetersPerDegreeLat;
+		Output.Longitude += GpsPositionNoiseStd * RandStandardNormal(Noise()) / MetersPerDegreeLon;
+		Output.Altitude  += GpsPositionNoiseStd * RandStandardNormal(Noise());
 	}
 
 	if (GpsVelocityNoiseStd > 0.f)
 	{
-		Output.Velocity.X += GpsVelocityNoiseStd * RandStandardNormal();
-		Output.Velocity.Y += GpsVelocityNoiseStd * RandStandardNormal();
-		Output.Velocity.Z += GpsVelocityNoiseStd * RandStandardNormal();
+		Output.Velocity.X += GpsVelocityNoiseStd * RandStandardNormal(Noise());
+		Output.Velocity.Y += GpsVelocityNoiseStd * RandStandardNormal(Noise());
+		Output.Velocity.Z += GpsVelocityNoiseStd * RandStandardNormal(Noise());
 	}
 
 	CachedOutput = Output;
+}
+
+FRandomStream& UFSDSGpsSensor::Noise()
+{
+	if (!bNoiseStreamReady)
+	{
+		NoiseStream = FSDSRandom::MakeStream(TEXT("Gps.noise"));
+		bNoiseStreamReady = true;
+	}
+	return NoiseStream;
 }

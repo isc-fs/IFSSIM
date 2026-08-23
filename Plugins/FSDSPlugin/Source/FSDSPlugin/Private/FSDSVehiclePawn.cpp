@@ -1,5 +1,6 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
+#include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -507,6 +508,11 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// actually drives; the Pacejka curve still comes from the wheel CDO.
 		VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
 		VehicleMovement->VerifyAllWheelConfigsApplied();
+
+		// Seed all stochastic sources for this run. Must happen before any
+		// sensor draws noise or any cone is spawned; BeginPlay is the earliest
+		// point where settings.json has been parsed.
+		FSDSRandom::SetScenarioSeed(FFSDSSettings::Get().ScenarioSeed);
 
 		// Determinism posture, logged on every run.
 		//

@@ -1,4 +1,5 @@
 #include "Sensors/FSDSImuSensor.h"
+#include "FSDSRandom.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -57,34 +58,44 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 		// Bias drift — Ornstein–Uhlenbeck process. Bounded long-run stddev.
 		if (AccelBiasStd > 0.f)
 		{
-			AccelBias.X = StepOrnsteinUhlenbeck(AccelBias.X, DeltaTime, AccelBiasTau, AccelBiasStd);
-			AccelBias.Y = StepOrnsteinUhlenbeck(AccelBias.Y, DeltaTime, AccelBiasTau, AccelBiasStd);
-			AccelBias.Z = StepOrnsteinUhlenbeck(AccelBias.Z, DeltaTime, AccelBiasTau, AccelBiasStd);
+			AccelBias.X = StepOrnsteinUhlenbeck(Noise(), AccelBias.X, DeltaTime, AccelBiasTau, AccelBiasStd);
+			AccelBias.Y = StepOrnsteinUhlenbeck(Noise(), AccelBias.Y, DeltaTime, AccelBiasTau, AccelBiasStd);
+			AccelBias.Z = StepOrnsteinUhlenbeck(Noise(), AccelBias.Z, DeltaTime, AccelBiasTau, AccelBiasStd);
 		}
 
 		if (GyroBiasStd > 0.f)
 		{
-			GyroBias.X = StepOrnsteinUhlenbeck(GyroBias.X, DeltaTime, GyroBiasTau, GyroBiasStd);
-			GyroBias.Y = StepOrnsteinUhlenbeck(GyroBias.Y, DeltaTime, GyroBiasTau, GyroBiasStd);
-			GyroBias.Z = StepOrnsteinUhlenbeck(GyroBias.Z, DeltaTime, GyroBiasTau, GyroBiasStd);
+			GyroBias.X = StepOrnsteinUhlenbeck(Noise(), GyroBias.X, DeltaTime, GyroBiasTau, GyroBiasStd);
+			GyroBias.Y = StepOrnsteinUhlenbeck(Noise(), GyroBias.Y, DeltaTime, GyroBiasTau, GyroBiasStd);
+			GyroBias.Z = StepOrnsteinUhlenbeck(Noise(), GyroBias.Z, DeltaTime, GyroBiasTau, GyroBiasStd);
 		}
 
 		// Apply bias + Gaussian white noise to accelerometer
 		if (AccelNoiseStd > 0.f || AccelBiasStd > 0.f)
 		{
-			Output.LinearAcceleration.X += AccelBias.X + AccelNoiseStd * RandStandardNormal();
-			Output.LinearAcceleration.Y += AccelBias.Y + AccelNoiseStd * RandStandardNormal();
-			Output.LinearAcceleration.Z += AccelBias.Z + AccelNoiseStd * RandStandardNormal();
+			Output.LinearAcceleration.X += AccelBias.X + AccelNoiseStd * RandStandardNormal(Noise());
+			Output.LinearAcceleration.Y += AccelBias.Y + AccelNoiseStd * RandStandardNormal(Noise());
+			Output.LinearAcceleration.Z += AccelBias.Z + AccelNoiseStd * RandStandardNormal(Noise());
 		}
 
 		// Apply bias + Gaussian white noise to gyroscope
 		if (GyroNoiseStd > 0.f || GyroBiasStd > 0.f)
 		{
-			Output.AngularVelocity.X += GyroBias.X + GyroNoiseStd * RandStandardNormal();
-			Output.AngularVelocity.Y += GyroBias.Y + GyroNoiseStd * RandStandardNormal();
-			Output.AngularVelocity.Z += GyroBias.Z + GyroNoiseStd * RandStandardNormal();
+			Output.AngularVelocity.X += GyroBias.X + GyroNoiseStd * RandStandardNormal(Noise());
+			Output.AngularVelocity.Y += GyroBias.Y + GyroNoiseStd * RandStandardNormal(Noise());
+			Output.AngularVelocity.Z += GyroBias.Z + GyroNoiseStd * RandStandardNormal(Noise());
 		}
 	}
 
 	CachedOutput = Output;
+}
+
+FRandomStream& UFSDSImuSensor::Noise()
+{
+	if (!bNoiseStreamReady)
+	{
+		NoiseStream = FSDSRandom::MakeStream(TEXT("Imu.noise"));
+		bNoiseStreamReady = true;
+	}
+	return NoiseStream;
 }
