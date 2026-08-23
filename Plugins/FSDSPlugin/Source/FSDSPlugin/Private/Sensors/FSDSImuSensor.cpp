@@ -53,14 +53,37 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 
 	// --- Apply noise ---
 
+	// UNIT CONVERSION — the accelerometer only.
+	//
+	// This sensor works in UE units: Owner->GetVelocity() is cm/s, so
+	// LinearAcceleration above is cm/s^2 (note the explicit `WorldAccel.Z +=
+	// 980.f; // cm/s^2`). The cm->m conversion happens LATER, at frame packing
+	// (FSDSUdpBroadcaster.cpp:211, FSDSRpcServer.cpp:1556, both `/ 100.f`).
+	//
+	// AccelNoiseStd / AccelBiasStd are configured in m/s^2 — settings.json
+	// derives them from the BMI088 datasheet: "~0.024 m/s^2 ... per-sample
+	// standard deviations". Applying an m/s^2 sigma to a cm/s^2 quantity and
+	// then dividing by 100 made the published noise 100x too small: measured
+	// std on a stationary car was 0.00024 m/s^2 against the configured 0.024.
+	//
+	// The EKF was therefore tuned against a simulated accelerometer roughly
+	// 100x quieter than the real sensor, so scale into the sensor's working
+	// units here. The gyro needs no equivalent: angular velocity comes from
+	// GetPhysicsAngularVelocityInRadians() and is packed unscaled, so rad/s
+	// is already the published unit.
+	constexpr float AccelMToCm = 100.f;
+
 	if (DeltaTime > 0.f)
 	{
 		// Bias drift — Ornstein–Uhlenbeck process. Bounded long-run stddev.
+		// SteadyStd is scaled so the bias state lives in cm/s^2, matching the
+		// LinearAcceleration it is added to below.
 		if (AccelBiasStd > 0.f)
 		{
-			AccelBias.X = StepOrnsteinUhlenbeck(Noise(), AccelBias.X, DeltaTime, AccelBiasTau, AccelBiasStd);
-			AccelBias.Y = StepOrnsteinUhlenbeck(Noise(), AccelBias.Y, DeltaTime, AccelBiasTau, AccelBiasStd);
-			AccelBias.Z = StepOrnsteinUhlenbeck(Noise(), AccelBias.Z, DeltaTime, AccelBiasTau, AccelBiasStd);
+			const float AccelBiasStdCm = AccelBiasStd * AccelMToCm;
+			AccelBias.X = StepOrnsteinUhlenbeck(Noise(), AccelBias.X, DeltaTime, AccelBiasTau, AccelBiasStdCm);
+			AccelBias.Y = StepOrnsteinUhlenbeck(Noise(), AccelBias.Y, DeltaTime, AccelBiasTau, AccelBiasStdCm);
+			AccelBias.Z = StepOrnsteinUhlenbeck(Noise(), AccelBias.Z, DeltaTime, AccelBiasTau, AccelBiasStdCm);
 		}
 
 		if (GyroBiasStd > 0.f)
@@ -73,9 +96,10 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 		// Apply bias + Gaussian white noise to accelerometer
 		if (AccelNoiseStd > 0.f || AccelBiasStd > 0.f)
 		{
-			Output.LinearAcceleration.X += AccelBias.X + AccelNoiseStd * RandStandardNormal(Noise());
-			Output.LinearAcceleration.Y += AccelBias.Y + AccelNoiseStd * RandStandardNormal(Noise());
-			Output.LinearAcceleration.Z += AccelBias.Z + AccelNoiseStd * RandStandardNormal(Noise());
+			const float AccelNoiseStdCm = AccelNoiseStd * AccelMToCm;
+			Output.LinearAcceleration.X += AccelBias.X + AccelNoiseStdCm * RandStandardNormal(Noise());
+			Output.LinearAcceleration.Y += AccelBias.Y + AccelNoiseStdCm * RandStandardNormal(Noise());
+			Output.LinearAcceleration.Z += AccelBias.Z + AccelNoiseStdCm * RandStandardNormal(Noise());
 		}
 
 		// Apply bias + Gaussian white noise to gyroscope
