@@ -9,6 +9,22 @@ UFSDSWheelFront::UFSDSWheelFront()
 	bAffectedByHandbrake = true;
 	bAffectedBySteering = true;
 
+	// Match FSDSWheelRear: SetDriveTorque()/SetBrakeTorque() write to the
+	// wheel's ExternalDriveTorque/ExternalBrakeTorque, which the solver only
+	// reads when the combine method is Override or Additive. The Chaos default
+	// (None) silently DISCARDS them — see WheelSystem.cpp's combine block.
+	//
+	// This is a no-op today because the car is RWD and no torque is ever sent
+	// to the front wheels. It is set here so that when it is — four in-wheel
+	// motors, torque vectoring, front regen — the torque actually arrives.
+	// Without it the first 4WD experiment would silently be an RWD experiment,
+	// with a plausible-looking result and no error anywhere.
+	//
+	// Additive rather than Override, for the same reason as the rear: internal
+	// brake torques (handbrake / EBS, which these wheels DO respond to) must
+	// still reach the wheel.
+	ExternalTorqueCombineMethod = ETorqueCombineMethod::Additive;
+
 	// IFS-08: Hoosier 16.0x7.5-10 R20
 	WheelRadius = 20.f;       // 200mm tire radius
 	WheelWidth = 19.f;        // 7.5 inch = 190mm

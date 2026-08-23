@@ -1,6 +1,8 @@
 #include "FSDSRandom.h"
 
 #include "HAL/PlatformTime.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 namespace
 {
@@ -27,6 +29,19 @@ namespace
 
 void FSDSRandom::SetScenarioSeed(int32 InSeed)
 {
+	// -fsds.seed=N overrides settings.json. This is what makes N-seed repeats
+	// possible without editing config between runs — a batch runner sweeps the
+	// seed on the command line and every run is otherwise byte-identical in
+	// configuration, which is exactly the property a paired comparison needs.
+	int32 CmdSeed = 0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("fsds.seed="), CmdSeed))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS: scenario seed overridden from the command line: %d (settings.json said %d)"),
+			CmdSeed, InSeed);
+		InSeed = CmdSeed;
+	}
+
 	GScenarioSeed = InSeed;
 	GWarnedUnseeded = false;
 
