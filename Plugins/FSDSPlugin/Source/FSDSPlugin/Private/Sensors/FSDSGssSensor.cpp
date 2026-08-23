@@ -1,4 +1,5 @@
 #include "Sensors/FSDSGssSensor.h"
+#include "FSDSRandom.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -32,10 +33,24 @@ void UFSDSGssSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	// to any consumer EKF.
 	if (VelocityNoiseStd > 0.f)
 	{
-		Output.LinearVelocity.X += VelocityNoiseStd * RandStandardNormal();
-		Output.LinearVelocity.Y += VelocityNoiseStd * RandStandardNormal();
-		Output.LinearVelocity.Z += VelocityNoiseStd * RandStandardNormal();
+		Output.LinearVelocity.X += VelocityNoiseStd * RandStandardNormal(Noise());
+		Output.LinearVelocity.Y += VelocityNoiseStd * RandStandardNormal(Noise());
+		Output.LinearVelocity.Z += VelocityNoiseStd * RandStandardNormal(Noise());
 	}
 
 	CachedOutput = Output;
+}
+
+FRandomStream& UFSDSGssSensor::Noise()
+{
+	// Re-seed on generation change, not just once: a scenario reset must
+	// restart the sequence, otherwise run 2 continues run 1 from wherever it
+	// happened to stop. Generation 0 means the seed has not been set yet.
+	const uint32 Gen = FSDSRandom::GetGeneration();
+	if (NoiseStreamGeneration != Gen)
+	{
+		NoiseStream = FSDSRandom::MakeStream(TEXT("Gss.noise"));
+		NoiseStreamGeneration = Gen;
+	}
+	return NoiseStream;
 }

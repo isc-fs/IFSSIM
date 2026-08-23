@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "Components/ActorComponent.h"
 #include "FSDSImuSensor.generated.h"
 
@@ -72,4 +73,15 @@ private:
 	// Persistent bias state (O-U process)
 	FVector AccelBias = FVector::ZeroVector;
 	FVector GyroBias = FVector::ZeroVector;
+
+	// Deterministic noise source. Lazily seeded from the scenario seed on first
+	// use (the seed is set after component construction). Each sensor has its
+	// own stream so sensors cannot perturb each other's sequences.
+	// See FSDSRandom.h.
+	FRandomStream NoiseStream;
+	// Generation this stream was seeded for. A scenario reset bumps the
+	// generation, which forces a re-seed so a repeat run genuinely restarts
+	// the sequence instead of continuing the previous one.
+	uint32 NoiseStreamGeneration = 0;
+	FRandomStream& Noise();
 };

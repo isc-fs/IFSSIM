@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "WheeledVehiclePawn.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
+#include "Vehicles/FSDSWheeledVehicleMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "Camera/CameraComponent.h"
@@ -29,7 +30,11 @@ class FSDSPLUGIN_API AFSDSVehiclePawn : public AWheeledVehiclePawn
 	GENERATED_BODY()
 
 public:
-	AFSDSVehiclePawn();
+	// Takes an FObjectInitializer so the constructor can substitute
+	// UFSDSWheeledVehicleMovementComponent for the stock Chaos component —
+	// the movement component is a default subobject created by
+	// AWheeledVehiclePawn, so its class can only be changed here.
+	AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer);
 
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
@@ -147,7 +152,7 @@ public:
 	// --- Components ---
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
-	UChaosWheeledVehicleMovementComponent* VehicleMovement;
+	UFSDSWheeledVehicleMovementComponent* VehicleMovement;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	USpringArmComponent* SpringArm;
