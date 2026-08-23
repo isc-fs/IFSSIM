@@ -192,6 +192,26 @@ docker compose build              # ~5-10 min cold, seconds after
 docker compose up -d              # starts all 4 containers
 ```
 
+### Faster: pull the pipeline image instead of building it
+
+`docker compose build` compiles the ROS workspace and installs gtsam, numba
+and the FaSTTUBe planner. CI publishes that image on every merge to `dev`, so
+unless you are editing `ros2/src/` or `pipeline/` you can skip the build
+entirely:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.pull.yml pull
+docker compose -f docker-compose.yml -f docker-compose.pull.yml up -d
+```
+
+Pin an exact build with `PIPELINE_IMAGE_TAG` (`dev`, `latest`, or an immutable
+`sha-<short>` — use a `sha-` tag when two machines must run provably identical
+stacks).
+
+**If you ARE editing bridge or pipeline code, do not use the override.**
+`tools/refresh-bridge.sh` rebuilds from your working tree, and a pulled image
+would silently mask your changes.
+
 After ~10 s, `docker compose ps` should show all four `Up (healthy)`:
 
 ```
