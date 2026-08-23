@@ -6,8 +6,9 @@
 
 namespace
 {
-	int32 GScenarioSeed = 0;
-	bool  GWarnedUnseeded = false;
+	int32  GScenarioSeed = 0;
+	bool   GWarnedUnseeded = false;
+	uint32 GGeneration = 0;   // bumped on every (re)seed; see GetGeneration()
 
 	/**
 	 * FNV-1a over the stream name. Any stable hash works; what matters is that
@@ -44,6 +45,7 @@ void FSDSRandom::SetScenarioSeed(int32 InSeed)
 
 	GScenarioSeed = InSeed;
 	GWarnedUnseeded = false;
+	++GGeneration;
 
 	if (InSeed != 0)
 	{
@@ -69,6 +71,11 @@ int32 FSDSRandom::GetScenarioSeed()
 bool FSDSRandom::IsDeterministic()
 {
 	return GScenarioSeed != 0;
+}
+
+uint32 FSDSRandom::GetGeneration()
+{
+	return GGeneration;
 }
 
 uint32 FSDSRandom::MakeSeed(const FString& StreamName, uint32 Salt)

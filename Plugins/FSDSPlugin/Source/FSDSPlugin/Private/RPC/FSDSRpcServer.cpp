@@ -1,4 +1,6 @@
 #include "RPC/FSDSRpcServer.h"
+#include "EmraxMotor.h"
+#include "FSDSRandom.h"
 #include "RPC/FSDSUdpBroadcaster.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
@@ -839,9 +841,97 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("reset"))
 	{
 		// Destructive level reload (OpenLevel) crashed the editor; removed in fix/12.
-		// Clients should use simSetVehiclePose instead for a soft reset.
-		UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: 'reset' is no longer supported; use simSetVehiclePose"));
-		return TEXT("{\"error\":\"reset removed; use simSetVehiclePose\"}");
+		// Clients should use resetScenario (soft reset) instead.
+		UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: 'reset' is no longer supported; use resetScenario"));
+		return TEXT("{\"error\":\"reset removed; use resetScenario\"}");
+	}
+
+	else if (Method.StartsWith(TEXT("resetScenario")))
+	{
+		// Soft scenario reset for repeat runs: restore the sim to the state a
+		// fresh run would start from, WITHOUT reloading the level (OpenLevel
+		// is what crashed the editor and got 'reset' removed).
+		//
+		// The point of this call is repeatability. A repeat is only a repeat if
+		// every piece of carried-over state is restored — it is easy to reset
+		// the visible things (pose, cones) and silently leave the invisible
+		// ones (RNG position, IMU bias drift, rotor speed), which produces a
+		// run that looks like a repeat and is not one.
+		//
+		// Optional argument: resetScenario [seed]. Passing a seed makes this
+		// the primitive a batch runner sweeps over for N-seed repeats.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		const bool bHasSeed = (Parts.Num() >= 2);
+		const int32 NewSeed = bHasSeed ? FCString::Atoi(*Parts[1]) : 0;
+
+		FString Result;
+		FEvent* Done = FPlatformProcess::GetSynchEventFromPool(false);
+
+		AsyncTask(ENamedThreads::GameThread, [this, bHasSeed, NewSeed, &Result, Done]()
+		{
+			int32 NumCones = 0;
+
+			// 1. Re-seed. Bumps the RNG generation, which makes every cached
+			//    sensor stream re-seed on next use and clears IMU bias drift.
+			FSDSRandom::SetScenarioSeed(bHasSeed ? NewSeed : FSDSRandom::GetScenarioSeed());
+
+			// 2. Referee counters (DOO / out-of-course / laps / times).
+			if (Referee) Referee->ResetState();
+
+			// 3. Vehicle: back to the start gate with velocities zeroed, and
+			//    powertrain state cleared. EBS stays as-is deliberately — in
+			//    the real FS-DV flow the RES Go signal owns that transition
+			//    (T 14.8.4), and loadTrack made the same choice.
+			if (IsValid(VehiclePawn))
+			{
+				if (World)
+				{
+					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+					{
+						FVector StartLoc; FQuat StartRot;
+						if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
+						{
+							VehiclePawn->SetActorLocationAndRotation(
+								StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+						}
+						NumCones = It->SpawnedCones.Num();
+						break;
+					}
+				}
+
+				// Zero the physics body. Chaos keeps its own velocities on the
+				// body instance, so teleporting the actor alone leaves the car
+				// carrying the previous run's momentum into the new one.
+				if (USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh())
+				{
+					if (Mesh->IsSimulatingPhysics())
+					{
+						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+					}
+				}
+
+				// Rotor speed is integrated state; without this the repeat
+				// starts with the previous run's motor spinning.
+				if (VehiclePawn->Motor) VehiclePawn->Motor->Reset();
+			}
+
+			Result = FString::Printf(
+				TEXT("{\"ok\":true,\"seed\":%d,\"generation\":%u,\"cones\":%d}"),
+				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration(), NumCones);
+
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS RPC: resetScenario — seed %d (generation %u), referee cleared, "
+					 "vehicle at start gate, velocities and rotor zeroed"),
+				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration());
+
+			Done->Trigger();
+		});
+
+		Done->Wait();
+		FPlatformProcess::ReturnSynchEventToPool(Done);
+		return Result;
 	}
 
 	// === Object APIs ===

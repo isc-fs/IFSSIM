@@ -56,6 +56,17 @@ namespace FSDSRandom
 	FSDSPLUGIN_API bool IsDeterministic();
 
 	/**
+	 * Increments every time the scenario seed is (re)set.
+	 *
+	 * Streams are cached by their owners — a sensor seeds once and keeps
+	 * drawing from that stream. On a scenario RESET those caches must be
+	 * rebuilt, or run 2 continues run 1's sequence from wherever it stopped
+	 * and is not a repeat at all. Owners store the generation they seeded for
+	 * and re-seed when it changes.
+	 */
+	FSDSPLUGIN_API uint32 GetGeneration();
+
+	/**
 	 * A stream for a named source of randomness, derived from the scenario
 	 * seed. Independent of every other stream.
 	 */

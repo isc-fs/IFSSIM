@@ -307,6 +307,9 @@ private:
 	// differs while the whole sequence stays reproducible for a given seed.
 	uint32 GpuScanCounter = 0;
 	FRandomStream NoiseStream;
-	bool bNoiseStreamReady = false;
+	// Generation this stream was seeded for. A scenario reset bumps the
+	// generation, which forces a re-seed so a repeat run genuinely restarts
+	// the sequence instead of continuing the previous one.
+	uint32 NoiseStreamGeneration = 0;
 	FRandomStream& Noise();
 };

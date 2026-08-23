@@ -61,10 +61,14 @@ void UFSDSGpsSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 
 FRandomStream& UFSDSGpsSensor::Noise()
 {
-	if (!bNoiseStreamReady)
+	// Re-seed on generation change, not just once: a scenario reset must
+	// restart the sequence, otherwise run 2 continues run 1 from wherever it
+	// happened to stop. Generation 0 means the seed has not been set yet.
+	const uint32 Gen = FSDSRandom::GetGeneration();
+	if (NoiseStreamGeneration != Gen)
 	{
 		NoiseStream = FSDSRandom::MakeStream(TEXT("Gps.noise"));
-		bNoiseStreamReady = true;
+		NoiseStreamGeneration = Gen;
 	}
 	return NoiseStream;
 }

@@ -79,6 +79,9 @@ private:
 	// own stream so sensors cannot perturb each other's sequences.
 	// See FSDSRandom.h.
 	FRandomStream NoiseStream;
-	bool bNoiseStreamReady = false;
+	// Generation this stream was seeded for. A scenario reset bumps the
+	// generation, which forces a re-seed so a repeat run genuinely restarts
+	// the sequence instead of continuing the previous one.
+	uint32 NoiseStreamGeneration = 0;
 	FRandomStream& Noise();
 };
