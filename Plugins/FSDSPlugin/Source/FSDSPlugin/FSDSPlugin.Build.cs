@@ -14,6 +14,7 @@ public class FSDSPlugin : ModuleRules
 			"Engine",
 			"InputCore",
 			"ChaosVehicles",
+			"ChaosVehiclesCore",   // Chaos::MToCm, FSimpleWheelSim readback (Stage 0 config verification)
 			"PhysicsCore",
 			"RHI",
 			"RenderCore",

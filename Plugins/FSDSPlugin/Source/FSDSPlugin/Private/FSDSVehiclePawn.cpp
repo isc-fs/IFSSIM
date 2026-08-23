@@ -5,15 +5,26 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/PhysicsSettings.h"   // determinism posture log (Stage 0)
 #include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
 
-AFSDSVehiclePawn::AFSDSVehiclePawn()
+// Substitute our movement component for the stock Chaos one. The movement
+// component is a default subobject created by AWheeledVehiclePawn, so this
+// constructor is the only place its class can be changed.
+//
+// The subclass exists solely to reach VehicleSimulationPT (protected) so wheel
+// configuration can be pushed to the solver AFTER CreateVehicle() has already
+// built the physics wheels from the class default object. See
+// FSDSWheeledVehicleMovementComponent.h for why that is necessary.
+AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UFSDSWheeledVehicleMovementComponent>(
+		AWheeledVehiclePawn::VehicleMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
 
 	// Get the Chaos vehicle movement component
-	VehicleMovement = CastChecked<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
+	VehicleMovement = CastChecked<UFSDSWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 
 	// Try to load the Formula Student skeletal mesh
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> CarMesh(
@@ -458,11 +469,68 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
 			if (!W) continue;
 			// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
-			if (i == 2 || i == 3) W->MaxBrakeTorque = RearPerWheelMax;
+			const bool bIsRear = (i == 2 || i == 3);
+			if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
+
+			// Make settings.json authoritative for wheel geometry. These were
+			// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
+			// WheelRadius=20cm, :15 MaxSteerAngle=28deg) while the parsed
+			// P.WheelRadius / P.MaxSteerAngle had NO consumer anywhere — the
+			// settings values were decoration.
+			//
+			// NOTE: assigning these alone is a NO-OP, because Chaos already
+			// built its physics wheels from the class default object. It only
+			// takes effect because ApplyAllWheelConfigsToPhysics() below pushes
+			// the result to the solver. The two changes are only correct
+			// together.
+			W->WheelRadius = P.WheelRadius * 100.f;   // settings [m] -> wheel [cm]
+			if (!bIsRear) W->MaxSteerAngle = P.MaxSteerAngle;  // rears stay 0
 
 			// Pacejka Magic Formula — bake lateral and longitudinal slip curves
 			// into each wheel, replacing the flat FrictionForceMultiplier model.
 			FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+		}
+
+		// Everything above wrote to the game-thread UChaosVehicleWheel objects.
+		// Chaos built its physics wheels from the wheel class's CLASS DEFAULT
+		// OBJECT back in CreateVehicle() (engine :1412), so on its own none of
+		// it reaches the solver — which is why TireMu, the Pacejka bake and
+		// MaxBrakeTorque have behaved as decoration.
+		//
+		// Push the configuration through, then read the solver back and shout
+		// if it disagrees. The verify step is the point: the failure mode is
+		// silent, and a car that is not the car you configured invalidates
+		// every measurement taken from it.
+		// bFullReinit=false: InitializeWheel/InitializeSuspension re-seed solver
+		// state on a live vehicle and launched the car on first test. The
+		// per-field setters below are sufficient for everything settings.json
+		// actually drives; the Pacejka curve still comes from the wheel CDO.
+		VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
+		VehicleMovement->VerifyAllWheelConfigsApplied();
+
+		// Determinism posture, logged on every run.
+		//
+		// A validation platform has to state, in its own output, whether the run
+		// it just produced is reproducible. With bUseFixedFrameRate the engine
+		// advances by exactly 1/FixedFrameRate per tick and physics steps with it
+		// (substepping is off), so the trajectory no longer depends on how fast
+		// the machine rendered. Without it, results are machine- and load-
+		// dependent and should not be compared against anything.
+		const bool bFixedStep = GEngine && GEngine->bUseFixedFrameRate;
+		const float FixedHz   = GEngine ? GEngine->FixedFrameRate : 0.f;
+		const float MaxPhysDt = UPhysicsSettings::Get() ? UPhysicsSettings::Get()->MaxPhysicsDeltaTime : 0.f;
+		if (bFixedStep)
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: timestep DETERMINISTIC — fixed %.1f Hz (dt=%.5f s), MaxPhysicsDeltaTime=%.5f s"),
+				FixedHz, (FixedHz > 0.f ? 1.f / FixedHz : 0.f), MaxPhysDt);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: timestep VARIABLE — physics advances by the measured frame delta. ")
+				TEXT("This run is machine- and load-dependent and is NOT comparable with others. ")
+				TEXT("Set bUseFixedFrameRate=True in Config/DefaultEngine.ini."));
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, regen %.0fNm/%.0fW, mu=%.2f"),
