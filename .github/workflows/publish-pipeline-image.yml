@@ -1,0 +1,106 @@
+name: Publish pipeline image
+
+# CD for the simulator stack. Building dv_pipeline_stack locally compiles the
+# ROS workspace and installs gtsam / numba / the FaSTTUBe planner — minutes of
+# work and a full toolchain — which every team member currently pays on first
+# run and after any Dockerfile change. Publishing the image means a new member
+# can `docker compose pull` and be running the sim without building anything.
+#
+# Consume it with the pull override:
+#   docker compose -f docker-compose.yml -f docker-compose.pull.yml up -d
+on:
+  push:
+    branches: [dev, main]
+    # Only rebuild when something that lands IN the image changes.
+    paths:
+      - 'docker/dv_pipeline_stack/**'
+      - 'ros2/src/**'
+      - 'pipeline'
+      - '.github/workflows/publish-pipeline-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository_owner }}/ifssim-dv_pipeline_stack
+
+jobs:
+  build:
+    name: Build + push
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout (with submodule)
+        uses: actions/checkout@v4
+        with:
+          # The Dockerfile does `COPY pipeline/ src/` — without the submodule
+          # the image builds an autonomy stack with no autonomy in it.
+          submodules: recursive
+
+      - name: Fail fast if the submodule is empty
+        run: |
+          test -f pipeline/package.xml -o -d pipeline/control \
+            || { echo "::error::pipeline submodule not checked out"; exit 1; }
+          echo "submodule pin: $(git -C pipeline rev-parse --short HEAD)"
+
+      - name: Set up QEMU
+        # arm64 matters: the team develops on Apple Silicon, and an amd64-only
+        # image would run the whole sim pipeline under emulation. If the org
+        # gains native arm64 runners, split this into a matrix on
+        # ubuntu-24.04-arm and drop QEMU — it is much faster.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          # dev pushes publish :dev and :sha-<short>; main also gets :latest,
+          # so `latest` always means "what main runs", never a dev snapshot.
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/dv_pipeline_stack/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Pull it:"
+            echo '```bash'
+            echo "docker compose -f docker-compose.yml -f docker-compose.pull.yml pull"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
