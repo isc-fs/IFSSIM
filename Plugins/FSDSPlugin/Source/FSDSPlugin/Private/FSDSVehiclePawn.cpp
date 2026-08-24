@@ -193,12 +193,47 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// --- Differential (RWD) ---
 	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
 
+	// --- Steering geometry ---
+	//
+	// SteeringType was never set, so it inherited the Chaos default
+	// AngleRatio with AngleRatio = 0.7. That gives the OUTSIDE wheel the full
+	// MaxSteeringAngle and the INSIDE wheel only 70% of it (see
+	// SteeringSystem.h GetSteeringAngle) — i.e. REVERSE Ackermann. Real
+	// Ackermann steers the inside wheel MORE, not less. Nobody chose this; it
+	// is simply what the engine defaults to.
+	//
+	// The consequence matters for us: the effective single-track (bicycle)
+	// angle is roughly the average of the two wheels, ~0.85x MaxSteerAngle, so
+	// the road-wheel angle the autonomy asks for was silently ~15% short of
+	// what it got. The pipeline models a kinematic BICYCLE, so SingleAngle is
+	// the honest choice — both wheels take the commanded angle and
+	// max_steer_deg means exactly what the controller assumes it means.
+	//
+	// Ackermann is the physically-correct upgrade for a real car, but it needs
+	// the IFS-08's actual steering geometry, which is not measured yet. Better
+	// to model no geometry than the wrong geometry.
+	VehicleMovement->SteeringSetup.SteeringType = ESteeringType::SingleAngle;
+
 	// --- Steering curve (speed-dependent) ---
+	//
+	// FLATTENED to 1.0 at all speeds, for two reasons.
+	//
+	// 1. Unit bug: these keys were authored in km/h (see the old comments) but
+	//    Chaos evaluates the curve in MPH — SteeringSystem.h's
+	//    GetSteeringFromVelocity(float VelocityMPH). So every breakpoint sat at
+	//    the wrong speed, and the taper never applied where it was meant to.
+	// 2. More importantly, a speed-dependent steering taper is a driving aid,
+	//    not vehicle physics. The real IFS-08 has none: the actuator commands a
+	//    road-wheel angle and gets it, regardless of speed. Neither the
+	//    controller nor the EKF models such a taper, so keeping one makes the
+	//    sim disagree with both the car and the autonomy's own model.
+	//
+	// Flat keys make the unit bug moot and make steering authority speed
+	// independent, which is what everything downstream already assumes.
 	FRichCurve* SteeringCurve = VehicleMovement->SteeringSetup.SteeringCurve.GetRichCurve();
 	SteeringCurve->Reset();
-	SteeringCurve->AddKey(0.f, 1.0f);    // Full lock at standstill
-	SteeringCurve->AddKey(60.f, 0.8f);   // 80% at 60 km/h
-	SteeringCurve->AddKey(120.f, 0.6f);  // 60% at 120 km/h
+	SteeringCurve->AddKey(0.f, 1.0f);
+	SteeringCurve->AddKey(200.f, 1.0f);   // flat: no speed-dependent taper
 
 	// --- Wheels ---
 	VehicleMovement->WheelSetups.SetNum(4);
@@ -822,11 +857,22 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	// Apply drag at CoG
 	VehicleMesh->AddForce(DragForce, NAME_None, false);
 
-	// Apply downforce split front/rear at approximate axle positions
-	// Wheelbase ~1627mm in UE X. Front axle at +813mm from center, rear at -813mm
+	// Apply downforce split front/rear at the axle positions.
+	//
+	// BUG FIXED: this used to be a literal 813.f labelled "cm", while the
+	// comment above it said "+813mm from center". UE local space IS cm, so the
+	// downforce was applied at +/-8.13 m fore and aft instead of +/-0.813 m —
+	// a moment arm 10x too long, and therefore an aero pitch couple 10x too
+	// large. Only the couple was wrong; total downforce was unaffected, which
+	// is why it never showed up as an obviously broken ride height.
+	//
+	// Derived from the vehicle's Wheelbase rather than re-hardcoded, so it
+	// tracks settings.json and removes one more copy of a constant this
+	// codebase already has too many versions of.
 	FTransform ActorTransform = GetActorTransform();
-	FVector FrontAxleLocal(813.f, 0.f, 0.f); // cm, local space
-	FVector RearAxleLocal(-813.f, 0.f, 0.f);
+	const float HalfWheelbaseCm = 0.5f * Wheelbase * 100.f;   // m -> cm
+	FVector FrontAxleLocal(HalfWheelbaseCm, 0.f, 0.f);
+	FVector RearAxleLocal(-HalfWheelbaseCm, 0.f, 0.f);
 	FVector FrontAxleWorld = ActorTransform.TransformPosition(FrontAxleLocal);
 	FVector RearAxleWorld = ActorTransform.TransformPosition(RearAxleLocal);
 
