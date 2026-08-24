@@ -486,8 +486,14 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// aero map from settings.json (CdA, ClA, AeroBalanceFront) every Tick. So
 	// the car has been carrying TWO aerodynamic models at once:
 	//
-	//     drag       1.80x intended   (+46 N at 10 m/s)
-	//     downforce  1.25x intended   (+46 N at 10 m/s)
+	//     drag       1.84x intended   (+46 N at 10 m/s)
+	//     downforce  1.42x intended   (+46 N at 10 m/s)
+	//
+	// (CORRECTED. These were first written as 1.80x / 1.25x, computed from the
+	// C++ struct defaults CdA=0.95 / ClA=3.0 instead of from settings.json,
+	// which actually declares CdA=0.9 / ClA=1.8. Reading a header instead of
+	// the config file is the exact failure the parameter bridge in
+	// matlab/plant/ifssim_params.m exists to prevent, and it caught this.)
 	//
 	// and in disagreeing frames — Chaos transforms its force by the vehicle
 	// world transform (body-local), while ApplyAeroForces pushes downforce
@@ -546,7 +552,8 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 
 	// KNOWN GAP, not fixed here: only the X component of the CoG is overridden.
 	// CoG HEIGHT comes from whatever the physics asset computes, while
-	// settings.json declares CoGHeight = 0.344 m and ComputeTireLoadsParametric
+	// settings.json declares CoGHeight = 0.3 m (NOT the 0.344 C++ default —
+	// the file overrides it) and ComputeTireLoadsParametric
 	// uses that number for longitudinal load transfer. That is the same
 	// two-models-disagree pattern as the 2.3x spring-rate divergence. Setting
 	// the Z component changes ride height and load transfer together, so it
