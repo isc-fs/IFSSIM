@@ -33,9 +33,7 @@ addpath(outdir);
 
 % Parameters and buses must exist in the base workspace before anything is
 % typed against them.
-P = ifssim_params();
-assignin('base','IFSSIM_P',P);
-ifssim_plant_buses();
+P = ifssim_load_workspace();
 
 fprintf('building plant skeleton in %s\n', outdir);
 fprintf('  parameters from %s (%s)\n', P.SettingsPath, P.VehicleName);

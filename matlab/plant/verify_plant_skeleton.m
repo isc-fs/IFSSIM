@@ -10,12 +10,7 @@ if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
-assignin('base','IFSSIM_P', ifssim_params());
-ifssim_plant_buses();
-% Placeholder Constant blocks reference these zeroed bus structs by name.
-for b = {'IFSSIM_PoseBus','IFSSIM_WheelsBus','IFSSIM_PowertrainBus','IFSSIM_StatusBus'}
-    assignin('base',[b{1} '_zero'], Simulink.Bus.createMATLABStruct(b{1}));
-end
+ifssim_load_workspace();
 
 models = {'IFSSIM_Steering','IFSSIM_Powertrain','IFSSIM_Brakes', ...
           'IFSSIM_TireSuspension','IFSSIM_Aero','IFSSIM_Chassis','IFSSIM_Plant'};
@@ -31,12 +26,24 @@ for i = 1:numel(models)
     catch ME
         ok = false;
         fprintf('  [FAIL] %s\n         %s\n', m, ME.message);
+        % Simulink wraps compile failures as "Error due to multiple causes",
+        % which says nothing. Walk the causes — the real message is in there.
+        print_causes(ME, 2);
         try, eval([m '([],[],[],''term'');']); catch, end
     end
     try, close_system(m,0); catch, end
 end
 fprintf('\n%s\n', ternary(ok,'all models compile.','SOME MODELS FAILED TO COMPILE.'));
 end
+function print_causes(ME, depth)
+if depth > 4 || isempty(ME.cause), return; end
+for i = 1:numel(ME.cause)
+    c = ME.cause{i};
+    fprintf('%s- %s\n', repmat('  ',1,depth+2), strtrim(c.message));
+    print_causes(c, depth+1);
+end
+end
+
 function s = ternary(c,a,b)
 if c, s=a; else, s=b; end
 end

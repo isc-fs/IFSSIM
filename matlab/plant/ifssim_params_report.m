@@ -35,6 +35,17 @@ for i = 1:numel(pf)
     fprintf('  %s   %-20s %12.6g   %s\n', tag, k, P.Pacejka.(k), src);
 end
 
+if isfield(P,'Assumed')
+    fprintf('\n  ASSUMED (not from settings.json, not measured):\n');
+    a = fieldnames(P.Assumed);
+    for i = 1:numel(a)
+        v = P.Assumed.(a{i});
+        if isnumeric(v), fprintf('      %-22s %12.6g\n', a{i}, v);
+        else,            fprintf('      %-22s %s\n', a{i}, v);
+        end
+    end
+end
+
 fprintf('\n  derived:\n');
 d = fieldnames(P.Derived);
 for i = 1:numel(d)
@@ -77,6 +88,14 @@ chk(P.TireMu > 0.8 && P.TireMu < 2.0, sprintf('tyre mu %.2f', P.TireMu));
 chk(abs(P.Derived.WheelRateEach*4 - P.HeaveStiffness) < 1, ...
     sprintf('wheel rate x4 (%.0f N/m) equals declared HeaveStiffness', ...
             P.Derived.WheelRateEach*4));
+
+if isfield(P,'Assumed')
+    fprintf(['  [WARN] inertia tensor is an ESTIMATE (Ixx %.0f, Iyy %.0f, Izz %.0f kg m^2).\n' ...
+             '         Izz sets yaw response, which is exactly what the controller is\n' ...
+             '         tuned against — a 20%%%% error there reads as a gain problem.\n' ...
+             '         Measure it and move it into settings.json.\n'], ...
+             P.Assumed.Ixx, P.Assumed.Iyy, P.Assumed.Izz);
+end
 
 if strcmp(P.Source.Mass,'default')
     fprintf(['  [WARN] Mass is a DEFAULT (290 kg, documented as "car 210 + driver 80")\n' ...

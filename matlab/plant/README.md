@@ -71,6 +71,43 @@ It also runs sanity checks, each of which exists because something here has
 already failed it: wheel radius plausible for a 10″ wheel, ride frequency in the
 3–5 Hz band, and wheel-rate ×4 equalling the declared `HeaveStiffness`.
 
+## Chassis is filled in
+
+`IFSSIM_Chassis` is implemented as the worked example — 6-DOF Newton-Euler in the
+body frame, forward Euler at 1/960 s. State lives in Unit Delay blocks so it is
+visible on the canvas; the equations live in one MATLAB Function block, because
+Newton-Euler as sixty primitives is the same six lines with worse typography and
+forty chances to mis-wire a signal.
+
+```matlab
+build_chassis            % regenerate it
+test_chassis_physics     % run it against closed-form answers
+```
+
+Two things it does deliberately, both of which are easy to get wrong and both of
+which are live bugs in the current simulator:
+
+* **`accel_proper` excludes gravity.** It is what an accelerometer reads. The
+  simulator today finite-differences a world velocity and adds +g — which is
+  where the EKF's missing Coriolis terms came from.
+* **The Coriolis term `-omega x v` is present.** Body-frame rates are not
+  inertial. Dropping it is exactly the bug that made lateral velocity drift
+  during sustained cornering.
+
+`test_chassis_physics` checks each against a closed-form answer, including the
+one that catches sign and frame errors: **an accelerometer in free fall must
+read zero.**
+
+### Inertia is an assumption
+
+`settings.json` has no inertia tensor, and UE only scales whatever its physics
+asset computes — so there is nothing authoritative to read. `P.Assumed.Ixx/Iyy/Izz`
+are typical FS values, **not measured for this car**.
+
+`Izz` sets yaw response, which is precisely what the controller is tuned against.
+A 20% error there will present as a controller gain problem. Measure it (bifilar
+pendulum, or CAD mass properties) and move it into `settings.json`.
+
 ## Rules of the contract
 
 The port interface is what the simulator depends on. Inside your block, do what

@@ -136,4 +136,42 @@ P.Derived.PeakWheelTorque  = P.MotorMaxTorque * P.GearRatio * P.DrivetrainEffici
 P.Derived.UnsprungPerCorner = 10.0;                                    % kg  ASSUMPTION
 P.Derived.SprungPerCorner   = (P.Mass - 4*P.Derived.UnsprungPerCorner)/4;
 P.Derived.RideFreqHz        = sqrt(P.Derived.WheelRateEach / P.Derived.SprungPerCorner)/(2*pi);
+
+% ---------------------------------------------------------------------
+% ASSUMPTIONS. Values the plant needs that settings.json does not carry.
+% Kept in a separate struct, not mixed in with configured parameters, so a
+% reader can see at a glance what is measured and what is guessed.
+% ---------------------------------------------------------------------
+P.Assumed = struct();
+
+% INERTIA TENSOR — the largest single unknown in this model.
+%
+% settings.json has no inertia. The simulator only has UE's
+% InertiaTensorScale = (1.0, 1.4, 1.1), which SCALES whatever the physics asset
+% happens to compute from the mesh — so there is no authoritative number to read
+% and none to copy.
+%
+% These are typical measured values for a ~275 kg Formula Student car, and the
+% ratios agree with the shape UE's scale implies (pitch > yaw > roll).
+%
+%   Ixx  roll   — smallest: the car is narrow and low
+%   Iyy  pitch  — largest: mass spread fore and aft along the wheelbase
+%   Izz  yaw    — dominates the transient the autonomy actually feels
+%
+% Yaw inertia is the one that matters most here: it sets how quickly the car
+% responds to a steering input, which is precisely what the controller is tuned
+% against. A 20 % error in Izz is a 20 % error in yaw response, and it will be
+% mistaken for a controller gain problem.
+%
+% MEASURE THESE. A bifilar pendulum test, or a CAD mass-properties export, and
+% then move them into settings.json so they stop being an assumption. Until
+% then, treat any lateral-transient result from this model as provisional.
+P.Assumed.Ixx = 30.0;    % kg*m^2   roll     ASSUMPTION
+P.Assumed.Iyy = 110.0;   % kg*m^2   pitch    ASSUMPTION
+P.Assumed.Izz = 125.0;   % kg*m^2   yaw      ASSUMPTION
+P.Assumed.InertiaSource = 'ESTIMATE — typical FS values, not measured for this car';
+
+% CoG height above ground. settings.json declares 0.3 m; kept here as the value
+% the chassis actually uses so there is one place to change it.
+P.Assumed.CoGHeightUsed = P.CoGHeight;
 end
