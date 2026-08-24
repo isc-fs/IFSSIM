@@ -438,6 +438,35 @@ existing `UFloatingPawnMovement` fallback is the template.
 **Exit:** Reference FMUs load, step, and `GetFMUState`/`SetFMUState` round-trip
 bit-identically on all three host platforms the team uses.
 
+> **STATUS `[V]` 2026-08-24 — the core of this phase is DONE on macOS/arm64.** An FMU
+> exported by Simulink R2025b loads, instantiates, steps and round-trips its state inside
+> IFSSIM, driven over the `fmuSelfTest` RPC:
+>
+> ```
+> fmiVersionReported  3.0
+> library             fsds_fmu_spike.dylib   (aarch64-darwin)
+> stepSize            1/60 s
+> yAfterFirstStep     0.015624999999999998   = 15/960, forward Euler, exact
+> yRunA / yRunB       0.18229166666666632    = 175/960, bitwise identical
+> stateRoundTrip      true
+> ```
+>
+> Two things are established rather than merely observed. First, the arithmetic is
+> **right**, not just stable: with a unit input into a 1/960 s forward-Euler integrator
+> the reported output is `(N-1)/960` after `N` substeps, and 16 substeps per
+> communication step is exactly what `fixedInternalStepSize` declares — so the FMU is
+> genuinely stepping at its declared internal rate. Second, `GetFMUState`/`SetFMUState`
+> reproduced **bitwise**, compared as raw `uint64` with no tolerance, because a tolerance
+> would accept an FMU that restores approximately, which is not restoring.
+>
+> **This is the primitive `resetScenario` never had.** The platform's own reset restores
+> four hand-enumerated fields and does not touch Chaos solver state at all; an FMU plant
+> replaces that with an opaque blob that provably round-trips.
+>
+> Deliberately NOT proven yet: Linux and Windows hosts, an FMI 2.0 FMU (this binding is
+> 3.0 only, by design), and sequential instantiate/free/instantiate — the reclassified
+> multi-instance question from §7, which still needs its own probe.
+
 ### Phase 6 — Parity FMU v0
 
 A hand-written C FMU built by the project's own CMake, reproducing **the `settings.json`
