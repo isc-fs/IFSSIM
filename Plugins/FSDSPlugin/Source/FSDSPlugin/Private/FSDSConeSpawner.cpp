@@ -21,11 +21,22 @@ namespace
 	FRandomStream& ConeYawStream()
 	{
 		static FRandomStream Stream;
-		static int32 SeededFor = MIN_int32;
-		if (SeededFor != FSDSRandom::GetScenarioSeed())
+		static uint32 SeededForGeneration = 0;   // 0 = never seeded
+
+		// Keyed on GENERATION, not on the seed VALUE. FSDSRandom bumps the
+		// generation on every (re)seed, including a reseed to the same number.
+		// Keying on the value meant that `resetScenario <same seed>` — the
+		// exact case a repeat run uses — compared equal, skipped the reseed,
+		// and let the stream carry on from wherever the previous run left it.
+		// So repeating a scenario with the same seed produced DIFFERENT cone
+		// yaws, which is a different perception input, which defeats the point
+		// of seeding at all. Every sensor already keys on the generation; this
+		// was the one stream that did not.
+		const uint32 Gen = FSDSRandom::GetGeneration();
+		if (SeededForGeneration != Gen)
 		{
 			Stream = FSDSRandom::MakeStream(TEXT("ConeSpawner.yaw"));
-			SeededFor = FSDSRandom::GetScenarioSeed();
+			SeededForGeneration = Gen;
 		}
 		return Stream;
 	}

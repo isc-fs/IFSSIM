@@ -137,6 +137,92 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 	MagnetometerSensor = CreateDefaultSubobject<UFSDSMagnetometerSensor>(TEXT("MagnetometerSensor"));
 }
 
+void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
+{
+	// WHY THIS IS A SEPARATE, RE-RUNNABLE FUNCTION
+	// --------------------------------------------
+	// UChaosVehicleMovementComponent::ResetVehicleState() (engine :1787) calls
+	// OnDestroyPhysicsState() followed by OnCreatePhysicsState(), which re-runs
+	// CreateVehicle() — and CreateVehicle builds the physics wheels from the
+	// wheel CLASS DEFAULT OBJECT all over again.
+	//
+	// So every reset silently reverts the solver to CDO values, discarding
+	// everything settings.json contributed through the runtime push. Nothing
+	// re-applied it and nothing verified it, so the car quietly reverted to a
+	// different car mid-session with no log line anywhere.
+	//
+	// That matters more than it sounds: RPC handlers call ResetVehicleState()
+	// on simSetVehiclePose and on loadTrack, and tools/scenario_runner/
+	// run_scenario.py issues load_track before EVERY run of a seed sweep. A
+	// benchmark campaign could therefore have been measuring the CDO car on
+	// every run after the first.
+	//
+	// The CDO-routed values (SpringRate, and the Pacejka curve written by
+	// ApplyTireModelToWheelCDOs) survive a rebuild by construction, because the
+	// CDO is exactly what the rebuild reads. It is the runtime-pushed fields
+	// that need re-applying.
+	if (!VehicleMovement) return;
+
+	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!Vehicle) return;
+	const FFSDSVehiclePhysics& P = Vehicle->Physics;
+
+	float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
+	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
+	{
+		UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
+		if (!W) continue;
+		// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
+		const bool bIsRear = (i == 2 || i == 3);
+		if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
+
+		// Make settings.json authoritative for wheel geometry. These were
+		// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
+		// WheelRadius=20cm, :15 MaxSteerAngle=28deg) while the parsed
+		// P.WheelRadius / P.MaxSteerAngle had NO consumer anywhere — the
+		// settings values were decoration.
+		//
+		// NOTE: assigning these alone is a NO-OP, because Chaos already
+		// built its physics wheels from the class default object. It only
+		// takes effect because ApplyAllWheelConfigsToPhysics() below pushes
+		// the result to the solver. The two changes are only correct
+		// together.
+		W->WheelRadius = P.WheelRadius * 100.f;   // settings [m] -> wheel [cm]
+		if (!bIsRear) W->MaxSteerAngle = P.MaxSteerAngle;  // rears stay 0
+
+		// Pacejka Magic Formula — bake lateral and longitudinal slip curves
+		// into each wheel, replacing the flat FrictionForceMultiplier model.
+		FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+	}
+
+	// Everything above wrote to the game-thread UChaosVehicleWheel objects.
+	// Chaos built its physics wheels from the wheel class's CLASS DEFAULT
+	// OBJECT back in CreateVehicle() (engine :1412), so on its own none of
+	// it reaches the solver — which is why TireMu, the Pacejka bake and
+	// MaxBrakeTorque have behaved as decoration.
+	//
+	// Push the configuration through, then read the solver back and shout
+	// if it disagrees. The verify step is the point: the failure mode is
+	// silent, and a car that is not the car you configured invalidates
+	// every measurement taken from it.
+	// bFullReinit=false: InitializeWheel/InitializeSuspension re-seed solver
+	// state on a live vehicle and launched the car on first test. The
+	// per-field setters below are sufficient for everything settings.json
+	// actually drives; the Pacejka curve still comes from the wheel CDO.
+	VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
+	VehicleMovement->VerifyAllWheelConfigsApplied();
+
+	// Verification above only covers fields this project actually sets.
+	// The complement — what it never set, and therefore inherited from
+	// Chaos — is invisible by construction: you cannot grep for a value
+	// that is never written. Print it, so the car nobody configured is at
+	// least a car somebody has read.
+	if (bLogInherited)
+	{
+		VehicleMovement->LogInheritedWheelDefaults();
+	}
+}
+
 void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 {
 	// WHY THIS EXISTS
@@ -203,7 +289,9 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// Torque at wheel = motor_torque * gear_ratio * efficiency
 	// (Local constants were hardcoded but unused; the settings path
 	//  overrides both below. Member GearRatio is shadowed by settings
-	//  in ApplyPhysicsSettings.)
+	//  in SetupSensorsFromSettings, which is where the settings.json
+	//  overrides are applied. There is no ApplyPhysicsSettings() in this
+	//  class — that name appears only in stale comments.)
 
 	// Chaos engine setup. We own the powertrain via UEmraxMotor and
 	// override per-wheel drive torque each tick via SetDriveTorque
@@ -704,57 +792,9 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// MaxRegenPower/ω_motor. Front wheels keep MaxBrakeTorque=0
 		// from the class default — no hydraulic service brake on the
 		// real car.
-		float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
-		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
-		{
-			UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
-			if (!W) continue;
-			// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
-			const bool bIsRear = (i == 2 || i == 3);
-			if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
-
-			// Make settings.json authoritative for wheel geometry. These were
-			// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
-			// WheelRadius=20cm, :15 MaxSteerAngle=28deg) while the parsed
-			// P.WheelRadius / P.MaxSteerAngle had NO consumer anywhere — the
-			// settings values were decoration.
-			//
-			// NOTE: assigning these alone is a NO-OP, because Chaos already
-			// built its physics wheels from the class default object. It only
-			// takes effect because ApplyAllWheelConfigsToPhysics() below pushes
-			// the result to the solver. The two changes are only correct
-			// together.
-			W->WheelRadius = P.WheelRadius * 100.f;   // settings [m] -> wheel [cm]
-			if (!bIsRear) W->MaxSteerAngle = P.MaxSteerAngle;  // rears stay 0
-
-			// Pacejka Magic Formula — bake lateral and longitudinal slip curves
-			// into each wheel, replacing the flat FrictionForceMultiplier model.
-			FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
-		}
-
-		// Everything above wrote to the game-thread UChaosVehicleWheel objects.
-		// Chaos built its physics wheels from the wheel class's CLASS DEFAULT
-		// OBJECT back in CreateVehicle() (engine :1412), so on its own none of
-		// it reaches the solver — which is why TireMu, the Pacejka bake and
-		// MaxBrakeTorque have behaved as decoration.
-		//
-		// Push the configuration through, then read the solver back and shout
-		// if it disagrees. The verify step is the point: the failure mode is
-		// silent, and a car that is not the car you configured invalidates
-		// every measurement taken from it.
-		// bFullReinit=false: InitializeWheel/InitializeSuspension re-seed solver
-		// state on a live vehicle and launched the car on first test. The
-		// per-field setters below are sufficient for everything settings.json
-		// actually drives; the Pacejka curve still comes from the wheel CDO.
-		VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
-		VehicleMovement->VerifyAllWheelConfigsApplied();
-
-		// Verification above only covers fields this project actually sets.
-		// The complement — what it never set, and therefore inherited from
-		// Chaos — is invisible by construction: you cannot grep for a value
-		// that is never written. Print it, so the car nobody configured is at
-		// least a car somebody has read.
-		VehicleMovement->LogInheritedWheelDefaults();
+		// Extracted so it can be re-run after a physics rebuild. See
+		// ApplyWheelSettingsToSolver() for why that is necessary.
+		ApplyWheelSettingsToSolver(/*bLogInherited=*/true);
 
 		// Seed all stochastic sources for this run. Must happen before any
 		// sensor draws noise or any cone is spawned; BeginPlay is the earliest
@@ -814,8 +854,7 @@ void AFSDSVehiclePawn::BeginPlay()
 
 
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
-	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup
-	// (MaxTorque=0, EngineIdleRPM=0) and Tick below feeds per-wheel
+	// from here on. Tick below feeds per-wheel
 	// drive torque from this object. Default FEmraxMotorParams matches
 	// the EMRAX 228 MV / LC datasheet; we forward the regen caps from
 	// settings.json so a user override (e.g. a bigger battery raising
@@ -957,7 +996,10 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetTargetGear(1, true);
 
 		// --- EMRAX 228 drive-torque override ----------------------
-		// We bypass Chaos's engine entirely (MaxTorque was zeroed in
+		// We bypass Chaos's engine entirely (NOT by zeroing MaxTorque —
+		// see SetupVehicleMovement, which deliberately leaves it at the
+		// full 643 N.m peak-at-wheel; the bypass is that Tick passes
+		// throttle=0 to Chaos and injects torque per wheel instead, in
 		// SetupVehicleMovement) and compute the shaft torque from
 		// our motor model. The motor's RPM tracks actual wheel speed
 		// × gear ratio so a parked car reads zero RPM (vs Chaos's
@@ -974,7 +1016,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 				GetVelocity(), GetActorForwardVector()) * 0.01f;
 			// Wheel angular velocity assuming no slip, then geared
 			// up to motor rotor speed. WheelRadius / GearRatio are
-			// captured from settings in ApplyPhysicsSettings.
+			// captured from settings in SetupSensorsFromSettings.
 			const float WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
 			const float MotorOmega = WheelOmega * GearRatio;
 			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));

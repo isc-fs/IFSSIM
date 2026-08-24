@@ -1112,6 +1112,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (VehiclePawn->VehicleMovement)
 				{
 					VehiclePawn->VehicleMovement->ResetVehicleState();
+
+					// ResetVehicleState destroys and recreates the physics
+					// state, which re-runs CreateVehicle() and rebuilds every
+					// physics wheel from the CLASS DEFAULT OBJECT — silently
+					// discarding everything settings.json pushed to the solver.
+					// Re-apply and re-verify, or the rest of the session runs a
+					// different car than the one that was configured.
+					VehiclePawn->ApplyWheelSettingsToSolver();
 				}
 				// Restore the saved heading — ResetVehicleState wipes it to
 				// identity. Apply to both the actor and the physics body so
@@ -1394,6 +1402,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					if (VehiclePawn->VehicleMovement)
 					{
 						VehiclePawn->VehicleMovement->ResetVehicleState();
+
+					// ResetVehicleState destroys and recreates the physics
+					// state, which re-runs CreateVehicle() and rebuilds every
+					// physics wheel from the CLASS DEFAULT OBJECT — silently
+					// discarding everything settings.json pushed to the solver.
+					// Re-apply and re-verify, or the rest of the session runs a
+					// different car than the one that was configured.
+					VehiclePawn->ApplyWheelSettingsToSolver();
 					}
 					bAligned = true;
 				LastStartGateLoc_UE = StartLoc;

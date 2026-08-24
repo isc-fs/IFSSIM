@@ -1094,6 +1094,19 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// replays identically for a given seed. Previously this was
 	// FPlatformTime::Cycles(), which made every scan unreproducible and was
 	// the single largest source of run-to-run divergence in perception.
+	//
+	// The counter must restart when the scenario does. It used to run
+	// monotonically from editor start, so the seed for scan N of a run depended
+	// on how many scans the whole SESSION had done — meaning a repeat of the
+	// same scenario drew completely different GPU dropouts and range noise, and
+	// the seeding above bought nothing for the GPU path. The CPU path already
+	// re-seeds on generation change; this is the same rule.
+	const uint32 GpuGen = FSDSRandom::GetGeneration();
+	if (GpuScanCounterGeneration != GpuGen)
+	{
+		GpuScanCounter = 0;
+		GpuScanCounterGeneration = GpuGen;
+	}
 	U.RNGSeed            = FSDSRandom::MakeSeed(TEXT("Lidar.gpu"), ++GpuScanCounter);
 	// SensorOffset is stored in cm; shader takes metres.
 	U.SensorOffsetXm     = SensorOffset.X / 100.f;

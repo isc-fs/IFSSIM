@@ -214,6 +214,20 @@ private:
 	// has no other route.
 	void ApplyTireModelToWheelCDOs();
 
+public:
+	/**
+	 * Push everything settings.json contributes to the wheels into the Chaos
+	 * solver, then read it back and complain if it disagrees.
+	 *
+	 * MUST be called again after anything that rebuilds physics state.
+	 * ResetVehicleState() destroys and recreates it, which re-runs
+	 * CreateVehicle() and rebuilds every physics wheel from the CLASS DEFAULT
+	 * OBJECT — silently discarding the runtime-pushed configuration.
+	 */
+	void ApplyWheelSettingsToSolver(bool bLogInherited = false);
+
+private:
+
 	void SetupVehicleMovement();
 	void OnThrottleInput(float Value);
 	void OnSteeringInput(float Value);
