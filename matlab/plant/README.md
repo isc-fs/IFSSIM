@@ -5,7 +5,7 @@ terrain, sensors, collision, the referee and the ROS bridge; **this** is the car
 
 ## Why it is generated from a script
 
-`build_plant_skeleton.m` writes every `.slx` here. That is deliberate:
+`build_plant_skeleton.m` writes every `.slx` in `models/`. That is deliberate:
 
 * **`.slx` is binary — it does not diff and it does not merge.** The structure and
   the port contract therefore live in a text file that can be reviewed, while
@@ -16,9 +16,14 @@ terrain, sensors, collision, the referee and the ROS bridge; **this** is the car
 
 ```matlab
 addpath matlab/plant
-build_plant_skeleton      % writes matlab/plant/generated/
+build_plant_skeleton      % writes matlab/plant/models/
 verify_plant_skeleton     % compiles every model, reports pass/fail
 ```
+
+The folder is `models/`, not `generated/`. The skeleton is generated; the models
+are **not disposable**. Once an engineer fills in a subsystem, that file is the
+work — regenerating rewrites the top-level wiring and any block still holding a
+placeholder, and a folder called `generated` invites someone to delete it.
 
 ## Who owns what
 

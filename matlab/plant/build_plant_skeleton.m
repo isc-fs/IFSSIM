@@ -1,6 +1,11 @@
 function build_plant_skeleton(outdir)
 %BUILD_PLANT_SKELETON  Generate the IFSSIM plant model skeleton.
 %
+%   Output goes to matlab/plant/models — NOT 'generated'. The skeleton is
+%   generated; the models are not disposable. Once an engineer fills in a
+%   subsystem that file is the work, and a folder named 'generated' invites
+%   someone to delete it.
+%
 %   Creates a top-level plant model plus one REFERENCED MODEL per subsystem, so
 %   the dynamics, powertrain and braking engineers each own a separate .slx and
 %   can work in parallel without merge-conflicting a single binary file. A
@@ -11,14 +16,14 @@ function build_plant_skeleton(outdir)
 %   the port contract live in text that can be. Subsystem CONTENTS are then
 %   owned and edited by engineers in Simulink; only the skeleton is regenerated.
 %
-%   Run:  build_plant_skeleton            % writes into matlab/plant/generated
+%   Run:  build_plant_skeleton            % writes into matlab/plant/models
 %
 %   Every subsystem starts as a correctly-ported placeholder emitting zeros, so
 %   the whole model compiles and runs from day one. An engineer replaces the
 %   inside of their block and nothing else moves.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'generated');
+    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
 end
 if ~isfolder(outdir), mkdir(outdir); end
 addpath(fileparts(mfilename('fullpath')));
