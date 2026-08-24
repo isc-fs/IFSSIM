@@ -83,5 +83,7 @@ private:
 	// generation, which forces a re-seed so a repeat run genuinely restarts
 	// the sequence instead of continuing the previous one.
 	uint32 NoiseStreamGeneration = 0;
+	// Determinism probe counter — see Noise() in the .cpp.
+	int32 ProbeDrawsLogged = 0;
 	FRandomStream& Noise();
 };

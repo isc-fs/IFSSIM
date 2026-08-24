@@ -1,5 +1,7 @@
 #include "Sensors/FSDSImuSensor.h"
 #include "FSDSRandom.h"
+#include "Misc/Parse.h"
+#include "Misc/CommandLine.h"
 #include "FSDSSensorNoise.h"
 
 using FSDSNoise::RandStandardNormal;
@@ -116,6 +118,35 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 
 FRandomStream& UFSDSImuSensor::Noise()
 {
+	// DETERMINISM PROBE (fsds.probeNoise). Logs the first N raw draws straight
+	// from this sensor's stream, BEFORE they touch physics, the bridge, or the
+	// republishing that duplicates samples and flattens timestamps.
+	//
+	// This exists because /imu turned out to be unusable for answering "does the
+	// same seed reproduce the same noise": it mixes signal with noise, arrives
+	// resampled with duplicates, and its header stamps neither advance per
+	// sample nor reset across a PIE restart. Three attempts to measure
+	// determinism downstream all failed on the observable, not on the sim.
+	//
+	// Compare two fresh sessions: identical lines => seeding reproduces.
+	// Enable with -fsds.probeNoise on the command line, or by flipping the
+	// default below for a quick local check.
+	static bool bProbe = FParse::Param(FCommandLine::Get(), TEXT("fsds.probeNoise"));
+	if (bProbe && ProbeDrawsLogged < 8)
+	{
+		// Peek WITHOUT consuming: copy the stream, draw from the copy. Drawing
+		// from the live stream here would change the sequence the sensor then
+		// uses, i.e. the probe would alter what it is measuring.
+		FRandomStream Peek = (NoiseStreamGeneration == FSDSRandom::GetGeneration())
+			? NoiseStream
+			: FSDSRandom::MakeStream(TEXT("Imu.noise"));
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS PROBE imu.noise[%d] seed=%d gen=%u draw=%.9f"),
+			ProbeDrawsLogged, FSDSRandom::GetScenarioSeed(),
+			FSDSRandom::GetGeneration(), Peek.GetFraction());
+		++ProbeDrawsLogged;
+	}
+
 	// Re-seed on generation change, not just once: a scenario reset must
 	// restart the sequence, otherwise run 2 continues run 1 from wherever it
 	// happened to stop. Generation 0 means the seed has not been set yet.
