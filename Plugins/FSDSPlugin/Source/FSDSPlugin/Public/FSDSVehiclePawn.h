@@ -206,6 +206,14 @@ public:
 	class UBoxComponent* PhysicsBox = nullptr;
 
 private:
+	// Writes the settings.json tire model into the wheel CLASS DEFAULT
+	// OBJECTS. Must be called from the constructor, before the movement
+	// component is configured: Chaos builds its physics wheels from the CDO
+	// during CreateVehicle(), so anything applied later never reaches the
+	// solver. See the implementation for why the Pacejka curve in particular
+	// has no other route.
+	void ApplyTireModelToWheelCDOs();
+
 	void SetupVehicleMovement();
 	void OnThrottleInput(float Value);
 	void OnSteeringInput(float Value);

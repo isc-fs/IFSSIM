@@ -89,6 +89,11 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 	// Configure Chaos vehicle physics only if skeleton is valid
 	if (bChaosVehicleActive)
 	{
+		// MUST run before SetupVehicleMovement(): everything settings.json
+		// contributes that has no per-field runtime setter has to be in the
+		// wheel CLASS DEFAULT OBJECT before Chaos reads it in CreateVehicle().
+		ApplyTireModelToWheelCDOs();
+
 		SetupVehicleMovement();
 	}
 	else if (VehicleMovement)
@@ -130,6 +135,62 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 	DistanceSensor = CreateDefaultSubobject<UFSDSDistanceSensor>(TEXT("DistanceSensor"));
 	BarometerSensor = CreateDefaultSubobject<UFSDSBarometerSensor>(TEXT("BarometerSensor"));
 	MagnetometerSensor = CreateDefaultSubobject<UFSDSMagnetometerSensor>(TEXT("MagnetometerSensor"));
+}
+
+void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
+{
+	// WHY THIS EXISTS
+	// ---------------
+	// The Pacejka curve is the one piece of settings.json that CANNOT be
+	// delivered by the runtime push added alongside the wheel-config work.
+	// Chaos exposes SetWheelSlipGraphMultiplier — a scalar on the curve — but
+	// no setter for the curve itself, and the only other route
+	// (InitializeWheel/InitializeSuspension) re-seeds solver state on a live
+	// vehicle, which previously launched the car into the air on spawn.
+	//
+	// So the curve has to be in the wheel CLASS DEFAULT OBJECT before
+	// CreateVehicle() bakes it (ChaosWheeledVehicleMovementComponent.cpp:1412
+	// reads WheelSetups[i].WheelClass.GetDefaultObject(), from
+	// OnCreatePhysicsState, i.e. at component registration — before BeginPlay).
+	//
+	// BeginPlay was too late. It baked Pacejka onto the per-instance
+	// UChaosVehicleWheel objects, which the solver never reads, so every tire
+	// coefficient in settings.json has been decoration: the car has been
+	// driving on the wheel classes' flat FrictionForceMultiplier this whole
+	// time, no matter what Pacejka block was configured.
+	//
+	// AutoLoad() is normally called from BeginPlay, which is also too late for
+	// this, so pull it forward. It is idempotent — BeginPlay's call re-parses
+	// and both see the same file.
+	FFSDSSettings::Get().AutoLoad();
+	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!Vehicle)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: no vehicle settings at CDO time — wheels keep class-default tire model"));
+		return;
+	}
+	const FFSDSVehiclePhysics& P = Vehicle->Physics;
+
+	// Mutating a native class's CDO is safe here: native CDOs are not
+	// serialised to disk, and this runs on every pawn construction, so an
+	// edited settings.json takes effect on the next PIE session rather than
+	// sticking until an editor restart.
+	UChaosVehicleWheel* CDOs[] = {
+		UFSDSWheelFront::StaticClass()->GetDefaultObject<UFSDSWheelFront>(),
+		UFSDSWheelRear::StaticClass()->GetDefaultObject<UFSDSWheelRear>()
+	};
+
+	for (UChaosVehicleWheel* CDO : CDOs)
+	{
+		if (!CDO) continue;
+		FSDSPacejka::BakeToWheel(CDO, P.Pacejka, P.TireMu);
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")
+		TEXT("lat B=%.2f C=%.2f E=%.2f, peak mu=%.2f. settings.json tire model is now live."),
+		P.Pacejka.LatB, P.Pacejka.LatC, P.Pacejka.LatE, P.TireMu);
 }
 
 void AFSDSVehiclePawn::SetupVehicleMovement()
