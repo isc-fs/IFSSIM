@@ -877,7 +877,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			FSDSRandom::SetScenarioSeed(bHasSeed ? NewSeed : FSDSRandom::GetScenarioSeed());
 
 			// 2. Referee counters (DOO / out-of-course / laps / times).
-			if (Referee) Referee->ResetState();
+			//
+			// ResetForRepeatRun, NOT ResetState. ResetState wipes the cone
+			// registry, the cone list and the finish line — fine for
+			// loadTrack, which respawns cones immediately afterwards, but
+			// resetScenario respawns nothing. Using it here left the referee
+			// permanently blind: DOO, off-course and lap detection all dead,
+			// so every run after the first silently scored 0 / 0 / 0. Any A/B
+			// campaign built on resetScenario was comparing empty scorecards.
+			if (Referee) Referee->ResetForRepeatRun();
 
 			// 3. Vehicle: back to the start gate with velocities zeroed, and
 			//    powertrain state cleared. EBS stays as-is deliberately — in
