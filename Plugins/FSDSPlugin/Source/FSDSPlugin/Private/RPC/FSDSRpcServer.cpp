@@ -1,4 +1,5 @@
 #include "RPC/FSDSRpcServer.h"
+#include "FMI/FSDSFmuPackage.h"
 #include "EmraxMotor.h"
 #include "FSDSRandom.h"
 #include "RPC/FSDSUdpBroadcaster.h"
@@ -664,6 +665,71 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
+	else if (Method.StartsWith(TEXT("inspectFmu")))
+	{
+		// inspectFmu <path-to.fmu>
+		//
+		// Opens an FMU, extracts it, and checks it against the gates in
+		// docs/fmu_plant_migration.md — the same checks tools/fmu/
+		// inspect_fmu.py runs offline, so the two must agree. This is the
+		// in-engine one, which additionally proves the .fmu can be read by the
+		// code that will actually have to load it: the offline tool uses
+		// Python's zipfile, and agreeing with it says nothing about whether
+		// our own ZIP reader and XML parse work on this file.
+		//
+		// No FMI runtime is invoked. Nothing is instantiated, nothing steps.
+		// This answers "could we run this?", not "does it run?".
+		TArray<FString> Parts;
+		Method.ParseIntoArray(Parts, TEXT(" "), true);
+		if (Parts.Num() < 2)
+		{
+			return TEXT("{\"error\":\"usage: inspectFmu <path-to.fmu>\"}");
+		}
+
+		FFSDSFmuPackage Package;
+		if (!Package.Open(Parts[1]))
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"error\":\"%s\"}"),
+				*Package.GetError().ReplaceCharWithEscapedChar());
+		}
+
+		// The platform's communication step. Fixed 60 Hz — see
+		// Config/DefaultEngine.ini and the determinism posture log.
+		const double CommStep = 1.0 / 60.0;
+		const bool bPassed = Package.LogGateResults(CommStep);
+		const FFSDSFmuInfo& I = Package.GetInfo();
+
+		FString GatesJson;
+		for (const FFSDSFmuGate& G : Package.CheckGates(CommStep))
+		{
+			if (!GatesJson.IsEmpty()) GatesJson += TEXT(",");
+			GatesJson += FString::Printf(
+				TEXT("{\"name\":\"%s\",\"passed\":%s,\"required\":%s,\"detail\":\"%s\"}"),
+				*G.Name, G.bPassed ? TEXT("true") : TEXT("false"),
+				G.bRequired ? TEXT("true") : TEXT("false"),
+				*G.Detail.ReplaceCharWithEscapedChar());
+		}
+
+		return FString::Printf(
+			TEXT("{\"ok\":%s,\"fmiVersion\":\"%s\",\"modelName\":\"%s\",")
+			TEXT("\"modelIdentifier\":\"%s\",\"tool\":\"%s\",\"token\":\"%s\",")
+			TEXT("\"stateAttr\":\"%s\",\"canGetAndSetState\":%s,")
+			TEXT("\"fixedInternalStepSize\":%g,\"binaries\":[%s],")
+			TEXT("\"hostBinary\":\"%s\",\"sourceCode\":%s,\"resources\":%s,")
+			TEXT("\"inputs\":%d,\"outputs\":%d,\"parameters\":%d,\"gates\":[%s]}"),
+			bPassed ? TEXT("true") : TEXT("false"),
+			I.Version == EFSDSFmiVersion::FMI3 ? TEXT("3.0")
+				: I.Version == EFSDSFmiVersion::FMI2 ? TEXT("2.0") : TEXT("unknown"),
+			*I.ModelName, *I.ModelIdentifier, *I.GenerationTool, *I.InstantiationToken,
+			*I.StateAttributeFound,
+			I.bCanGetAndSetState ? TEXT("true") : TEXT("false"),
+			I.FixedInternalStepSize,
+			*FString::Printf(TEXT("\"%s\""), *FString::Join(I.BinaryPlatforms, TEXT("\",\""))),
+			*Package.GetBinaryPathForHost().ReplaceCharWithEscapedChar(),
+			I.bHasSourceCode ? TEXT("true") : TEXT("false"),
+			I.bHasResources ? TEXT("true") : TEXT("false"),
+			I.NumInputs, I.NumOutputs, I.NumParameters, *GatesJson);
+	}
 	else if (Method.StartsWith(TEXT("getTireLoads")))
 	{
 		// Parse:  getTireLoads truth
