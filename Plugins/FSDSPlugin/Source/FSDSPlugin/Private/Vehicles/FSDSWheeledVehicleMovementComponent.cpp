@@ -188,3 +188,72 @@ bool UFSDSWheeledVehicleMovementComponent::VerifyAllWheelConfigsApplied(float To
 
 	return bAllOk;
 }
+
+void UFSDSWheeledVehicleMovementComponent::LogInheritedWheelDefaults() const
+{
+	// Engine defaults, read from UChaosVehicleWheel::UChaosVehicleWheel
+	// (ChaosVehicleWheel.cpp:20-53) in UE 5.7. Kept here so the log can say
+	// "still at the engine default" rather than just printing a number.
+	struct FDefault { const TCHAR* Name; float Value; };
+	static const FDefault Defaults[] = {
+		{ TEXT("CorneringStiffness"),   1000.f },
+		{ TEXT("SideSlipModifier"),        1.f },
+		{ TEXT("SlipThreshold"),          20.f },
+		{ TEXT("SkidThreshold"),          20.f },
+		{ TEXT("MaxWheelspinRotation"),   30.f },
+		{ TEXT("MaxHandBrakeTorque"),   3000.f },
+		{ TEXT("SpringPreload"),          50.f },
+		{ TEXT("RollbarScaling"),        0.15f },
+	};
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("FSDS: ---- wheel parameters NOBODY CHOSE (Chaos engine defaults) ----"));
+
+	for (int32 i = 0; i < Wheels.Num(); i++)
+	{
+		const UChaosVehicleWheel* W = Wheels[i];
+		if (!W) continue;
+
+		const float Actual[] = {
+			W->CorneringStiffness, W->SideSlipModifier, W->SlipThreshold,
+			W->SkidThreshold, static_cast<float>(W->MaxWheelspinRotation),
+			W->MaxHandBrakeTorque, W->SpringPreload, W->RollbarScaling
+		};
+
+		FString Line;
+		for (int32 f = 0; f < UE_ARRAY_COUNT(Defaults); f++)
+		{
+			const bool bInherited = FMath::IsNearlyEqual(Actual[f], Defaults[f].Value, 1e-3f);
+			Line += FString::Printf(TEXT("%s=%.3g%s  "),
+				Defaults[f].Name, Actual[f], bInherited ? TEXT("(default)") : TEXT("(set)"));
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("FSDS:   wheel %d  %s"), i, *Line);
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS:   wheel %d  bAffectedByBrake=%s bAffectedByHandbrake=%s ")
+			TEXT("SuspensionSmoothing=%d SuspensionAxis=(%.1f,%.1f,%.1f) ")
+			TEXT("SuspensionForceOffset=(%.1f,%.1f,%.1f)"),
+			i,
+			W->bAffectedByBrake ? TEXT("true") : TEXT("false"),
+			W->bAffectedByHandbrake ? TEXT("true") : TEXT("false"),
+			W->SuspensionSmoothing,
+			W->SuspensionAxis.X, W->SuspensionAxis.Y, W->SuspensionAxis.Z,
+			W->SuspensionForceOffset.X, W->SuspensionForceOffset.Y, W->SuspensionForceOffset.Z);
+	}
+
+	// Called out separately because it is the one with a safety consequence.
+	// The handbrake channel is this car's EBS (both wheel classes set
+	// bAffectedByHandbrake=true so it acts on all four corners, matching the
+	// pneumatic system). At 3000 N.m per wheel against a grip limit of roughly
+	// mu * Fz * r ~ 1.4 * 675 N * 0.202 m ~ 190 N.m, the commanded torque
+	// exceeds what the tyre can transmit by more than an order of magnitude, so
+	// every EBS application is a guaranteed four-wheel lock-up rather than a
+	// modelled deceleration. Any stopping distance measured from it is a
+	// property of the tyre model alone.
+	UE_LOG(LogTemp, Warning,
+		TEXT("FSDS: EBS runs on the Chaos handbrake channel at the engine-default ")
+		TEXT("3000 N.m/wheel — roughly 15x the ~190 N.m the tyre can transmit, so ")
+		TEXT("EBS is modelled as instant lock-up. Needs a real IFS-08 number ")
+		TEXT("before any stopping-distance claim. See docs/fmu_plant_migration.md."));
+	UE_LOG(LogTemp, Warning, TEXT("FSDS: ---- end unchosen wheel parameters ----"));
+}

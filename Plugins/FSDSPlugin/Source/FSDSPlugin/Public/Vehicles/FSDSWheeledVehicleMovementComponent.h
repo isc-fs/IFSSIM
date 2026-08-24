@@ -95,4 +95,26 @@ public:
 
 	/** VerifyWheelConfigApplied across all wheels; logs a single summary. */
 	bool VerifyAllWheelConfigsApplied(float Tolerance = 0.5f) const;
+
+	/**
+	 * Log every wheel parameter this project never explicitly chose.
+	 *
+	 * Chaos's wheel class ships twelve tuning fields that FSDSWheelFront/Rear
+	 * do not set, so they run at UChaosVehicleWheel's constructor defaults —
+	 * values picked for arcade game handling, not for an IFS-08. They are
+	 * invisible in this repo precisely BECAUSE they are absent from it: you
+	 * cannot grep for a value that is never written.
+	 *
+	 * Two of them are physically significant and neither was a decision:
+	 *   RollbarScaling      0.15  — a live anti-roll bar
+	 *   MaxHandBrakeTorque  3000 N.m/wheel — and the handbrake channel IS the
+	 *                       EBS on this car, so this is the number the entire
+	 *                       emergency-braking case rests on
+	 *
+	 * This logs actual runtime values rather than changing them. Picking real
+	 * ones needs IFS-08 numbers the simulator does not have, and inventing them
+	 * would repeat the mistake that produced the 2.3x spring-rate divergence.
+	 * Making them visible is the prerequisite for choosing them.
+	 */
+	void LogInheritedWheelDefaults() const;
 };

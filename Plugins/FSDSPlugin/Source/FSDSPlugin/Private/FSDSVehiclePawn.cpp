@@ -383,18 +383,94 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->WheelSetups[3].BoneName = FName("WheelRR");
 	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
 
+	// === Chaos's OWN aerodynamics — turned OFF ===
+	//
+	// UChaosVehicleSimulation::UpdateSimulation calls ApplyAerodynamics()
+	// unconditionally on every physics step (engine :199, :283). It uses the
+	// component's DragCoefficient / DownforceCoefficient / DragArea, which this
+	// project never set, so the engine defaults have been live on every run:
+	//
+	//     DragCoefficient      0.3
+	//     DownforceCoefficient 0.3
+	//     DragArea             ChassisWidth x ChassisHeight = 1.80 x 1.40 = 2.52 m^2
+	//
+	// AFSDSVehiclePawn::ApplyAeroForces() already applies the IFS-08's real
+	// aero map from settings.json (CdA, ClA, AeroBalanceFront) every Tick. So
+	// the car has been carrying TWO aerodynamic models at once:
+	//
+	//     drag       1.80x intended   (+46 N at 10 m/s)
+	//     downforce  1.25x intended   (+46 N at 10 m/s)
+	//
+	// and in disagreeing frames — Chaos transforms its force by the vehicle
+	// world transform (body-local), while ApplyAeroForces pushes downforce
+	// along world -Z and drag along the inverse velocity vector.
+	//
+	// Zero the Chaos side so exactly one aero model exists. This must be set
+	// here, in the constructor path, because the sim reads it during
+	// CreateVehicle. "The platform applies zero aerodynamic force of its own"
+	// is now an invariant, and it is what makes the aero map in settings.json
+	// mean what it says.
+	//
+	// FOLLOW-UP, deliberately not changed here: ApplyAeroForces applies
+	// downforce along WORLD -Z. Real downforce acts normal to the car's floor,
+	// so at roll/pitch angles the body-frame convention Chaos used is the more
+	// correct one. Fixing that changes handling and needs a validation lap, so
+	// it belongs with the plant work, not in a hygiene pass.
+	VehicleMovement->DragCoefficient = 0.f;
+	VehicleMovement->DownforceCoefficient = 0.f;
+
 	// === IFS-08 Mass & Inertia ===
-	// Total mass: 290 kg (car 210 + driver 80)
-	// Wheelbase: 1627 mm, weight dist front: 43.8%
-	// CoG at 713mm from front axle = 813.5mm - 713mm = 100.5mm behind mesh center
-	// CoG height: 344mm from ground
-	VehicleMovement->Mass = 290.f;
+	//
+	// Mass now comes from settings.json. It used to be a hardcoded 290 kg
+	// ("car 210 + driver 80") while settings.json declared 275 — and the
+	// settings value was assigned in SetupSensorsFromSettings() from BeginPlay,
+	// which is FAR too late: Chaos reads this->Mass in UpdateMassProperties,
+	// reached from SetupVehicleMass during physics-state creation. The BeginPlay
+	// write only takes effect if something later triggers a mass recalculation,
+	// and nothing does. So the car has been running at 290 kg regardless of
+	// settings.json — a 5.5% error that presents as a tire or powertrain
+	// modelling discrepancy.
+	//
+	// This is reachable now only because ApplyTireModelToWheelCDOs() pulled
+	// AutoLoad() forward into the constructor path.
+	//
+	// NOTE FOR THE TEAM: 290 included an 80 kg driver. This car is driverless.
+	// 275 is what settings.json declares and what the parametric load-transfer
+	// model already assumes, so the two now agree — but the real IFS-08 DV mass
+	// is a team number, and settings.json is where to change it.
+	const FFSDSVehicleSettings* MassVehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	const float ConfiguredMass = MassVehicle ? MassVehicle->Physics.Mass : 275.f;
+	const float ConfiguredWheelbase = MassVehicle ? MassVehicle->Physics.Wheelbase : 1.627f;
+	const float ConfiguredWeightDistFront = MassVehicle ? MassVehicle->Physics.WeightDistFront : 0.438f;
+
+	VehicleMovement->Mass = ConfiguredMass;
 	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
-	// CoG offset: negative X = rearward (43.8% front means rear-biased)
-	// Mesh center is roughly at wheelbase/2 = 813mm from front
-	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
-	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
+
+	// CoG offset along X, derived rather than hardcoded. Front axle load
+	// fraction Wf = b/L (b = CoG-to-rear-axle distance), so measured from the
+	// mesh centre at L/2 the CoG sits at L*(Wf - 0.5) — negative is rearward.
+	// At Wf=0.438, L=1.627 m that is -10.1 cm, which is what the old hardcoded
+	// -10.f cm meant; deriving it removes another duplicated constant and makes
+	// it track settings.json.
+	const float CoGOffsetXCm = ConfiguredWheelbase * (ConfiguredWeightDistFront - 0.5f) * 100.f;
+	VehicleMovement->CenterOfMassOverride = FVector(CoGOffsetXCm, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
+
+	// KNOWN GAP, not fixed here: only the X component of the CoG is overridden.
+	// CoG HEIGHT comes from whatever the physics asset computes, while
+	// settings.json declares CoGHeight = 0.344 m and ComputeTireLoadsParametric
+	// uses that number for longitudinal load transfer. That is the same
+	// two-models-disagree pattern as the 2.3x spring-rate divergence. Setting
+	// the Z component changes ride height and load transfer together, so it
+	// needs a validation lap and belongs with the plant work.
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: mass %.1f kg from settings.json (was a hardcoded 290 that ")
+		TEXT("settings could not override), CoG X offset %.1f cm derived from ")
+		TEXT("wheelbase %.3f m and front weight distribution %.1f%%. CoG HEIGHT is ")
+		TEXT("still whatever the physics asset computes, NOT the declared %.3f m."),
+		ConfiguredMass, CoGOffsetXCm, ConfiguredWheelbase,
+		ConfiguredWeightDistFront * 100.f,
+		MassVehicle ? MassVehicle->Physics.CoGHeight : 0.344f);
 
 	// Disable Chaos's vehicle-specific aggressive sleep. Chaos's
 	// ProcessSleeping() (ChaosVehicleMovementComponent.cpp:1252) puts
@@ -672,6 +748,13 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// actually drives; the Pacejka curve still comes from the wheel CDO.
 		VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
 		VehicleMovement->VerifyAllWheelConfigsApplied();
+
+		// Verification above only covers fields this project actually sets.
+		// The complement — what it never set, and therefore inherited from
+		// Chaos — is invisible by construction: you cannot grep for a value
+		// that is never written. Print it, so the car nobody configured is at
+		// least a car somebody has read.
+		VehicleMovement->LogInheritedWheelDefaults();
 
 		// Seed all stochastic sources for this run. Must happen before any
 		// sensor draws noise or any cone is spawned; BeginPlay is the earliest
