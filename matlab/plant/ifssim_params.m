@@ -171,7 +171,44 @@ P.Assumed.Iyy = 110.0;   % kg*m^2   pitch    ASSUMPTION
 P.Assumed.Izz = 125.0;   % kg*m^2   yaw      ASSUMPTION
 P.Assumed.InertiaSource = 'ESTIMATE — typical FS values, not measured for this car';
 
+% Rotational inertia of one wheel+tyre assembly. Not in settings.json. The wheel
+% classes give 10 kg per corner; a solid disc at r=0.202 would be 0.5*m*r^2 =
+% 0.204, and the 2024-25 IFS_Sim model carried 0.215 for wheel+tyre. They agree,
+% which is weak but real corroboration.
+%
+% This sets how fast a wheel can spin up or lock. Too large and the car will not
+% wheelspin when it should; too small and it locks under trivial brake torque.
+P.Assumed.WheelInertia = 0.21;   % kg*m^2 per corner   ASSUMPTION
+
+% Slip regularisation speed. Slip ratio and slip angle both divide by forward
+% speed, which is zero at standstill. Dividing by max(|vx|, this) keeps the
+% tyre model finite at rest instead of producing Inf on the first step.
+% 1 m/s is the usual choice; below it the tyre model is not to be trusted
+% anyway, and a launch-from-rest study should say so rather than quietly
+% believing the number.
+P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
+
 % CoG height above ground. settings.json declares 0.3 m; kept here as the value
 % the chassis actually uses so there is one place to change it.
 P.Assumed.CoGHeightUsed = P.CoGHeight;
+
+% --- suspension, derived from the declared stiffness ------------------
+% SuspensionDamping in settings.json is a damping RATIO (zeta), not a
+% coefficient. Converting it needs the sprung mass at the corner, so it is done
+% here once rather than in whichever subsystem needs it first.
+%   c = 2 * zeta * sqrt(k * m)
+P.Derived.SuspensionDampingCoeff = ...
+    2 * P.SuspensionDamping * sqrt(P.Derived.WheelRateEach * P.Derived.SprungPerCorner);
+
+% Static suspension length: CoG height minus wheel radius. At rest the corner
+% attachment sits at CoG height and the wheel centre one radius above the road,
+% so this is the deflection reference — delta = 0 means sitting at ride height.
+P.Derived.StaticSuspLength = P.CoGHeight - P.WheelRadius;
+
+% Longitudinal wheel positions from the CoG. Front axle load fraction Wf is the
+% ratio of the CoG-to-REAR distance to the wheelbase, so the front arm is the
+% complement. Getting this backwards mirrors the car's balance and is very hard
+% to spot from a lap time.
+P.Derived.aFront = P.Wheelbase * (1 - P.WeightDistFront);   % m, CoG -> front axle
+P.Derived.bRear  = P.Wheelbase * P.WeightDistFront;         % m, CoG -> rear axle
 end

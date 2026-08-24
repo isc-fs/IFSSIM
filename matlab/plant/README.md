@@ -108,6 +108,50 @@ are typical FS values, **not measured for this car**.
 A 20% error there will present as a controller gain problem. Measure it (bifilar
 pendulum, or CAD mass properties) and move it into `settings.json`.
 
+## TireSuspension is filled in
+
+Per-wheel suspension and Pacejka tyre forces, summed into a body-frame wrench.
+
+```matlab
+build_tiresuspension
+test_tiresuspension_physics
+```
+
+**Wheel speed is a real integrated state.** That is the headline. Chaos snaps
+wheel speed to ground speed, which makes longitudinal slip structurally
+unrepresentable and leaves `/motor_rpm` as chassis speed round-tripped through a
+gear ratio. Here a wheel spins up from torque and can genuinely lock or slip —
+the test confirms a free wheel dropped onto ground moving at 10 m/s accelerates
+until its slip ratio reaches zero, settling at exactly `vx/Rw`.
+
+Simplified deliberately, and stated so nobody assumes otherwise:
+
+* **Quasi-static suspension** — spring and damper between the body corner and the
+  road, no unsprung-mass DOF. Costs wheel-hop fidelity over kerbs, saves four
+  stiff states.
+* **Magic Formula with a friction ellipse** — no relaxation length, camber
+  thrust, load-sensitive mu or thermal model. Transient lateral response is
+  slightly quick.
+* **Slip divides by `max(|vx|, 1 m/s)`.** Below that the tyre model is not to be
+  trusted, so a launch-from-rest study must say so rather than quietly believing
+  the number.
+
+`Fz` is clamped at zero — a tyre cannot pull on the road — which is what lets an
+inside wheel lift in a corner instead of inventing negative grip.
+
+### A test that was wrong twice, worth reading before writing your own
+
+The naive check "at a large slip angle, lateral force approaches mu·m·g" fails,
+and both reasons are the model being right:
+
+1. With `omega = 0` and the body at speed the wheels are **locked**, so the
+   friction budget goes longitudinally, not laterally.
+2. Left long enough they **spin up** and the slip ratio returns to zero.
+
+And this coefficient set peaks near **5°** of slip angle, so at 45° the Magic
+Formula is already down to about a quarter of peak. Assert invariants — the
+friction ellipse holds, force opposes slip — not a guessed operating point.
+
 ## Rules of the contract
 
 The port interface is what the simulator depends on. Inside your block, do what
