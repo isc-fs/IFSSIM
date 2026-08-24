@@ -102,128 +102,62 @@ end
 P.SettingsPath = settingsPath;
 P.VehicleName  = vehicleName;
 
-% ---------------------------------------------------------------------
-% DERIVED quantities, computed here so no subsystem re-derives them
-% differently. Each is a place a second copy could otherwise appear.
-% ---------------------------------------------------------------------
+% Derived once here so no subsystem re-derives them differently.
 P.Derived = struct();
 P.Derived.MaxSteerAngleRad = deg2rad(P.MaxSteerAngle);
-% Wheel rate per corner, from the declared SUM of four.
-P.Derived.WheelRateEach    = P.HeaveStiffness / 4;                     % N/m
-% CoG measured from the front axle, and as an offset from the wheelbase
-% midpoint (negative = rearward), which is what the sim's CoM override uses.
+P.Derived.WheelRateEach    = P.HeaveStiffness / 4;                     % N/m per corner
 P.Derived.CoGFromFrontAxle = P.Wheelbase * (1 - P.WeightDistFront);    % m
-P.Derived.CoGOffsetFromMid = P.Wheelbase * (P.WeightDistFront - 0.5);  % m
+P.Derived.CoGOffsetFromMid = P.Wheelbase * (P.WeightDistFront - 0.5);  % m, -ve = rearward
 P.Derived.StaticLoadFront  = P.Mass * 9.81 * P.WeightDistFront / 2;    % N per wheel
 P.Derived.StaticLoadRear   = P.Mass * 9.81 * (1-P.WeightDistFront) / 2;
-% Peak torque referred to the wheel, through the single reduction.
 P.Derived.PeakWheelTorque  = P.MotorMaxTorque * P.GearRatio * P.DrivetrainEfficiency;
-% Unsprung mass is not in settings.json; 10 kg/corner is the wheel-class
-% figure. Flagged as an assumption rather than silently folded in.
-P.Derived.UnsprungPerCorner = 10.0;                                    % kg  ASSUMPTION
+P.Derived.UnsprungPerCorner = 10.0;                    % kg, from the wheel classes  ASSUMPTION
 P.Derived.SprungPerCorner   = (P.Mass - 4*P.Derived.UnsprungPerCorner)/4;
 P.Derived.RideFreqHz        = sqrt(P.Derived.WheelRateEach / P.Derived.SprungPerCorner)/(2*pi);
 
-% ---------------------------------------------------------------------
-% ASSUMPTIONS. Values the plant needs that settings.json does not carry.
-% Kept in a separate struct, not mixed in with configured parameters, so a
-% reader can see at a glance what is measured and what is guessed.
-% ---------------------------------------------------------------------
+% Values the plant needs that settings.json does not carry. Separate from the
+% configured parameters on purpose, so what is guessed is visible at a glance.
+% README has the table of why each matters and how to measure it.
 P.Assumed = struct();
 
-% INERTIA TENSOR — the largest single unknown in this model.
-%
-% settings.json has no inertia. The simulator only has UE's
-% InertiaTensorScale = (1.0, 1.4, 1.1), which SCALES whatever the physics asset
-% happens to compute from the mesh — so there is no authoritative number to read
-% and none to copy.
-%
-% These are typical measured values for a ~275 kg Formula Student car, and the
-% ratios agree with the shape UE's scale implies (pitch > yaw > roll).
-%
-%   Ixx  roll   — smallest: the car is narrow and low
-%   Iyy  pitch  — largest: mass spread fore and aft along the wheelbase
-%   Izz  yaw    — dominates the transient the autonomy actually feels
-%
-% Yaw inertia is the one that matters most here: it sets how quickly the car
-% responds to a steering input, which is precisely what the controller is tuned
-% against. A 20 % error in Izz is a 20 % error in yaw response, and it will be
-% mistaken for a controller gain problem.
-%
-% MEASURE THESE. A bifilar pendulum test, or a CAD mass-properties export, and
-% then move them into settings.json so they stop being an assumption. Until
-% then, treat any lateral-transient result from this model as provisional.
+% Typical values for a ~275 kg FS car. settings.json has no inertia and UE only
+% scales what its physics asset computes, so there is nothing to read.
+% Izz sets yaw response, which is what the controller is tuned against.
 P.Assumed.Ixx = 30.0;    % kg*m^2   roll     ASSUMPTION
 P.Assumed.Iyy = 110.0;   % kg*m^2   pitch    ASSUMPTION
 P.Assumed.Izz = 125.0;   % kg*m^2   yaw      ASSUMPTION
 P.Assumed.InertiaSource = 'ESTIMATE — typical FS values, not measured for this car';
 
-% Rotational inertia of one wheel+tyre assembly. Not in settings.json. The wheel
-% classes give 10 kg per corner; a solid disc at r=0.202 would be 0.5*m*r^2 =
-% 0.204, and the 2024-25 IFS_Sim model carried 0.215 for wheel+tyre. They agree,
-% which is weak but real corroboration.
-%
-% This sets how fast a wheel can spin up or lock. Too large and the car will not
-% wheelspin when it should; too small and it locks under trivial brake torque.
+% Wheel+tyre. Corroborated two ways: a solid disc at 10 kg / r=0.202 gives 0.204,
+% and IFS_Sim carried 0.215. Sets how fast a wheel spins up or locks.
 P.Assumed.WheelInertia = 0.21;   % kg*m^2 per corner   ASSUMPTION
 
-% Slip regularisation speed. Slip ratio and slip angle both divide by forward
-% speed, which is zero at standstill. Dividing by max(|vx|, this) keeps the
-% tyre model finite at rest instead of producing Inf on the first step.
-% 1 m/s is the usual choice; below it the tyre model is not to be trusted
-% anyway, and a launch-from-rest study should say so rather than quietly
-% believing the number.
+% Slip divides by forward speed, which is zero at rest. Slip is computed against
+% max(|vx|, this). Below this speed the tyre model is not trustworthy.
 P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
 
 % --- steering ---------------------------------------------------------
-% ACKERMANN FRACTION. 1.0 = full geometric Ackermann, where the inner wheel
-% steers more so both front wheels roll about a common centre. 0 = parallel
-% steer. Real FS cars are usually somewhere between, and some run deliberate
-% ANTI-Ackermann because a loaded outer tyre peaks at a larger slip angle.
-%
-% The IFS-08's actual steering-arm geometry is not recorded anywhere in this
-% repo, so this is an assumption. It is a defensible one: full Ackermann is
-% physically motivated, and it is a large improvement on what the simulator was
-% doing, which was Chaos's default AngleRatio 0.7 — REVERSE Ackermann, giving
-% the inner wheel LESS angle than the outer. Nobody chose that either.
-%
-% Measure it from the steering arms and set it here.
+% 1.0 = full geometric Ackermann (inner wheel steers more, common turn centre).
+% 0 = parallel steer. Real FS cars run partial or even anti-Ackermann; the
+% IFS-08 steering-arm geometry is not recorded anywhere in this repo.
 P.Assumed.AckermannFraction = 1.0;        % ASSUMPTION
 
-% STEERING ACTUATOR. A rate limit and a first-order lag, both defaulted to
-% effectively instantaneous.
-%
-% This is deliberate and follows the rule applied when Chaos's hidden 0.4 s
-% steering rate limit was removed: better NO lag than the WRONG lag. An
-% unmeasured actuator model produces confident, wrong transient behaviour, and
-% the autonomy is tuned against exactly that transient.
-%
-% The real DV steering motor does have a finite slew rate, and the bench data
-% shows the wheel angle sensor diverging from the command by ~22.9 deg mean —
-% which is either a calibration error or real actuator lag, and nobody has
-% separated the two yet. When that is resolved, set these and re-tune.
+% Actuator rate limit and lag, defaulted to effectively none. Better no lag than
+% the wrong lag: the autonomy is tuned against this transient. Bench the real
+% steering motor and set them.
 P.Assumed.SteerRateLimit = 100.0;         % rad/s   ASSUMPTION (effectively none)
 P.Assumed.SteerLagTau    = 1e-3;          % s       ASSUMPTION (effectively none)
 
 % --- battery ----------------------------------------------------------
-% HARVESTED FROM matlab/IFS_Sim (the 2024-25 drive-cycle model), not from
-% settings.json. Provenance matters here: that model also carried mass 237 kg
-% and tyre radius 0.30 m, both of which disagree with settings.json, so it is
-% evidently a different car or a different year. The pack numbers are probably
-% still right, but "probably" is the operative word.
-%
-%   n_series 19, n_stacks 5, max_cellV 4.2  ->  95 cells in series, 399 V
-%   Battery_Capacity 8.5 Ah, initial SoC 0.9
-%
-% Move these into settings.json once someone confirms they describe THIS car.
+% From matlab/IFS_Sim (2024-25), NOT settings.json. That model also carries mass
+% 237 kg and tyre radius 0.30 m, which disagree with settings.json — so it may
+% describe a different car. Confirm, then move these into settings.json.
 P.Assumed.BatterySeriesCells = 95;
 P.Assumed.BatteryCellVMax    = 4.2;      % V, fully charged
 P.Assumed.BatteryCellVMin    = 3.2;      % V, empty. IFS_Sim did not record this.
 P.Assumed.BatteryCapacityAh  = 8.5;      % Ah
 P.Assumed.BatteryInitialSoC  = 0.9;
-% Pack internal resistance. NOT in IFS_Sim and not measured. It only affects
-% terminal voltage sag, which nothing downstream currently consumes, but a
-% voltage that never sags is a battery model that will flatter any power study.
+% Not in IFS_Sim and not measured. Only affects terminal voltage sag.
 P.Assumed.BatteryResistance  = 0.10;     % ohm     ASSUMPTION
 
 % CoG height above ground. settings.json declares 0.3 m; kept here as the value
@@ -231,22 +165,16 @@ P.Assumed.BatteryResistance  = 0.10;     % ohm     ASSUMPTION
 P.Assumed.CoGHeightUsed = P.CoGHeight;
 
 % --- suspension, derived from the declared stiffness ------------------
-% SuspensionDamping in settings.json is a damping RATIO (zeta), not a
-% coefficient. Converting it needs the sprung mass at the corner, so it is done
-% here once rather than in whichever subsystem needs it first.
-%   c = 2 * zeta * sqrt(k * m)
+% settings.json SuspensionDamping is a RATIO (zeta), not a coefficient:
+% c = 2*zeta*sqrt(k*m). Converting needs the corner sprung mass, so it is done here.
 P.Derived.SuspensionDampingCoeff = ...
     2 * P.SuspensionDamping * sqrt(P.Derived.WheelRateEach * P.Derived.SprungPerCorner);
 
-% Static suspension length: CoG height minus wheel radius. At rest the corner
-% attachment sits at CoG height and the wheel centre one radius above the road,
-% so this is the deflection reference — delta = 0 means sitting at ride height.
+% Deflection reference: delta = 0 means sitting at ride height.
 P.Derived.StaticSuspLength = P.CoGHeight - P.WheelRadius;
 
-% Longitudinal wheel positions from the CoG. Front axle load fraction Wf is the
-% ratio of the CoG-to-REAR distance to the wheelbase, so the front arm is the
-% complement. Getting this backwards mirrors the car's balance and is very hard
-% to spot from a lap time.
+% Wf is the CoG-to-REAR distance over the wheelbase, so the front arm is the
+% complement. Backwards mirrors the car's balance and is hard to spot in a lap time.
 P.Derived.aFront = P.Wheelbase * (1 - P.WeightDistFront);   % m, CoG -> front axle
 P.Derived.bRear  = P.Wheelbase * P.WeightDistFront;         % m, CoG -> rear axle
 
@@ -256,11 +184,8 @@ P.Derived.BatteryVMin  = P.Assumed.BatterySeriesCells * P.Assumed.BatteryCellVMi
 P.Derived.BatteryAs    = P.Assumed.BatteryCapacityAh * 3600;   % amp-seconds
 P.Derived.BatteryWh    = P.Derived.BatteryVMax * P.Assumed.BatteryCapacityAh;
 
-% Regen is POWER limited long before it is torque limited. MaxRegenPower is the
-% cell input-current cap; at any real speed it binds first, and by a lot. Worth
-% having as a number rather than a surprise: at 10 m/s the motor turns about
-% v/Rw*GearRatio rad/s, so the available regen torque is MaxRegenPower divided
-% by that, which is a small fraction of the 230 Nm envelope.
+% Regen is POWER limited long before torque limited, and by a lot. This is the
+% number that actually sets braking capability.
 P.Derived.RegenTorqueAt10ms = P.MaxRegenPower / ...
     ((10 / P.WheelRadius) * P.GearRatio);   % Nm at the motor
 end

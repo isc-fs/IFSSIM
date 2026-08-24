@@ -6,21 +6,15 @@ function build_plant_skeleton(outdir)
 %   subsystem that file is the work, and a folder named 'generated' invites
 %   someone to delete it.
 %
-%   Creates a top-level plant model plus one REFERENCED MODEL per subsystem, so
-%   the dynamics, powertrain and braking engineers each own a separate .slx and
-%   can work in parallel without merge-conflicting a single binary file. A
-%   monolithic model is a single-writer bottleneck, and .slx does not merge.
+%   Top-level model plus one REFERENCED MODEL per subsystem, so engineers own
+%   separate .slx files and can work in parallel — .slx does not merge.
 %
-%   The model is GENERATED FROM THIS SCRIPT, deliberately. The script is the
-%   reviewable artifact — a binary .slx cannot be diffed, so the structure and
-%   the port contract live in text that can be. Subsystem CONTENTS are then
-%   owned and edited by engineers in Simulink; only the skeleton is regenerated.
-%
-%   Run:  build_plant_skeleton            % writes into matlab/plant/models
+%   Generated from this script because a binary .slx cannot be reviewed in a
+%   diff. Subsystem contents are owned by engineers; only the skeleton is
+%   regenerated.
 %
 %   Every subsystem starts as a correctly-ported placeholder emitting zeros, so
-%   the whole model compiles and runs from day one. An engineer replaces the
-%   inside of their block and nothing else moves.
+%   the whole model compiles from day one and nobody is blocked.
 
 if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
