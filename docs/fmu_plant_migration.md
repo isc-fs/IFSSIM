@@ -511,13 +511,46 @@ turnover.
 
 **Toolchain and licensing — not settleable from public sources.**
 
-1. **Which MATLAB release, and does the campus bundle include the FMU export product?**
-   `[R]` Confirmed: **base Simulink never suffices.** R2026a+ needs the separate paid
-   *Simulink FMU Builder*; R2023b–R2025b needs the free support package **plus** MATLAB
-   Compiler and Simulink Compiler; source-code export adds Simulink Coder (or Embedded
-   Coder) plus MATLAB Coder. `[?]` Academic-bundle coverage varies by institution.
-   **This is the single biggest cost unknown. Check your own licence before any purchase or
-   architecture decision.**
+1. ~~**Which MATLAB release, and does the campus bundle include the FMU export product?**~~
+   **ANSWERED 2026-08-24 by measurement on this machine — and the answer reverses the
+   risk.** `[V]` MATLAB R2025b (maca64, Apple Silicon), licence 1088581:
+
+   ```
+   Simulink Compiler   licensed, checkout OK
+   MATLAB Compiler     licensed, checkout OK
+   Simulink Coder      licensed, checkout OK
+   Embedded Coder      licensed
+   MATLAB Coder        licensed
+   ```
+
+   **Nothing needs to be bought.** Every product FMU export requires is already
+   entitled and a licence seat checks out successfully.
+
+   The blocker is that they are **not installed**. `matlab.addons.installedAddons`
+   lists only MATLAB, Simulink, Aerospace, Navigation, PDE, Robotics and UAV.
+   `Simulink.FMUExporter` constructs and accepts every option, and the FMI 2 and FMI 3
+   code-generation targets (`RTWCG_FMU2_target.c`, `RTWCG_FMU3_target.c`) ship in
+   `matlabroot/rtw/c` — but the implementation function `exportToFMU_fcn` is absent,
+   so `export()` fails with `MATLAB:UndefinedFunction`.
+
+   **Fix: re-run the MathWorks installer with the existing licence and add the
+   Compiler/Coder products. Free.** Re-check with
+   `tools/fmu/matlab/check_fmu_export.m`, which separates *not licensed* (a purchase)
+   from *not installed* (an installer run) from *not present* (wrong release) — three
+   states with completely different costs that all present as "it does not work".
+
+   This was written up as the single biggest cost unknown of the migration. It was a
+   free installer run, and it was answerable in ten minutes on the machine the
+   simulator already runs on.
+
+   `[V]` **The exporter's option surface also answers several other questions**, since
+   every platform gate turns out to be an explicit export option:
+   `FMIVersion`, `FMUType`, `canGetAndSetFMUStateOverride`,
+   `canBeInstantiatedOnlyOncePerProcessOverride`, **`SaveSourceCodeToFMU`** (so
+   source-code FMUs — the cross-platform escape hatch — are supported), and
+   `GenerateLinuxBinaryWithWSL` / `GenerateWindowsBinaryWithDocker` for producing
+   other hosts' binaries.
+
 2. **Which platform tuple does a Mac-hosted export write — `aarch64-darwin` or
    `x86_64-darwin`?** `[?]` No MathWorks statement exists. Five-minute experiment: export
    once on a Mac, unzip, list `binaries/`. **Do not write the loader's tuple resolution
