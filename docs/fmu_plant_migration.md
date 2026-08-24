@@ -551,19 +551,42 @@ turnover.
    `GenerateLinuxBinaryWithWSL` / `GenerateWindowsBinaryWithDocker` for producing
    other hosts' binaries.
 
-2. **Which platform tuple does a Mac-hosted export write — `aarch64-darwin` or
-   `x86_64-darwin`?** `[?]` No MathWorks statement exists. Five-minute experiment: export
-   once on a Mac, unzip, list `binaries/`. **Do not write the loader's tuple resolution
-   before someone runs it.**
-3. **Do Simulink's fixed-step CS FMUs set `canHandleVariableCommunicationStepSize`?** `[?]`
-4. **Does the intended plant qualify for FMI 3.0 Event Mode?** `[R]` The one-step-delay fix
-   "works for FMUs created from a Simulink model containing **only direct feedthrough
-   blocks**." A vehicle model full of integrators may not qualify. This is the strongest
-   technical argument for FMI 3.0 **and it may not apply** — test before letting it carry
-   the decision.
-5. **Sourcing caveat:** `[R]` MathWorks bot-blocks the Event Mode and variable-step export
-   pages (both 404 to direct fetch; confirmed only via search-indexed content). **A human
-   must open them in a browser before this document quotes them.**
+2. ~~**Which platform tuple does a Mac-hosted export write?**~~ **ANSWERED `[V]`:
+   `aarch64-darwin`.** A real R2025b export on this Apple Silicon Mac produced
+   `binaries/aarch64-darwin/<model>.dylib`. The loader's tuple table already accepts it
+   alongside the FMI 2.0 `darwin64` spelling, so this is confirmed rather than assumed.
+
+3. ~~**Do Simulink's fixed-step CS FMUs set `canHandleVariableCommunicationStepSize`?**~~
+   **ANSWERED `[V]`: no — `false`.** Which is what this platform wants: a fixed 1/60 s
+   communication step is the invariant, not a limitation to work around.
+
+4. **Does the intended plant qualify for FMI 3.0 Event Mode?** `[V]` The exported FMU
+   advertises `hasEventMode="true"`, so the release supports it. Whether a plant full of
+   integrators qualifies for the one-step-delay fix is still unproven — the "direct
+   feedthrough blocks only" restriction was reported for Simulink-generated FMUs and this
+   spike model is too trivial to test it. Do not let Event Mode carry the FMI 3.0
+   decision until a realistic model is tried.
+
+5. ~~**Sourcing caveat: MathWorks bot-blocks the relevant pages.**~~ Superseded — the
+   questions those pages would have answered were answered by measurement instead.
+
+6. **NEW, and it is a REQUIRED gate that currently FAILS.** `[V]` A default Simulink
+   export sets **`canBeInstantiatedOnlyOncePerProcess="true"`**, which means the editor
+   cannot reload the plant without a full process restart. Two things were established:
+
+   - The `canBeInstantiatedOnlyOncePerProcessOverride` export option **does not change
+     it**. Setting it false leaves the attribute true, so the option appears to mean
+     "force to true", not "set to this value". Do not rely on it.
+   - The real lever is code generation: the model defaults to
+     `CodeInterfacePackaging = 'Nonreusable function'`, i.e. generated code holds static
+     data and genuinely cannot be instantiated twice. Setting it to `'Reusable function'`
+     is accepted by `set_param`, but the subsequent export raises a **modal dialog**,
+     which means the reentrant path **cannot currently be exported headlessly** (it
+     breaks `matlab -batch`, and therefore CI).
+
+   Neither the workaround nor its cost is known yet. Until it is resolved, plan on a
+   **process restart between FMU reloads**, and treat "iterate on the plant without
+   restarting the editor" as unavailable rather than assumed.
 
 **Engineering questions the plan cannot decide by fiat.**
 

@@ -10,6 +10,7 @@ a licence, and without launching the editor.
 |---|---|
 | `good_fmi3.fmu` | well-formed FMI 3.0 Co-Simulation; every gate should PASS |
 | `trap_fmi2_lowercase_state.fmu` | FMI 2.0 using the **lowercase** `canGetAndSetFMUstate` spelling, and `win64`-only. The state gate must PASS (reading the attribute correctly) while multi-instance and host-binary FAIL. A parser that only matches the FMI 3.0 capital-S spelling reports a false negative here — that is the bug this fixture exists to catch. |
+| `simulink_r2025b_fmi3.fmu` | **a real export**, not hand-built: Simulink R2025b, FMI 3.0 Co-Simulation, `aarch64-darwin` binary plus full `sources/`, `fixedInternalStepSize` = 1/960 s. It **fails** the multi-instance gate (`canBeInstantiatedOnlyOncePerProcess="true"`), which is not a defect in the fixture — it is what a default Simulink export actually produces, and the reason that gate exists. |
 | `deflate_probe.fmu` | every entry DEFLATE-compressed rather than stored, so the zlib inflate path is exercised. A reader that only handles stored entries passes the other two fixtures and fails this one. |
 
 Check them with either implementation — they must agree:
