@@ -152,6 +152,50 @@ And this coefficient set peaks near **5°** of slip angle, so at 45° the Magic
 Formula is already down to about a quarter of peak. Assert invariants — the
 friction ellipse holds, force opposes slip — not a guessed operating point.
 
+## Steering is filled in
+
+```matlab
+build_steering
+test_steering_physics
+```
+
+**The command is the single-track angle.** `steer_norm * MaxSteerAngle` is the
+angle of an equivalent bicycle; Ackermann then splits it across the front
+wheels. The autonomy plans against a kinematic bicycle, so this definition keeps
+the controller's geometry and the plant's in agreement. If `1.0` instead meant
+"outer wheel at max", the two would disagree by the Ackermann difference at
+every steering angle, silently.
+
+The test asserts the geometry directly — including the check that would have
+caught Chaos's default: **the inner wheel steers MORE than the outer**, and both
+front wheels share one turn centre.
+
+**Ackermann is assumed, not measured.** The IFS-08 steering-arm geometry isn't
+recorded anywhere here. Full geometric Ackermann is physically motivated and a
+large improvement on what the simulator was doing — Chaos's default
+`AngleRatio 0.7` is *reverse* Ackermann, inner wheel taking **less** angle than
+the outer. Real FS cars run partial or even anti-Ackermann; measure the arms and
+set `P.Assumed.AckermannFraction`.
+
+**The actuator is modelled but defaulted off.** Rate limit and first-order lag
+exist as parameters, set to effectively instantaneous — the same rule that
+removed Chaos's hidden 0.4 s rate limit: *better no lag than the wrong lag*. An
+unmeasured actuator produces confident, wrong transients, and the autonomy is
+tuned against exactly that transient.
+
+### One thing for somebody's list
+
+Three sources, three numbers, no agreement:
+
+| source | max road-wheel angle |
+|---|---|
+| `settings.json` | 28° |
+| pipeline | 18.2° |
+| real steering ratio 5:1 with ±60° column clamp | ~12° |
+
+That's a calibration question rather than a modelling one, but it should be
+settled before anyone trusts a lap time.
+
 ## Rules of the contract
 
 The port interface is what the simulator depends on. Inside your block, do what

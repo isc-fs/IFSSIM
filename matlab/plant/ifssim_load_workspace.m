@@ -52,7 +52,13 @@ flat = struct( ...
     'IFSSIM_LonC',  P.Pacejka.LonC, ...
     'IFSSIM_LonE',  P.Pacejka.LonE, ...
     'IFSSIM_Iw',    P.Assumed.WheelInertia, ...   % kg*m^2  ASSUMPTION
-    'IFSSIM_vreg',  P.Assumed.SlipRegularisationSpeed);    % m/s
+    'IFSSIM_vreg',  P.Assumed.SlipRegularisationSpeed, ... % m/s
+    ... % --- steering ---
+    'IFSSIM_dmax',  P.Derived.MaxSteerAngleRad, ...          % rad at the road wheel
+    'IFSSIM_L',     P.Wheelbase, ...                         % m
+    'IFSSIM_ack',   P.Assumed.AckermannFraction, ...         % ASSUMPTION
+    'IFSSIM_drate', P.Assumed.SteerRateLimit, ...            % rad/s ASSUMPTION
+    'IFSSIM_dtau',  P.Assumed.SteerLagTau);                  % s     ASSUMPTION
 
 f = fieldnames(flat);
 for i = 1:numel(f), assignin('base', f{i}, flat.(f{i})); end

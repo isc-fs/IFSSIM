@@ -9,20 +9,7 @@ function P = ifssim_params(settingsPath)
 %   That is the entire point: the plant model and the simulator must not be
 %   able to disagree about what car they are simulating.
 %
-%   This project has already been burned twice by exactly that failure. The
-%   Chaos suspension ran at 25 kN/m per corner while the parametric
-%   load-transfer model used 56.9 kN/m — the same car, two stiffnesses, 2.3x
-%   apart, for an unknown length of time, because each model held its own
-%   copy of the number. Separately, IFS_Sim (the 2024-25 Simulink drive-cycle
-%   model) carries mass 237 kg and tyre radius 0.30 m against settings.json's
-%   275 kg and 0.202 m. A retyped parameter is a divergence with a delay fuse.
-%
-%   Every field records WHERE it came from, in P.Source.<field>:
-%       'settings.json'  the file said so
-%       'default'        the file was silent; this mirrors the C++ default in
-%                        FSDSSettings.h / FSDSPacejkaTireModel.h
-%   so a model built on defaults cannot be mistaken for one built on
-%   configured values. Call IFSSIM_PARAMS_REPORT(P) to print the breakdown.
+
 
 if nargin < 1 || isempty(settingsPath)
     here = fileparts(mfilename('fullpath'));
@@ -59,7 +46,7 @@ end
 %         Plugins/FSDSPlugin/Source/FSDSPlugin/Public/FSDSPacejkaTireModel.h
 % ---------------------------------------------------------------------
 D = struct( ...
-    'Mass',                 290.0, ...    % kg   (settings.json says 275)
+    'Mass',                 290.0, ...    % kg
     'WheelRadius',          0.200, ...    % m
     'WheelWidth',           0.190, ...    % m
     'MaxSteerAngle',        28.0, ...     % deg, road wheel
@@ -187,6 +174,36 @@ P.Assumed.WheelInertia = 0.21;   % kg*m^2 per corner   ASSUMPTION
 % anyway, and a launch-from-rest study should say so rather than quietly
 % believing the number.
 P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
+
+% --- steering ---------------------------------------------------------
+% ACKERMANN FRACTION. 1.0 = full geometric Ackermann, where the inner wheel
+% steers more so both front wheels roll about a common centre. 0 = parallel
+% steer. Real FS cars are usually somewhere between, and some run deliberate
+% ANTI-Ackermann because a loaded outer tyre peaks at a larger slip angle.
+%
+% The IFS-08's actual steering-arm geometry is not recorded anywhere in this
+% repo, so this is an assumption. It is a defensible one: full Ackermann is
+% physically motivated, and it is a large improvement on what the simulator was
+% doing, which was Chaos's default AngleRatio 0.7 — REVERSE Ackermann, giving
+% the inner wheel LESS angle than the outer. Nobody chose that either.
+%
+% Measure it from the steering arms and set it here.
+P.Assumed.AckermannFraction = 1.0;        % ASSUMPTION
+
+% STEERING ACTUATOR. A rate limit and a first-order lag, both defaulted to
+% effectively instantaneous.
+%
+% This is deliberate and follows the rule applied when Chaos's hidden 0.4 s
+% steering rate limit was removed: better NO lag than the WRONG lag. An
+% unmeasured actuator model produces confident, wrong transient behaviour, and
+% the autonomy is tuned against exactly that transient.
+%
+% The real DV steering motor does have a finite slew rate, and the bench data
+% shows the wheel angle sensor diverging from the command by ~22.9 deg mean —
+% which is either a calibration error or real actuator lag, and nobody has
+% separated the two yet. When that is resolved, set these and re-tune.
+P.Assumed.SteerRateLimit = 100.0;         % rad/s   ASSUMPTION (effectively none)
+P.Assumed.SteerLagTau    = 1e-3;          % s       ASSUMPTION (effectively none)
 
 % CoG height above ground. settings.json declares 0.3 m; kept here as the value
 % the chassis actually uses so there is one place to change it.
