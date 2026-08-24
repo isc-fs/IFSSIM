@@ -296,6 +296,74 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	SteeringCurve->AddKey(0.f, 1.0f);
 	SteeringCurve->AddKey(200.f, 1.0f);   // flat: no speed-dependent taper
 
+	// --- Control input conditioning: DISABLE Chaos's arcade driver aids ---
+	//
+	// Chaos conditions every control input twice before the solver sees it:
+	// a rate limiter (FVehicleInputRateConfig::InterpInputValue, applied in
+	// UpdateState at ChaosVehicleMovementComponent.cpp:1218-1224) and then a
+	// response curve (CalcControlFunction, applied when the async input is
+	// built at :1765-1769).
+	//
+	// The engine defaults (:626-636) were NEVER overridden in this project, so
+	// both have been live on every run ever recorded here:
+	//
+	//   SteeringInputRate  RiseRate 2.5  FallRate 5   curve SQUARED
+	//   ThrottleInputRate  RiseRate 6    FallRate 10  curve linear
+	//   BrakeInputRate     RiseRate 6    FallRate 10  curve linear
+	//   HandbrakeInputRate RiseRate 12   FallRate 12  (EBS!)
+	//
+	// The squared steering curve is the serious one. CalcControlFunction with
+	// EInputFunctionType::SquaredFunction returns sign(x)*x^2, so the road-wheel
+	// angle the solver applied was
+	//
+	//     MaxSteerAngle * sign(s) * s^2
+	//
+	// i.e. a 0.5 command produced 0.25 of full lock — the autonomy has been
+	// getting roughly HALF the steering it asked for in the mid-range, on top of
+	// a rate limit that needs 1/2.5 = 0.4 s to reach full lock. For scale: the
+	// reverse-Ackermann defect fixed in 96e0e4e was worth ~15%.
+	//
+	// This is also a candidate mechanism for the Stanley limit cycle in this
+	// repo's history: squaring drives small corrections toward zero, so the
+	// controller winds up until it saturates at +/-1 — where x^2 == x and the
+	// loop gain abruptly jumps back to unity. That is a textbook recipe for
+	// bang-bang, and it would look exactly like a badly tuned gain.
+	//
+	// These are driver aids for gamepads. A Formula Student DV car has no such
+	// conditioning between the autonomy's command and the rack, and neither the
+	// controller nor the EKF models any. Rate is set to 1000/s, which at 60 Hz
+	// permits 16.67 units of change per tick against a total input range of 2.0
+	// — effectively instantaneous, without special-casing the interpolator.
+	//
+	// The REAL steering actuator does have a finite slew rate, and the real EBS
+	// has a finite pneumatic fill time. Both belong in the plant as authored,
+	// documented parameters (see docs/fmu_plant_migration.md), not as an
+	// unchosen engine default. Better no lag than the wrong lag.
+	constexpr float kInstantInputRate = 1000.f;   // units/s; >= 2.0 * 60 Hz
+	VehicleMovement->SteeringInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->SteeringInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->SteeringInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	VehicleMovement->ThrottleInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->ThrottleInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->ThrottleInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	VehicleMovement->BrakeInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->BrakeInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->BrakeInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	// EBS is routed through the Chaos handbrake channel. RiseRate 12 meant the
+	// emergency brake took 1/12 s = 83 ms to reach full commanded torque — a
+	// modelled actuation lag on the safety system that nobody chose and that
+	// silently flattered every EBS stopping-distance figure.
+	VehicleMovement->HandbrakeInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->HandbrakeInputRate.FallRate = kInstantInputRate;
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: control input conditioning disabled — steering curve linear ")
+		TEXT("(was SQUARED), all input rate limits removed (steering was 2.5/s, EBS 12/s). ")
+		TEXT("Commanded steering now reaches the solver unmodified."));
+
 	// --- Wheels ---
 	VehicleMovement->WheelSetups.SetNum(4);
 
