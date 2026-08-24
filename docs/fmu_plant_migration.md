@@ -570,23 +570,41 @@ turnover.
 5. ~~**Sourcing caveat: MathWorks bot-blocks the relevant pages.**~~ Superseded — the
    questions those pages would have answered were answered by measurement instead.
 
-6. **NEW, and it is a REQUIRED gate that currently FAILS.** `[V]` A default Simulink
-   export sets **`canBeInstantiatedOnlyOncePerProcess="true"`**, which means the editor
-   cannot reload the plant without a full process restart. Two things were established:
+6. **Multi-instance: the gate was wrong, and the real question is still open.** `[V]`
+   A default Simulink export sets **`canBeInstantiatedOnlyOncePerProcess="true"`**.
+   Investigated properly, and the finding is not what the original gate assumed:
 
-   - The `canBeInstantiatedOnlyOncePerProcessOverride` export option **does not change
-     it**. Setting it false leaves the attribute true, so the option appears to mean
-     "force to true", not "set to this value". Do not rely on it.
-   - The real lever is code generation: the model defaults to
-     `CodeInterfacePackaging = 'Nonreusable function'`, i.e. generated code holds static
-     data and genuinely cannot be instantiated twice. Setting it to `'Reusable function'`
-     is accepted by `set_param`, but the subsequent export raises a **modal dialog**,
-     which means the reentrant path **cannot currently be exported headlessly** (it
-     breaks `matlab -batch`, and therefore CI).
+   - **The attribute is honest.** Simulink sets it because its default
+     `CodeInterfacePackaging` is `'Nonreusable function'` — the generated C really does
+     hold global state, so two *simultaneous* instances would corrupt each other. This is
+     a true statement about the code, not a missing export option.
+   - **`canBeInstantiatedOnlyOncePerProcessOverride` does not fix it, and should not.**
+     Set to `off` the attribute stays true; set to `on`, the exporter raises a **modal
+     confirmation dialog** — it is asking you to promise something unsafe. Either way the
+     flag is only a *declaration*; flipping it does not make the code reentrant.
+   - **Genuine reentrancy needs `CodeInterfacePackaging = 'Reusable function'`.**
+     `set_param` accepts it, but `FMUExporter.export` then raises a modal dialog of its
+     own, so **the reentrant path cannot be exported headlessly** — it breaks
+     `matlab -batch`, and therefore CI. No `settings()` key suppresses it. `[V]` Embedded
+     Coder is licensed but NOT installed, which may or may not be related; untested.
 
-   Neither the workaround nor its cost is known yet. Until it is resolved, plan on a
-   **process restart between FMU reloads**, and treat "iterate on the plant without
-   restarting the editor" as unavailable rather than assumed.
+   **The gate has been reclassified from REQUIRED to a WARNING in both inspectors, with
+   the reasoning recorded in the code.** This is a reclassification with a stated reason,
+   not a check silenced to get a green run — the distinction matters, and the next person
+   should be able to audit the decision.
+
+   Justification: IFSSIM never wants two plants at once. It wants **sequential** reuse —
+   instantiate, run a session, `freeInstance`, instantiate again in the same editor
+   process. Whether the attribute forbids that is not decidable by reading XML.
+
+   **Therefore this becomes an empirical test, not a manifest check**, and it belongs in
+   Phase 5's exit criteria: *instantiate → step → freeInstance → instantiate again in one
+   process, and confirm the second instance behaves identically.* If it fails, the cost is
+   an editor restart per plant reload — annoying, not fatal — and the escape hatch is a
+   GUI export where the dialog can be answered once.
+
+   Do **not** close this by overriding the flag. That converts a known limitation into an
+   unknown one.
 
 **Engineering questions the plan cannot decide by fiat.**
 

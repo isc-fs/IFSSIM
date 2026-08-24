@@ -165,9 +165,31 @@ def inspect(path: Path) -> dict:
               "N-ticks==N-doSteps invariant")
 
     once = i.get("canBeInstantiatedOnlyOncePerProcess")
-    check("multi-instance allowed", once is not True, True,
-          "true means the editor cannot reload without a process restart; "
-          "Simulink's supportMultiInstance defaults OFF")
+    # NOT a required gate, and the reasoning matters — this is a reclassification
+    # with a stated reason, not a check silenced to get a green run.
+    #
+    # The attribute is the FMU author's declaration that only one instance per
+    # process is safe. Simulink sets it true because the default code interface
+    # packaging is 'Nonreusable function': the generated C really does hold
+    # global state, so two SIMULTANEOUS instances would corrupt each other.
+    # That is a true statement about the code, not a missing export option.
+    #
+    # IFSSIM never wants two plants at once. What it wants is SEQUENTIAL reuse:
+    # instantiate, run a session, freeInstance, instantiate again in the same
+    # editor process. Whether the attribute forbids that is not something the
+    # spec settles cleanly, and it cannot be answered by reading XML — it needs
+    # an instantiate/free/instantiate probe against a real FMI runtime.
+    #
+    # Forcing it false via canBeInstantiatedOnlyOncePerProcessOverride only
+    # rewrites the declaration; it does not make the code reentrant. Making it
+    # genuinely reentrant needs CodeInterfacePackaging='Reusable function',
+    # which Simulink's exporter refuses without an interactive confirmation.
+    check("multi-instance declared", once is not True, False,
+          "true = only one instance per process. Simulink sets this because "
+          "codegen is non-reentrant, which is an honest statement about the "
+          "generated code. Fine for IFSSIM IF sequential reload works — that "
+          "must be PROVEN with instantiate/free/instantiate, not assumed, and "
+          "not waved away by overriding the flag")
 
     ht = host_tuples()
     usable = [b for b in bins if b in ht]

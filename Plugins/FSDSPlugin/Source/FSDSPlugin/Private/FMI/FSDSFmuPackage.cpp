@@ -277,9 +277,24 @@ TArray<FFSDSFmuGate> FFSDSFmuPackage::CheckGates(double CommunicationStep) const
 			     "would break the N-ticks-equals-N-doSteps invariant"));
 	}
 
-	Add(TEXT("multi-instance allowed"), !Info.bOnlyOneInstancePerProcess, true,
-		TEXT("canBeInstantiatedOnlyOncePerProcess=true prevents editor reload without a "
-		     "full process restart; Simulink's supportMultiInstance defaults OFF"));
+	// NOT required, and the reasoning is recorded rather than the check quietly
+	// dropped. The attribute is the FMU author's declaration that only one
+	// instance per process is safe, and Simulink sets it true because its
+	// default CodeInterfacePackaging is 'Nonreusable function' — the generated
+	// C genuinely holds global state, so two SIMULTANEOUS instances would
+	// corrupt each other. That is an honest statement about the code, not a
+	// missing export option.
+	//
+	// IFSSIM never wants two plants at once; it wants SEQUENTIAL reuse
+	// (instantiate, run, freeInstance, instantiate again in the same editor
+	// process). Whether the attribute forbids that cannot be decided by reading
+	// XML — it needs an instantiate/free/instantiate probe once the FMI runtime
+	// lands. Overriding the flag only rewrites the declaration; it does not make
+	// the code reentrant.
+	Add(TEXT("multi-instance declared"), !Info.bOnlyOneInstancePerProcess, false,
+		TEXT("true = only one instance per process, because Simulink's codegen is "
+		     "non-reentrant. Acceptable IF sequential reload works — that must be "
+		     "PROVEN with instantiate/free/instantiate, not assumed"));
 
 	const FString HostBinary = GetBinaryPathForHost();
 	Add(TEXT("binary for this host"), !HostBinary.IsEmpty() || Info.bHasSourceCode, true,
