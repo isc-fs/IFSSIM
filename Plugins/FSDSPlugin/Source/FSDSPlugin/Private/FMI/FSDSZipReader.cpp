@@ -109,7 +109,19 @@ bool FFSDSZipReader::ReadCentralDirectory()
 		const uint8* NameBytes = &Buffer[Cursor + 46];
 		// ZIP names are UTF-8 when bit 11 is set, CP437 otherwise. Every FMU
 		// in practice is ASCII; treat as UTF-8, which is correct for both.
-		E.Name = FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(NameBytes), NameLen).Get(), NameLen);
+		//
+		// USE THE LENGTH-AWARE FSTRING CONSTRUCTOR. This previously read
+		//     FString(FUTF8ToTCHAR(Bytes, NameLen).Get(), NameLen)
+		// which looks like (pointer, length) but is not: FString's two-argument
+		// form is (Src, ExtraSlack). NameLen was silently taken as extra
+		// capacity, and the name itself was read as a NUL-terminated string out
+		// of a conversion buffer that is NOT NUL-terminated when built with an
+		// explicit length. Every entry name picked up trailing garbage, so
+		// nothing ever matched and the archive looked empty of known files.
+		// It survived my hand-built fixtures only because those were checked
+		// with the Python inspector and never through this code path.
+		FUTF8ToTCHAR NameConv(reinterpret_cast<const ANSICHAR*>(NameBytes), NameLen);
+		E.Name = FString(NameConv.Length(), NameConv.Get());
 		E.bIsDirectory = E.Name.EndsWith(TEXT("/"));
 
 		Entries.Add(MoveTemp(E));

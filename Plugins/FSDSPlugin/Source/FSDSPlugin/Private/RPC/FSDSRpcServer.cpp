@@ -679,15 +679,27 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		//
 		// No FMI runtime is invoked. Nothing is instantiated, nothing steps.
 		// This answers "could we run this?", not "does it run?".
+		// Parse the whole REQUEST, not Method: the dispatcher above already
+		// split Method off as the first word, so Method never contains the
+		// argument. Every other multi-argument command here parses Request —
+		// this one did not, and reported "usage:" for a perfectly good path.
 		TArray<FString> Parts;
-		Method.ParseIntoArray(Parts, TEXT(" "), true);
+		Request.ParseIntoArray(Parts, TEXT(" "), true);
 		if (Parts.Num() < 2)
 		{
 			return TEXT("{\"error\":\"usage: inspectFmu <path-to.fmu>\"}");
 		}
 
+		// Re-join the tail so paths containing spaces survive.
+		FString FmuPath;
+		for (int32 i = 1; i < Parts.Num(); i++)
+		{
+			if (i > 1) FmuPath += TEXT(" ");
+			FmuPath += Parts[i];
+		}
+
 		FFSDSFmuPackage Package;
-		if (!Package.Open(Parts[1]))
+		if (!Package.Open(FmuPath))
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"error\":\"%s\"}"),
 				*Package.GetError().ReplaceCharWithEscapedChar());

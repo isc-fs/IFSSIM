@@ -69,7 +69,20 @@ bool FFSDSFmuPackage::Open(const FString& FmuPath)
 	TArray<uint8> Xml;
 	if (!Zip.ExtractFile(TEXT("modelDescription.xml"), Xml))
 	{
-		Error = TEXT("no modelDescription.xml — not a valid FMU");
+		// Report WHAT WAS in the archive. "no modelDescription.xml" on a file
+		// another tool reads happily means our reader is wrong, not the FMU —
+		// and the entry names are the evidence that distinguishes the two.
+		FString Listing;
+		int32 Shown = 0;
+		for (const FFSDSZipReader::FEntry& E : Zip.GetEntries())
+		{
+			if (Shown++ >= 12) { Listing += TEXT(", ..."); break; }
+			if (!Listing.IsEmpty()) Listing += TEXT(", ");
+			Listing += FString::Printf(TEXT("'%s'"), *E.Name);
+		}
+		Error = FString::Printf(
+			TEXT("no modelDescription.xml — not a valid FMU. Archive holds %d entr(ies): %s"),
+			Zip.GetEntries().Num(), *Listing);
 		return false;
 	}
 
@@ -77,7 +90,15 @@ bool FFSDSFmuPackage::Open(const FString& FmuPath)
 	// name but different builds must not share a directory, or a stale binary
 	// gets loaded and the mismatch surfaces as inexplicable physics.
 	const FString Stem = FPaths::GetBaseFilename(FmuPath);
-	ExtractedDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("FMU"), Stem);
+	// ABSOLUTE, deliberately. ProjectSavedDir() is relative to the engine
+	// binary's working directory, so leaving it relative produced a path like
+	// "../../../../../../Users/.../Saved/FMU/...". That still resolves today
+	// only because the working directory happens to be right — and the very
+	// next step is handing this path to dlopen for the FMU's shared library,
+	// where a CWD-dependent path is a bug waiting for the first caller that
+	// changes directory.
+	ExtractedDir = FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("FMU"), Stem));
 
 	// Wipe any previous extraction: a partial one from an interrupted run is
 	// worse than none, because the missing file may be one nothing reads until
