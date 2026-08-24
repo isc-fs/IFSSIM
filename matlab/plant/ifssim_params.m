@@ -205,6 +205,27 @@ P.Assumed.AckermannFraction = 1.0;        % ASSUMPTION
 P.Assumed.SteerRateLimit = 100.0;         % rad/s   ASSUMPTION (effectively none)
 P.Assumed.SteerLagTau    = 1e-3;          % s       ASSUMPTION (effectively none)
 
+% --- battery ----------------------------------------------------------
+% HARVESTED FROM matlab/IFS_Sim (the 2024-25 drive-cycle model), not from
+% settings.json. Provenance matters here: that model also carried mass 237 kg
+% and tyre radius 0.30 m, both of which disagree with settings.json, so it is
+% evidently a different car or a different year. The pack numbers are probably
+% still right, but "probably" is the operative word.
+%
+%   n_series 19, n_stacks 5, max_cellV 4.2  ->  95 cells in series, 399 V
+%   Battery_Capacity 8.5 Ah, initial SoC 0.9
+%
+% Move these into settings.json once someone confirms they describe THIS car.
+P.Assumed.BatterySeriesCells = 95;
+P.Assumed.BatteryCellVMax    = 4.2;      % V, fully charged
+P.Assumed.BatteryCellVMin    = 3.2;      % V, empty. IFS_Sim did not record this.
+P.Assumed.BatteryCapacityAh  = 8.5;      % Ah
+P.Assumed.BatteryInitialSoC  = 0.9;
+% Pack internal resistance. NOT in IFS_Sim and not measured. It only affects
+% terminal voltage sag, which nothing downstream currently consumes, but a
+% voltage that never sags is a battery model that will flatter any power study.
+P.Assumed.BatteryResistance  = 0.10;     % ohm     ASSUMPTION
+
 % CoG height above ground. settings.json declares 0.3 m; kept here as the value
 % the chassis actually uses so there is one place to change it.
 P.Assumed.CoGHeightUsed = P.CoGHeight;
@@ -228,4 +249,18 @@ P.Derived.StaticSuspLength = P.CoGHeight - P.WheelRadius;
 % to spot from a lap time.
 P.Derived.aFront = P.Wheelbase * (1 - P.WeightDistFront);   % m, CoG -> front axle
 P.Derived.bRear  = P.Wheelbase * P.WeightDistFront;         % m, CoG -> rear axle
+
+% --- battery, derived -------------------------------------------------
+P.Derived.BatteryVMax  = P.Assumed.BatterySeriesCells * P.Assumed.BatteryCellVMax;
+P.Derived.BatteryVMin  = P.Assumed.BatterySeriesCells * P.Assumed.BatteryCellVMin;
+P.Derived.BatteryAs    = P.Assumed.BatteryCapacityAh * 3600;   % amp-seconds
+P.Derived.BatteryWh    = P.Derived.BatteryVMax * P.Assumed.BatteryCapacityAh;
+
+% Regen is POWER limited long before it is torque limited. MaxRegenPower is the
+% cell input-current cap; at any real speed it binds first, and by a lot. Worth
+% having as a number rather than a surprise: at 10 m/s the motor turns about
+% v/Rw*GearRatio rad/s, so the available regen torque is MaxRegenPower divided
+% by that, which is a small fraction of the 230 Nm envelope.
+P.Derived.RegenTorqueAt10ms = P.MaxRegenPower / ...
+    ((10 / P.WheelRadius) * P.GearRatio);   % Nm at the motor
 end

@@ -1,222 +1,207 @@
-# IFSSIM plant model (Simulink)
+# IFSSIM plant model
 
-The vehicle plant, as a Simulink model your engineers own. The simulator keeps
-terrain, sensors, collision, the referee and the ROS bridge; **this** is the car.
+The vehicle, as a Simulink model your engineers own. The simulator keeps terrain,
+sensors, collision, the referee and the ROS bridge — **this is the car.**
 
-## Why it is generated from a script
+---
 
-`build_plant_skeleton.m` writes every `.slx` in `models/`. That is deliberate:
-
-* **`.slx` is binary — it does not diff and it does not merge.** The structure and
-  the port contract therefore live in a text file that can be reviewed, while
-  subsystem *contents* are owned and edited by engineers in Simulink.
-* Regenerating replaces the skeleton, not your work: each subsystem is a
-  **separate referenced model**, so three people can work at once without
-  fighting over one file.
+## Start here
 
 ```matlab
-addpath matlab/plant
-build_plant_skeleton      % writes matlab/plant/models/
-verify_plant_skeleton     % compiles every model, reports pass/fail
+cd matlab/plant
+ifssim_setup          % paths, parameters, buses
+ifssim_plant_check    % build everything, compile it, test it
 ```
 
-The folder is `models/`, not `generated/`. The skeleton is generated; the models
-are **not disposable**. Once an engineer fills in a subsystem, that file is the
-work — regenerating rewrites the top-level wiring and any block still holding a
-placeholder, and a folder called `generated` invites someone to delete it.
+`ifssim_plant_check` is the only command you need day to day. Run it after you
+pull and before you commit. If it says `PLANT OK`, the model is healthy.
+
+```
+--- summary ---
+  [ok  ] parameters load
+  [ok  ] build
+  [ok  ] all models compile
+  [ok  ] chassis physics
+  [ok  ] tyre/suspension physics
+  [ok  ] steering physics
+  [ok  ] powertrain physics
+
+PLANT OK   (46 s)
+```
+
+Then `open_system('IFSSIM_Plant')`.
+
+> **Always run `ifssim_setup` before opening a model.** Without it the bus
+> objects are missing, ports go red, and the errors suggest someone committed a
+> broken model. They didn't — the workspace is just empty.
+
+---
 
 ## Who owns what
 
-| Model | Owner | Takes | Gives |
-|---|---|---|---|
-| `IFSSIM_Steering` | dynamics | `Cmd` | road-wheel angles ×4 |
-| `IFSSIM_Powertrain` | powertrain | `Cmd`, wheel ω | drive torque ×4, motor/battery state |
-| `IFSSIM_Brakes` | braking | `Cmd`, wheel ω | brake torque ×4 |
-| `IFSSIM_TireSuspension` | dynamics | road, pose, steer, torques | per-wheel state, tyre wrench |
-| `IFSSIM_Aero` | aero | pose | aero force and moment |
-| `IFSSIM_Chassis` | dynamics | tyre + aero wrench, env | pose, velocity, acceleration |
+| Model | Owner | Status |
+|---|---|---|
+| `IFSSIM_Chassis` | dynamics | implemented — 6-DOF rigid body |
+| `IFSSIM_TireSuspension` | dynamics | implemented — Pacejka + suspension |
+| `IFSSIM_Steering` | dynamics / controls | implemented — Ackermann |
+| `IFSSIM_Powertrain` | powertrain | implemented — motor, drivetrain, battery |
+| `IFSSIM_Brakes` | braking | **placeholder, emits zeros** |
+| `IFSSIM_Aero` | aero | **placeholder, emits zeros** |
 
-Numbers on the top-level blocks are the signal-flow order: commands become
-torques and angles, torques and angles become tyre forces, tyre forces become
-motion.
+Each is a **separate referenced model**, so you can work on yours while somebody
+else works on theirs. `.slx` is binary and does not merge — one shared model
+would mean one person at a time.
 
-Every block starts as a **correctly-ported placeholder emitting zeros**, so the
-whole model compiles and runs from day one. Nobody is blocked waiting for
-someone else's subsystem.
+---
 
-## Parameters: settings.json is the source of truth
+## I want to change something
 
-```matlab
-P = ifssim_params();        % reads settings.json
-ifssim_params_report(P)     % prints every value AND where it came from
-```
+### …a number (mass, tyre mu, gear ratio, spring rate)
 
-**Do not type numbers into a block.** Read them from `IFSSIM_P`.
-
-This is not style. This project has already paid for the alternative twice:
-
-* Chaos ran **25 kN/m** per corner while the load-transfer model used
-  **56.9 kN/m** — the same car, two stiffnesses, 2.3× apart, because each model
-  held its own copy of the number.
-* `IFS_Sim` (2024-25) carries mass **237 kg** and tyre radius **0.30 m** against
-  `settings.json`'s **275 kg** and **0.202 m**. A 0.30 m tyre radius puts every
-  speed and energy figure it ever produced ~48% out.
-
-A retyped parameter is a divergence with a delay fuse. `ifssim_params_report`
-prints provenance per field — `settings.json` or `default` — because "the model
-uses 275 kg" and "the model fell back to a 290 kg default because the file was
-silent" look identical in a block diagram and are completely different claims.
-
-It also runs sanity checks, each of which exists because something here has
-already failed it: wheel radius plausible for a 10″ wheel, ride frequency in the
-3–5 Hz band, and wheel-rate ×4 equalling the declared `HeaveStiffness`.
-
-## Chassis is filled in
-
-`IFSSIM_Chassis` is implemented as the worked example — 6-DOF Newton-Euler in the
-body frame, forward Euler at 1/960 s. State lives in Unit Delay blocks so it is
-visible on the canvas; the equations live in one MATLAB Function block, because
-Newton-Euler as sixty primitives is the same six lines with worse typography and
-forty chances to mis-wire a signal.
+Edit **`settings.json` at the repo root**, not the model. Then:
 
 ```matlab
-build_chassis            % regenerate it
-test_chassis_physics     % run it against closed-form answers
+ifssim_params_report    % confirm it took, and see where every value came from
 ```
 
-Two things it does deliberately, both of which are easy to get wrong and both of
-which are live bugs in the current simulator:
+The simulator reads the same file, so this is what keeps the Simulink plant and
+the running sim describing the same car.
 
-* **`accel_proper` excludes gravity.** It is what an accelerometer reads. The
-  simulator today finite-differences a world velocity and adds +g — which is
-  where the EKF's missing Coriolis terms came from.
-* **The Coriolis term `-omega x v` is present.** Body-frame rates are not
-  inertial. Dropping it is exactly the bug that made lateral velocity drift
-  during sustained cornering.
+**Never type a number into a block.** Read it from `IFSSIM_P`. This project has
+already paid for the alternative twice — see *Why parameters work this way* below.
 
-`test_chassis_physics` checks each against a closed-form answer, including the
-one that catches sign and frame errors: **an accelerometer in free fall must
-read zero.**
+### …the physics inside a subsystem
 
-### Inertia is an assumption
+1. Open the model: `open_system('IFSSIM_TireSuspension')`
+2. Edit the MATLAB Function block, or replace it with whatever blocks you prefer
+3. `ifssim_plant_check` — did anything break?
+4. Add an assertion to the matching `test_*_physics.m` covering what you changed
 
-`settings.json` has no inertia tensor, and UE only scales whatever its physics
-asset computes — so there is nothing authoritative to read. `P.Assumed.Ixx/Iyy/Izz`
-are typical FS values, **not measured for this car**.
+**But note:** subsystems with a `build_*.m` script are *regenerated* by
+`ifssim_plant_build`, which will overwrite hand edits. Put your change in the
+builder script. That is deliberate — a `.slx` cannot be reviewed in a pull
+request, and a model nobody can review is a model nobody can trust.
 
-`Izz` sets yaw response, which is precisely what the controller is tuned against.
-A 20% error there will present as a controller gain problem. Measure it (bifilar
-pendulum, or CAD mass properties) and move it into `settings.json`.
+### …a placeholder into a real model (Brakes, Aero)
 
-## TireSuspension is filled in
+Copy the pattern from `build_steering.m` — it is the smallest complete example.
+Then register it in two places:
 
-Per-wheel suspension and Pacejka tyre forces, summed into a body-frame wrench.
+* `ifssim_plant_build.m` → add your builder to the `builders` list
+* `ifssim_plant_check.m` → add your test to the `tests` list
 
-```matlab
-build_tiresuspension
-test_tiresuspension_physics
-```
+### …the port interface
 
-**Wheel speed is a real integrated state.** That is the headline. Chaos snaps
-wheel speed to ground speed, which makes longitudinal slip structurally
-unrepresentable and leaves `/motor_rpm` as chassis speed round-tripped through a
-gear ratio. Here a wheel spins up from torque and can genuinely lock or slip —
-the test confirms a free wheel dropped onto ground moving at 10 m/s accelerates
-until its slip ratio reaches zero, settling at exactly `vx/Rw`.
+Edit `ifssim_plant_buses.m`. Then tell whoever owns the C++ side, because the
+platform depends on those names and widths. This is the one change that is not
+local to you.
 
-Simplified deliberately, and stated so nobody assumes otherwise:
-
-* **Quasi-static suspension** — spring and damper between the body corner and the
-  road, no unsprung-mass DOF. Costs wheel-hop fidelity over kerbs, saves four
-  stiff states.
-* **Magic Formula with a friction ellipse** — no relaxation length, camber
-  thrust, load-sensitive mu or thermal model. Transient lateral response is
-  slightly quick.
-* **Slip divides by `max(|vx|, 1 m/s)`.** Below that the tyre model is not to be
-  trusted, so a launch-from-rest study must say so rather than quietly believing
-  the number.
-
-`Fz` is clamped at zero — a tyre cannot pull on the road — which is what lets an
-inside wheel lift in a corner instead of inventing negative grip.
-
-### A test that was wrong twice, worth reading before writing your own
-
-The naive check "at a large slip angle, lateral force approaches mu·m·g" fails,
-and both reasons are the model being right:
-
-1. With `omega = 0` and the body at speed the wheels are **locked**, so the
-   friction budget goes longitudinally, not laterally.
-2. Left long enough they **spin up** and the slip ratio returns to zero.
-
-And this coefficient set peaks near **5°** of slip angle, so at 45° the Magic
-Formula is already down to about a quarter of peak. Assert invariants — the
-friction ellipse holds, force opposes slip — not a guessed operating point.
-
-## Steering is filled in
-
-```matlab
-build_steering
-test_steering_physics
-```
-
-**The command is the single-track angle.** `steer_norm * MaxSteerAngle` is the
-angle of an equivalent bicycle; Ackermann then splits it across the front
-wheels. The autonomy plans against a kinematic bicycle, so this definition keeps
-the controller's geometry and the plant's in agreement. If `1.0` instead meant
-"outer wheel at max", the two would disagree by the Ackermann difference at
-every steering angle, silently.
-
-The test asserts the geometry directly — including the check that would have
-caught Chaos's default: **the inner wheel steers MORE than the outer**, and both
-front wheels share one turn centre.
-
-**Ackermann is assumed, not measured.** The IFS-08 steering-arm geometry isn't
-recorded anywhere here. Full geometric Ackermann is physically motivated and a
-large improvement on what the simulator was doing — Chaos's default
-`AngleRatio 0.7` is *reverse* Ackermann, inner wheel taking **less** angle than
-the outer. Real FS cars run partial or even anti-Ackermann; measure the arms and
-set `P.Assumed.AckermannFraction`.
-
-**The actuator is modelled but defaulted off.** Rate limit and first-order lag
-exist as parameters, set to effectively instantaneous — the same rule that
-removed Chaos's hidden 0.4 s rate limit: *better no lag than the wrong lag*. An
-unmeasured actuator produces confident, wrong transients, and the autonomy is
-tuned against exactly that transient.
-
-### One thing for somebody's list
-
-Three sources, three numbers, no agreement:
-
-| source | max road-wheel angle |
-|---|---|
-| `settings.json` | 28° |
-| pipeline | 18.2° |
-| real steering ratio 5:1 with ±60° column clamp | ~12° |
-
-That's a calibration question rather than a modelling one, but it should be
-settled before anyone trusts a lap time.
+---
 
 ## Rules of the contract
 
-The port interface is what the simulator depends on. Inside your block, do what
-you like.
+Inside your block, do what you like. At the ports:
 
-* **Do not change port names, types or widths.** Buses are defined in
-  `ifssim_plant_buses.m`; changing one is a platform-side change too.
+* **Do not change port names, types or widths** without changing the bus
+  definition and telling the platform side.
 * **Fixed step, 1/960 s, no continuous states.** This model becomes an FMU, and
   an FMU with a data-dependent substep count is not reproducible. 1/960 is the
   first 60-divisible rate at which the motor current-loop time constant is
   representable at all.
 * **Body frame is ISO 8855 / REP-103** — x forward, y **left**, z up. World is ENU.
 * **Wheel order is FL, FR, RL, RR**, everywhere. It is already load-bearing on
-  the C++ side; changing it is a silent, symmetric, nearly undetectable bug.
+  the C++ side, so changing it is a silent, symmetric, nearly undetectable bug.
 
-## What is deliberately NOT here
+---
+
+## Three compile errors you will hit
+
+All three cost time the first time. None of them are your maths.
+
+**1. "Simulink is unable to determine sizes and/or types… errors in the block body"**
+
+Usually a workspace constant that is not *declared*. A MATLAB Function block does
+not pick up base-workspace variables the way a script does. Declare it:
+
+```matlab
+d = Stateflow.Data(chart); d.Name = 'IFSSIM_Mass'; d.Scope = 'Parameter';
+```
+
+See any `build_*.m` — they all do this in a loop.
+
+**2. The same error, but caused by feedback**
+
+If a signal comes from a Unit Delay whose input is your own output, nothing can
+infer a size — the circle has no starting point. Set port sizes explicitly
+(`d.Props.Array.Size`).
+
+**3. "Error due to multiple causes"**
+
+Simulink's least useful message. `verify_plant_skeleton` walks the nested causes
+and prints the real one. Use it rather than guessing.
+
+**Also:** passing a bus straight into a MATLAB Function block works but is
+fragile. Put a **Bus Selector** outside instead — it is more robust *and* it
+documents on the canvas which fields the block actually consumes.
+
+---
+
+## Why parameters work this way
+
+`ifssim_params.m` reads `settings.json` and records, per field, whether the value
+came from the file or fell back to a C++ default. `ifssim_params_report` prints
+it. That distinction matters: *"the model uses 275 kg"* and *"the model fell back
+to a 290 kg default because the file was silent"* look identical in a block
+diagram and are completely different claims.
+
+Two things this project has already lived through:
+
+* Chaos ran **25 kN/m** per corner while the load-transfer model used
+  **56.9 kN/m** — same car, two stiffnesses, 2.3× apart, because each held its
+  own copy of the number.
+* `matlab/IFS_Sim` (2024-25) carries mass **237 kg** and tyre radius **0.30 m**
+  against `settings.json`'s **275 kg** and **0.202 m**. A 0.30 m tyre radius puts
+  every speed and energy figure it ever produced ~48% out.
+
+A retyped parameter is a divergence with a delay fuse.
+
+`ifssim_params_report` also runs sanity checks, each of which exists because
+something here has already failed it — wheel radius plausible for a 10″ wheel,
+ride frequency in the 3–5 Hz band, wheel-rate ×4 equalling the declared
+`HeaveStiffness`.
+
+---
+
+## Assumptions, and what to measure
+
+`P.Assumed` holds everything the plant needs that `settings.json` does not carry.
+It is a separate struct on purpose — you can see at a glance what is measured and
+what is guessed.
+
+| assumption | why it matters | how to fix it |
+|---|---|---|
+| **inertia tensor** `Ixx 30, Iyy 110, Izz 125` | `Izz` sets yaw response, which is what the controller is tuned against. A 20% error reads as a gain problem. | bifilar pendulum, or CAD mass properties |
+| **wheel inertia** 0.21 kg·m² | how fast a wheel spins up or locks | CAD, or a spin-down test |
+| **Ackermann fraction** 1.0 | inner/outer steer split | measure the steering arms |
+| **steer actuator** effectively instant | transient steering response | bench the DV steering motor |
+| **battery pack** 95s, 8.5 Ah | energy and power limits | confirm it describes *this* car, then move to `settings.json` |
+| **slip regularisation** 1 m/s | below this the tyre model is not trustworthy | inherent — a launch study must say so |
+
+**Unmeasured is not the same as wrong** — but it must be visible. Every one of
+these is flagged in the model annotation too, so you meet it while reading the
+block rather than after trusting a result.
+
+---
+
+## Also worth knowing
+
+Three sources disagree about maximum steering angle: `settings.json` says **28°**,
+the pipeline uses **18.2°**, and the real 5:1 steering ratio with a ±60° column
+clamp implies about **12°**. That is a calibration question rather than a
+modelling one, but it should be settled before anyone trusts a lap time.
 
 `matlab/IFS_Sim/` is the 2024-25 drive-cycle model, kept for reference. It is
 built on **Simscape Driveline**, which is **not licensed** on this account, so it
-cannot simulate as-is. Its architecture and battery parameters are worth
-harvesting; its Driveline blocks are not.
-
-**Vehicle Dynamics Blockset** and **Powertrain Blockset** *are* licensed and are
-the intended foundation for the tyre, suspension, steering and motor subsystems.
+cannot simulate as-is. Its architecture and battery parameters were worth
+harvesting; its Driveline blocks are not. **Vehicle Dynamics Blockset** and
+**Powertrain Blockset** *are* licensed if you want richer tyre or motor models.
