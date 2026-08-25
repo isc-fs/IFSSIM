@@ -55,7 +55,7 @@ is four lines in the `Driver` block; edit `build_drive_harness.m` to change it.
 | `IFSSIM_TireSuspension` | dynamics | implemented — Pacejka + suspension |
 | `IFSSIM_Steering` | dynamics / controls | implemented — Ackermann |
 | `IFSSIM_Powertrain` | powertrain | implemented — motor, drivetrain, battery |
-| `IFSSIM_Brakes` | braking | **placeholder, emits zeros** |
+| `IFSSIM_Brakes` | braking | implemented — EBS, all four corners |
 | `IFSSIM_Aero` | aero | implemented — body-frame drag and downforce |
 
 Each is a **separate referenced model**, so you can work on yours while somebody

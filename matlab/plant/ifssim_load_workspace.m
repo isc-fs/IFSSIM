@@ -79,7 +79,10 @@ flat = struct( ...
     'IFSSIM_CdA',   P.CdA, ...                  % m^2
     'IFSSIM_ClA',   P.ClA, ...                  % m^2, positive = downforce
     'IFSSIM_abal',  P.AeroBalanceFront, ...     % fraction of downforce on the front
-    'IFSSIM_hcop',  P.Assumed.CoPHeightAboveCoG);  % m  ASSUMPTION
+    'IFSSIM_hcop',  P.Assumed.CoPHeightAboveCoG, ...  % m  ASSUMPTION
+    ... % --- brakes ---
+    'IFSSIM_Tebs',  P.Derived.EbsTorquePerWheel, ...  % N*m per wheel
+    'IFSSIM_ebstau',P.Assumed.EbsFillTau);            % s  ASSUMPTION
 
 f = fieldnames(flat);
 for i = 1:numel(f), assignin('base', f{i}, flat.(f{i})); end

@@ -162,6 +162,27 @@ P.Assumed.AirDensity = 1.225;      % kg/m^3   ASSUMPTION
 % the honest default until someone runs the CFD or the wind tunnel.
 P.Assumed.CoPHeightAboveCoG = 0.0;   % m   ASSUMPTION (no drag pitch couple)
 
+% --- EBS --------------------------------------------------------------
+% Emergency brake torque per wheel, pneumatic, acting on all four corners.
+%
+% Sized as a MULTIPLE OF THE GRIP LIMIT rather than as an absolute number,
+% because the absolute number is not what determines stopping distance. Above
+% the grip limit the wheel locks, and from then on deceleration is set by the
+% TYRE at full slip — not by how much more torque the caliper could apply. 1.5x
+% guarantees lock-up, which is what an emergency system without ABS does.
+%
+% The value it replaces was Chaos's default 3000 N.m per wheel: roughly 15x the
+% grip limit, chosen by nobody, and the number the entire emergency-braking case
+% silently rested on.
+%
+% MEASURE THE REAL SYSTEM. Not because the torque matters much above the grip
+% limit, but because the FILL TIME does — see SteerLagTau for the same argument.
+P.Assumed.EbsGripMultiple = 1.5;     % ASSUMPTION
+
+% Pneumatic fill time, defaulted to effectively instant. Better no lag than the
+% wrong lag; this one directly flatters every stopping-distance figure.
+P.Assumed.EbsFillTau = 1e-3;         % s   ASSUMPTION (effectively none)
+
 % --- steering ---------------------------------------------------------
 % 1.0 = full geometric Ackermann (inner wheel steers more, common turn centre).
 % 0 = parallel steer. Real FS cars run partial or even anti-Ackermann; the
@@ -215,6 +236,10 @@ P.Derived.BatteryWh    = P.Derived.BatteryVMax * P.Assumed.BatteryCapacityAh;
 % Downforce at a reference speed, so the number is visible rather than implied.
 P.Derived.DownforceAt20ms = 0.5 * P.Assumed.AirDensity * 20^2 * P.ClA;   % N
 P.Derived.DragAt20ms      = 0.5 * P.Assumed.AirDensity * 20^2 * P.CdA;   % N
+
+% EBS torque per wheel, from the grip limit at static load.
+P.Derived.EbsTorquePerWheel = P.Assumed.EbsGripMultiple * P.TireMu * ...
+    (P.Mass * 9.81 / 4) * P.WheelRadius;     % N*m
 
 P.Derived.RegenTorqueAt10ms = P.MaxRegenPower / ...
     ((10 / P.WheelRadius) * P.GearRatio);   % Nm at the motor
