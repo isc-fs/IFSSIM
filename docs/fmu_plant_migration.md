@@ -466,6 +466,28 @@ bit-identically on all three host platforms the team uses.
 > Deliberately NOT proven yet: Linux and Windows hosts, an FMI 2.0 FMU (this binding is
 > 3.0 only, by design), and sequential instantiate/free/instantiate — the reclassified
 > multi-instance question from §7, which still needs its own probe.
+>
+> **UPDATE `[V]` 2026-08-25 — the REAL plant now runs, not a spike model.** The
+> Simulink vehicle (`matlab/plant`, six subsystems, 17 inputs / 22 outputs / 51
+> parameters) exported as an FMU and loaded in the engine:
+>
+> ```
+> library         IFSSIM_Plant.dylib
+> batt_soc        0.900000 -> 0.899991 -> 0.898979
+> stateRoundTrip  true   bitwise identical across restore
+> ```
+>
+> The witness is a genuine INTEGRATED state this time, not a constant. Battery SoC
+> drains 1.02e-3 over eleven steps, which back-solves to ~170 A at 389 V ≈ 66 kW —
+> where a 230 Nm motor spinning free wheels should be as it approaches its 80 kW
+> cap. A constant round-trips bitwise for free; an integrating state only does so
+> if `SetFMUState` actually restored suspension, wheel speeds, battery and chassis.
+>
+> **Phase 6 is therefore substantially done, and done better than planned.** The
+> doc called for a hand-written C FMU reproducing `settings.json`. That was wrong
+> for this team — a C FMU is unreadable to the dynamics, powertrain and braking
+> engineers who own the car. The plant is a Simulink model instead, and it exports
+> to the same boundary.
 
 ### Phase 6 — Parity FMU v0
 
