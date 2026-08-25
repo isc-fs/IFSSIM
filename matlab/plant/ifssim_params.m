@@ -151,6 +151,17 @@ P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
 P.Assumed.RelaxLengthLong = 0.20;   % m   ASSUMPTION
 P.Assumed.RelaxLengthLat  = 0.30;   % m   ASSUMPTION
 
+% Air density. Not in settings.json. Sea level, 15 C. Aero scales linearly with
+% it, so a hot day at altitude is a real few percent — worth a parameter rather
+% than a constant buried in the aero block.
+P.Assumed.AirDensity = 1.225;      % kg/m^3   ASSUMPTION
+
+% Height of the centre of pressure above the CoG. Drag acting above the CoG
+% pitches the nose down under braking and lifts it under power. Not measured;
+% zero means drag acts through the CoG and produces no pitch moment, which is
+% the honest default until someone runs the CFD or the wind tunnel.
+P.Assumed.CoPHeightAboveCoG = 0.0;   % m   ASSUMPTION (no drag pitch couple)
+
 % --- steering ---------------------------------------------------------
 % 1.0 = full geometric Ackermann (inner wheel steers more, common turn centre).
 % 0 = parallel steer. Real FS cars run partial or even anti-Ackermann; the
@@ -201,6 +212,10 @@ P.Derived.BatteryWh    = P.Derived.BatteryVMax * P.Assumed.BatteryCapacityAh;
 
 % Regen is POWER limited long before torque limited, and by a lot. This is the
 % number that actually sets braking capability.
+% Downforce at a reference speed, so the number is visible rather than implied.
+P.Derived.DownforceAt20ms = 0.5 * P.Assumed.AirDensity * 20^2 * P.ClA;   % N
+P.Derived.DragAt20ms      = 0.5 * P.Assumed.AirDensity * 20^2 * P.CdA;   % N
+
 P.Derived.RegenTorqueAt10ms = P.MaxRegenPower / ...
     ((10 / P.WheelRadius) * P.GearRatio);   % Nm at the motor
 end

@@ -46,7 +46,8 @@ results(end+1,:) = {'all models compile', run_check(@verify_plant_skeleton, verb
 tests = { 'chassis physics',         @test_chassis_physics
           'tyre/suspension physics', @test_tiresuspension_physics
           'steering physics',        @test_steering_physics
-          'powertrain physics',      @test_powertrain_physics };
+          'powertrain physics',      @test_powertrain_physics
+          'aero physics',            @test_aero_physics };
 for i = 1:size(tests,1)
     results(end+1,:) = {tests{i,1}, run_check(tests{i,2}, verbose)}; %#ok<AGROW>
 end
