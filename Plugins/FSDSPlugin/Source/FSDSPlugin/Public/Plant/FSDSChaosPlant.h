@@ -36,8 +36,25 @@ public:
 	static void UeToWorld(const FVector& Ue, double Out[3]);
 	/** UE quaternion (left-handed) -> contract quaternion (w,x,y,z). */
 	static void UeToQuat(const FQuat& Ue, double Out[4]);
-	/** UE vector (cm/s or cm) -> contract vector (m). Handedness flip on Y. */
+	/** POLAR vector (position, velocity, force): (x, y, z) -> (x, -y, z). */
 	static void UeToVec(const FVector& Ue, double Out[3], double Scale);
+
+	/**
+	 * AXIAL vector (angular velocity, angular acceleration, torque):
+	 * (x, y, z) -> (-x, y, -z).
+	 *
+	 * NOT the same rule as a polar vector, and the difference is not cosmetic.
+	 * The UE->contract map is a reflection through the XZ plane, which is
+	 * IMPROPER (determinant -1). A polar vector transforms as M*v; an axial one
+	 * — being a cross product of two polars — picks up the determinant as well,
+	 * so it transforms as -M*v.
+	 *
+	 * Concretely, with yaw: UE is left-handed so +yaw is a RIGHT turn, while
+	 * ISO 8855 is right-handed so +yaw is a LEFT turn. A UE yaw rate of +1 must
+	 * therefore come out as -1. The polar rule gives +1 — a mirrored attitude,
+	 * which is a bug this project has already shipped once.
+	 */
+	static void UeToAxial(const FVector& Ue, double Out[3], double Scale);
 
 private:
 	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;

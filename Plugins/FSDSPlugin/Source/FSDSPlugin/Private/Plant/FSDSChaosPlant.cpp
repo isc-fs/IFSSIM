@@ -29,6 +29,15 @@ void FFSDSChaosPlant::UeToVec(const FVector& Ue, double Out[3], double Scale)
 	Out[2] =  Ue.Z * Scale;
 }
 
+void FFSDSChaosPlant::UeToAxial(const FVector& Ue, double Out[3], double Scale)
+{
+	// Axial (pseudo-)vector under an improper map: negate X and Z, keep Y.
+	// See the header for why this differs from UeToVec.
+	Out[0] = -Ue.X * Scale;
+	Out[1] =  Ue.Y * Scale;
+	Out[2] = -Ue.Z * Scale;
+}
+
 void FFSDSChaosPlant::UeToWorld(const FVector& Ue, double Out[3])
 {
 	UeToVec(Ue, Out, 0.01);   // cm -> m
@@ -90,7 +99,7 @@ void FFSDSChaosPlant::PostStep(FFSDSPlantOutput& Out)
 
 	const FVector OmegaUe = Mesh->GetPhysicsAngularVelocityInRadians();
 	const FVector OmegaBodyUe = Xf.InverseTransformVectorNoScale(OmegaUe);
-	UeToVec(OmegaBodyUe, Out.OmegaBody, 1.0);
+	UeToAxial(OmegaBodyUe, Out.OmegaBody, 1.0);   // AXIAL, not polar
 
 	// PROPER ACCELERATION, by finite difference of BODY velocity with the
 	// Coriolis term restored and gravity removed. Chaos exposes no accelerometer,

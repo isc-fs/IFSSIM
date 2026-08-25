@@ -3,6 +3,7 @@
 #include "Misc/Parse.h"
 #include "Misc/CommandLine.h"
 #include "FSDSSensorNoise.h"
+#include "FSDSVehiclePawn.h"
 
 using FSDSNoise::RandStandardNormal;
 using FSDSNoise::StepOrnsteinUhlenbeck;
@@ -19,39 +20,66 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
 
+	AFSDSVehiclePawn* Pawn = Cast<AFSDSVehiclePawn>(Owner);
+	const FFSDSPlantOutput* Plant = Pawn ? &Pawn->GetPlantState() : nullptr;
+
+	// PLANT FIRST, and REFUSE to publish if it failed.
+	//
+	// The previous guard was `if (RootPrim && RootPrim->IsSimulatingPhysics())`
+	// wrapped around the gyro only, with the accelerometer outside it entirely.
+	// A dead plant therefore published a well-formed, correctly-covarianced
+	// ZERO at full rate with nothing in the log — indistinguishable downstream
+	// from a stationary car. Silence is safer than a confident lie.
+	if (!Plant || !Plant->bPlantOk)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS IMU: plant state unavailable — not publishing. A zeroed IMU "
+			     "looks exactly like a stationary car to the EKF."));
+		return;
+	}
+
 	FImuOutput Output;
 	Output.Timestamp = FPlatformTime::Cycles64();
 	Output.Orientation = Owner->GetActorQuat();
 
-	// Pre-compute the world→body rotation once; angular velocity and
-	// linear acceleration both need it.
-	const FQuat InvRotation = Owner->GetActorQuat().Inverse();
+	// GYRO — body-frame angular velocity from the plant, converted back to the
+	// UE wire convention.
+	//
+	// Angular velocity is an AXIAL vector, so the map is (x,y,z) -> (-x,y,-z),
+	// NOT the (x,-y,z) used for velocities. The rule is an involution, so the
+	// same expression converts in both directions. Using the polar rule here
+	// mirrors yaw, which SLAM then integrates into a mirrored attitude — this
+	// project has shipped that bug before.
+	Output.AngularVelocity = FVector(
+		-Plant->OmegaBody[0],
+		 Plant->OmegaBody[1],
+		-Plant->OmegaBody[2]);
 
-	// Angular velocity. GetPhysicsAngularVelocityInRadians() returns
-	// world-space ω; a real IMU gyro outputs body-frame ω, so rotate it
-	// into the body frame here. Without this, downstream SLAM nodes
-	// integrate a mirrored attitude during turns (validated empirically
-	// against fast_LIMO — yaw direction was inverted vs. ground-truth
-	// odom, see 2026-04-27 Phase 2 drive test).
-	UPrimitiveComponent* RootPrim = Cast<UPrimitiveComponent>(Owner->GetRootComponent());
-	if (RootPrim && RootPrim->IsSimulatingPhysics())
-	{
-		const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
-		Output.AngularVelocity = InvRotation.RotateVector(WorldAngVel);
-	}
+	// ACCELEROMETER — PROPER acceleration from the plant.
+	//
+	// THIS CHANGES THE PUBLISHED SIGNAL, deliberately. The previous code did
+	//     WorldAccel = (v - v_prev)/dt ;  WorldAccel.Z += 980 ;  rotate to body
+	// which is wrong in two ways: it differences a WORLD velocity and then
+	// rotates, dropping the Coriolis term (-omega x v) that body-frame rates
+	// require; and it adds gravity as a world-Z constant rather than removing
+	// it in the body frame.
+	//
+	// The missing Coriolis term is the documented root cause of lateral
+	// velocity drifting during sustained cornering. The plant computes proper
+	// acceleration correctly, so this is that fix arriving.
+	//
+	// UNIT ROUND-TRIP, and it is deliberate: the plant works in m/s^2, while
+	// this sensor's contract with the frame packers is cm/s^2 (they divide by
+	// 100 at FSDSUdpBroadcaster.cpp:211 and FSDSRpcServer.cpp:1556). Converting
+	// up here keeps the wire format byte-identical. Removing BOTH conversions
+	// is a separate, explicit change — doing half of it silently rescales every
+	// accelerometer reading by 100.
+	Output.LinearAcceleration = FVector(
+		 Plant->AccelProper[0] * 100.0,
+		-Plant->AccelProper[1] * 100.0,
+		 Plant->AccelProper[2] * 100.0);
 
-	// Linear acceleration from velocity delta
-	FVector CurrentVelocity = Owner->GetVelocity();
-	if (DeltaTime > 0.f)
-	{
-		FVector WorldAccel = (CurrentVelocity - PreviousVelocity) / DeltaTime;
-		// Add gravity
-		WorldAccel.Z += 980.f; // cm/s^2
-
-		// Transform to body frame (re-uses the InvRotation above)
-		Output.LinearAcceleration = InvRotation.RotateVector(WorldAccel);
-	}
-	PreviousVelocity = CurrentVelocity;
+	PreviousVelocity = Owner->GetVelocity();   // kept for the reset-spike guard
 
 	// --- Apply noise ---
 
