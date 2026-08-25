@@ -2,6 +2,7 @@
 #include "FSDSSettings.h"
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
+#include "Plant/FSDSChaosPlant.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
@@ -803,6 +804,25 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// ApplyWheelSettingsToSolver() for why that is necessary.
 		ApplyWheelSettingsToSolver(/*bLogInherited=*/true);
 
+		// Stand up the plant behind the interface. Chaos today: this is an
+		// OBSERVER of the vehicle the engine is already integrating, so nothing
+		// about how the car drives changes. The seam going in first is what
+		// makes a later FMU swap attributable — any difference is then the
+		// plant, not the refactor.
+		Plant = MakeUnique<FFSDSChaosPlant>(this);
+		if (!Plant->Initialise())
+		{
+			UE_LOG(LogTemp, Error, TEXT("FSDS: plant failed to initialise — %s"),
+				*Plant->GetName());
+			Plant.Reset();
+		}
+		else
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: plant '%s' active. GetPlantState() now carries pose, wheels ")
+				TEXT("and powertrain in SI / ISO 8855 / ENU."), *Plant->GetName());
+		}
+
 		// Seed all stochastic sources for this run. Must happen before any
 		// sensor draws noise or any cone is spawned; BeginPlay is the earliest
 		// point where settings.json has been parsed.
@@ -957,9 +977,33 @@ void AFSDSVehiclePawn::BeginPlay()
 		bChaosVehicleActive ? TEXT("YES") : TEXT("NO - fallback mode"));
 }
 
+FString AFSDSVehiclePawn::GetPlantName() const
+{
+	return Plant.IsValid() ? Plant->GetName() : TEXT("<none>");
+}
+
 void AFSDSVehiclePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// --- refresh the plant snapshot -------------------------------------
+	// Once per tick, in one place, in contract units. Everything downstream
+	// should read PlantState rather than re-deriving pose and velocity from
+	// the pawn — that re-derivation is where the frame and sign errors live.
+	if (Plant.IsValid())
+	{
+		FFSDSPlantInput PlantIn;
+		PlantIn.Throttle   = CurrentControls.Throttle;
+		PlantIn.Regen      = CurrentControls.Regen;
+		PlantIn.SteerNorm  = CurrentControls.Steering;
+		PlantIn.bEbsLatched = bEbsLatched;
+		PlantIn.DeltaTime  = DeltaTime;
+		PlantIn.SimTime    = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		PlantIn.GravityZ   = GetWorld() ? GetWorld()->GetGravityZ() * 0.01 : -9.81;
+
+		Plant->PreStep(PlantIn);
+		Plant->PostStep(PlantState);
+	}
 
 	// Acceleration tracking
 	FVector CurrentVelocity = GetVelocity();

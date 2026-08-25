@@ -15,6 +15,7 @@
 #include "Sensors/FSDSBarometerSensor.h"
 #include "Sensors/FSDSMagnetometerSensor.h"
 #include "Vehicles/FSDSWheelFront.h"
+#include "Plant/FSDSPlant.h"
 #include "Vehicles/FSDSWheelRear.h"
 #include "EmraxMotor.h"
 #include "FSDSVehiclePawn.generated.h"
@@ -150,6 +151,14 @@ public:
 	bool IsEbsLatched() const { return bEbsLatched; }
 
 	// --- Components ---
+	/** The plant behind the interface. Chaos today; an FMU later. Not a
+	 *  UPROPERTY because IFSDSPlant is a plain C++ interface, deliberately —
+	 *  it must be implementable without dragging in UObject machinery. */
+	TUniquePtr<IFSDSPlant> Plant;
+
+	/** Refreshed once per Tick, read by everything downstream. */
+	FFSDSPlantOutput PlantState;
+
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UFSDSWheeledVehicleMovementComponent* VehicleMovement;
@@ -225,6 +234,22 @@ public:
 	 * OBJECT — silently discarding the runtime-pushed configuration.
 	 */
 	void ApplyWheelSettingsToSolver(bool bLogInherited = false);
+
+	/**
+	 * This tick's plant state, in the platform<->plant contract (SI, ISO 8855,
+	 * ENU) rather than UE's left-handed centimetres.
+	 *
+	 * Consumers should migrate to this instead of reading the pawn or the Chaos
+	 * component directly. Two reasons: the frame conversion then lives in ONE
+	 * place, and when the plant becomes an FMU nothing downstream changes.
+	 *
+	 * Check bPlantOk. A failed step reports false; it does NOT return a
+	 * well-formed zero, which is what the IsSimulatingPhysics guards do today.
+	 */
+	const FFSDSPlantOutput& GetPlantState() const { return PlantState; }
+
+	/** Which plant is driving. "Chaos" today. */
+	FString GetPlantName() const;
 
 private:
 

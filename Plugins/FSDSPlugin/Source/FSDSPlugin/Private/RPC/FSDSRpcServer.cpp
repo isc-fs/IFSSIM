@@ -667,6 +667,39 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
+	else if (Method == TEXT("getPlantState"))
+	{
+		// The live plant snapshot, in contract units (SI, ISO 8855, ENU) rather
+		// than UE's left-handed centimetres. This is what sensors and the bridge
+		// should migrate to reading.
+		if (!IsValid(VehiclePawn))
+		{
+			return TEXT("{\"ok\":false,\"error\":\"no vehicle pawn\"}");
+		}
+		const FFSDSPlantOutput& S = VehiclePawn->GetPlantState();
+		return FString::Printf(
+			TEXT("{\"ok\":%s,\"plant\":\"%s\",\"status\":%d,")
+			TEXT("\"position\":[%.6f,%.6f,%.6f],\"quat\":[%.6f,%.6f,%.6f,%.6f],")
+			TEXT("\"velWorld\":[%.6f,%.6f,%.6f],\"velBody\":[%.6f,%.6f,%.6f],")
+			TEXT("\"omegaBody\":[%.6f,%.6f,%.6f],\"accelProper\":[%.6f,%.6f,%.6f],")
+			TEXT("\"attitude\":[%.6f,%.6f,%.6f],")
+			TEXT("\"wheelFz\":[%.1f,%.1f,%.1f,%.1f],")
+			TEXT("\"wheelSteer\":[%.5f,%.5f,%.5f,%.5f],")
+			TEXT("\"inContact\":[%d,%d,%d,%d]}"),
+			S.bPlantOk ? TEXT("true") : TEXT("false"),
+			*VehiclePawn->GetPlantName(), S.PlantStatus,
+			S.Position[0], S.Position[1], S.Position[2],
+			S.Quat[0], S.Quat[1], S.Quat[2], S.Quat[3],
+			S.VelWorld[0], S.VelWorld[1], S.VelWorld[2],
+			S.VelBody[0], S.VelBody[1], S.VelBody[2],
+			S.OmegaBody[0], S.OmegaBody[1], S.OmegaBody[2],
+			S.AccelProper[0], S.AccelProper[1], S.AccelProper[2],
+			S.Attitude[0], S.Attitude[1], S.Attitude[2],
+			S.WheelFz[0], S.WheelFz[1], S.WheelFz[2], S.WheelFz[3],
+			S.WheelSteer[0], S.WheelSteer[1], S.WheelSteer[2], S.WheelSteer[3],
+			S.bWheelInContact[0]?1:0, S.bWheelInContact[1]?1:0,
+			S.bWheelInContact[2]?1:0, S.bWheelInContact[3]?1:0);
+	}
 	else if (Method.StartsWith(TEXT("plantDrive")))
 	{
 		// plantDrive <path-to.fmu> [seconds] [throttle] [steer]
