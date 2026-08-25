@@ -59,8 +59,8 @@ chart.Script = tiresusp_code();
 sizes = struct( ...
   'road_valid',4,'road_h',4,'road_mu',4, ...
   'pos',3,'quat',4,'velb',3,'omegab',3, ...
-  'steer_in',4,'drive_t',4,'brake_t',4,'w_i',4, ...
-  'w_n',4, ...
+  'steer_in',4,'drive_t',4,'brake_t',4,'w_i',4,'kap_i',4,'alp_i',4, ...
+  'w_n',4,'kap_n',4,'alp_n',4, ...
   'omega',4,'steer',4,'fz',4,'fx',4,'fy',4, ...
   'slip_ratio',4,'slip_angle',4,'susp_travel',4,'in_contact',4, ...
   'tyre_force',3,'tyre_torque',3);
@@ -73,7 +73,8 @@ end
 params = {'IFSSIM_Ts','IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR','IFSSIM_Rw', ...
           'IFSSIM_kw','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
           'IFSSIM_mu','IFSSIM_LatB','IFSSIM_LatC','IFSSIM_LatE', ...
-          'IFSSIM_LonB','IFSSIM_LonC','IFSSIM_LonE','IFSSIM_Iw','IFSSIM_vreg'};
+          'IFSSIM_LonB','IFSSIM_LonC','IFSSIM_LonE','IFSSIM_Iw','IFSSIM_vreg', ...
+          'IFSSIM_sigk','IFSSIM_siga'};
 existing = {data.Name};
 for k = 1:numel(params)
     if any(strcmp(existing,params{k})), continue; end
@@ -84,6 +85,10 @@ end
 %% ---- wheel-speed state ------------------------------------------------
 add_block('simulink/Discrete/Unit Delay',[name '/wheel omega (state)'], ...
           'Position',[330 520 400 550],'InitialCondition','[0;0;0;0]','SampleTime','-1');
+add_block('simulink/Discrete/Unit Delay',[name '/slip ratio (state)'], ...
+          'Position',[330 570 400 600],'InitialCondition','[0;0;0;0]','SampleTime','-1');
+add_block('simulink/Discrete/Unit Delay',[name '/slip angle (state)'], ...
+          'Position',[330 620 400 650],'InitialCondition','[0;0;0;0]','SampleTime','-1');
 
 %% ---- outputs ----------------------------------------------------------
 add_block('simulink/Signal Routing/Bus Creator',[name '/Wheels Bus'], ...
@@ -103,11 +108,15 @@ for i = 1:3, add_line(name,sprintf('Road Select/%d',i),sprintf('%s/%d',FB,i),'au
 for i = 1:4, add_line(name,sprintf('Pose Select/%d',i),sprintf('%s/%d',FB,3+i),'autorouting','on'); end
 for i = 1:3, add_line(name,[vecIn{i} '/1'],sprintf('%s/%d',FB,7+i),'autorouting','on'); end
 add_line(name,'wheel omega (state)/1',sprintf('%s/11',FB),'autorouting','on');
+add_line(name,'slip ratio (state)/1', sprintf('%s/12',FB),'autorouting','on');
+add_line(name,'slip angle (state)/1', sprintf('%s/13',FB),'autorouting','on');
 
 add_line(name,sprintf('%s/1',FB),'wheel omega (state)/1','autorouting','on');
-for i = 1:9, add_line(name,sprintf('%s/%d',FB,1+i),sprintf('Wheels Bus/%d',i),'autorouting','on'); end
-add_line(name,sprintf('%s/11',FB),'tyre_force/1','autorouting','on');
-add_line(name,sprintf('%s/12',FB),'tyre_torque/1','autorouting','on');
+add_line(name,sprintf('%s/2',FB),'slip ratio (state)/1','autorouting','on');
+add_line(name,sprintf('%s/3',FB),'slip angle (state)/1','autorouting','on');
+for i = 1:9, add_line(name,sprintf('%s/%d',FB,3+i),sprintf('Wheels Bus/%d',i),'autorouting','on'); end
+add_line(name,sprintf('%s/13',FB),'tyre_force/1','autorouting','on');
+add_line(name,sprintf('%s/14',FB),'tyre_torque/1','autorouting','on');
 
 add_block('built-in/Note',[name '/Notes'],'Position',[40 620], ...
     'Text', tiresusp_notes(P),'HorizontalAlignment','left');
@@ -122,8 +131,8 @@ end
 %% =======================================================================
 function c = tiresusp_code()
 L = {
-"function [w_n, omega, steer, fz, fx, fy, slip_ratio, slip_angle, susp_travel, in_contact, tyre_force, tyre_torque] = ..."
-"         tiresusp(road_valid, road_h, road_mu, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_i)"
+"function [w_n, kap_n, alp_n, omega, steer, fz, fx, fy, slip_ratio, slip_angle, susp_travel, in_contact, tyre_force, tyre_torque] = ..."
+"         tiresusp(road_valid, road_h, road_mu, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_i, kap_i, alp_i)"
 "%#codegen"
 "% Per-wheel suspension and tyre forces, summed into a body-frame wrench."
 "%"
@@ -148,7 +157,7 @@ L = {
 "fz         = zeros(4,1);  fx         = zeros(4,1);  fy = zeros(4,1);"
 "slip_ratio = zeros(4,1);  slip_angle = zeros(4,1);"
 "susp_travel= zeros(4,1);  in_contact = zeros(4,1);"
-"w_n        = zeros(4,1);"
+"w_n        = zeros(4,1);  kap_n      = zeros(4,1);  alp_n = zeros(4,1);"
 "F_sum = zeros(3,1);  M_sum = zeros(3,1);"
 ""
 "for i = 1:4"
@@ -183,9 +192,10 @@ L = {
 "    vy = -v_b(1)*sd + v_b(2)*cd;          % across it"
 "    vref = max(abs(vx), IFSSIM_vreg);     % see note on regularisation"
 ""
-"    % ---- slip ------------------------------------------------------"
+"    % ---- slip --------------------------------------------------------"
 "    kappa = (w_i(i)*Rw - vx) / vref;"
 "    alpha = atan2(vy, vref);"
+"    kap_n(i) = kappa;  alp_n(i) = alpha;"
 ""
 "    % ---- Pacejka ---------------------------------------------------"
 "    muw = road_mu(i);"
@@ -202,13 +212,30 @@ L = {
 "        if s > 1, Fx0 = Fx0/s; Fy0 = Fy0/s; end"
 "    end"
 ""
-"    % ---- wheel spin ------------------------------------------------"
-"    % Iw*dw = drive - brake*sign(w) - Fx*Rw."
-"    % tanh instead of sign: sign() chatters at zero crossing and, at a fixed"
-"    % 1/960 step, that chatter becomes a limit cycle in the wheel speed."
+"    % ---- wheel spin, SEMI-IMPLICIT -----------------------------------"
+"    % Iw*dw = drive - brake - Fx*Rw, but solved accounting for the fact that"
+"    % Fx itself depends on the wheel speed we are solving for."
+"    %"
+"    % An explicit step is UNSTABLE here at 1/960 s. From rest at half throttle"
+"    % the wheel gains ~0.15 of slip ratio in ONE step while the longitudinal"
+"    % curve peaks at ~0.10 — so it overshoots the peak before the tyre reacts,"
+"    % and past the peak more slip means LESS force, so it runs away. The car"
+"    % wheelspins at torque levels the tyre could comfortably have held."
+"    % Relaxation length does not fix this: delaying the force build-up makes"
+"    % the launch transient worse, not better."
+"    %"
+"    % Linearising Fx about the current slip and solving for w_n adds the tyre"
+"    % stiffness to the effective inertia, which is what makes it stable."
 "    T_brake = brake_t(i) * tanh(w_i(i) * 10);"
-"    dw = (drive_t(i) - T_brake - Fx0*Rw) / IFSSIM_Iw;"
-"    w_n(i) = w_i(i) + Ts*dw;"
+"    T_net   = drive_t(i) - T_brake - Fx0*Rw;"
+"    % dFx/dw = dFx/dkappa * dkappa/dw, by central difference on the curve."
+"    hk   = 1e-4;"
+"    dmf  = (mf(kappa+hk, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE) - ..."
+"            mf(kappa-hk, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE)) / (2*hk);"
+"    % Clamped at zero: past the peak the slope is negative, and letting that"
+"    % reduce the effective inertia would destabilise the very case this fixes."
+"    dFx_dw = max(Fmax * dmf * Rw / vref, 0);"
+"    w_n(i) = w_i(i) + T_net / (IFSSIM_Iw/Ts + dFx_dw*Rw);"
 ""
 "    % ---- to the body frame -----------------------------------------"
 "    Fb = [Fx0*cd - Fy0*sd; Fx0*sd + Fy0*cd; Fz_i];"

@@ -101,7 +101,12 @@ end
 % Initial conditions: at rest, level, at the origin. The platform teleports the
 % car to the start gate by writing pose, so a non-zero IC here would just be a
 % number to forget to update.
-states = {'pos',      '[0;0;0]'
+% Start AT RIDE HEIGHT, not at the world origin. With pos = [0;0;0] the corner
+% attachments sit level with the road, so the suspension reads 0.3 m of
+% compression on the first step and fires the car into the air. The platform
+% teleports the car to the start gate anyway, but a plant that cannot be started
+% from its own defaults is a plant nobody can test in isolation.
+states = {'pos',      '[0;0;IFSSIM_CoGH]'
           'quat',     '[1;0;0;0]'
           'vel_body', '[0;0;0]'
           'omega',    '[0;0;0]'};

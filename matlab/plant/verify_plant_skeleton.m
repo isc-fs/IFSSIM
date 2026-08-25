@@ -16,6 +16,11 @@ models = {'IFSSIM_Steering','IFSSIM_Powertrain','IFSSIM_Brakes', ...
           'IFSSIM_TireSuspension','IFSSIM_Aero','IFSSIM_Chassis','IFSSIM_Plant'};
 ok = true;
 fprintf('\n=== compiling plant skeleton ===\n');
+
+% UNCONNECTED PORTS FIRST. A model with dangling ports still COMPILES — which
+% is how the top-level plant sat as six disconnected blocks reporting green.
+% "It compiles" and "it is wired" are different claims and this checks both.
+ok = check_connectivity(models) && ok;
 for i = 1:numel(models)
     m = models{i};
     try
@@ -35,6 +40,31 @@ for i = 1:numel(models)
 end
 fprintf('\n%s\n', ternary(ok,'all models compile.','SOME MODELS FAILED TO COMPILE.'));
 end
+function ok = check_connectivity(models)
+ok = true;
+for i = 1:numel(models)
+    m = models{i};
+    try, load_system(m); catch, continue; end
+    blocks = find_system(m,'SearchDepth',1,'Type','Block');
+    dangling = {};
+    for b = 1:numel(blocks)
+        pc = get_param(blocks{b},'PortConnectivity');
+        for k = 1:numel(pc)
+            if isempty(pc(k).SrcBlock) && isempty(pc(k).DstBlock)
+                dangling{end+1} = get_param(blocks{b},'Name'); %#ok<AGROW>
+                break
+            end
+        end
+    end
+    if isempty(dangling)
+        fprintf('  [ok  ] %s wired\n', m);
+    else
+        ok = false;
+        fprintf('  [FAIL] %s has unconnected port(s) on: %s\n', m, strjoin(unique(dangling),', '));
+    end
+end
+end
+
 function print_causes(ME, depth)
 if depth > 4 || isempty(ME.cause), return; end
 for i = 1:numel(ME.cause)

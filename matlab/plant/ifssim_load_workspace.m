@@ -53,6 +53,8 @@ flat = struct( ...
     'IFSSIM_LonE',  P.Pacejka.LonE, ...
     'IFSSIM_Iw',    P.Assumed.WheelInertia, ...   % kg*m^2  ASSUMPTION
     'IFSSIM_vreg',  P.Assumed.SlipRegularisationSpeed, ... % m/s
+    'IFSSIM_sigk',  P.Assumed.RelaxLengthLong, ...          % m  ASSUMPTION
+    'IFSSIM_siga',  P.Assumed.RelaxLengthLat, ...           % m  ASSUMPTION
     ... % --- steering ---
     'IFSSIM_dmax',  P.Derived.MaxSteerAngleRad, ...          % rad at the road wheel
     'IFSSIM_L',     P.Wheelbase, ...                         % m
@@ -80,4 +82,16 @@ for i = 1:numel(f), assignin('base', f{i}, flat.(f{i})); end
 for b = {'IFSSIM_PoseBus','IFSSIM_WheelsBus','IFSSIM_PowertrainBus','IFSSIM_StatusBus'}
     assignin('base',[b{1} '_zero'], Simulink.Bus.createMATLABStruct(b{1}));
 end
+
+% A pose bus of ZEROS is not a valid car: it puts the chassis at z=0 (buried,
+% because the corners sit at CoG height) and gives it a zero quaternion, which
+% has no norm and therefore no orientation. Used as the initial condition of the
+% pose feedback delay it produces a 17.8 kN suspension spike on step one and
+% throws the car into the air before it has done anything.
+%
+% This is the pose the plant should START from: at ride height, level, at rest.
+poseInit = Simulink.Bus.createMATLABStruct('IFSSIM_PoseBus');
+poseInit.position = [0; 0; P.CoGHeight];
+poseInit.quat     = [1; 0; 0; 0];          % identity, NOT zeros
+assignin('base','IFSSIM_PoseBus_init', poseInit);
 end

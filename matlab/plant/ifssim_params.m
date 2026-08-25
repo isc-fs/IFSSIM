@@ -136,6 +136,21 @@ P.Assumed.WheelInertia = 0.21;   % kg*m^2 per corner   ASSUMPTION
 % max(|vx|, this). Below this speed the tyre model is not trustworthy.
 P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
 
+% RELAXATION LENGTH. Slip is a STATE, not an algebraic quantity: a tyre needs
+% to roll a certain distance before its carcass has deformed enough to build
+% the force. dkappa/dt = (|vx|/sigma) * (kappa_steady - kappa).
+%
+% This is physically real, and it is also what makes the model integrable at a
+% fixed step. With algebraic slip the wheel is numerically stiff at launch: from
+% rest, one 1/960 s step adds ~0.15 of slip ratio while the longitudinal curve
+% peaks at ~0.10, so the wheel overshoots the peak before the tyre can react,
+% and past the peak more slip means less force — spurious runaway wheelspin at
+% throttle levels the tyre could easily have held.
+%
+% 0.2-0.3 m is typical for a race slick.
+P.Assumed.RelaxLengthLong = 0.20;   % m   ASSUMPTION
+P.Assumed.RelaxLengthLat  = 0.30;   % m   ASSUMPTION
+
 % --- steering ---------------------------------------------------------
 % 1.0 = full geometric Ackermann (inner wheel steers more, common turn centre).
 % 0 = parallel steer. Real FS cars run partial or even anti-Ackermann; the
