@@ -17,8 +17,9 @@ build_plant_skeleton();          % top level + placeholders for anything unfille
 
 % Subsystems that have a real implementation. Add yours here when you write one.
 builders = {@build_chassis, @build_tiresuspension, @build_steering, @build_powertrain};
-for i = 1:numel(builders)
-    builders{i}();
-end
+for i = 1:numel(builders), builders{i}(); end
+
+% The drive harness comes last: it references the assembled plant.
+build_drive_harness();
 fprintf('\nbuild complete.\n');
 end

@@ -29,7 +29,17 @@ pull and before you commit. If it says `PLANT OK`, the model is healthy.
 PLANT OK   (46 s)
 ```
 
-Then `open_system('IFSSIM_Plant')`.
+Then open one of two models:
+
+```matlab
+open_system('IFSSIM_Plant')    % the car: six subsystems, wired
+open_system('IFSSIM_Drive')    % press Run and watch it drive
+```
+
+`IFSSIM_Drive` is the one to keep open while tuning. It drives a scripted
+manoeuvre — accelerate, turn, straighten, brake — with scopes on speed, rates,
+position, wheel speed, tyre load, slip, and motor RPM and power. The manoeuvre
+is four lines in the `Driver` block; edit `build_drive_harness.m` to change it.
 
 > **Always run `ifssim_setup` before opening a model.** Without it the bus
 > objects are missing, ports go red, and the errors suggest someone committed a
