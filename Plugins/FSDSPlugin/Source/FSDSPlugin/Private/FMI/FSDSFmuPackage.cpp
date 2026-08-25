@@ -216,6 +216,24 @@ bool FFSDSFmuPackage::ParseModelDescription(const FString& XmlPath)
 			if (C == TEXT("input"))          Info.NumInputs++;
 			else if (C == TEXT("output"))    Info.NumOutputs++;
 			else if (C == TEXT("parameter") || C == TEXT("calculatedParameter")) Info.NumParameters++;
+
+			// Build the name -> value-reference table. Array variables carry
+			// <Dimension start="N"/> children; a missing dimension means scalar.
+			const FString Name = V->GetAttribute(TEXT("name"));
+			const FString VRStr = V->GetAttribute(TEXT("valueReference"));
+			if (Name.IsEmpty() || VRStr.IsEmpty()) continue;
+
+			int32 Count = 1;
+			for (const FXmlNode* Dim : V->GetChildrenNodes())
+			{
+				if (Dim->GetTag() == TEXT("Dimension"))
+				{
+					const FString S = Dim->GetAttribute(TEXT("start"));
+					if (!S.IsEmpty()) Count = FMath::Max(1, FCString::Atoi(*S));
+				}
+			}
+			Info.VariableRefs.Add(Name, (uint32)FCString::Atoi64(*VRStr));
+			Info.VariableCounts.Add(Name, Count);
 		}
 	}
 

@@ -57,6 +57,18 @@ struct FSDSPLUGIN_API FFSDSFmuInfo
 	int32 NumInputs = 0;
 	int32 NumOutputs = 0;
 	int32 NumParameters = 0;
+
+	/**
+	 * Every scalar/array variable, by name, with its value reference and
+	 * element count.
+	 *
+	 * Resolving by NAME is the point. Simulink renumbers value references
+	 * freely on re-export, so hardcoding them works until somebody adds a
+	 * signal — and then every port is still a double, so the mismatch
+	 * type-checks perfectly and silently feeds the plant the wrong numbers.
+	 */
+	TMap<FString, uint32> VariableRefs;
+	TMap<FString, int32>  VariableCounts;
 };
 
 /** One gate result, so failures can be reported together rather than one at a time. */

@@ -1,6 +1,7 @@
 #include "RPC/FSDSRpcServer.h"
 #include "FMI/FSDSFmuPackage.h"
 #include "FMI/FSDSFmi3.h"
+#include "Plant/FSDSFmuPlant.h"
 #include "EmraxMotor.h"
 #include "FSDSRandom.h"
 #include "RPC/FSDSUdpBroadcaster.h"
@@ -666,6 +667,81 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
+	else if (Method.StartsWith(TEXT("plantDrive")))
+	{
+		// plantDrive <path-to.fmu> [seconds] [throttle] [steer]
+		//
+		// Drives an FMU through IFSDSPlant exactly as the simulator would: flat
+		// road under all four wheels, gravity, constant commands, stepped at
+		// 1/60 s. Reports the resulting trajectory.
+		//
+		// The point is CROSS-CHECKING. The same model driven the same way in
+		// MATLAB produces a known answer; if this path produces a different one
+		// then the FMU export, the value-reference resolution or the interface
+		// is wrong — and every one of those failures type-checks perfectly,
+		// because every signal on this boundary is a double.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "), true);
+		if (Parts.Num() < 2)
+		{
+			return TEXT("{\"error\":\"usage: plantDrive <path-to.fmu> [seconds] [throttle] [steer]\"}");
+		}
+		const double Seconds  = (Parts.Num() >= 3) ? FCString::Atod(*Parts[2]) : 2.0;
+		const double Throttle = (Parts.Num() >= 4) ? FCString::Atod(*Parts[3]) : 0.5;
+		const double Steer    = (Parts.Num() >= 5) ? FCString::Atod(*Parts[4]) : 0.0;
+
+		FFSDSFmuPlant Plant(Parts[1]);
+		if (!Plant.Initialise())
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"init\",\"error\":\"%s\"}"),
+				*Plant.GetLastError().ReplaceCharWithEscapedChar());
+		}
+
+		FFSDSPlantInput In;
+		In.Throttle  = Throttle;
+		In.SteerNorm = Steer;
+		In.GravityZ  = -9.81;
+		In.DeltaTime = 1.0 / 60.0;
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++)
+		{
+			In.bRoadValid[i] = true;
+			In.RoadHeight[i] = 0.0;
+			In.RoadMu[i]     = 1.4;
+			In.RoadNormal[i][0] = 0.0; In.RoadNormal[i][1] = 0.0; In.RoadNormal[i][2] = 1.0;
+		}
+
+		FFSDSPlantOutput Out;
+		const int32 Steps = FMath::Max(1, FMath::RoundToInt(Seconds * 60.0));
+		for (int32 i = 0; i < Steps; i++)
+		{
+			In.SimTime = i / 60.0;
+			Plant.PreStep(In);
+			Plant.PostStep(Out);
+			if (!Out.bPlantOk)
+			{
+				return FString::Printf(
+					TEXT("{\"ok\":false,\"stage\":\"step\",\"atStep\":%d,\"error\":\"%s\"}"),
+					i, *Plant.GetLastError().ReplaceCharWithEscapedChar());
+			}
+		}
+
+		return FString::Printf(
+			TEXT("{\"ok\":true,\"plant\":\"%s\",\"steps\":%d,\"seconds\":%.6g,")
+			TEXT("\"throttle\":%.6g,\"steer\":%.6g,")
+			TEXT("\"x\":%.6f,\"y\":%.6f,\"z\":%.6f,")
+			TEXT("\"vx\":%.6f,\"vy\":%.6f,\"yawRate\":%.6f,")
+			TEXT("\"wheelOmega\":[%.4f,%.4f,%.4f,%.4f],")
+			TEXT("\"fz\":[%.1f,%.1f,%.1f,%.1f],")
+			TEXT("\"slipRatio\":[%.5f,%.5f,%.5f,%.5f],")
+			TEXT("\"motorRpm\":%.2f,\"battSoc\":%.9f}"),
+			*Plant.GetName(), Steps, Seconds, Throttle, Steer,
+			Out.Position[0], Out.Position[1], Out.Position[2],
+			Out.VelBody[0], Out.VelBody[1], Out.OmegaBody[2],
+			Out.WheelOmega[0], Out.WheelOmega[1], Out.WheelOmega[2], Out.WheelOmega[3],
+			Out.WheelFz[0], Out.WheelFz[1], Out.WheelFz[2], Out.WheelFz[3],
+			Out.WheelSlipRatio[0], Out.WheelSlipRatio[1], Out.WheelSlipRatio[2], Out.WheelSlipRatio[3],
+			Out.MotorRpm, Out.BattSoc);
+	}
 	else if (Method.StartsWith(TEXT("fmuSelfTest")))
 	{
 		// fmuSelfTest <path-to.fmu> [inputVR] [outputVR]

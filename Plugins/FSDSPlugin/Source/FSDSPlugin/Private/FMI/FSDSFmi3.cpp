@@ -231,6 +231,20 @@ bool FFSDSFmi3Instance::GetFloat64(uint32 ValueReference, double& OutValue)
 	return true;
 }
 
+bool FFSDSFmi3Instance::SetFloat64Array(uint32 ValueReference, const double* Values, int32 Count)
+{
+	if (!Instance || Count <= 0) return false;
+	const fmi3ValueReference VR = ValueReference;
+	return SetFloat64Fn(Instance, &VR, 1, Values, (size_t)Count) < fmi3Error;
+}
+
+bool FFSDSFmi3Instance::GetFloat64Array(uint32 ValueReference, double* OutValues, int32 Count)
+{
+	if (!Instance || Count <= 0) return false;
+	const fmi3ValueReference VR = ValueReference;
+	return GetFloat64Fn(Instance, &VR, 1, OutValues, (size_t)Count) < fmi3Error;
+}
+
 bool FFSDSFmi3Instance::GetState(void*& OutState)
 {
 	if (!Instance || !GetStateFn) return false;

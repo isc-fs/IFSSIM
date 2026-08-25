@@ -122,6 +122,12 @@ public:
 	bool SetFloat64(uint32 ValueReference, double Value);
 	bool GetFloat64(uint32 ValueReference, double& OutValue);
 
+	/** Array forms. FMI 3.0 requires nValues to equal the TOTAL element count
+	 *  across the requested references — passing 1 for a 3-element variable is
+	 *  an error, not a partial read. */
+	bool SetFloat64Array(uint32 ValueReference, const double* Values, int32 Count);
+	bool GetFloat64Array(uint32 ValueReference, double* OutValues, int32 Count);
+
 	/** State save/restore — the deterministic-reset primitive. */
 	bool GetState(void*& OutState);
 	bool SetState(void* State);
