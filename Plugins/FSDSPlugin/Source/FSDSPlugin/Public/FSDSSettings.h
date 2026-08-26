@@ -84,6 +84,19 @@ struct FFSDSVehiclePhysics
 	float WheelRadius = 0.200f;      // meters
 	float WheelWidth = 0.190f;       // meters
 	float MaxSteerAngle = 22.4f;     // degrees
+	// Resistive wheel torque Crr*Fz*Rw. ASSUMED, not measured on the IFS-08.
+	//
+	// CONSUMED BY THE FMU PLANT, NOT BY CHAOS. Chaos has no equivalent knob we
+	// drive, so this field changes nothing in a Plant.Type="chaos" run — it is
+	// here because ifssim_params.m mirrors this struct field-for-field and a
+	// silent divergence between the two is the bug that mirror exists to stop.
+	//
+	// It reaches the FMU by being BAKED IN AT EXPORT: export_plant_fmu.m reads
+	// settings.json into IFSSIM_Crr and Simulink freezes it into the .fmu. So
+	// editing this value does NOT change an already-exported FMU. Re-export
+	// (matlab/plant/export_plant_fmu.m) or the number here and the number the
+	// plant actually uses will quietly disagree.
+	float RollingResistance = 0.020f;
 	float MotorMaxTorque = 230.f;    // Nm (at motor)
 	float MotorMaxPower = 80000.f;   // Watts
 	// Regen braking limits. The IFS-08 has no hydraulic service brake —

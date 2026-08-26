@@ -35,6 +35,8 @@
         "ClA": 1.8,
         "AeroBalanceFront": 0.45,
         "TireMu": 1.4,
+        "_comment_rolling": "Rolling resistance coefficient. Absent until now, which the shadow FMU exposed twice over: a parked FMU car crept at ~1.5 mm/s because nothing opposed motion at zero slip, and on the same throttle that holds Chaos at 3.0 m/s the FMU reached 8.1 m/s mean. Applied as a resistive WHEEL TORQUE, Crr*Fz*Rw, which is the actual mechanism (contact-patch pressure shifting forward) rather than a body-frame force. 0.020 is typical for a racing slick on warm tarmac; it is an ASSUMPTION, not measured on the IFS-08.",
+        "RollingResistance": 0.020,
         "WeightDistFront": 0.438,
         "CoGHeight": 0.300,
         "SuspensionDamping": 1.5,
