@@ -1296,12 +1296,42 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			// single-quadrant regen — refuses braking torque on a
 			// backward-rotating wheel, which would otherwise drive the
 			// chassis further in reverse.
-			const float VFwdMs = FVector::DotProduct(
-				GetVelocity(), GetActorForwardVector()) * 0.01f;
-			// Wheel angular velocity assuming no slip, then geared
-			// up to motor rotor speed. WheelRadius / GearRatio are
-			// captured from settings in SetupSensorsFromSettings.
-			const float WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			// WHERE THIS NUMBER COMES FROM DECIDES WHETHER THE CAR CAN
+			// DRIVE ITSELF. It becomes SensorFrame.rpm -> /motor_rpm, which
+			// is the odometry filter's only wheel-speed input.
+			//
+			// GetVelocity() is the ACTOR's velocity, and when the FMU drives,
+			// the actor is teleported each tick rather than moved by a
+			// movement component — so it reads ~zero. The pipeline then sees a
+			// stationary car while the IMU reports acceleration, the EKF
+			// diverges, SLAM's data association collapses (every cone reads as
+			// new), and the car drives straight off the track. Observed
+			// exactly that: DOO 1, OC 1, zero laps.
+			// Forward speed, from the plant when it is driving. Used both for
+			// the fallback wheel-speed derivation and the EMRAX trace below.
+			const float VFwdMs = (bFmuDrivesPawn && PlantState.bPlantOk)
+				? (float)PlantState.VelBody[0]
+				: FVector::DotProduct(GetVelocity(), GetActorForwardVector()) * 0.01f;
+
+			float WheelOmega;
+			if (bFmuDrivesPawn && PlantState.bPlantOk)
+			{
+				// The DRIVEN wheels' actual speed, which is what a real motor
+				// encoder is geared to. Using the plant's own omega rather
+				// than a no-slip guess means wheelspin and lock-up reach the
+				// pipeline — the signal Chaos structurally cannot produce,
+				// because it snaps wheel speed to ground speed.
+				WheelOmega = 0.5f * (float)(PlantState.WheelOmega[FSDS_RL]
+				                          + PlantState.WheelOmega[FSDS_RR]);
+			}
+			else
+			{
+				// Chaos path, unchanged. Its plant reports WheelOmega as zero
+				// by design — it has no independent wheel state — so the
+				// no-slip derivation from body velocity is the only honest
+				// option there.
+				WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			}
 			const float MotorOmega = WheelOmega * GearRatio;
 			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));
 			Motor->SetMechRpm(MotorRpm);
