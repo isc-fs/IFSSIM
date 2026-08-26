@@ -74,9 +74,14 @@ ok = check(ok,'slip angle matches atan2(vy,vx)', W.slip_angle(1), alpha, 1e-6);
 %   The obvious test — "at a big slip angle lateral force approaches mu*m*g" —
 %   fails, correctly. With omega = 0 and the body at 10 m/s the wheels are
 %   LOCKED, so slip ratio is -1 and the friction budget is spent
-%   longitudinally, not laterally. And this coefficient set peaks near 5 deg
-%   of slip angle, so at 45 deg the Magic Formula has already fallen to about
-%   a quarter of peak. Both behaviours are right; the expectation was not.
+%   longitudinally, not laterally. And the Magic Formula falls off past its
+%   peak, so a large slip angle gives LESS lateral force, not more. Both
+%   behaviours are right; the expectation was not.
+%
+%   Do not re-express these checks in terms of a peak slip angle. That number
+%   is a property of the coefficients in settings.json, and it has already
+%   moved once — 4.9 deg to 10.6 deg — when the curve was found to be far too
+%   peaky for a slick. Assert invariants, not operating points.
 assignin('base','POSE_BIG', poseStruct(P.CoGHeight, [10;10;0], [0;0;0]));
 set_param([h '/POSE'],'Value','POSE_BIG');
 r = sim(h);  W = wheels(r); F = force(r);
