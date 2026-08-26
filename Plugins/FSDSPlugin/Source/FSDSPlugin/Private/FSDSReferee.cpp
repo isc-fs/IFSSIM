@@ -48,6 +48,10 @@ void AFSDSReferee::Tick(float DeltaTime)
 				if (Pair.Key && IsValid(Pair.Key))
 				{
 					Pair.Value = Pair.Key->GetActorLocation();
+					// Record the settled POSE too, so a repeat run can put a
+					// knocked-over cone back upright and not merely back in
+					// the right spot.
+					ConeOriginalTransforms.Add(Pair.Key, Pair.Key->GetActorTransform());
 				}
 			}
 			bPositionsRecorded = true;
@@ -191,6 +195,7 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 
 	// Store original position for displacement tracking
 	ConeOriginalPositions.Add(ConeActor, ConeActor->GetActorLocation());
+	ConeOriginalTransforms.Add(ConeActor, ConeActor->GetActorTransform());
 
 	// Enable physics on the cone so it can be knocked over
 	UStaticMeshComponent* MeshComp = nullptr;
@@ -308,6 +313,7 @@ void AFSDSReferee::ResetState()
 	State.Laps.Empty();
 	State.Cones.Empty();
 	ConeOriginalPositions.Empty();
+	ConeOriginalTransforms.Empty();
 	HitCones.Empty();
 	bLapTimerRunning = false;
 	bVehicleInsideFinishZone = false;
@@ -317,6 +323,74 @@ void AFSDSReferee::ResetState()
 	PositionSnapshotTimer = 0.f;
 	LapStartTime = 0.0;
 	UE_LOG(LogTemp, Log, TEXT("FSDS Referee: State reset"));
+}
+
+void AFSDSReferee::ResetForRepeatRun()
+{
+	// Counters and lap state only. The cone registry, the cone list used by
+	// the off-course test, and the finish-line trigger all survive — they
+	// describe the TRACK, which a repeat run does not change.
+	State.DooCounter = 0;
+	State.OffTrackCounter = 0;
+	State.Laps.Empty();
+	HitCones.Empty();
+	bLapTimerRunning = false;
+	bVehicleInsideFinishZone = false;
+	bWasOffTrack = false;
+	LapStartTime = 0.0;
+
+	// Put the cones back. Required, not cosmetic: HitCones was just cleared,
+	// so any cone still sitting past ConeHitThreshold from its recorded pose
+	// would re-trip the displacement test on the very first tick and score a
+	// phantom DOO before the car has moved.
+	int32 Restored = 0, Missing = 0;
+	for (const TPair<AActor*, FVector>& Pair : ConeOriginalPositions)
+	{
+		AActor* ConeActor = Pair.Key;
+		if (!ConeActor || !IsValid(ConeActor)) { Missing++; continue; }
+
+		// Kill any residual motion first, or the physics body carries its
+		// velocity straight through the teleport and drifts off again.
+		if (UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(ConeActor->GetRootComponent()))
+		{
+			if (Prim->IsSimulatingPhysics())
+			{
+				Prim->SetPhysicsLinearVelocity(FVector::ZeroVector);
+				Prim->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+			}
+		}
+
+		const FTransform* Settled = ConeOriginalTransforms.Find(ConeActor);
+		const bool bMoved = !ConeActor->GetActorLocation().Equals(Pair.Value, 1.0f);
+
+		if (Settled)
+		{
+			// TeleportPhysics so the body does not try to sweep back through
+			// whatever it was resting against.
+			ConeActor->SetActorTransform(*Settled, false, nullptr, ETeleportType::TeleportPhysics);
+		}
+		else
+		{
+			// Registered before the settle snapshot ran — location only.
+			ConeActor->SetActorLocation(Pair.Value, false, nullptr, ETeleportType::TeleportPhysics);
+		}
+		if (bMoved) Restored++;
+	}
+
+	// If the settle snapshot has not run yet, let it run against the restored
+	// poses rather than freezing whatever the previous run left behind.
+	if (!bPositionsRecorded)
+	{
+		PositionSnapshotTimer = 0.f;
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS Referee: repeat-run reset — counters cleared, %d cone(s) restored ")
+		TEXT("(%d registered, %d stale), finish line %s, cone list %d. ")
+		TEXT("Scoring stays LIVE across this reset."),
+		Restored, ConeOriginalPositions.Num(), Missing,
+		bFinishLineValid ? TEXT("kept") : TEXT("NOT VALID — track never loaded?"),
+		State.Cones.Num());
 }
 
 void AFSDSReferee::AppendCone(FTransform Transform, EFSDSConeColor Color)

@@ -28,7 +28,15 @@ public class FSDSPlugin : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"Slate",
-			"SlateCore"
+			"SlateCore",
+			// FMU (.fmu) packages are ZIP containers. We read them ourselves
+			// on top of zlib rather than using the engine's FZipArchiveReader,
+			// whose libzip backend is linked only under bBuildEditor — that
+			// would make FMU loading work in the editor and fail silently in a
+			// packaged build. See FSDSZipReader.h.
+			"zlib",
+			// modelDescription.xml parsing.
+			"XmlParser"
 		});
 
 		// winmm.lib provides timeBeginPeriod / timeEndPeriod, which we

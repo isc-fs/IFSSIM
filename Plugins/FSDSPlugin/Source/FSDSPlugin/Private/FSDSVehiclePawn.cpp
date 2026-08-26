@@ -2,6 +2,7 @@
 #include "FSDSSettings.h"
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
+#include "Plant/FSDSChaosPlant.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
@@ -89,6 +90,11 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 	// Configure Chaos vehicle physics only if skeleton is valid
 	if (bChaosVehicleActive)
 	{
+		// MUST run before SetupVehicleMovement(): everything settings.json
+		// contributes that has no per-field runtime setter has to be in the
+		// wheel CLASS DEFAULT OBJECT before Chaos reads it in CreateVehicle().
+		ApplyTireModelToWheelCDOs();
+
 		SetupVehicleMovement();
 	}
 	else if (VehicleMovement)
@@ -132,6 +138,148 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 	MagnetometerSensor = CreateDefaultSubobject<UFSDSMagnetometerSensor>(TEXT("MagnetometerSensor"));
 }
 
+void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
+{
+	// WHY THIS IS A SEPARATE, RE-RUNNABLE FUNCTION
+	// --------------------------------------------
+	// UChaosVehicleMovementComponent::ResetVehicleState() (engine :1787) calls
+	// OnDestroyPhysicsState() followed by OnCreatePhysicsState(), which re-runs
+	// CreateVehicle() — and CreateVehicle builds the physics wheels from the
+	// wheel CLASS DEFAULT OBJECT all over again.
+	//
+	// So every reset silently reverts the solver to CDO values, discarding
+	// everything settings.json contributed through the runtime push. Nothing
+	// re-applied it and nothing verified it, so the car quietly reverted to a
+	// different car mid-session with no log line anywhere.
+	//
+	// That matters more than it sounds: RPC handlers call ResetVehicleState()
+	// on simSetVehiclePose and on loadTrack, and tools/scenario_runner/
+	// run_scenario.py issues load_track before EVERY run of a seed sweep. A
+	// benchmark campaign could therefore have been measuring the CDO car on
+	// every run after the first.
+	//
+	// The CDO-routed values (SpringRate, and the Pacejka curve written by
+	// ApplyTireModelToWheelCDOs) survive a rebuild by construction, because the
+	// CDO is exactly what the rebuild reads. It is the runtime-pushed fields
+	// that need re-applying.
+	if (!VehicleMovement) return;
+
+	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!Vehicle) return;
+	const FFSDSVehiclePhysics& P = Vehicle->Physics;
+
+	float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
+	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
+	{
+		UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
+		if (!W) continue;
+		// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
+		const bool bIsRear = (i == 2 || i == 3);
+		if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
+
+		// Make settings.json authoritative for wheel geometry. These were
+		// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
+		// WheelRadius=20cm, :15 MaxSteerAngle=28deg) while the parsed
+		// P.WheelRadius / P.MaxSteerAngle had NO consumer anywhere — the
+		// settings values were decoration.
+		//
+		// NOTE: assigning these alone is a NO-OP, because Chaos already
+		// built its physics wheels from the class default object. It only
+		// takes effect because ApplyAllWheelConfigsToPhysics() below pushes
+		// the result to the solver. The two changes are only correct
+		// together.
+		W->WheelRadius = P.WheelRadius * 100.f;   // settings [m] -> wheel [cm]
+		if (!bIsRear) W->MaxSteerAngle = P.MaxSteerAngle;  // rears stay 0
+
+		// Pacejka Magic Formula — bake lateral and longitudinal slip curves
+		// into each wheel, replacing the flat FrictionForceMultiplier model.
+		FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+	}
+
+	// Everything above wrote to the game-thread UChaosVehicleWheel objects.
+	// Chaos built its physics wheels from the wheel class's CLASS DEFAULT
+	// OBJECT back in CreateVehicle() (engine :1412), so on its own none of
+	// it reaches the solver — which is why TireMu, the Pacejka bake and
+	// MaxBrakeTorque have behaved as decoration.
+	//
+	// Push the configuration through, then read the solver back and shout
+	// if it disagrees. The verify step is the point: the failure mode is
+	// silent, and a car that is not the car you configured invalidates
+	// every measurement taken from it.
+	// bFullReinit=false: InitializeWheel/InitializeSuspension re-seed solver
+	// state on a live vehicle and launched the car on first test. The
+	// per-field setters below are sufficient for everything settings.json
+	// actually drives; the Pacejka curve still comes from the wheel CDO.
+	VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
+	VehicleMovement->VerifyAllWheelConfigsApplied();
+
+	// Verification above only covers fields this project actually sets.
+	// The complement — what it never set, and therefore inherited from
+	// Chaos — is invisible by construction: you cannot grep for a value
+	// that is never written. Print it, so the car nobody configured is at
+	// least a car somebody has read.
+	if (bLogInherited)
+	{
+		VehicleMovement->LogInheritedWheelDefaults();
+	}
+}
+
+void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
+{
+	// WHY THIS EXISTS
+	// ---------------
+	// The Pacejka curve is the one piece of settings.json that CANNOT be
+	// delivered by the runtime push added alongside the wheel-config work.
+	// Chaos exposes SetWheelSlipGraphMultiplier — a scalar on the curve — but
+	// no setter for the curve itself, and the only other route
+	// (InitializeWheel/InitializeSuspension) re-seeds solver state on a live
+	// vehicle, which previously launched the car into the air on spawn.
+	//
+	// So the curve has to be in the wheel CLASS DEFAULT OBJECT before
+	// CreateVehicle() bakes it (ChaosWheeledVehicleMovementComponent.cpp:1412
+	// reads WheelSetups[i].WheelClass.GetDefaultObject(), from
+	// OnCreatePhysicsState, i.e. at component registration — before BeginPlay).
+	//
+	// BeginPlay was too late. It baked Pacejka onto the per-instance
+	// UChaosVehicleWheel objects, which the solver never reads, so every tire
+	// coefficient in settings.json has been decoration: the car has been
+	// driving on the wheel classes' flat FrictionForceMultiplier this whole
+	// time, no matter what Pacejka block was configured.
+	//
+	// AutoLoad() is normally called from BeginPlay, which is also too late for
+	// this, so pull it forward. It is idempotent — BeginPlay's call re-parses
+	// and both see the same file.
+	FFSDSSettings::Get().AutoLoad();
+	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!Vehicle)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: no vehicle settings at CDO time — wheels keep class-default tire model"));
+		return;
+	}
+	const FFSDSVehiclePhysics& P = Vehicle->Physics;
+
+	// Mutating a native class's CDO is safe here: native CDOs are not
+	// serialised to disk, and this runs on every pawn construction, so an
+	// edited settings.json takes effect on the next PIE session rather than
+	// sticking until an editor restart.
+	UChaosVehicleWheel* CDOs[] = {
+		UFSDSWheelFront::StaticClass()->GetDefaultObject<UFSDSWheelFront>(),
+		UFSDSWheelRear::StaticClass()->GetDefaultObject<UFSDSWheelRear>()
+	};
+
+	for (UChaosVehicleWheel* CDO : CDOs)
+	{
+		if (!CDO) continue;
+		FSDSPacejka::BakeToWheel(CDO, P.Pacejka, P.TireMu);
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")
+		TEXT("lat B=%.2f C=%.2f E=%.2f, peak mu=%.2f. settings.json tire model is now live."),
+		P.Pacejka.LatB, P.Pacejka.LatC, P.Pacejka.LatE, P.TireMu);
+}
+
 void AFSDSVehiclePawn::SetupVehicleMovement()
 {
 	if (!VehicleMovement) return;
@@ -142,7 +290,9 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// Torque at wheel = motor_torque * gear_ratio * efficiency
 	// (Local constants were hardcoded but unused; the settings path
 	//  overrides both below. Member GearRatio is shadowed by settings
-	//  in ApplyPhysicsSettings.)
+	//  in SetupSensorsFromSettings, which is where the settings.json
+	//  overrides are applied. There is no ApplyPhysicsSettings() in this
+	//  class — that name appears only in stale comments.)
 
 	// Chaos engine setup. We own the powertrain via UEmraxMotor and
 	// override per-wheel drive torque each tick via SetDriveTorque
@@ -235,6 +385,74 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	SteeringCurve->AddKey(0.f, 1.0f);
 	SteeringCurve->AddKey(200.f, 1.0f);   // flat: no speed-dependent taper
 
+	// --- Control input conditioning: DISABLE Chaos's arcade driver aids ---
+	//
+	// Chaos conditions every control input twice before the solver sees it:
+	// a rate limiter (FVehicleInputRateConfig::InterpInputValue, applied in
+	// UpdateState at ChaosVehicleMovementComponent.cpp:1218-1224) and then a
+	// response curve (CalcControlFunction, applied when the async input is
+	// built at :1765-1769).
+	//
+	// The engine defaults (:626-636) were NEVER overridden in this project, so
+	// both have been live on every run ever recorded here:
+	//
+	//   SteeringInputRate  RiseRate 2.5  FallRate 5   curve SQUARED
+	//   ThrottleInputRate  RiseRate 6    FallRate 10  curve linear
+	//   BrakeInputRate     RiseRate 6    FallRate 10  curve linear
+	//   HandbrakeInputRate RiseRate 12   FallRate 12  (EBS!)
+	//
+	// The squared steering curve is the serious one. CalcControlFunction with
+	// EInputFunctionType::SquaredFunction returns sign(x)*x^2, so the road-wheel
+	// angle the solver applied was
+	//
+	//     MaxSteerAngle * sign(s) * s^2
+	//
+	// i.e. a 0.5 command produced 0.25 of full lock — the autonomy has been
+	// getting roughly HALF the steering it asked for in the mid-range, on top of
+	// a rate limit that needs 1/2.5 = 0.4 s to reach full lock. For scale: the
+	// reverse-Ackermann defect fixed in 96e0e4e was worth ~15%.
+	//
+	// This is also a candidate mechanism for the Stanley limit cycle in this
+	// repo's history: squaring drives small corrections toward zero, so the
+	// controller winds up until it saturates at +/-1 — where x^2 == x and the
+	// loop gain abruptly jumps back to unity. That is a textbook recipe for
+	// bang-bang, and it would look exactly like a badly tuned gain.
+	//
+	// These are driver aids for gamepads. A Formula Student DV car has no such
+	// conditioning between the autonomy's command and the rack, and neither the
+	// controller nor the EKF models any. Rate is set to 1000/s, which at 60 Hz
+	// permits 16.67 units of change per tick against a total input range of 2.0
+	// — effectively instantaneous, without special-casing the interpolator.
+	//
+	// The REAL steering actuator does have a finite slew rate, and the real EBS
+	// has a finite pneumatic fill time. Both belong in the plant as authored,
+	// documented parameters (see docs/fmu_plant_migration.md), not as an
+	// unchosen engine default. Better no lag than the wrong lag.
+	constexpr float kInstantInputRate = 1000.f;   // units/s; >= 2.0 * 60 Hz
+	VehicleMovement->SteeringInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->SteeringInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->SteeringInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	VehicleMovement->ThrottleInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->ThrottleInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->ThrottleInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	VehicleMovement->BrakeInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->BrakeInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->BrakeInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	// EBS is routed through the Chaos handbrake channel. RiseRate 12 meant the
+	// emergency brake took 1/12 s = 83 ms to reach full commanded torque — a
+	// modelled actuation lag on the safety system that nobody chose and that
+	// silently flattered every EBS stopping-distance figure.
+	VehicleMovement->HandbrakeInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->HandbrakeInputRate.FallRate = kInstantInputRate;
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: control input conditioning disabled — steering curve linear ")
+		TEXT("(was SQUARED), all input rate limits removed (steering was 2.5/s, EBS 12/s). ")
+		TEXT("Commanded steering now reaches the solver unmodified."));
+
 	// --- Wheels ---
 	VehicleMovement->WheelSetups.SetNum(4);
 
@@ -254,18 +472,101 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->WheelSetups[3].BoneName = FName("WheelRR");
 	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
 
+	// === Chaos's OWN aerodynamics — turned OFF ===
+	//
+	// UChaosVehicleSimulation::UpdateSimulation calls ApplyAerodynamics()
+	// unconditionally on every physics step (engine :199, :283). It uses the
+	// component's DragCoefficient / DownforceCoefficient / DragArea, which this
+	// project never set, so the engine defaults have been live on every run:
+	//
+	//     DragCoefficient      0.3
+	//     DownforceCoefficient 0.3
+	//     DragArea             ChassisWidth x ChassisHeight = 1.80 x 1.40 = 2.52 m^2
+	//
+	// AFSDSVehiclePawn::ApplyAeroForces() already applies the IFS-08's real
+	// aero map from settings.json (CdA, ClA, AeroBalanceFront) every Tick. So
+	// the car has been carrying TWO aerodynamic models at once:
+	//
+	//     drag       1.84x intended   (+46 N at 10 m/s)
+	//     downforce  1.42x intended   (+46 N at 10 m/s)
+	//
+	// (CORRECTED. These were first written as 1.80x / 1.25x, computed from the
+	// C++ struct defaults CdA=0.95 / ClA=3.0 instead of from settings.json,
+	// which actually declares CdA=0.9 / ClA=1.8. Reading a header instead of
+	// the config file is the exact failure the parameter bridge in
+	// matlab/plant/ifssim_params.m exists to prevent, and it caught this.)
+	//
+	// and in disagreeing frames — Chaos transforms its force by the vehicle
+	// world transform (body-local), while ApplyAeroForces pushes downforce
+	// along world -Z and drag along the inverse velocity vector.
+	//
+	// Zero the Chaos side so exactly one aero model exists. This must be set
+	// here, in the constructor path, because the sim reads it during
+	// CreateVehicle. "The platform applies zero aerodynamic force of its own"
+	// is now an invariant, and it is what makes the aero map in settings.json
+	// mean what it says.
+	//
+	// FOLLOW-UP, deliberately not changed here: ApplyAeroForces applies
+	// downforce along WORLD -Z. Real downforce acts normal to the car's floor,
+	// so at roll/pitch angles the body-frame convention Chaos used is the more
+	// correct one. Fixing that changes handling and needs a validation lap, so
+	// it belongs with the plant work, not in a hygiene pass.
+	VehicleMovement->DragCoefficient = 0.f;
+	VehicleMovement->DownforceCoefficient = 0.f;
+
 	// === IFS-08 Mass & Inertia ===
-	// Total mass: 290 kg (car 210 + driver 80)
-	// Wheelbase: 1627 mm, weight dist front: 43.8%
-	// CoG at 713mm from front axle = 813.5mm - 713mm = 100.5mm behind mesh center
-	// CoG height: 344mm from ground
-	VehicleMovement->Mass = 290.f;
+	//
+	// Mass now comes from settings.json. It used to be a hardcoded 290 kg
+	// ("car 210 + driver 80") while settings.json declared 275 — and the
+	// settings value was assigned in SetupSensorsFromSettings() from BeginPlay,
+	// which is FAR too late: Chaos reads this->Mass in UpdateMassProperties,
+	// reached from SetupVehicleMass during physics-state creation. The BeginPlay
+	// write only takes effect if something later triggers a mass recalculation,
+	// and nothing does. So the car has been running at 290 kg regardless of
+	// settings.json — a 5.5% error that presents as a tire or powertrain
+	// modelling discrepancy.
+	//
+	// This is reachable now only because ApplyTireModelToWheelCDOs() pulled
+	// AutoLoad() forward into the constructor path.
+	//
+	// NOTE FOR THE TEAM: 290 included an 80 kg driver. This car is driverless.
+	// 275 is what settings.json declares and what the parametric load-transfer
+	// model already assumes, so the two now agree — but the real IFS-08 DV mass
+	// is a team number, and settings.json is where to change it.
+	const FFSDSVehicleSettings* MassVehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	const float ConfiguredMass = MassVehicle ? MassVehicle->Physics.Mass : 275.f;
+	const float ConfiguredWheelbase = MassVehicle ? MassVehicle->Physics.Wheelbase : 1.627f;
+	const float ConfiguredWeightDistFront = MassVehicle ? MassVehicle->Physics.WeightDistFront : 0.438f;
+
+	VehicleMovement->Mass = ConfiguredMass;
 	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
-	// CoG offset: negative X = rearward (43.8% front means rear-biased)
-	// Mesh center is roughly at wheelbase/2 = 813mm from front
-	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
-	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
+
+	// CoG offset along X, derived rather than hardcoded. Front axle load
+	// fraction Wf = b/L (b = CoG-to-rear-axle distance), so measured from the
+	// mesh centre at L/2 the CoG sits at L*(Wf - 0.5) — negative is rearward.
+	// At Wf=0.438, L=1.627 m that is -10.1 cm, which is what the old hardcoded
+	// -10.f cm meant; deriving it removes another duplicated constant and makes
+	// it track settings.json.
+	const float CoGOffsetXCm = ConfiguredWheelbase * (ConfiguredWeightDistFront - 0.5f) * 100.f;
+	VehicleMovement->CenterOfMassOverride = FVector(CoGOffsetXCm, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
+
+	// KNOWN GAP, not fixed here: only the X component of the CoG is overridden.
+	// CoG HEIGHT comes from whatever the physics asset computes, while
+	// settings.json declares CoGHeight = 0.3 m (NOT the 0.344 C++ default —
+	// the file overrides it) and ComputeTireLoadsParametric
+	// uses that number for longitudinal load transfer. That is the same
+	// two-models-disagree pattern as the 2.3x spring-rate divergence. Setting
+	// the Z component changes ride height and load transfer together, so it
+	// needs a validation lap and belongs with the plant work.
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: mass %.1f kg from settings.json (was a hardcoded 290 that ")
+		TEXT("settings could not override), CoG X offset %.1f cm derived from ")
+		TEXT("wheelbase %.3f m and front weight distribution %.1f%%. CoG HEIGHT is ")
+		TEXT("still whatever the physics asset computes, NOT the declared %.3f m."),
+		ConfiguredMass, CoGOffsetXCm, ConfiguredWheelbase,
+		ConfiguredWeightDistFront * 100.f,
+		MassVehicle ? MassVehicle->Physics.CoGHeight : 0.344f);
 
 	// Disable Chaos's vehicle-specific aggressive sleep. Chaos's
 	// ProcessSleeping() (ChaosVehicleMovementComponent.cpp:1252) puts
@@ -499,50 +800,28 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// MaxRegenPower/ω_motor. Front wheels keep MaxBrakeTorque=0
 		// from the class default — no hydraulic service brake on the
 		// real car.
-		float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
-		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
+		// Extracted so it can be re-run after a physics rebuild. See
+		// ApplyWheelSettingsToSolver() for why that is necessary.
+		ApplyWheelSettingsToSolver(/*bLogInherited=*/true);
+
+		// Stand up the plant behind the interface. Chaos today: this is an
+		// OBSERVER of the vehicle the engine is already integrating, so nothing
+		// about how the car drives changes. The seam going in first is what
+		// makes a later FMU swap attributable — any difference is then the
+		// plant, not the refactor.
+		Plant = MakeUnique<FFSDSChaosPlant>(this);
+		if (!Plant->Initialise())
 		{
-			UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
-			if (!W) continue;
-			// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
-			const bool bIsRear = (i == 2 || i == 3);
-			if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
-
-			// Make settings.json authoritative for wheel geometry. These were
-			// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
-			// WheelRadius=20cm, :15 MaxSteerAngle=28deg) while the parsed
-			// P.WheelRadius / P.MaxSteerAngle had NO consumer anywhere — the
-			// settings values were decoration.
-			//
-			// NOTE: assigning these alone is a NO-OP, because Chaos already
-			// built its physics wheels from the class default object. It only
-			// takes effect because ApplyAllWheelConfigsToPhysics() below pushes
-			// the result to the solver. The two changes are only correct
-			// together.
-			W->WheelRadius = P.WheelRadius * 100.f;   // settings [m] -> wheel [cm]
-			if (!bIsRear) W->MaxSteerAngle = P.MaxSteerAngle;  // rears stay 0
-
-			// Pacejka Magic Formula — bake lateral and longitudinal slip curves
-			// into each wheel, replacing the flat FrictionForceMultiplier model.
-			FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+			UE_LOG(LogTemp, Error, TEXT("FSDS: plant failed to initialise — %s"),
+				*Plant->GetName());
+			Plant.Reset();
 		}
-
-		// Everything above wrote to the game-thread UChaosVehicleWheel objects.
-		// Chaos built its physics wheels from the wheel class's CLASS DEFAULT
-		// OBJECT back in CreateVehicle() (engine :1412), so on its own none of
-		// it reaches the solver — which is why TireMu, the Pacejka bake and
-		// MaxBrakeTorque have behaved as decoration.
-		//
-		// Push the configuration through, then read the solver back and shout
-		// if it disagrees. The verify step is the point: the failure mode is
-		// silent, and a car that is not the car you configured invalidates
-		// every measurement taken from it.
-		// bFullReinit=false: InitializeWheel/InitializeSuspension re-seed solver
-		// state on a live vehicle and launched the car on first test. The
-		// per-field setters below are sufficient for everything settings.json
-		// actually drives; the Pacejka curve still comes from the wheel CDO.
-		VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
-		VehicleMovement->VerifyAllWheelConfigsApplied();
+		else
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: plant '%s' active. GetPlantState() now carries pose, wheels ")
+				TEXT("and powertrain in SI / ISO 8855 / ENU."), *Plant->GetName());
+		}
 
 		// Seed all stochastic sources for this run. Must happen before any
 		// sensor draws noise or any cone is spawned; BeginPlay is the earliest
@@ -602,8 +881,7 @@ void AFSDSVehiclePawn::BeginPlay()
 
 
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
-	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup
-	// (MaxTorque=0, EngineIdleRPM=0) and Tick below feeds per-wheel
+	// from here on. Tick below feeds per-wheel
 	// drive torque from this object. Default FEmraxMotorParams matches
 	// the EMRAX 228 MV / LC datasheet; we forward the regen caps from
 	// settings.json so a user override (e.g. a bigger battery raising
@@ -699,9 +977,33 @@ void AFSDSVehiclePawn::BeginPlay()
 		bChaosVehicleActive ? TEXT("YES") : TEXT("NO - fallback mode"));
 }
 
+FString AFSDSVehiclePawn::GetPlantName() const
+{
+	return Plant.IsValid() ? Plant->GetName() : TEXT("<none>");
+}
+
 void AFSDSVehiclePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// --- refresh the plant snapshot -------------------------------------
+	// Once per tick, in one place, in contract units. Everything downstream
+	// should read PlantState rather than re-deriving pose and velocity from
+	// the pawn — that re-derivation is where the frame and sign errors live.
+	if (Plant.IsValid())
+	{
+		FFSDSPlantInput PlantIn;
+		PlantIn.Throttle   = CurrentControls.Throttle;
+		PlantIn.Regen      = CurrentControls.Regen;
+		PlantIn.SteerNorm  = CurrentControls.Steering;
+		PlantIn.bEbsLatched = bEbsLatched;
+		PlantIn.DeltaTime  = DeltaTime;
+		PlantIn.SimTime    = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		PlantIn.GravityZ   = GetWorld() ? GetWorld()->GetGravityZ() * 0.01 : -9.81;
+
+		Plant->PreStep(PlantIn);
+		Plant->PostStep(PlantState);
+	}
 
 	// Acceleration tracking
 	FVector CurrentVelocity = GetVelocity();
@@ -745,7 +1047,10 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetTargetGear(1, true);
 
 		// --- EMRAX 228 drive-torque override ----------------------
-		// We bypass Chaos's engine entirely (MaxTorque was zeroed in
+		// We bypass Chaos's engine entirely (NOT by zeroing MaxTorque —
+		// see SetupVehicleMovement, which deliberately leaves it at the
+		// full 643 N.m peak-at-wheel; the bypass is that Tick passes
+		// throttle=0 to Chaos and injects torque per wheel instead, in
 		// SetupVehicleMovement) and compute the shaft torque from
 		// our motor model. The motor's RPM tracks actual wheel speed
 		// × gear ratio so a parked car reads zero RPM (vs Chaos's
@@ -762,7 +1067,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 				GetVelocity(), GetActorForwardVector()) * 0.01f;
 			// Wheel angular velocity assuming no slip, then geared
 			// up to motor rotor speed. WheelRadius / GearRatio are
-			// captured from settings in ApplyPhysicsSettings.
+			// captured from settings in SetupSensorsFromSettings.
 			const float WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
 			const float MotorOmega = WheelOmega * GearRatio;
 			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));

@@ -1,6 +1,7 @@
 #include "Sensors/FSDSGpsSensor.h"
 #include "FSDSRandom.h"
 #include "FSDSSensorNoise.h"
+#include "FSDSVehiclePawn.h"
 
 using FSDSNoise::RandStandardNormal;
 
@@ -16,8 +17,22 @@ void UFSDSGpsSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
 
-	FVector WorldPos = Owner->GetActorLocation(); // in cm
-	FVector WorldVel = Owner->GetVelocity(); // cm/s
+	// Position is GEOMETRIC — it must match where the mesh actually is, so it
+	// stays on the actor transform. Velocity is STATE and comes from the plant:
+	// GetVelocity() returns an unwritten zero on a non-simulating actor, which
+	// is how a dead plant published a well-formed zero GPS velocity.
+	AFSDSVehiclePawn* Pawn = Cast<AFSDSVehiclePawn>(Owner);
+	const FFSDSPlantOutput* Plant = Pawn ? &Pawn->GetPlantState() : nullptr;
+	if (!Plant || !Plant->bPlantOk)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS GPS: plant state unavailable — not publishing"));
+		return;
+	}
+	FVector WorldPos = Owner->GetActorLocation(); // cm, geometric
+	// ENU metres -> UE cm, y flips back to the left-handed wire convention.
+	FVector WorldVel = FVector( Plant->VelWorld[0] * 100.0,
+	                           -Plant->VelWorld[1] * 100.0,
+	                            Plant->VelWorld[2] * 100.0);
 
 	FGpsOutput Output;
 	Output.Timestamp = FPlatformTime::Cycles64();

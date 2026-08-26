@@ -15,6 +15,7 @@
 #include "Sensors/FSDSBarometerSensor.h"
 #include "Sensors/FSDSMagnetometerSensor.h"
 #include "Vehicles/FSDSWheelFront.h"
+#include "Plant/FSDSPlant.h"
 #include "Vehicles/FSDSWheelRear.h"
 #include "EmraxMotor.h"
 #include "FSDSVehiclePawn.generated.h"
@@ -150,6 +151,14 @@ public:
 	bool IsEbsLatched() const { return bEbsLatched; }
 
 	// --- Components ---
+	/** The plant behind the interface. Chaos today; an FMU later. Not a
+	 *  UPROPERTY because IFSDSPlant is a plain C++ interface, deliberately —
+	 *  it must be implementable without dragging in UObject machinery. */
+	TUniquePtr<IFSDSPlant> Plant;
+
+	/** Refreshed once per Tick, read by everything downstream. */
+	FFSDSPlantOutput PlantState;
+
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UFSDSWheeledVehicleMovementComponent* VehicleMovement;
@@ -206,6 +215,44 @@ public:
 	class UBoxComponent* PhysicsBox = nullptr;
 
 private:
+	// Writes the settings.json tire model into the wheel CLASS DEFAULT
+	// OBJECTS. Must be called from the constructor, before the movement
+	// component is configured: Chaos builds its physics wheels from the CDO
+	// during CreateVehicle(), so anything applied later never reaches the
+	// solver. See the implementation for why the Pacejka curve in particular
+	// has no other route.
+	void ApplyTireModelToWheelCDOs();
+
+public:
+	/**
+	 * Push everything settings.json contributes to the wheels into the Chaos
+	 * solver, then read it back and complain if it disagrees.
+	 *
+	 * MUST be called again after anything that rebuilds physics state.
+	 * ResetVehicleState() destroys and recreates it, which re-runs
+	 * CreateVehicle() and rebuilds every physics wheel from the CLASS DEFAULT
+	 * OBJECT — silently discarding the runtime-pushed configuration.
+	 */
+	void ApplyWheelSettingsToSolver(bool bLogInherited = false);
+
+	/**
+	 * This tick's plant state, in the platform<->plant contract (SI, ISO 8855,
+	 * ENU) rather than UE's left-handed centimetres.
+	 *
+	 * Consumers should migrate to this instead of reading the pawn or the Chaos
+	 * component directly. Two reasons: the frame conversion then lives in ONE
+	 * place, and when the plant becomes an FMU nothing downstream changes.
+	 *
+	 * Check bPlantOk. A failed step reports false; it does NOT return a
+	 * well-formed zero, which is what the IsSimulatingPhysics guards do today.
+	 */
+	const FFSDSPlantOutput& GetPlantState() const { return PlantState; }
+
+	/** Which plant is driving. "Chaos" today. */
+	FString GetPlantName() const;
+
+private:
+
 	void SetupVehicleMovement();
 	void OnThrottleInput(float Value);
 	void OnSteeringInput(float Value);
