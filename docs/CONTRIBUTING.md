@@ -275,7 +275,37 @@ the branch is deleted. The issue closes as the permanent record.
 ### 6. Merging into main + cutting a release
 
 When `dev` holds a set of validated changes ready to ship, a
-responsible team member opens a PR from `dev` into `main`.
+responsible team member brings it to `main`.
+
+> **`main` and `dev` have UNRELATED HISTORIES.** `main` is an orphan
+> branch — a single placeholder commit holding one `README.md`, with no
+> common ancestor with `dev` at all. `git merge` refuses outright
+> (`fatal: refusing to merge unrelated histories`), so a plain PR from
+> `dev` into `main` **cannot be merged**. This is not a conflict to
+> resolve; it is two disconnected graphs.
+>
+> There is a second trap underneath it: `main` holds `README.md` and
+> `dev` holds `readme.md`. Git treats those as different files, so a
+> merge produces both — and on macOS or Windows, where the filesystem
+> is case-insensitive, they collide and `git status` reports phantom
+> changes forever after.
+>
+> The way that works is to make `main`'s **content** equal `dev`'s
+> without merging their **histories**:
+>
+> ```bash
+> git checkout main
+> git rm README.md              # drop the placeholder, avoid the collision
+> git checkout dev -- .         # take dev's tree wholesale
+> git commit -m "release: vX.Y.Z"
+> ```
+>
+> `main` keeps a clean linear history of release commits. Provenance
+> lives in the tags, which point into `dev`'s history where the work
+> actually happened.
+>
+> Do not `--allow-unrelated-histories` unless you have decided you want
+> two roots in the graph permanently, and do not force-push `main`.
 
 To cut a release:
 
