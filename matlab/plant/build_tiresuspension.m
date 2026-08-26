@@ -29,7 +29,7 @@ set_param(name,'SolverType','Fixed-step','Solver','FixedStepDiscrete', ...
 add_block('simulink/Sources/In1',[name '/Road'],'Position',[30 40 60 60], ...
           'OutDataTypeStr','Bus: IFSSIM_RoadBus','BusOutputAsStruct','on');
 add_block('simulink/Signal Routing/Bus Selector',[name '/Road Select'], ...
-          'Position',[130 20 140 120],'OutputSignals','valid,height,mu');
+          'Position',[130 20 140 120],'OutputSignals','valid,height,mu,residual');
 add_line(name,'Road/1','Road Select/1','autorouting','on');
 
 add_block('simulink/Sources/In1',[name '/Pose'],'Position',[30 160 60 180], ...
@@ -57,7 +57,7 @@ chart.Script = tiresusp_code();
 % Explicit sizes: the wheel-speed state feeds back through a delay, so nothing
 % can be inferred. Same circular-inference trap as the chassis.
 sizes = struct( ...
-  'road_valid',4,'road_h',4,'road_mu',4, ...
+  'road_valid',4,'road_h',4,'road_mu',4,'road_res',4, ...
   'pos',3,'quat',4,'velb',3,'omegab',3, ...
   'steer_in',4,'drive_t',4,'brake_t',4,'w_i',4,'kap_i',4,'alp_i',4, ...
   'w_n',4,'kap_n',4,'alp_n',4, ...
@@ -105,12 +105,18 @@ add_block('simulink/Sinks/Out1',[name '/tyre_torque'],'Position',[680 420 710 44
 
 %% ---- wiring -----------------------------------------------------------
 FB = 'Tyre and Suspension';
-for i = 1:3, add_line(name,sprintf('Road Select/%d',i),sprintf('%s/%d',FB,i),'autorouting','on'); end
-for i = 1:4, add_line(name,sprintf('Pose Select/%d',i),sprintf('%s/%d',FB,3+i),'autorouting','on'); end
-for i = 1:3, add_line(name,[vecIn{i} '/1'],sprintf('%s/%d',FB,7+i),'autorouting','on'); end
-add_line(name,'wheel omega (state)/1',sprintf('%s/11',FB),'autorouting','on');
-add_line(name,'slip ratio (state)/1', sprintf('%s/12',FB),'autorouting','on');
-add_line(name,'slip angle (state)/1', sprintf('%s/13',FB),'autorouting','on');
+% Road now carries residual as well, so every downstream input index shifts
+% by one. Written as offsets from the block before it rather than as literals,
+% because the last time these were literals a bus gained a field and the
+% mis-wiring type-checked perfectly - every port on this boundary is a double.
+nRoad = 4;   % valid, height, mu, residual
+nPose = 4;   % position, quat, vel_body, omega_body
+for i = 1:nRoad, add_line(name,sprintf('Road Select/%d',i),sprintf('%s/%d',FB,i),'autorouting','on'); end
+for i = 1:nPose, add_line(name,sprintf('Pose Select/%d',i),sprintf('%s/%d',FB,nRoad+i),'autorouting','on'); end
+for i = 1:3, add_line(name,[vecIn{i} '/1'],sprintf('%s/%d',FB,nRoad+nPose+i),'autorouting','on'); end
+add_line(name,'wheel omega (state)/1',sprintf('%s/%d',FB,nRoad+nPose+4),'autorouting','on');
+add_line(name,'slip ratio (state)/1', sprintf('%s/%d',FB,nRoad+nPose+5),'autorouting','on');
+add_line(name,'slip angle (state)/1', sprintf('%s/%d',FB,nRoad+nPose+6),'autorouting','on');
 
 add_line(name,sprintf('%s/1',FB),'wheel omega (state)/1','autorouting','on');
 add_line(name,sprintf('%s/2',FB),'slip ratio (state)/1','autorouting','on');
@@ -130,7 +136,7 @@ end
 function c = tiresusp_code()
 L = {
 "function [w_n, kap_n, alp_n, omega, steer, fz, fx, fy, slip_ratio, slip_angle, susp_travel, in_contact, tyre_force, tyre_torque] = ..."
-"         tiresusp(road_valid, road_h, road_mu, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_i, kap_i, alp_i)"
+"         tiresusp(road_valid, road_h, road_mu, road_res, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_i, kap_i, alp_i)"
 "%#codegen"
 "% Per-wheel suspension and tyre forces, summed into a body-frame wrench."
 "%"
@@ -179,7 +185,21 @@ L = {
 "    % A tyre cannot pull the road. Clamping here is what lets a wheel lift"
 "    % in a corner instead of generating negative grip."
 "    if Fz_i < 0, Fz_i = 0; end"
-"    contact = (road_valid(i) > 0.5) && (Fz_i > 0);"
+"    % Contact needs the platform to have actually CHARACTERISED the ground,"
+"    % not merely to have hit something with one ray."
+"    %"
+"    % A NEGATIVE residual is the platform saying it could not fit a plane at"
+"    % all - fewer than three of its rays hit - so it does not know what is"
+"    % under this wheel. Standing on an answer nobody has is how a wheel ends"
+"    % up loaded against geometry that is not there."
+"    %"
+"    % A LARGE residual is a different thing entirely and deliberately does NOT"
+"    % remove contact. It means the patch spans a step or a kerb edge: the"
+"    % ground is poorly described by a plane, but the tyre is still touching"
+"    % it. Dropping Fz there would make the car fall through every kerb, which"
+"    % is worse than the flat-plane approximation it would be replacing."
+"    fit_known = (road_res(i) >= 0);"
+"    contact = (road_valid(i) > 0.5) && (Fz_i > 0) && fit_known;"
 "    if ~contact, Fz_i = 0; end"
 ""
 "    % ---- contact-patch velocity ------------------------------------"

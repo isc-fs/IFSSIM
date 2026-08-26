@@ -112,15 +112,47 @@ r = sim(h);  W = wheels(r);
 ok = check(ok,'airborne wheel spin-up = T/Iw*t', W.omega(3), T/P.Assumed.WheelInertia*0.5, 0.5);
 ok = check(ok,'undriven wheel stays still', W.omega(1), 0, 1e-12);
 
+%% 5. Contact is gated on the platform having CHARACTERISED the ground.
+%
+% A negative residual is the platform saying it could not fit a plane at all —
+% fewer than three of its probe rays hit — so it does not know what is under
+% this wheel. Standing on an answer nobody has is how a wheel ends up loaded
+% against geometry that is not there.
+%
+% Both halves are checked. Without the second, a gate that rejected EVERY wheel
+% would pass the first and quietly ground the car.
+set_param([h '/DRV'],'Value','[0;0;0;0]');
+set_param([h '/POSE'],'Value','POSE_REST');
+
+% FL's fit failed; the other three are fine.
+assignin('base','ROAD_NOFIT', ...
+    roadStruct(zeros(4,1), ones(4,1), P.TireMu*ones(4,1), [-1;0;0;0]));
+set_param([h '/ROAD'],'Value','ROAD_NOFIT');
+r = sim(h);  W = wheels(r);
+ok = check(ok,'no plane fitted: that wheel carries no load', W.fz(1), 0, 1e-9);
+ok = check(ok,'no plane fitted: the others still do',        W.fz(2) > 0, true, 0);
+
+% And a LARGE but MEASURED residual must NOT remove contact. The patch spans a
+% kerb, the plane describes it badly, but the tyre is still touching it —
+% dropping Fz here would make the car fall through every kerb.
+assignin('base','ROAD_ROUGH', ...
+    roadStruct(zeros(4,1), ones(4,1), P.TireMu*ones(4,1), [0.05;0.05;0.05;0.05]));
+set_param([h '/ROAD'],'Value','ROAD_ROUGH');
+r = sim(h);  W = wheels(r);
+ok = check(ok,'rough but measured: contact is KEPT', W.fz(1) > 0, true, 0);
+
+set_param([h '/ROAD'],'Value','ROAD_FLAT');
+
 close_system(h,0);
 fprintf('\n%s\n', ternary(ok,'tyre/suspension checks PASS.','TYRE/SUSPENSION CHECKS FAILED.'));
 end
 
-function s = roadStruct(hgt, valid, mu)
+function s = roadStruct(hgt, valid, mu, res)
 s = Simulink.Bus.createMATLABStruct('IFSSIM_RoadBus');
 s.valid = valid; s.height = hgt; s.mu = mu;
 s.normal_x = zeros(4,1); s.normal_y = zeros(4,1); s.normal_z = ones(4,1);
-s.residual = zeros(4,1);
+if nargin < 4, res = zeros(4,1); end
+s.residual = res;
 end
 
 function s = poseStruct(z, velb, omegab)
