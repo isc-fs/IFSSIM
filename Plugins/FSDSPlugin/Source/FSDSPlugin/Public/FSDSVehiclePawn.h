@@ -296,6 +296,15 @@ public:
 	 *  UE centimetres. */
 	void ResetPlants(const double Position[3], const double Quat[4]);
 
+	/** Probe the ground under ONE point. Public and single-point so it can be
+	 *  tested against known geometry: the wheel loop below is a caller, not
+	 *  the unit. A probe only ever exercised through four wheel bones on flat
+	 *  ground cannot be told apart from a stub returning zero.
+	 *
+	 *  StartCm is a world UE position; the trace runs down from above it.
+	 *  Outputs are CONTRACT units — height in m, normal in ENU with +y LEFT. */
+	bool ProbeRoadAt(const FVector& StartCm, double& OutHeightM, double OutNormal[3]) const;
+
 private:
 
 	void SetupVehicleMovement();

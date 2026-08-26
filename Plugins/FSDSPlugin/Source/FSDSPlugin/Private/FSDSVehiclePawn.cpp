@@ -1543,6 +1543,34 @@ AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
 //    comparability with Chaos's own channel trace, which the migration doc
 //    states plainly rather than discovering later.
 // ---------------------------------------------------------------------------
+bool AFSDSVehiclePawn::ProbeRoadAt(const FVector& StartCm, double& OutHeightM,
+                                   double OutNormal[3]) const
+{
+	const UWorld* W = GetWorld();
+	if (!W) return false;
+
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSRoadProbe), /*bTraceComplex=*/true, this);
+	FCollisionObjectQueryParams ObjParams;
+	ObjParams.AddObjectTypesToQuery(ECC_WorldStatic);
+
+	const FVector Start(StartCm.X, StartCm.Y, StartCm.Z + S.RoadProbeUpM   * 100.0);
+	const FVector End  (StartCm.X, StartCm.Y, StartCm.Z - S.RoadProbeDownM * 100.0);
+
+	FHitResult Hit;
+	if (!W->LineTraceSingleByObjectType(Hit, Start, End, ObjParams, Params)) return false;
+
+	OutHeightM = Hit.ImpactPoint.Z * 0.01;
+	// UE is left-handed with +Y right; the contract is ENU with +Y left. A
+	// normal is a POLAR vector, so this is (x, -y, z). The axial rule would
+	// silently invert the road on every slope — and agree perfectly on flat
+	// ground, which is why this needs a cambered surface to test at all.
+	OutNormal[0] =  Hit.ImpactNormal.X;
+	OutNormal[1] = -Hit.ImpactNormal.Y;
+	OutNormal[2] =  Hit.ImpactNormal.Z;
+	return true;
+}
+
 void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 {
 	const FFSDSSettings& S = FFSDSSettings::Get();
@@ -1559,13 +1587,6 @@ void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 		return;
 	}
 
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSRoadProbe), /*bTraceComplex=*/true, this);
-	Params.bReturnPhysicalMaterial = false;
-	FCollisionObjectQueryParams ObjParams;
-	ObjParams.AddObjectTypesToQuery(ECC_WorldStatic);
-
-	const double UpCm   = S.RoadProbeUpM   * 100.0;
-	const double DownCm = S.RoadProbeDownM * 100.0;
 	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VM->WheelSetups.Num());
 
 	for (int32 i = 0; i < N; i++)
@@ -1582,20 +1603,12 @@ void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 		WheelCentre += Mesh->GetComponentTransform()
 			.TransformVectorNoScale(VM->WheelSetups[i].AdditionalOffset);
 
-		const FVector Start(WheelCentre.X, WheelCentre.Y, WheelCentre.Z + UpCm);
-		const FVector End  (WheelCentre.X, WheelCentre.Y, WheelCentre.Z - DownCm);
-
-		FHitResult Hit;
-		if (W->LineTraceSingleByObjectType(Hit, Start, End, ObjParams, Params))
+		double HitZ = 0.0, HitN[3] = {0,0,1};
+		if (ProbeRoadAt(WheelCentre, HitZ, HitN))
 		{
-			In.bRoadValid[i]  = true;
-			In.RoadHeight[i]  = Hit.ImpactPoint.Z * 0.01;   // cm -> m, world Z
-			// UE is left-handed with +Y right; the contract is ENU with +Y
-			// left. A normal is a POLAR vector, so this is (x, -y, z) — the
-			// axial rule would silently invert the road on every slope.
-			In.RoadNormal[i][0] =  Hit.ImpactNormal.X;
-			In.RoadNormal[i][1] = -Hit.ImpactNormal.Y;
-			In.RoadNormal[i][2] =  Hit.ImpactNormal.Z;
+			In.bRoadValid[i] = true;
+			In.RoadHeight[i] = HitZ;
+			for (int32 k = 0; k < 3; k++) In.RoadNormal[i][k] = HitN[k];
 			// Single ray, so there is no plane fit and no residual to report.
 			// Zero here means "not measured", not "perfectly flat"; a
 			// multi-ray fit is what would make this number mean something.
