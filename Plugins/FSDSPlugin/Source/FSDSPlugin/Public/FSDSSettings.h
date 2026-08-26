@@ -223,6 +223,11 @@ public:
 	 *  Distinct from VehiclePhysics.TireMu, which is the tyre's own limit. */
 	float RoadDefaultMu = 1.4f;
 
+	/** Half-span of the road probe's sample pattern, metres. Sized to the tyre
+	 *  contact patch: sampling much wider than the patch would report a plane
+	 *  the tyre never touches, and much narrower makes the fit noise-limited. */
+	float RoadProbeSpanM = 0.08f;
+
 	/** Shadow mode: force the shadow's state equal to the reference's every
 	 *  step, so the comparison is "same state, same inputs, same response?"
 	 *  rather than "how far apart do they drift?".

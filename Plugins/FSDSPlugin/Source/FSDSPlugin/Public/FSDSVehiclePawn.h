@@ -305,6 +305,23 @@ public:
 	 *  Outputs are CONTRACT units — height in m, normal in ENU with +y LEFT. */
 	bool ProbeRoadAt(const FVector& StartCm, double& OutHeightM, double OutNormal[3]) const;
 
+	/** Fit a plane to five rays around one point, so the platform reports the
+	 *  surface the tyre actually sits on and can say how well a plane
+	 *  describes it.
+	 *
+	 *  OutResidual is the RMS distance of the hits from the fitted plane, in
+	 *  metres — the contract's "so the plant can DETECT a bad fit rather than
+	 *  trust it". It is kRoadResidualNotFitted (negative, so it cannot be
+	 *  mistaken for a good measurement) when fewer than three rays hit and
+	 *  there is no plane to fit. */
+	bool ProbeRoadPatch(const FVector& CentreCm, double& OutHeightM,
+	                    double OutNormal[3], double& OutResidualM) const;
+
+	/** Reported when no plane could be fitted. Negative because an RMS never
+	 *  is, so a consumer cannot silently read it as "perfectly flat" — which
+	 *  is exactly what a 0.0 here used to invite. */
+	static constexpr double kRoadResidualNotFitted = -1.0;
+
 private:
 
 	void SetupVehicleMovement();

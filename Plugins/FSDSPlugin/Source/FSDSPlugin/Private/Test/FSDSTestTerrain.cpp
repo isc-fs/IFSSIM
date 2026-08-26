@@ -67,6 +67,15 @@ void AFSDSTestTerrain::Build()
 		{ TEXT("ramp_up"),     40.0,  0.0, 8.0, 4.0, 1.0,  8.0,  0.0 },
 		{ TEXT("crown_left"),  70.0,  2.0, 8.0, 2.0, 0.2,  0.0,  6.0 },
 		{ TEXT("crown_right"), 70.0, -2.0, 8.0, 2.0, 0.2,  0.0, -6.0 },
+		// A STEP: two flat patches at different heights meeting at y=100.
+		// Every surface above is planar, so a plane fit describes them
+		// perfectly and the residual is zero whether or not the fit works.
+		// This is the shape that makes the residual mean something — a wheel
+		// straddling the seam sits on ground no plane describes, which is
+		// precisely the case the contract wants the plant to be able to
+		// DETECT rather than trust.
+		{ TEXT("step_low"),   100.0,  1.5, 8.0, 1.5, 0.0,  0.0,  0.0 },
+		{ TEXT("step_high"),  100.0, -1.5, 8.0, 1.5, 0.15, 0.0,  0.0 },
 	};
 
 	const double M2CM = 100.0;

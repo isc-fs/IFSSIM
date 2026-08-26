@@ -107,6 +107,7 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 		if ((*PlantObj)->TryGetNumberField(TEXT("RoadProbeUpM"), PlantDbl))   RoadProbeUpM   = (float)PlantDbl;
 		if ((*PlantObj)->TryGetNumberField(TEXT("RoadProbeDownM"), PlantDbl)) RoadProbeDownM = (float)PlantDbl;
 		if ((*PlantObj)->TryGetNumberField(TEXT("RoadDefaultMu"), PlantDbl))  RoadDefaultMu  = (float)PlantDbl;
+		if ((*PlantObj)->TryGetNumberField(TEXT("RoadProbeSpanM"), PlantDbl)) RoadProbeSpanM = (float)PlantDbl;
 		(*PlantObj)->TryGetBoolField(TEXT("ShadowSync"), bShadowSync);
 
 		PlantType = PlantType.ToLower();
