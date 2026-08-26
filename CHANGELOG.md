@@ -16,11 +16,11 @@ shipping pipeline, documentation.
 
 **The vehicle dynamics left Chaos.** This release is dominated by one
 thread: the car's physics moved out of Unreal's arcade vehicle
-simulator and behind an interface, with a team-authored Simulink model
-running against it as a shadow. Alongside that, the autonomy pipeline
-became a submodule, every stochastic source became seedable, and a
-series of long-standing physics defects were found — several of which
-had been silently wrong since the project started.
+simulator and behind an interface, and a team-authored Simulink model
+now drives the car. Alongside that, the autonomy pipeline became a
+submodule, every stochastic source became seedable, and a series of
+long-standing physics defects were found — several of which had been
+silently wrong since the project started.
 
 Two changes are breaking for anyone tracking `settings.json` or the
 repository layout: the autonomy pipeline is no longer in this repo, and
@@ -49,7 +49,14 @@ repository layout: the autonomy pipeline is no longer in this repo, and
 - **`Plant.Type` in `settings.json`** — `chaos`, `shadow` or `fmu`. In
   `shadow`, the FMU steps alongside Chaos on identical inputs and the
   divergence is logged; it drives nothing, so it cannot change
-  behaviour.
+  behaviour. In **`fmu`** the FMU integrates the vehicle and the mesh
+  becomes a kinematic target written from the plant's pose each tick —
+  sensors already read `PlantState`, so they follow for free.
+- **The FMU drives the car (Phase 6).** Measured: 0 → 21.8 m/s in 10 s
+  with all four wheels in contact, and a 0.5 steering command giving an
+  8.3 m radius against 8.22 m from `L/tan(δ)` — within 1% of an
+  independent kinematic prediction rather than a number tuned to match
+  anything.
 - **A road probe.** The platform now answers *what is under each wheel*
   — five rays per wheel, least-squares plane fit, reporting height,
   normal and an RMS residual so the plant can detect a bad fit rather
@@ -121,12 +128,21 @@ by building the plant seam rather than by anything failing loudly.
   the timeout as failure and skipped the copy to the host.
 - **`resetScenario` left scoring permanently blind** — every repeat run
   scored 0/0/0.
+- **Plants were initialised twice on the same object.** Invisible for
+  years because the Chaos plant is idempotent; it only became a crash
+  once something non-reentrant sat behind the same call — the FMU
+  declares one instance per process, and a second `Instantiate`
+  segfaults rather than failing. Teardown is now deterministic in
+  `EndPlay`, since PIE restarts `BeginPlay` on a new pawn while the old
+  one is still alive.
 
 ### Known limitations
 
-- The FMU runs as a **shadow only**. Chaos still drives the car, and
-  remains the only validated reference. Same-state parity between the
-  two is ~0.8 m/s² mean.
+- **Chaos remains the default and the reference.** The FMU drives the
+  car under `Plant.Type="fmu"`, but `chaos` is still what a fresh
+  checkout runs, and it is the implementation every prior lap was
+  validated against. Same-state parity between the two is ~0.8 m/s²
+  mean.
 - **`Crr = 0.020` and the 22.4° steering clamp both rest on a
   shape-fitted Pacejka, not measured tyre data.** Every dynamics number
   in this release is internally consistent and none of it is anchored
