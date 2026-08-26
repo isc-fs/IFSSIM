@@ -581,3 +581,52 @@ def test_is_auto_pull_enabled_off_values(monkeypatch):
     for off in ("0", "false", "no", "off", "FALSE", "  0 "):
         monkeypatch.setenv("IFSSIM_BAG_AUTO_PULL", off)
         assert br.is_auto_pull_enabled() is False, f"{off!r} should disable"
+
+
+# ----- bag_finalised: a stop timeout must not abandon a good bag ----------
+#
+# Regression cover for the 3.45 GB autocross bag that finalised
+# correctly but was left in the volume because /bag_recorder/stop
+# took longer than the (then 15 s) timeout, which the caller read as
+# a stop FAILURE and so skipped auto-pull entirely. rosbag2 writes
+# metadata.yaml last, so its presence is the completion signal that
+# survives the timeout.
+
+def test_request_stop_timeout_is_generous_enough_for_multi_gb_bags():
+    import inspect
+    sig = inspect.signature(br.request_stop)
+    # 15 s was measurably too short; anything below a minute will
+    # reintroduce the abandoned-bag bug on a normal autocross run.
+    assert sig.parameters["timeout_s"].default >= 60.0
+
+
+def test_bag_finalised_true_when_metadata_present(monkeypatch):
+    calls = []
+
+    def _exec(cmd, **kw):
+        calls.append(cmd)
+        return (0, b"")
+
+    container = _fake_container_factory(exec_run=_exec)
+    _patch_docker_sdk(monkeypatch, container=container)
+    assert br.bag_finalised("autocross_20260826_115100") is True
+    assert calls, "expected a metadata.yaml existence check"
+    assert any("metadata.yaml" in str(part) for part in calls[0])
+
+
+def test_bag_finalised_false_when_metadata_absent(monkeypatch):
+    container = _fake_container_factory(exec_run=lambda cmd, **kw: (1, b""))
+    _patch_docker_sdk(monkeypatch, container=container)
+    assert br.bag_finalised("half_written_bag") is False
+
+
+def test_bag_finalised_false_without_docker(monkeypatch):
+    _patch_docker_sdk(monkeypatch, module_missing=True)
+    assert br.bag_finalised("anything") is False
+
+
+def test_bag_finalised_rejects_traversal(monkeypatch):
+    container = _fake_container_factory(exec_run=lambda cmd, **kw: (0, b""))
+    _patch_docker_sdk(monkeypatch, container=container)
+    for bad in ("", "../etc", "a/b"):
+        assert br.bag_finalised(bad) is False
