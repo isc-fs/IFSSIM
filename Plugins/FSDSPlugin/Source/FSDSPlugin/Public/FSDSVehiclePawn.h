@@ -197,6 +197,24 @@ public:
 	 *  ground. The plant knows where its wheels are; this puts them there. */
 	void PoseWheelsFromPlant(float DeltaTime);
 
+	/** Build the plant-driven wheel meshes and hide the skeletal ones. */
+	void CreatePlantWheels();
+
+	/** Wheels drawn from the plant, in FL/FR/RL/RR order.
+	 *
+	 *  The wheels ARE plant state — omega, steer, suspension travel and
+	 *  contact all come off the Wheels bus — so the platform's only job is to
+	 *  draw what the plant reports. Chaos's animation node drawing them
+	 *  instead put two different simulators into one picture: a chassis from
+	 *  the plant and wheels from Chaos. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> PlantWheels;
+
+	/** Accumulated spin per wheel, radians, integrated from the plant's omega.
+	 *  Chaos snaps wheel speed to ground speed, so its wheels always look like
+	 *  they are rolling; these stop when the plant says the wheel has. */
+	double WheelSpinRad[FSDS_NUM_WHEELS] = {0,0,0,0};
+
 	/** Throttles the wheel-gap report to once a second. */
 	double WheelReportAccum = 0.0;
 

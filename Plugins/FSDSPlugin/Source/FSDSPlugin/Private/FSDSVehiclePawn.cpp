@@ -4,6 +4,8 @@
 #include "FSDSPacejkaTireModel.h"
 #include "Plant/FSDSChaosPlant.h"
 #include "Plant/FSDSFmuPlant.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
@@ -864,15 +866,13 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			Plant = MoveTemp(FmuPlant);
 			bFmuDrivesPawn = true;
 
-			// NOT deactivated. The movement component is kept alive only as the
-			// wheel-ANIMATION path: Chaos's vehicle anim node is what poses the
-			// wheel bones, and killing the component leaves them in bind pose
-			// while the chassis moves — which reads on screen as a car not
-			// touching the ground, and no telemetry channel shows it.
-			//
-			// It cannot drive the car: the mesh is kinematic below, so the
-			// vehicle sim has no body to push. The plant owns the pose; Chaos
-			// is demoted to drawing the wheels.
+			// Chaos is stood down completely. It was previously kept alive
+			// purely so its animation node would draw the wheels — which put
+			// two simulators in one picture: a chassis from the plant and
+			// wheels from Chaos. The wheels are plant state, so the plant
+			// draws them now (CreatePlantWheels below) and nothing is left
+			// for Chaos to do.
+			if (VehicleMovement) VehicleMovement->Deactivate();
 			if (USkeletalMeshComponent* M = GetMesh())
 			{
 				// Kinematic, not simulated. The body still collides — cones are
@@ -908,6 +908,8 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01, P0.Z * 0.01 };
 			const double QuatC[4] = { Q0.W, -Q0.X, Q0.Y, -Q0.Z };
 			ResetPlants(PosC, QuatC);
+
+			CreatePlantWheels();
 
 			UE_LOG(LogTemp, Warning,
 				TEXT("FSDS: THE FMU IS DRIVING. Chaos is deactivated and the mesh is a ")
@@ -1923,59 +1925,153 @@ void AFSDSVehiclePawn::DrivePawnFromPlant()
 			? TEXT(" (pushed it)") : TEXT(" (static, nothing to push)"));
 }
 
-void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
+void AFSDSVehiclePawn::CreatePlantWheels()
 {
-	// Deliberately does nothing yet, and is kept as the named place where it
-	// will.
-	//
-	// Chaos's vehicle animation node poses the wheel bones, and there is no
-	// way to hand it a pose: UChaosVehicleWheel exposes GetSteerAngle and
-	// GetRotationAngle and no setters, and USkeletalMeshComponent has no
-	// per-bone setter — that lives on UPoseableMeshComponent. Driving these
-	// bones from the plant needs a post-process anim blueprint, which is
-	// editor asset work rather than code.
-	//
-	// So for now the movement component is left ALIVE purely as the animation
-	// path (see BeginPlay), and it poses the wheels from its own wheel states.
-	// Those come from Chaos's own ground queries, not from the plant, so the
-	// wheels are plausible rather than truthful — in particular they cannot
-	// show lock-up, because Chaos snaps wheel speed to ground speed. That is a
-	// visual approximation and is stated as one.
-	//
-	// The plant HAS the honest numbers (WheelOmega, WheelSteer,
-	// WheelSuspTravel) and is the reason they are worth showing at all.
-	//
-	// Until then, MEASURE where the wheels actually are. "The car is not
-	// touching the ground" is a visual report, and every visual defect in this
-	// work was caught by eye and missed by telemetry — because nothing
-	// reported the one number that matters: the gap between the bottom of a
-	// wheel and the road beneath it.
 	USkeletalMeshComponent* M = GetMesh();
 	if (!M || !VehicleMovement) return;
 
+	// A cylinder, not the art asset's wheel. Extracting a bone's mesh at
+	// runtime is not something the engine offers, and the point here is that
+	// the wheel is WHERE and HOW FAST the plant says — a correct cylinder
+	// beats a pretty wheel in the wrong place. Swapping in the real mesh later
+	// is a one-line change.
+	UStaticMesh* Cyl = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!Cyl)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS: no cylinder mesh — wheels will not be drawn"));
+		return;
+	}
+
+	const FFSDSVehiclePhysics& P = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics : FFSDSVehiclePhysics();
+	// Engine cylinder is 100 cm across and 100 cm tall with its axis on Z.
+	const double DiaScale   = (P.WheelRadius * 2.0);
+	const double WidthScale = P.WheelWidth;
+
+	PlantWheels.Reset();
+	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VehicleMovement->WheelSetups.Num());
+	for (int32 i = 0; i < N; i++)
+	{
+		UStaticMeshComponent* W = NewObject<UStaticMeshComponent>(this);
+		W->SetStaticMesh(Cyl);
+		W->SetupAttachment(GetRootComponent());
+		W->RegisterComponent();
+		W->SetMobility(EComponentMobility::Movable);
+		// Visual only. The car's collision is the chassis body, and the plant
+		// resolves the wheels against the road itself through the probe —
+		// giving these collision would have them fight it.
+		W->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		W->SetRelativeScale3D(FVector(DiaScale, DiaScale, WidthScale));
+		W->SetCastShadow(true);
+
+		// A dark rubber-ish material. The engine cylinder ships with a bright
+		// default that reads as white plastic, which makes a correctly placed
+		// wheel look like a mistake — and these are the one part of the car
+		// placed from the REAL measured geometry rather than from the art
+		// asset. Worth not making them look like the error.
+		if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(
+				nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")))
+		{
+			if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Base, this))
+			{
+				// The parameter name varies by engine version; setting one
+				// that does not exist is a no-op rather than an error, so both
+				// are attempted and the wheel draws either way.
+				const FLinearColor Rubber(0.035f, 0.035f, 0.04f);
+				MID->SetVectorParameterValue(TEXT("Color"), Rubber);
+				MID->SetVectorParameterValue(TEXT("BaseColor"), Rubber);
+				W->SetMaterial(0, MID);
+			}
+		}
+		PlantWheels.Add(W);
+
+		// Hide the skeletal wheel so there are not two of each. HideBoneByName
+		// is on USkinnedMeshComponent and needs no animation asset, which is
+		// what makes this whole approach possible from C++.
+		M->HideBoneByName(VehicleMovement->WheelSetups[i].BoneName, PBO_None);
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: %d wheels now drawn from the plant (%.0f mm diameter, %.0f mm wide); "
+		     "skeletal wheels hidden"),
+		PlantWheels.Num(), P.WheelRadius * 2000.0, P.WheelWidth * 1000.0);
+}
+
+void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
+{
+	if (PlantWheels.Num() == 0 || !PlantState.bPlantOk) return;
+
+	const FFSDSVehiclePhysics& P = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics : FFSDSVehiclePhysics();
+
+	// Wheel centres from the SAME geometry the plant uses, not read back off
+	// the skeleton. The bind pose is only where the artist left the wheels;
+	// the plant is the authority on where they are now.
+	const double aF = P.Wheelbase * (1.0 - P.WeightDistFront);   // CoG -> front axle
+	const double bR = P.Wheelbase * P.WeightDistFront;           // CoG -> rear axle
+	// Mesh origin sits on the road plane, so a wheel centre is one radius up.
+	const double RestZCm = P.WheelRadius * 100.0;
+
+	// Contract is +y LEFT, UE is +y RIGHT: every lateral offset negates.
+	const double Geo[FSDS_NUM_WHEELS][2] = {
+		{  aF * 100.0, -P.TrackFront * 50.0 },   // FL
+		{  aF * 100.0,  P.TrackFront * 50.0 },   // FR
+		{ -bR * 100.0, -P.TrackRear  * 50.0 },   // RL
+		{ -bR * 100.0,  P.TrackRear  * 50.0 },   // RR
+	};
+
+	for (int32 i = 0; i < PlantWheels.Num(); i++)
+	{
+		UStaticMeshComponent* W = PlantWheels[i];
+		if (!W) continue;
+
+		// Suspension travel moves the wheel relative to the body. Positive
+		// travel is compression, which lifts the wheel INTO the arch, so the
+		// body sits lower relative to it — the wheel's own height above the
+		// road does not change, the chassis does. The chassis already carries
+		// that, so this is the residual: how far the wheel is from its static
+		// position in body coordinates.
+		const double TravelCm = PlantState.WheelSuspTravel[i] * 100.0;
+
+		// Spin from the plant's OMEGA. This is the signal Chaos structurally
+		// could not provide — it snaps wheel speed to ground speed, so its
+		// wheels roll even under lock-up. These stop when the plant says so.
+		WheelSpinRad[i] = FMath::Fmod(WheelSpinRad[i] + PlantState.WheelOmega[i] * DeltaTime,
+		                              2.0 * PI);
+
+		// Contract yaw is +left, UE yaw is +right.
+		const FQuat Steer(FVector::UpVector, -PlantState.WheelSteer[i]);
+		// Spin about the axle, which is the vehicle's lateral axis.
+		const FQuat Spin(FVector::RightVector, WheelSpinRad[i]);
+		// The engine cylinder stands on its end; lay it on its side so its
+		// axis becomes the axle.
+		const FQuat Align(FVector::ForwardVector, HALF_PI);
+
+		W->SetRelativeLocation(FVector(Geo[i][0], Geo[i][1], RestZCm - TravelCm));
+		W->SetRelativeRotation((Steer * Spin * Align).Rotator());
+	}
+
+	// Report the gap between tyre and road once a second. This is the number
+	// that mattered and that nothing reported: every visual defect in this
+	// work was caught by eye while telemetry called the run healthy, because
+	// the plant's own frame is self-consistent and says nothing about where
+	// the car looks like it is.
+	USkeletalMeshComponent* M = GetMesh();
+	if (!M) return;
 	WheelReportAccum += DeltaTime;
 	if (WheelReportAccum < 1.0) return;
 	WheelReportAccum = 0.0;
 
-	const double RadiusCm = FFSDSSettings::Get().GetDefaultVehicle()
-		? FFSDSSettings::Get().GetDefaultVehicle()->Physics.WheelRadius * 100.0 : 20.2;
-
 	FString Report;
-	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VehicleMovement->WheelSetups.Num());
-	for (int32 i = 0; i < N; i++)
+	for (int32 i = 0; i < PlantWheels.Num(); i++)
 	{
-		const FName Bone = VehicleMovement->WheelSetups[i].BoneName;
-		if (M->GetBoneIndex(Bone) == INDEX_NONE) { Report += TEXT(" [no bone]"); continue; }
-		const FVector BoneW = M->GetBoneLocation(Bone, EBoneSpaces::WorldSpace);
-
-		// Road directly under this wheel, from the same probe the plant uses.
-		double RoadM = 0.0; double N3[3] = {0,0,1};
-		const bool bRoad = ProbeRoadAt(BoneW, RoadM, N3);
-		// Gap between the bottom of the tyre and the road. Zero is correct;
-		// positive is a wheel hovering, negative is one sunk into the ground.
-		const double GapCm = bRoad ? (BoneW.Z - RadiusCm) - (RoadM * 100.0) : NAN;
-		Report += FString::Printf(TEXT("  %s z=%.1f gap=%+.1fcm"),
-			*Bone.ToString(), BoneW.Z, GapCm);
+		if (!PlantWheels[i]) continue;
+		const FVector C = PlantWheels[i]->GetComponentLocation();
+		double RoadM = 0.0; double Nrm[3] = {0,0,1};
+		const bool bRoad = ProbeRoadAt(C, RoadM, Nrm);
+		const double GapCm = bRoad ? (C.Z - P.WheelRadius * 100.0) - RoadM * 100.0 : NAN;
+		Report += FString::Printf(TEXT("  w%d gap=%+.1fcm om=%.1f"),
+			i, GapCm, PlantState.WheelOmega[i]);
 	}
 	UE_LOG(LogTemp, Log, TEXT("FSDS wheels:%s"), *Report);
 }
