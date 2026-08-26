@@ -85,7 +85,7 @@ for i = 1:numel(f)
 end
 
 % Pacejka lives in its own nested block.
-PD = struct('LatB',10.0,'LatC',1.9,'LatE',-1.5,'LonB',12.0,'LonC',1.7,'LonE',-0.5);
+PD = struct('LatB',10.0,'LatC',1.4,'LatE',-0.3,'LonB',12.0,'LonC',1.7,'LonE',-0.5);
 pf = fieldnames(PD);
 pj = struct();
 if isfield(phys,'Pacejka'), pj = phys.Pacejka; end
