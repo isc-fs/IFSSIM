@@ -114,13 +114,20 @@ def main() -> int:
     if span > 5.0:
         rate = (pos[-1] - pos[moved[0]]) / span
         print(f"drift rate     : {rate:+.3f} m/s of divergence")
-        if rate > 0.5:
-            print("  COMPOUNDING — the two are diverging faster than a")
-            print("  constant offset. Do not make this FMU authoritative")
-            print("  until the cause is found.")
-        else:
-            print("  bounded — consistent with a modelling difference")
-            print("  rather than an instability.")
+    print()
+    print("READ THE POSITION NUMBERS WITH CARE. The shadow is OPEN LOOP:")
+    print("the controller measures the REFERENCE car and computes throttle")
+    print("and steering for it; the shadow is handed those same commands and")
+    print("nothing feeds its own state back. Any difference in resistance or")
+    print("grip therefore integrates without correction, so compounding")
+    print("trajectory divergence is a property of the EXPERIMENT, not")
+    print("evidence that the plant is unstable. This setup cannot measure")
+    print("trajectory parity at all — only per-signal response.")
+    print()
+    print("What IS interpretable here is the speed comparison above: two")
+    print("plants given identical throttle. A shadow that settles at a")
+    print("different speed has different resistance, and that reading does")
+    print("not depend on the trajectories agreeing.")
     return 0
 
 
