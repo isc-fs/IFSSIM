@@ -52,7 +52,7 @@ Road = bus(['Road under each wheel, supplied by the platform because only it own
     el('normal_x',  4, '1',   'Surface normal X, unit')
     el('normal_y',  4, '1',   'Surface normal Y, unit')
     el('normal_z',  4, '1',   'Surface normal Z, unit')
-    el('residual',  4, 'm',   'Plane-fit residual, so the plant can DETECT a bad fit rather than trust it')
+    el('residual',  4, 'm',   'RMS distance of the probe rays from the fitted plane. NEGATIVE (-1) means NO PLANE WAS FITTED - fewer than three rays hit - and must not be read as a good fit. Zero means measured-and-flat, which is why the not-fitted case is not zero')
     el('mu',        4, '1',   'Surface friction coefficient at the contact patch')
     ]);
 

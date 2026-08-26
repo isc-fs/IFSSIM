@@ -1528,8 +1528,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				Terrain->Build();
 			}
 
-			int32 Checked = 0, Missed = 0, BadHeight = 0, BadNormal = 0;
-			double WorstHeight = 0.0, WorstNormal = 0.0;
+			int32 Checked = 0, Missed = 0, BadHeight = 0, BadNormal = 0, BadResidual = 0;
+			double WorstHeight = 0.0, WorstNormal = 0.0, WorstPlanarRes = 0.0;
 			FString WorstWhere;
 			// Per-patch detail. A single pass/fail cannot tell "the probe is
 			// wrong" from "the test's geometry is wrong", and I wrote both.
@@ -1550,8 +1550,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					const FVector StartCm(X * 100.0, -Y * 100.0, (TrueZ + 0.3) * 100.0);
 
 					double GotZ = 0.0, GotN[3] = {0,0,1};
+					double GotRes = AFSDSVehiclePawn::kRoadResidualNotFitted;
 					Checked++;
-					if (!VehiclePawn->ProbeRoadAt(StartCm, GotZ, GotN)) { Missed++; continue; }
+					if (!VehiclePawn->ProbeRoadPatch(StartCm, GotZ, GotN, GotRes)) { Missed++; continue; }
+
+					// Every patch here is planar, so a working fit must report
+					// a residual near zero. A fit that silently failed would
+					// return the not-fitted sentinel, which this also catches.
+					if (!(GotRes >= 0.0 && GotRes < 0.005)) BadResidual++;
+					if (GotRes > WorstPlanarRes) WorstPlanarRes = GotRes;
 
 					const double dZ = FMath::Abs(GotZ - TrueZ);
 					const double dN = FMath::Sqrt(
@@ -1578,14 +1585,34 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				}
 			}
 
-			const bool bOk = (Missed == 0 && BadHeight == 0 && BadNormal == 0);
+			// The seam. A residual that is always ~0 would pass every check
+			// above while carrying no information at all, so the test has to
+			// include ground that no plane describes and confirm the number
+			// actually rises.
+			double SeamRes = AFSDSVehiclePawn::kRoadResidualNotFitted;
+			double SeamZ = 0.0, SeamN[3] = {0,0,1};
+			bool bSeamProbed = false;
+			{
+				const FVector SeamStart(100.0 * 100.0, 0.0, 0.45 * 100.0);
+				bSeamProbed = VehiclePawn->ProbeRoadPatch(SeamStart, SeamZ, SeamN, SeamRes);
+			}
+			// 0.15 m step across an 8 cm span: the fit cannot absorb that, so
+			// anything below a centimetre means the residual is not measuring.
+			const bool bSeamOk = bSeamProbed && SeamRes > 0.01;
+
+			const bool bOk = (Missed == 0 && BadHeight == 0 && BadNormal == 0
+			                  && BadResidual == 0 && bSeamOk);
 			return FString::Printf(
 				TEXT("{\"ok\":%s,\"checked\":%d,\"missed\":%d,\"badHeight\":%d,")
 				TEXT("\"badNormal\":%d,\"worstHeightM\":%.4f,\"worstNormal\":%.4f,")
-				TEXT("\"worstPatch\":\"%s\",\"centres\":[%s]}"),
+				TEXT("\"worstPatch\":\"%s\",\"badResidual\":%d,")
+				TEXT("\"worstPlanarResidualM\":%.5f,\"seamOk\":%s,\"seamResidualM\":%.5f,")
+				TEXT("\"centres\":[%s]}"),
 				bOk ? TEXT("true") : TEXT("false"),
 				Checked, Missed, BadHeight, BadNormal,
-				WorstHeight, WorstNormal, *WorstWhere, *Detail);
+				WorstHeight, WorstNormal, *WorstWhere,
+				BadResidual, WorstPlanarRes,
+				bSeamOk ? TEXT("true") : TEXT("false"), SeamRes, *Detail);
 		}, 20.0, FString(TEXT("{\"ok\":false,\"error\":\"game-thread timeout\"}")),
 		   TEXT("validateRoadProbe"));
 	}

@@ -1571,6 +1571,105 @@ bool AFSDSVehiclePawn::ProbeRoadAt(const FVector& StartCm, double& OutHeightM,
 	return true;
 }
 
+bool AFSDSVehiclePawn::ProbeRoadPatch(const FVector& CentreCm, double& OutHeightM,
+                                      double OutNormal[3], double& OutResidualM) const
+{
+	// Five rays: the centre plus a cross at the contact-patch span. A single
+	// ray reports the height of one point and has NOTHING to say about whether
+	// that point represents the ground the tyre sits on — at a kerb edge it is
+	// confidently wrong, and reports a residual of zero while being so.
+	//
+	// The offsets are world-axis-aligned rather than rotated into the wheel's
+	// frame. A least-squares plane fit does not care how the samples are
+	// oriented, only that they span two dimensions, so rotating them would add
+	// a steer-angle dependency for no gain.
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const double SpanCm = FMath::Max(0.01f, S.RoadProbeSpanM) * 100.0;
+
+	const FVector Offsets[5] = {
+		FVector(0, 0, 0),
+		FVector( SpanCm, 0, 0), FVector(-SpanCm, 0, 0),
+		FVector(0,  SpanCm, 0), FVector(0, -SpanCm, 0),
+	};
+
+	FVector Hits[5];
+	int32 NumHits = 0;
+	bool bCentreHit = false;
+	double CentreNormal[3] = {0,0,1};
+	double CentreHeight = 0.0;
+
+	for (int32 i = 0; i < 5; i++)
+	{
+		double H = 0.0, N[3] = {0,0,1};
+		const FVector P = CentreCm + Offsets[i];
+		if (!ProbeRoadAt(P, H, N)) continue;
+		Hits[NumHits++] = FVector(P.X, P.Y, H * 100.0);
+		if (i == 0)
+		{
+			bCentreHit = true;
+			CentreHeight = H;
+			for (int32 k = 0; k < 3; k++) CentreNormal[k] = N[k];
+		}
+	}
+
+	// Validity still follows the CENTRE ray alone. Requiring three hits would
+	// be defensible but it is a behaviour change — a wheel at a track edge
+	// would go from "in contact" to "no road", zeroing Fz — and that belongs
+	// in its own change with its own lap, not smuggled in with a fit.
+	if (!bCentreHit) return false;
+
+	OutHeightM = CentreHeight;
+	for (int32 k = 0; k < 3; k++) OutNormal[k] = CentreNormal[k];
+	OutResidualM = kRoadResidualNotFitted;
+	if (NumHits < 3) return true;
+
+	// Least squares z = a*x + b*y + c, solved about the centroid so the normal
+	// equations stay well-conditioned. Fitting in raw world coordinates puts
+	// x ~ 1e4 cm against a 8 cm span, and the 3x3 loses its significant digits
+	// to the offset.
+	FVector Mean(0, 0, 0);
+	for (int32 i = 0; i < NumHits; i++) Mean += Hits[i];
+	Mean /= (double)NumHits;
+
+	double Sxx=0, Sxy=0, Syy=0, Sxz=0, Syz=0;
+	for (int32 i = 0; i < NumHits; i++)
+	{
+		const double dx = Hits[i].X - Mean.X;
+		const double dy = Hits[i].Y - Mean.Y;
+		const double dz = Hits[i].Z - Mean.Z;
+		Sxx += dx*dx; Sxy += dx*dy; Syy += dy*dy;
+		Sxz += dx*dz; Syz += dy*dz;
+	}
+	const double Det = Sxx*Syy - Sxy*Sxy;
+	if (FMath::Abs(Det) < 1e-9) return true;   // samples collinear: no plane
+
+	const double A = ( Syy*Sxz - Sxy*Syz) / Det;   // dz/dx
+	const double B = (-Sxy*Sxz + Sxx*Syz) / Det;   // dz/dy
+
+	double SumSq = 0.0;
+	for (int32 i = 0; i < NumHits; i++)
+	{
+		const double Pred = Mean.Z + A*(Hits[i].X - Mean.X) + B*(Hits[i].Y - Mean.Y);
+		SumSq += FMath::Square(Hits[i].Z - Pred);
+	}
+	// Perpendicular distance, not vertical: on a slope the vertical gap
+	// overstates how far the point is off the plane, by 1/cos(tilt).
+	const double InvSlopeNorm = 1.0 / FMath::Sqrt(A*A + B*B + 1.0);
+	OutResidualM = FMath::Sqrt(SumSq / (double)NumHits) * InvSlopeNorm * 0.01;
+
+	// Plane height at the centre, which is the point the wheel is actually at.
+	OutHeightM = (Mean.Z + A*(CentreCm.X - Mean.X) + B*(CentreCm.Y - Mean.Y)) * 0.01;
+
+	// Normal of z = a*x + b*y + c is (-a, -b, 1) in UE; then the POLAR flip to
+	// the contract frame, same rule as the single-ray path.
+	FVector NUe(-A, -B, 1.0);
+	NUe.Normalize();
+	OutNormal[0] =  NUe.X;
+	OutNormal[1] = -NUe.Y;
+	OutNormal[2] =  NUe.Z;
+	return true;
+}
+
 void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 {
 	const FFSDSSettings& S = FFSDSSettings::Get();
@@ -1603,16 +1702,13 @@ void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 		WheelCentre += Mesh->GetComponentTransform()
 			.TransformVectorNoScale(VM->WheelSetups[i].AdditionalOffset);
 
-		double HitZ = 0.0, HitN[3] = {0,0,1};
-		if (ProbeRoadAt(WheelCentre, HitZ, HitN))
+		double HitZ = 0.0, HitN[3] = {0,0,1}, Residual = kRoadResidualNotFitted;
+		if (ProbeRoadPatch(WheelCentre, HitZ, HitN, Residual))
 		{
 			In.bRoadValid[i] = true;
 			In.RoadHeight[i] = HitZ;
 			for (int32 k = 0; k < 3; k++) In.RoadNormal[i][k] = HitN[k];
-			// Single ray, so there is no plane fit and no residual to report.
-			// Zero here means "not measured", not "perfectly flat"; a
-			// multi-ray fit is what would make this number mean something.
-			In.RoadResidual[i] = 0.0;
+			In.RoadResidual[i] = Residual;
 			In.RoadMu[i]       = Mu;
 		}
 		else
