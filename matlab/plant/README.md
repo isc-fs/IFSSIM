@@ -3,6 +3,20 @@
 The vehicle, as a Simulink model your engineers own. The simulator keeps terrain,
 sensors, collision, the referee and the ROS bridge — **this is the car.**
 
+### Where this fits
+
+This model is one of two implementations of the simulator's plant seam. It is
+exported as an FMU and loaded by Unreal at runtime; the other implementation is
+UE's own Chaos Vehicles, which is still the default and the only validated
+reference. Which one runs is `Plant.Type` in `settings.json`.
+
+- Architecture and the platform/plant boundary: [`../../docs/REFERENCE.md`](../../docs/REFERENCE.md) §1
+- Why the migration, and what is still unresolved: [`../../docs/fmu_plant_migration.md`](../../docs/fmu_plant_migration.md)
+- Where a change belongs: [`../../docs/CONTRIBUTING.md`](../../docs/CONTRIBUTING.md)
+
+You do not need Unreal, Docker or ROS to work on this model. Everything below
+runs in MATLAB alone.
+
 ---
 
 ## Start here
