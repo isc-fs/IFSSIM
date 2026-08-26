@@ -228,6 +228,23 @@ public:
 	 *  the tyre never touches, and much narrower makes the fit noise-limited. */
 	float RoadProbeSpanM = 0.08f;
 
+	/** Height of the SKELETAL MESH ORIGIN above the road when the car rests,
+	 *  metres. The plant reports its CoG, so the mesh offset is
+	 *  -(CoGHeight - MeshOriginHeight).
+	 *
+	 *  ZERO, and the reason is worth stating because the obvious answer is
+	 *  wrong. Under Chaos the chassis rested at 0.029 m, and anchoring to that
+	 *  seems right — but Chaos's animation node was posing the wheels DOWN by
+	 *  the suspension compression at the same time. With that posing gone the
+	 *  wheels sit at their bind pose, exactly one radius below the mesh
+	 *  origin, so the origin belongs on the road plane.
+	 *
+	 *  Using 0.029 here lifted the whole car by that much: measured as a
+	 *  +2.8 cm gap between every tyre and the road. The right reference is the
+	 *  WHEEL contact, not the chassis height — a chassis-height match can be
+	 *  exact while the car visibly hovers, which is what happened. */
+	float MeshOriginHeightM = 0.0f;
+
 	/** Shadow mode: force the shadow's state equal to the reference's every
 	 *  step, so the comparison is "same state, same inputs, same response?"
 	 *  rather than "how far apart do they drift?".

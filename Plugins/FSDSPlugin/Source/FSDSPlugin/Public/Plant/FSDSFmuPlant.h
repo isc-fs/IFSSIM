@@ -51,6 +51,14 @@ private:
 	double CurrentTime = 0.0;
 	bool bReady = false;
 
+	/** How many FFSDSFmuPlant instances currently hold a live FMU in THIS
+	 *  process. Simulink's generated code is non-reentrant and the FMU says so
+	 *  (modelDescription reports one instance per process), so a second
+	 *  Instantiate does not fail — it SEGFAULTS inside the FMU. A counter is
+	 *  the difference between a clear error and a dead editor. */
+	static int32 LiveInstances;
+	bool bCountedLive = false;
+
 	/** The FMU's state immediately after initialisation, before any DoStep.
 	 *  This is what Reset() restores — an FMU's pose is internal state with no
 	 *  input to write, so a snapshot is the only honest reset there is. */

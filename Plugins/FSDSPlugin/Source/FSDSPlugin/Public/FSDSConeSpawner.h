@@ -17,6 +17,22 @@ class FSDSPLUGIN_API AFSDSConeSpawner : public AActor
 	GENERATED_BODY()
 
 public:
+	/**
+	 * A cone reported a collision. Routes the impulse to the vehicle so the
+	 * plant feels the hit.
+	 *
+	 * Bound on the CONE, not the car, and that is the whole trick. When the
+	 * FMU drives, the car's mesh is kinematic and its own hit reports a
+	 * NormalImpulse of zero — the solver does not integrate it, so there is no
+	 * reaction to report. The cone simulates, so its hit carries the real
+	 * impulse, and Newton's third law gives the car's.
+	 */
+	UFUNCTION()
+	void OnConeHit(UPrimitiveComponent* HitComp, AActor* OtherActor,
+	               UPrimitiveComponent* OtherComp, FVector NormalImpulse,
+	               const FHitResult& Hit);
+
+public:
 	AFSDSConeSpawner();
 
 	virtual void BeginPlay() override;
