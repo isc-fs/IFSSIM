@@ -30,7 +30,7 @@ import numpy as np
 
 
 WHEELBASE_M = 1.60          # IFS-08 (settings.json)
-MAX_STEER_DEG = 28.0        # IFS-08 MaxSteerAngle (settings.json)
+MAX_STEER_DEG = 22.4        # IFS-08 MaxSteerAngle (settings.json)
 
 
 class FSDSClient:

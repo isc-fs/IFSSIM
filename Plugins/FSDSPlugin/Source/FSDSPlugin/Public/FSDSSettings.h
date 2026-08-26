@@ -83,7 +83,7 @@ struct FFSDSVehiclePhysics
 	FString Drivetrain = TEXT("RWD"); // RWD, FWD, AWD
 	float WheelRadius = 0.200f;      // meters
 	float WheelWidth = 0.190f;       // meters
-	float MaxSteerAngle = 28.f;      // degrees
+	float MaxSteerAngle = 22.4f;     // degrees
 	float MotorMaxTorque = 230.f;    // Nm (at motor)
 	float MotorMaxPower = 80000.f;   // Watts
 	// Regen braking limits. The IFS-08 has no hydraulic service brake —

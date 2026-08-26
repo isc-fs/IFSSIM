@@ -49,7 +49,7 @@ D = struct( ...
     'Mass',                 290.0, ...    % kg
     'WheelRadius',          0.200, ...    % m
     'WheelWidth',           0.190, ...    % m
-    'MaxSteerAngle',        28.0, ...     % deg, road wheel
+    'MaxSteerAngle',        22.4, ...     % deg, road wheel (peak-grip clamp)
     'MotorMaxTorque',       230.0, ...    % Nm at motor
     'MotorMaxPower',        80000.0, ...  % W
     'MaxRegenTorque',       230.0, ...    % Nm at motor, negative side

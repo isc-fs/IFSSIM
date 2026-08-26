@@ -122,22 +122,42 @@ Measured at 8 m/s with the current tyre:
 
 | steer | road wheel | lateral g | yaw / kinematic | |
 |---|---|---|---|---|
-| 0.30 | 8.4° | 0.58 | 0.997 | |
-| 0.50 | 14.0° | 0.96 | 0.987 | |
-| 0.65 | 18.2° | 1.22 | 0.967 | |
-| 0.80 | 22.4° | **1.34** | 0.873 | **peak grip** |
-| 1.00 | 28.0° | 1.27 | 0.651 | more steer, *less* grip |
+| 0.10 | 2.24° | 0.179 | 1.001 | |
+| 0.20 | 4.48° | 0.336 | 1.000 | |
+| 0.30 | 6.72° | 0.470 | 0.998 | |
+| 0.40 | 8.96° | 0.622 | 0.996 | |
+| 0.50 | 11.20° | 0.775 | 0.993 | |
+| 0.65 | 14.56° | 0.998 | 0.986 | 1 g |
+| 0.80 | 17.92° | 1.202 | 0.969 | |
+| 1.00 | 22.40° | **1.336** | 0.873 | **full lock = peak grip** |
+
+Strictly monotonic: every increment of steering buys more lateral acceleration,
+all the way to the stop. Before the clamp, full lock was 28° and the last two
+rows read 1.34 g → 1.27 g — steering *past* the peak, with yaw/kinematic
+collapsing 0.873 → 0.651.
 
 **The plant is kinematically exact up to about 1 g.** Stanley outputs a road-wheel
 angle assuming the kinematic response, and it gets it — so the gains are not
 mis-scaled in normal driving.
 
-**Peak grip is at 0.80 of full lock.** Past that, adding steering *reduces* both
-lateral force and yaw rate. That is the region where a path-following controller
-enters positive feedback: it is running wide, so it adds steering, which makes it
-run wider.
+**Peak grip is at 22.4°.** Past that, adding steering *reduces* both lateral
+force and yaw rate. That is the region where a path-following controller enters
+positive feedback: it is running wide, so it adds steering, which makes it run
+wider.
 
-Nothing is gained by ever commanding above 0.80 — you cannot turn better there.
+`MaxSteerAngle` is therefore clamped to 22.4°, so full lock now lands exactly on
+the peak and the reversed-feedback region is unreachable. Nothing is lost — every
+angle removed produced less curvature than 22.4° already does.
+
+This holds at 8 m/s. At 12 m/s the car is **grip**-limited before it is
+steering-limited: past about 9° it cannot hold speed through the corner and
+scrubs down to 6–8 m/s, so `yaw / kinematic` rises above 1.0 — an artefact of
+dividing by a collapsed `vx`, not extra yaw authority. The clamp does not
+address that; it is a speed-target problem, not a steering one.
+
+Caveat: 22.4° is where *this* Pacejka fit peaks, and that fit is shape-based, not
+measured tyre data. **Re-run `characterise_plant.m` after any tyre-model change**
+and move the clamp with it.
 
 ## Rules of the contract
 

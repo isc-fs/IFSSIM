@@ -39,11 +39,21 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // steering as a normalized [-1, 1] axis input through
     // SensorFrame.steering; we convert to radians at the publish
     // site so /fsds/steering_angle is in SI units (the contract
-    // sim_supervisor's OdometryFilter expects post-#383). 0.5 rad
-    // matches the IFS-08 URDF rack limit; raise via launch arg if
-    // the plugin's max-axis-to-angle mapping changes.
+    // sim_supervisor's OdometryFilter expects post-#383).
+    //
+    // This MUST equal settings.json VehiclePhysics.MaxSteerAngle, because
+    // SensorFrame.steering is the NORMALISED command and this is the only
+    // thing that turns it back into an angle. It is a reporting scale, not
+    // an authority limit — setting it too high does not give the car more
+    // lock, it makes /steering_angle over-report an angle the wheel never
+    // reached, and the OdometryFilter's kinematic bicycle then predicts a
+    // yaw rate the car cannot produce.
+    //
+    // Was 0.5 rad (28.6 deg), described as the URDF rack limit, against a
+    // plugin max of 28 deg — already 2.3% adrift. Now deg2rad(22.4), the
+    // tyre's peak-grip clamp (see FSDSWheelFront.cpp).
     max_steering_angle_rad_ = node_->declare_parameter<double>(
-        "max_steering_angle_rad", 0.5);
+        "max_steering_angle_rad", 0.390954);
 
     // ----- LWS (Bosch Steering Wheel Angle Sensor) model — #462 -----
     // The bridge publishes the post-decode floating-point view that

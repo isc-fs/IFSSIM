@@ -325,10 +325,16 @@ private:
     //
     // TODO(braking-steering): authoritative ISC_IFS_08.xlsx MONO sheet
     // gives turning radius 4.5 m + wheelbase 1.570 m → max δ ≈ 0.336
-    // rad. Changing this default will reduce controller authority —
-    // held until Sandra confirms + controller speed/lookahead is
-    // re-tuned. Tracked in issue #462.
-    double max_steering_angle_rad_ = 0.5;
+    // rad. Mirrors settings.json VehiclePhysics.MaxSteerAngle = 22.4 deg.
+    // This scales REPORTED angle only (see the declare_parameter site); it
+    // does not clamp the command, so it cannot reduce controller authority
+    // — the earlier note here claiming otherwise was mistaken, and the
+    // value is now pinned to the plugin rather than held pending a re-tune.
+    // Sandra's confirmation of the true rack limit is still outstanding:
+    // four numbers disagree (28 deg invented, 22.4 tyre peak, 18.2 uDV
+    // MAX_STEER_ROADWHEEL_DEG, 19.25 from the MONO sheet above).
+    // Tracked in issue #462.
+    double max_steering_angle_rad_ = 0.390954;
 
     // Steering ratio (steering wheel angle / road-wheel angle). The
     // Bosch LWS measures the wheel column rotation; the
