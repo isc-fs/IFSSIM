@@ -38,4 +38,15 @@ two subdirectories is a MathWorks tutorial download rather than an ISC
 model. `ISC_IFS_08.xlsx` in there is cited as authoritative by the
 steering TODO in `ros2/src/ifssim_bridge/include/ifssim_ros_wrapper.h`,
 which means a contested parameter's source of truth is a file git has
-never seen. Worth fixing; not fixed here.
+never seen.
+
+What it contains — and how it compares to `settings.json` — is recorded
+in [`../docs/IFS_08_measured_parameters.md`](../docs/IFS_08_measured_parameters.md),
+so at least the numbers are reviewable. Two findings from it are worth
+knowing before you trust a parameter:
+
+- The rear `SpringRate` matches the workbook's 300 lbs/in **exactly**,
+  so it is measured even though nothing in the code says so.
+- The wheelbase the steering TODO quotes (1570 mm) sits in a block
+  headed `IFS-06/07`, and `settings.json` says 1627 mm. The derivation
+  may be mixing two chassis.
