@@ -108,6 +108,37 @@ local to you.
 
 ---
 
+## Characterising the plant
+
+```matlab
+characterise_plant    % constant-steer sweeps to steady state
+```
+
+Reports, per speed and steering angle, the achieved yaw rate against the
+**kinematic** yaw rate — which is what the controller assumes it will get.
+Anything below 1.0 is loop gain the controller has silently lost.
+
+Measured at 8 m/s with the current tyre:
+
+| steer | road wheel | lateral g | yaw / kinematic | |
+|---|---|---|---|---|
+| 0.30 | 8.4° | 0.58 | 0.997 | |
+| 0.50 | 14.0° | 0.96 | 0.987 | |
+| 0.65 | 18.2° | 1.22 | 0.967 | |
+| 0.80 | 22.4° | **1.34** | 0.873 | **peak grip** |
+| 1.00 | 28.0° | 1.27 | 0.651 | more steer, *less* grip |
+
+**The plant is kinematically exact up to about 1 g.** Stanley outputs a road-wheel
+angle assuming the kinematic response, and it gets it — so the gains are not
+mis-scaled in normal driving.
+
+**Peak grip is at 0.80 of full lock.** Past that, adding steering *reduces* both
+lateral force and yaw rate. That is the region where a path-following controller
+enters positive feedback: it is running wide, so it adds steering, which makes it
+run wider.
+
+Nothing is gained by ever commanding above 0.80 — you cannot turn better there.
+
 ## Rules of the contract
 
 Inside your block, do what you like. At the ports:
