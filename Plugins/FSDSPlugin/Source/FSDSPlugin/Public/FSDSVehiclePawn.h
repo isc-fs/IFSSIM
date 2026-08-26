@@ -159,6 +159,37 @@ public:
 	/** Refreshed once per Tick, read by everything downstream. */
 	FFSDSPlantOutput PlantState;
 
+	/** The FMU running alongside Chaos in Plant.Type="shadow". Stepped with
+	 *  the same inputs, read by nothing — so it cannot change behaviour. */
+	TUniquePtr<IFSDSPlant> ShadowPlant;
+	FFSDSPlantOutput ShadowState;
+	int64 ShadowSteps = 0;
+	/** Each plant's own pose on the first shadow step. The FMU begins at its
+	 *  own initial condition while the Chaos car spawns on the start gate, so
+	 *  absolute positions are not comparable and their difference would be a
+	 *  large meaningless constant. Divergence is measured between DISPLACEMENTS
+	 *  from these origins. */
+	bool   bShadowOriginSet = false;
+	double ShadowOriginFmu[3] = {0,0,0};
+	double ShadowOriginChaos[3] = {0,0,0};
+	double ShadowYaw0Fmu = 0.0;
+	double ShadowYaw0Chaos = 0.0;
+	double ShadowWorstPosErrM = 0.0;
+	double ShadowWorstYawErrDeg = 0.0;
+	double ShadowSumPosErrM = 0.0;
+	double ShadowNextLogTime = 0.0;
+
+	/** Fill the road bus by probing terrain under each wheel.
+	 *
+	 *  Deliberately independent of Chaos: it traces from the wheel BONES, not
+	 *  from FWheelStatus::ContactPoint, because Chaos's contact results vanish
+	 *  in Phase 6 and a probe that depends on them would have to be rewritten
+	 *  exactly when it is load-bearing. */
+	void ProbeRoad(FFSDSPlantInput& In) const;
+
+	/** Step the shadow plant and accumulate divergence against PlantState. */
+	void StepShadowPlant(const FFSDSPlantInput& In);
+
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UFSDSWheeledVehicleMovementComponent* VehicleMovement;

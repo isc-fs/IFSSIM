@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Quantify how far the shadow FMU drifts from the Chaos reference.
+
+Reads the `FSDS Plant shadow:` lines the pawn emits once a second and
+reports the divergence summary docs/fmu_plant_migration.md asks for at
+the Phase 6 boundary.
+
+Divergence is NOT a defect count. The FMU reproduces the settings.json
+car; Chaos reproduces three arcade assists, a snap-to-ground wheel model
+and a hidden aero model. The Chaos trace is a reference trajectory, not
+a target. What this answers is narrower and more useful: are the two in
+the same regime, and where do they part company?
+
+    python3 tools/fmu/ab_plant.py [path-to-IFSSIM.log]
+"""
+import os
+import re
+import sys
+
+LINE = re.compile(
+    r"FSDS Plant shadow: t=(?P<t>[-\d.]+) "
+    r"pos_err=(?P<pos>[-\d.]+) m \(worst (?P<pworst>[-\d.]+), mean (?P<pmean>[-\d.]+)\) "
+    r"yaw_err=(?P<yaw>[-\d.]+) deg \(worst (?P<yworst>[-\d.]+)\) \| "
+    r"chaos v=(?P<vc>[-\d.]+) fmu v=(?P<vf>[-\d.]+)"
+    r"(?: \| road (?P<rv>\d)/4 valid, z=(?P<rz>[-\d.]+))?"
+)
+
+DEFAULT_LOG = os.path.expanduser(
+    "~/Library/Logs/Unreal Engine/IFSSIMEditor/IFSSIM.log")
+
+
+def main() -> int:
+    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_LOG
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError as ex:
+        print(f"cannot read {path}: {ex}")
+        return 1
+
+    rows = [m.groupdict() for m in LINE.finditer(text)]
+    if not rows:
+        print(f"no shadow-plant lines in {path}")
+        print("is Plant.Type set to 'shadow' in settings.json, and has PIE run?")
+        return 1
+
+    # A run restarts when sim time goes backwards; only the last one is current.
+    starts = [i for i in range(1, len(rows))
+              if float(rows[i]["t"]) < float(rows[i - 1]["t"])]
+    if starts:
+        rows = rows[starts[-1]:]
+
+    t = [float(r["t"]) for r in rows]
+    pos = [float(r["pos"]) for r in rows]
+    yaw = [float(r["yaw"]) for r in rows]
+    vc = [float(r["vc"]) for r in rows]
+    vf = [float(r["vf"]) for r in rows]
+    dv = [f - c for f, c in zip(vf, vc)]
+
+    def rms(xs):
+        return (sum(x * x for x in xs) / len(xs)) ** 0.5
+
+    moved = [i for i, v in enumerate(vc) if abs(v) > 0.5]
+    print(f"samples        : {len(rows)}   span {t[0]:.0f}–{t[-1]:.0f} s")
+    if not moved:
+        # "Both stationary" is NOT "nothing to report". Two parked cars should
+        # agree exactly, so any growth here is the plant moving when it should
+        # be still — and a constant rate is a velocity offset, which a lap will
+        # integrate into real position error.
+        print()
+        print("reference car never exceeded 0.5 m/s — comparing AT REST")
+        span = t[-1] - t[0]
+        drift = pos[-1] - pos[0]
+        print(f"  divergence   : {pos[0]:.4f} -> {pos[-1]:.4f} m over {span:.0f} s")
+        if span > 5.0:
+            rate = drift / span
+            print(f"  rate         : {rate*1000:+.2f} mm/s")
+            if abs(rate) < 1e-4:
+                print("  Two parked cars agreeing, as they should.")
+            else:
+                print("  CREEP. A parked car should not move. A constant rate is")
+                print("  a velocity offset, not a settling transient — over a")
+                print(f"  174 s lap it integrates to ~{abs(rate)*174:.2f} m before")
+                print("  the car has turned a wheel. Likely a missing static")
+                print("  friction / rolling-resistance term: with no force at")
+                print("  zero slip, any residual imbalance integrates freely.")
+        return 0
+    print(f"moving from    : t={t[moved[0]]:.0f} s "
+          f"({len(moved)} of {len(rows)} samples above 0.5 m/s)")
+    print()
+    print("displacement divergence (each plant measured from its OWN origin)")
+    print(f"  final        : {pos[-1]:.3f} m")
+    print(f"  worst        : {max(pos):.3f} m")
+    print(f"  RMS          : {rms(pos):.3f} m")
+    print()
+    print("heading divergence (change-from-start, so spawn pose cancels)")
+    print(f"  final        : {yaw[-1]:.2f} deg")
+    print(f"  worst        : {max(yaw):.2f} deg")
+    print()
+    print("forward speed, where BOTH are moving")
+    mv = [i for i in moved]
+    print(f"  chaos        : mean {sum(vc[i] for i in mv)/len(mv):.2f} m/s   "
+          f"max {max(vc):.2f}")
+    print(f"  fmu          : mean {sum(vf[i] for i in mv)/len(mv):.2f} m/s   "
+          f"max {max(vf):.2f}")
+    print(f"  fmu - chaos  : mean {sum(dv[i] for i in mv)/len(mv):+.2f} m/s   "
+          f"worst {max((abs(dv[i]), dv[i]) for i in mv)[1]:+.2f}")
+    print()
+
+    # Growth rate separates "offset" from "unstable", which matters far more
+    # than the absolute number: a constant lag is a modelling difference, a
+    # compounding one is a plant that will not survive being made
+    # authoritative.
+    span = t[-1] - t[moved[0]]
+    if span > 5.0:
+        rate = (pos[-1] - pos[moved[0]]) / span
+        print(f"drift rate     : {rate:+.3f} m/s of divergence")
+        if rate > 0.5:
+            print("  COMPOUNDING — the two are diverging faster than a")
+            print("  constant offset. Do not make this FMU authoritative")
+            print("  until the cause is found.")
+        else:
+            print("  bounded — consistent with a modelling difference")
+            print("  rather than an instability.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

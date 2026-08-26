@@ -3,6 +3,7 @@
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Plant/FSDSChaosPlant.h"
+#include "Plant/FSDSFmuPlant.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
@@ -809,7 +810,71 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// about how the car drives changes. The seam going in first is what
 		// makes a later FMU swap attributable — any difference is then the
 		// plant, not the refactor.
-		Plant = MakeUnique<FFSDSChaosPlant>(this);
+		const FFSDSSettings& PlantCfg = FFSDSSettings::Get();
+		const bool bWantFmu    = (PlantCfg.PlantType == TEXT("fmu"));
+		const bool bWantShadow = (PlantCfg.PlantType == TEXT("shadow"));
+
+		FString FmuPath = PlantCfg.PlantFmuPath;
+		if ((bWantFmu || bWantShadow) && !FmuPath.IsEmpty() && FPaths::IsRelative(FmuPath))
+		{
+			FmuPath = FPaths::Combine(FPaths::ProjectDir(), FmuPath);
+		}
+
+		// Build the FMU first when one is wanted, so that a failure falls back
+		// to Chaos LOUDLY instead of leaving the car with no plant at all.
+		TUniquePtr<IFSDSPlant> FmuPlant;
+		if (bWantFmu || bWantShadow)
+		{
+			if (FmuPath.IsEmpty())
+			{
+				UE_LOG(LogTemp, Error,
+					TEXT("FSDS: Plant.Type='%s' but Plant.FmuPath is empty — falling back to chaos"),
+					*PlantCfg.PlantType);
+			}
+			else if (!FPaths::FileExists(FmuPath))
+			{
+				UE_LOG(LogTemp, Error,
+					TEXT("FSDS: Plant.Type='%s' but no FMU at '%s' — falling back to chaos"),
+					*PlantCfg.PlantType, *FmuPath);
+			}
+			else
+			{
+				TUniquePtr<FFSDSFmuPlant> Candidate = MakeUnique<FFSDSFmuPlant>(FmuPath);
+				if (Candidate->Initialise())
+				{
+					FmuPlant = MoveTemp(Candidate);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Error,
+						TEXT("FSDS: FMU plant failed to initialise (%s) — falling back to chaos"),
+						*Candidate->GetLastError());
+				}
+			}
+		}
+
+		if (bWantFmu && FmuPlant.IsValid())
+		{
+			// The FMU is the plant. NOTE: the pawn is still Chaos-integrated,
+			// so the sensors now describe a car the mesh is not flying. This
+			// is a bring-up mode, not a driving mode, until the Phase 6
+			// kinematic swap lands. Warned every run so it cannot be mistaken
+			// for a validated configuration.
+			Plant = MoveTemp(FmuPlant);
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: plant is the FMU, but the pawn is still Chaos-integrated — ")
+				TEXT("sensors describe a DIFFERENT car from the one on screen. ")
+				TEXT("Use Plant.Type='shadow' unless you are doing FMU bring-up."));
+		}
+		else
+		{
+			Plant = MakeUnique<FFSDSChaosPlant>(this);
+			if (bWantShadow && FmuPlant.IsValid())
+			{
+				ShadowPlant = MoveTemp(FmuPlant);
+			}
+		}
+
 		if (!Plant->Initialise())
 		{
 			UE_LOG(LogTemp, Error, TEXT("FSDS: plant failed to initialise — %s"),
@@ -821,6 +886,13 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			UE_LOG(LogTemp, Log,
 				TEXT("FSDS: plant '%s' active. GetPlantState() now carries pose, wheels ")
 				TEXT("and powertrain in SI / ISO 8855 / ENU."), *Plant->GetName());
+		}
+		if (ShadowPlant.IsValid())
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: shadow plant '%s' stepping alongside Chaos. It drives ")
+				TEXT("nothing — divergence is logged once a second."),
+				*ShadowPlant->GetName());
 		}
 
 		// Seed all stochastic sources for this run. Must happen before any
@@ -1001,8 +1073,18 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		PlantIn.SimTime    = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 		PlantIn.GravityZ   = GetWorld() ? GetWorld()->GetGravityZ() * 0.01 : -9.81;
 
+		// Terrain under each wheel. Chaos ignores this — it does its own
+		// ground query — so filling it costs four traces and changes nothing
+		// today. The FMU cannot work without it, and building it here means
+		// the probe is exercised on every run long before anything depends
+		// on it being right.
+		ProbeRoad(PlantIn);
+
 		Plant->PreStep(PlantIn);
 		Plant->PostStep(PlantState);
+
+		// Same inputs, same step, read by nothing.
+		StepShadowPlant(PlantIn);
 	}
 
 	// Acceleration tracking
@@ -1424,4 +1506,183 @@ AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
 	Out.RL = VehicleMovement->GetWheelState(2).SpringForce * CmToM;
 	Out.RR = VehicleMovement->GetWheelState(3).SpringForce * CmToM;
 	return Out;
+}
+
+// ---------------------------------------------------------------------------
+// Road probe — the platform's answer to "what is under each wheel?"
+//
+// Only the platform owns terrain, so this is the one place that answers it.
+// Three choices worth stating, because each has a cheaper wrong version:
+//
+// 1. Traces from the wheel BONES, not from FWheelStatus::ContactPoint. Chaos's
+//    contact results are exactly what Phase 6 deletes; a probe built on them
+//    would need rewriting at the moment it becomes load-bearing.
+//
+// 2. Straight DOWN in world Z, not along the vehicle's up axis. The road's
+//    height is a property of the world, and a rolled car must not tilt its own
+//    idea of where the ground is.
+//
+// 3. WorldStatic only, so the cones — which simulate, and are therefore
+//    PhysicsBody — cannot be mistaken for road. This forfeits exact
+//    comparability with Chaos's own channel trace, which the migration doc
+//    states plainly rather than discovering later.
+// ---------------------------------------------------------------------------
+void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
+{
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const float Mu = S.RoadDefaultMu;
+
+	USkeletalMeshComponent* Mesh = GetMesh();
+	UFSDSWheeledVehicleMovementComponent* VM = VehicleMovement;
+	const UWorld* W = GetWorld();
+	if (!Mesh || !VM || !W)
+	{
+		// No answer is better than a confident z=0: a flat-road stub passes
+		// every test that exists today and is wrong on the first ramp.
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++) In.bRoadValid[i] = false;
+		return;
+	}
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSRoadProbe), /*bTraceComplex=*/true, this);
+	Params.bReturnPhysicalMaterial = false;
+	FCollisionObjectQueryParams ObjParams;
+	ObjParams.AddObjectTypesToQuery(ECC_WorldStatic);
+
+	const double UpCm   = S.RoadProbeUpM   * 100.0;
+	const double DownCm = S.RoadProbeDownM * 100.0;
+	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VM->WheelSetups.Num());
+
+	for (int32 i = 0; i < N; i++)
+	{
+		const FName Bone = VM->WheelSetups[i].BoneName;
+		FVector WheelCentre = Mesh->GetBoneLocation(Bone, EBoneSpaces::WorldSpace);
+		if (WheelCentre.IsNearlyZero())
+		{
+			// Bone missing from this skeleton — say so rather than probing the
+			// world origin, which would return the ground under the map centre.
+			In.bRoadValid[i] = false;
+			continue;
+		}
+		WheelCentre += Mesh->GetComponentTransform()
+			.TransformVectorNoScale(VM->WheelSetups[i].AdditionalOffset);
+
+		const FVector Start(WheelCentre.X, WheelCentre.Y, WheelCentre.Z + UpCm);
+		const FVector End  (WheelCentre.X, WheelCentre.Y, WheelCentre.Z - DownCm);
+
+		FHitResult Hit;
+		if (W->LineTraceSingleByObjectType(Hit, Start, End, ObjParams, Params))
+		{
+			In.bRoadValid[i]  = true;
+			In.RoadHeight[i]  = Hit.ImpactPoint.Z * 0.01;   // cm -> m, world Z
+			// UE is left-handed with +Y right; the contract is ENU with +Y
+			// left. A normal is a POLAR vector, so this is (x, -y, z) — the
+			// axial rule would silently invert the road on every slope.
+			In.RoadNormal[i][0] =  Hit.ImpactNormal.X;
+			In.RoadNormal[i][1] = -Hit.ImpactNormal.Y;
+			In.RoadNormal[i][2] =  Hit.ImpactNormal.Z;
+			// Single ray, so there is no plane fit and no residual to report.
+			// Zero here means "not measured", not "perfectly flat"; a
+			// multi-ray fit is what would make this number mean something.
+			In.RoadResidual[i] = 0.0;
+			In.RoadMu[i]       = Mu;
+		}
+		else
+		{
+			In.bRoadValid[i] = false;
+			In.RoadMu[i]     = Mu;
+		}
+	}
+	for (int32 i = N; i < FSDS_NUM_WHEELS; i++) In.bRoadValid[i] = false;
+}
+
+// ---------------------------------------------------------------------------
+// Shadow plant — the FMU integrating alongside Chaos, driving nothing.
+//
+// Behaviour-neutral by construction: nothing downstream reads ShadowState, so
+// this cannot change how the car drives. What it produces is the parity number
+// the migration doc requires before the kinematic swap.
+//
+// Divergence is expected and is not a bug. The FMU reproduces the settings.json
+// car; Chaos reproduces three arcade assists, a snap-to-ground wheel model and
+// a hidden aero model. The Chaos trace is a reference trajectory, not a target.
+// ---------------------------------------------------------------------------
+void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
+{
+	if (!ShadowPlant.IsValid()) return;
+
+	ShadowPlant->PreStep(In);
+	ShadowPlant->PostStep(ShadowState);
+
+	if (!ShadowState.bPlantOk)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS Plant: shadow '%s' failed at step %lld — dropping it. "
+			     "Chaos is unaffected."), *ShadowPlant->GetName(), ShadowSteps);
+		ShadowPlant.Reset();
+		return;
+	}
+
+	ShadowSteps++;
+
+	// Compare only what BOTH plants actually have. Chaos cannot report wheel
+	// omega, Fx/Fy or slip ratio at all (it snaps wheel speed to ground speed),
+	// so those are not divergence — they are absence, and averaging them in
+	// would manufacture a number that means nothing.
+	const double YawS = FMath::Atan2(
+		2.0 * (ShadowState.Quat[0]*ShadowState.Quat[3] + ShadowState.Quat[1]*ShadowState.Quat[2]),
+		1.0 - 2.0 * (ShadowState.Quat[2]*ShadowState.Quat[2] + ShadowState.Quat[3]*ShadowState.Quat[3]));
+	const double YawC = FMath::Atan2(
+		2.0 * (PlantState.Quat[0]*PlantState.Quat[3] + PlantState.Quat[1]*PlantState.Quat[2]),
+		1.0 - 2.0 * (PlantState.Quat[2]*PlantState.Quat[2] + PlantState.Quat[3]*PlantState.Quat[3]));
+	// Latch both origins on the first good step, then compare like with like.
+	if (!bShadowOriginSet)
+	{
+		for (int32 i = 0; i < 3; i++)
+		{
+			ShadowOriginFmu[i]   = ShadowState.Position[i];
+			ShadowOriginChaos[i] = PlantState.Position[i];
+		}
+		ShadowYaw0Fmu   = YawS;
+		ShadowYaw0Chaos = YawC;
+		bShadowOriginSet = true;
+	}
+
+	const double Dx = (ShadowState.Position[0] - ShadowOriginFmu[0])
+	                - (PlantState.Position[0]  - ShadowOriginChaos[0]);
+	const double Dy = (ShadowState.Position[1] - ShadowOriginFmu[1])
+	                - (PlantState.Position[1]  - ShadowOriginChaos[1]);
+	const double Dz = (ShadowState.Position[2] - ShadowOriginFmu[2])
+	                - (PlantState.Position[2]  - ShadowOriginChaos[2]);
+	const double PosErr = FMath::Sqrt(Dx*Dx + Dy*Dy + Dz*Dz);
+
+	double YawErr = FMath::RadiansToDegrees(FMath::UnwindRadians(
+		(YawS - ShadowYaw0Fmu) - (YawC - ShadowYaw0Chaos)));
+	YawErr = FMath::Abs(YawErr);
+
+	ShadowSumPosErrM += PosErr;
+	ShadowWorstPosErrM   = FMath::Max(ShadowWorstPosErrM, PosErr);
+	ShadowWorstYawErrDeg = FMath::Max(ShadowWorstYawErrDeg, YawErr);
+
+	// Once a second, not once a tick: at 60 Hz a per-tick line is 10k lines a
+	// lap and the signal is in the trend, not the sample.
+	if (In.SimTime >= ShadowNextLogTime)
+	{
+		ShadowNextLogTime = In.SimTime + 1.0;
+		// Road-probe health belongs on this line, not inferred from the car
+		// not having fallen through the world. A probe that silently starts
+		// missing on a ramp looks identical to one that works, right up until
+		// the suspension loads are wrong.
+		int32 NValid = 0;
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++) if (In.bRoadValid[i]) NValid++;
+
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS Plant shadow: t=%.1f pos_err=%.3f m (worst %.3f, mean %.3f) "
+			     "yaw_err=%.2f deg (worst %.2f) | chaos v=%.2f fmu v=%.2f m/s "
+			     "| road %d/4 valid, z=%.3f m"),
+			In.SimTime, PosErr, ShadowWorstPosErrM,
+			ShadowSumPosErrM / FMath::Max((int64)1, ShadowSteps),
+			YawErr, ShadowWorstYawErrDeg,
+			PlantState.VelBody[0], ShadowState.VelBody[0],
+			NValid, In.RoadHeight[FSDS_FL]);
+	}
 }

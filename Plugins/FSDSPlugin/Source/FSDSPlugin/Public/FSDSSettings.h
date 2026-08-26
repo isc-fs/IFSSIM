@@ -176,6 +176,40 @@ public:
 	// non-reproducible. See FSDSRandom.h.
 	int32 ScenarioSeed = 1;
 
+	// --- Plant selection -------------------------------------------------
+	//
+	// Which implementation of IFSDSPlant stands behind the vehicle.
+	//
+	//   "chaos"  — Chaos observes the car it is already integrating. Default,
+	//              and the only validated reference.
+	//   "shadow" — Chaos still DRIVES; the FMU is stepped alongside it with
+	//              the same inputs and the divergence is logged. Behaviour is
+	//              unchanged by construction, because nothing downstream reads
+	//              the shadow. This is how parity gets measured before the
+	//              kinematic swap, per docs/fmu_plant_migration.md Phase 6.
+	//   "fmu"    — the FMU is the plant. NOT yet the authoritative driver: the
+	//              pawn is still Chaos-integrated, so selecting this makes the
+	//              sensors read a car the mesh is not flying. Only useful for
+	//              bring-up until the Phase 6 kinematic swap lands.
+	//
+	// Kept out of VehiclePhysics on purpose. This is not a property of the
+	// car; it is a choice about which simulator runs it.
+	FString PlantType = TEXT("chaos");
+
+	/** Path to the .fmu for "shadow"/"fmu". Relative paths resolve against the
+	 *  project directory. Empty means fall back to chaos, loudly. */
+	FString PlantFmuPath;
+
+	/** Metres above the wheel centre to start each road probe, and metres
+	 *  below to end it. The defaults straddle a 0.2 m wheel with room for
+	 *  suspension travel without reaching through thin geometry. */
+	float RoadProbeUpM   = 0.6f;
+	float RoadProbeDownM = 1.2f;
+
+	/** Surface friction handed to the plant where the probe cannot tell.
+	 *  Distinct from VehiclePhysics.TireMu, which is the tyre's own limit. */
+	float RoadDefaultMu = 1.4f;
+
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 
 	/** Get the first (default) vehicle settings */
