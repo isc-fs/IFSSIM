@@ -1887,8 +1887,17 @@ void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
 		// not having fallen through the world. A probe that silently starts
 		// missing on a ramp looks identical to one that works, right up until
 		// the suspension loads are wrong.
-		int32 NValid = 0;
-		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++) if (In.bRoadValid[i]) NValid++;
+		int32 NValid = 0, NNotFitted = 0;
+		double ResMin = 1e9, ResMax = -1e9;
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++)
+		{
+			if (In.bRoadValid[i]) NValid++;
+			const double R = In.RoadResidual[i];
+			if (R < 0.0) { NNotFitted++; continue; }   // sentinel, not a value
+			ResMin = FMath::Min(ResMin, R);
+			ResMax = FMath::Max(ResMax, R);
+		}
+		if (NNotFitted == FSDS_NUM_WHEELS) { ResMin = 0.0; ResMax = 0.0; }
 
 		// With sync on, position error is ~0 by construction and says nothing.
 		// The parity signal is the RESPONSE: same state, same inputs, so any
@@ -1903,13 +1912,13 @@ void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
 		UE_LOG(LogTemp, Log,
 			TEXT("FSDS Plant shadow: t=%.1f pos_err=%.3f m (worst %.3f, mean %.3f) "
 			     "yaw_err=%.2f deg (worst %.2f) | chaos v=%.2f fmu v=%.2f m/s "
-			     "| road %d/4 valid, z=%.3f m | synced=%d "
+			     "| road %d/4 valid, z=%.3f m, res %.4f-%.4f m, nofit %d | synced=%d "
 			     "acc_err=%.3f m/s2 (ax %+.3f ay %+.3f) yawrate_err=%.2f deg/s"),
 			In.SimTime, PosErr, ShadowWorstPosErrM,
 			ShadowSumPosErrM / FMath::Max((int64)1, ShadowSteps),
 			YawErr, ShadowWorstYawErrDeg,
 			PlantState.VelBody[0], ShadowState.VelBody[0],
-			NValid, In.RoadHeight[FSDS_FL],
+			NValid, In.RoadHeight[FSDS_FL], ResMin, ResMax, NNotFitted,
 			SyncedIn.bSyncState ? 1 : 0, AccErr, Ax, Ay, YawRateErr);
 	}
 }

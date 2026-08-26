@@ -62,20 +62,41 @@ void AFSDSTestTerrain::Build()
 	// filler — it is the control. If the probe is broken in a way that also
 	// breaks flat ground, the ramp results alone could not tell you.
 	struct FSpec { const TCHAR* Name; double CX, CY, HX, HY, H, Pitch, Roll; };
+	// A CONTINUOUS profile, laid out along +x in the order a car meets it.
+	//
+	// Each feature meets grade at its edges, and each segment's end height is
+	// the next one's start height. The first version of this was a row of
+	// isolated slabs sitting proud of the ground — a ramp whose top face was
+	// 1 m up at its centre and ended in a 2.1 m drop, and a crown standing
+	// 0.2 m above the floor. Every leading edge was a vertical wall, so a car
+	// driving the corridor did not traverse the terrain, it crashed into it:
+	// launched off the ramp at 10 m/s and never reached the crown at all.
+	// Geometry that can only be probed and not driven tests half of what it
+	// should.
+	//
+	// The camber is 1.5 deg, giving a 0.105 m crown over a 4 m width — about
+	// 2.6%, which is ordinary road camber rather than the 6 deg used before.
+	//
+	// The STEP is the deliberate exception. It is a 0.08 m lateral kerb and it
+	// is MEANT to be a discontinuity: it is the only geometry here that no
+	// plane describes, which is the whole point of having a residual. It runs
+	// along x so a car can straddle it rather than hit it end-on.
+	//
+	// 0.08 m rather than the 0.15 m first used. At 0.15 the car simply wedged
+	// against it and stopped — a 20 cm wheel does not climb a 15 cm kerb — so
+	// the feature could be probed but never driven, which is the same failure
+	// the isolated slabs had. 0.08 still puts the residual (~0.014 m) well
+	// clear of the 0.01 m detection threshold.
 	const FSpec Specs[] = {
-		{ TEXT("flat"),        20.0,  0.0, 5.0, 4.0, 0.0,  0.0,  0.0 },
-		{ TEXT("ramp_up"),     40.0,  0.0, 8.0, 4.0, 1.0,  8.0,  0.0 },
-		{ TEXT("crown_left"),  70.0,  2.0, 8.0, 2.0, 0.2,  0.0,  6.0 },
-		{ TEXT("crown_right"), 70.0, -2.0, 8.0, 2.0, 0.2,  0.0, -6.0 },
-		// A STEP: two flat patches at different heights meeting at y=100.
-		// Every surface above is planar, so a plane fit describes them
-		// perfectly and the residual is zero whether or not the fit works.
-		// This is the shape that makes the residual mean something — a wheel
-		// straddling the seam sits on ground no plane describes, which is
-		// precisely the case the contract wants the plant to be able to
-		// DETECT rather than trust.
-		{ TEXT("step_low"),   100.0,  1.5, 8.0, 1.5, 0.0,  0.0,  0.0 },
-		{ TEXT("step_high"),  100.0, -1.5, 8.0, 1.5, 0.15, 0.0,  0.0 },
+		{ TEXT("flat"),        22.0,  0.0, 12.0, 4.0, 0.0000,  0.0,  0.0 },  // x 10..34
+		{ TEXT("ramp_up"),     39.0,  0.0,  5.0, 4.0, 0.7020,  8.0,  0.0 },  // 0 -> 1.405
+		{ TEXT("ramp_down"),   49.0,  0.0,  5.0, 4.0, 0.7020, -8.0,  0.0 },  // 1.405 -> 0
+		{ TEXT("flat_mid"),    60.0,  0.0,  6.0, 4.0, 0.0000,  0.0,  0.0 },  // x 54..66
+		{ TEXT("crown_left"),  74.0,  2.0,  8.0, 2.0, 0.0524,  0.0,  1.5 },  // edge 0, ridge .105
+		{ TEXT("crown_right"), 74.0, -2.0,  8.0, 2.0, 0.0524,  0.0, -1.5 },
+		{ TEXT("flat_run"),    86.0,  0.0,  4.0, 4.0, 0.0000,  0.0,  0.0 },  // x 82..90
+		{ TEXT("step_low"),    99.0,  1.5,  9.0, 1.5, 0.0000,  0.0,  0.0 },  // x 90..108
+		{ TEXT("step_high"),   99.0, -1.5,  9.0, 1.5, 0.0800,  0.0,  0.0 },
 	};
 
 	const double M2CM = 100.0;
