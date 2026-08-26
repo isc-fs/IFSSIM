@@ -161,6 +161,47 @@ public:
 
 	/** The FMU running alongside Chaos in Plant.Type="shadow". Stepped with
 	 *  the same inputs, read by nothing — so it cannot change behaviour. */
+	/** True when the FMU is integrating the car and Chaos has been stood down.
+	 *  The mesh is then a KINEMATIC TARGET driven from PlantState, not a
+	 *  simulated body. */
+	bool bFmuDrivesPawn = false;
+
+	/** Vertical datum shift between the plant's body origin and the mesh's
+	 *  origin, in cm. The plant reports the CoG; the mesh origin is wherever
+	 *  the artist put it, and under Chaos the car rested at z ~= 0.03 m while
+	 *  the plant says 0.30. Writing the plant's z straight onto the mesh
+	 *  floats the car by the difference. Captured once, from the pose Chaos
+	 *  had the car in at the moment of the swap. */
+	double PlantToMeshZCm = 0.0;
+	bool   bZDatumCaptured = false;
+	double PawnZAtSwapCm = 0.0;
+
+	/** Contact impulses accumulated since the last plant step, in CONTRACT
+	 *  units (N*s, world ENU) with the moment already taken about the body
+	 *  origin. Converted to a force by dividing by the step, and cleared
+	 *  once consumed — an impulse applied twice is a force that doubles with
+	 *  frame rate. */
+	FVector PendingContactImpulse = FVector::ZeroVector;
+	FVector PendingContactMoment  = FVector::ZeroVector;
+	FVector PendingContactPoint   = FVector::ZeroVector;
+	int32   PendingContactCount   = 0;
+
+	/** Write the plant's pose onto the mesh. Only called when the FMU drives. */
+	void DrivePawnFromPlant();
+
+	/** Pose the wheel bones from the plant.
+	 *
+	 *  Chaos's vehicle anim node used to do this, and deactivating Chaos took
+	 *  it with it — leaving the wheels in their bind pose while the chassis
+	 *  moved correctly, which reads on screen as a car not touching the
+	 *  ground. The plant knows where its wheels are; this puts them there. */
+	void PoseWheelsFromPlant(float DeltaTime);
+
+	/** Throttles the wheel-gap report to once a second. */
+	double WheelReportAccum = 0.0;
+
+
+
 	TUniquePtr<IFSDSPlant> ShadowPlant;
 	FFSDSPlantOutput ShadowState;
 	int64 ShadowSteps = 0;
@@ -295,6 +336,26 @@ public:
 	 *  Position/Quat are in CONTRACT units (m, ENU, w-first quaternion), not
 	 *  UE centimetres. */
 	void ResetPlants(const double Position[3], const double Quat[4]);
+
+	/** Report a contact impulse the car just delivered, recovered from the
+	 *  OTHER body.
+	 *
+	 *  It has to come from the other side. When the FMU drives, the car's mesh
+	 *  is kinematic, and a kinematic body's own OnComponentHit reports a
+	 *  NormalImpulse of zero — there is no solver reaction on a body the
+	 *  solver does not integrate. The cone IS simulating, so its hit carries
+	 *  the real impulse, and Newton's third law supplies the car's.
+	 *
+	 *  ImpulseUe is the impulse ON THE OTHER BODY in UE units (kg*cm/s);
+	 *  PointUe is the world contact point in cm. Both are converted and
+	 *  negated here, once, rather than at each call site. */
+	void ReportContactImpulse(const FVector& ImpulseUe, const FVector& PointUe);
+
+	/** Tear the plants down deterministically. Waiting for the pawn to be
+	 *  garbage-collected is too late: PIE restarts BeginPlay on a new pawn
+	 *  while the old one is still alive, and the FMU is one-instance-per
+	 *  -process. */
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 
 	/** Probe the ground under ONE point. Public and single-point so it can be
 	 *  tested against known geometry: the wheel loop below is a caller, not

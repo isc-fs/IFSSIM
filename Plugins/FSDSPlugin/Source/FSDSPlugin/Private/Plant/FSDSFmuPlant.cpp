@@ -1,6 +1,8 @@
 #include "Plant/FSDSFmuPlant.h"
 #include "Misc/Paths.h"
 
+int32 FFSDSFmuPlant::LiveInstances = 0;
+
 FFSDSFmuPlant::FFSDSFmuPlant(const FString& InFmuPath)
 	: FmuPath(InFmuPath)
 {
@@ -10,6 +12,7 @@ FFSDSFmuPlant::~FFSDSFmuPlant()
 {
 	// Before Terminate: the state belongs to the instance that produced it.
 	if (PristineState) Fmu.FreeState(PristineState);
+	if (bCountedLive) { LiveInstances = FMath::Max(0, LiveInstances - 1); bCountedLive = false; }
 	Fmu.Terminate();
 	Fmu.FreeInstance();
 	Fmu.Unload();
@@ -54,6 +57,21 @@ bool FFSDSFmuPlant::Initialise()
 	NameToCount = Package.GetInfo().VariableCounts;
 
 	const FString Resources = FPaths::Combine(Package.GetExtractedDir(), TEXT("resources"));
+	// Refuse before the FMU can crash. This is not defensive padding: it fires
+	// on a PIE restart, when the previous pawn has not been destroyed yet, and
+	// the observed failure mode is a SIGSEGV inside the FMU with a stack that
+	// points at Instantiate rather than at whatever forgot to tear down.
+	if (LiveInstances > 0)
+	{
+		LastError = FString::Printf(
+			TEXT("an FMU instance is already live in this process (%d). This FMU "
+			     "declares one instance per process — Simulink codegen is not "
+			     "reentrant — so instantiating a second would crash rather than "
+			     "fail. Tear the previous plant down first."), LiveInstances);
+		UE_LOG(LogTemp, Error, TEXT("FSDS Plant: %s"), *LastError);
+		return false;
+	}
+
 	if (!Fmu.Instantiate(TEXT("ifssim_plant"), Package.GetInfo().InstantiationToken, Resources))
 	{
 		LastError = Fmu.GetLastError();
@@ -67,6 +85,8 @@ bool FFSDSFmuPlant::Initialise()
 
 	CurrentTime = 0.0;
 	bReady = true;
+	LiveInstances++;
+	bCountedLive = true;
 
 	// Snapshot the pristine state NOW, before a single DoStep. This is what
 	// Reset() restores, and taking it here rather than lazily is deliberate:

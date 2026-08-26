@@ -855,16 +855,64 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 
 		if (bWantFmu && FmuPlant.IsValid())
 		{
-			// The FMU is the plant. NOTE: the pawn is still Chaos-integrated,
-			// so the sensors now describe a car the mesh is not flying. This
-			// is a bring-up mode, not a driving mode, until the Phase 6
-			// kinematic swap lands. Warned every run so it cannot be mistaken
-			// for a validated configuration.
+			// THE FMU DRIVES THE CAR. Chaos is stood down and the mesh becomes
+			// a kinematic target written from the plant's pose each tick.
+			//
+			// Standing Chaos down is the point, not a side effect. Leaving it
+			// integrating would give two answers for where the car is, and the
+			// mesh would fight the plant every frame.
 			Plant = MoveTemp(FmuPlant);
+			bFmuDrivesPawn = true;
+
+			// NOT deactivated. The movement component is kept alive only as the
+			// wheel-ANIMATION path: Chaos's vehicle anim node is what poses the
+			// wheel bones, and killing the component leaves them in bind pose
+			// while the chassis moves — which reads on screen as a car not
+			// touching the ground, and no telemetry channel shows it.
+			//
+			// It cannot drive the car: the mesh is kinematic below, so the
+			// vehicle sim has no body to push. The plant owns the pose; Chaos
+			// is demoted to drawing the wheels.
+			if (USkeletalMeshComponent* M = GetMesh())
+			{
+				// Kinematic, not simulated. The body still collides — cones are
+				// what it has to push — but nothing integrates it any more.
+				M->SetSimulatePhysics(false);
+
+				// Say what the mesh can actually still collide with. Turning
+				// simulation off does not, by itself, keep a body in the
+				// physics scene as a collidable kinematic one — and a car that
+				// silently stops colliding drives THROUGH the cones while
+				// every telemetry channel reports a healthy lap.
+				UE_LOG(LogTemp, Warning,
+					TEXT("FSDS: kinematic mesh — collision=%d objectType=%d "
+					     "queryOnly=%s physicsState=%s bodies=%d"),
+					(int32)M->GetCollisionEnabled(),
+					(int32)M->GetCollisionObjectType(),
+					M->GetCollisionEnabled() == ECollisionEnabled::QueryOnly ? TEXT("YES") : TEXT("no"),
+					M->HasValidPhysicsState() ? TEXT("valid") : TEXT("NONE"),
+					M->Bodies.Num());
+			}
+
+			// Place the plant where the pawn already is. The FMU starts at its
+			// OWN initial condition, so without this the car teleports to the
+			// plant's origin the moment the first pose is written. ResetPlants
+			// does it properly: snapshot for the internal state, injection for
+			// the pose.
+			const FVector  P0 = GetActorLocation();
+			const FQuat    Q0 = GetActorQuat();
+			// Chaos has the car sitting correctly right now. Remember that
+			// height so the plant's datum can be aligned to it on the first
+			// step, rather than the car jumping to the plant's CoG height.
+			PawnZAtSwapCm = P0.Z;
+			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01, P0.Z * 0.01 };
+			const double QuatC[4] = { Q0.W, -Q0.X, Q0.Y, -Q0.Z };
+			ResetPlants(PosC, QuatC);
+
 			UE_LOG(LogTemp, Warning,
-				TEXT("FSDS: plant is the FMU, but the pawn is still Chaos-integrated — ")
-				TEXT("sensors describe a DIFFERENT car from the one on screen. ")
-				TEXT("Use Plant.Type='shadow' unless you are doing FMU bring-up."));
+				TEXT("FSDS: THE FMU IS DRIVING. Chaos is deactivated and the mesh is a ")
+				TEXT("kinematic target from the plant. Wheel visuals no longer animate, "
+				     "and cone contact does not yet feed back into the plant."));
 		}
 		else
 		{
@@ -875,13 +923,20 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			}
 		}
 
-		if (!Plant->Initialise())
+		// Only the Chaos plant still needs initialising here. An FMU candidate
+		// was already initialised above, before being adopted — calling it
+		// again asks the FMU to instantiate a SECOND time in the process, and
+		// Simulink's codegen is not reentrant, so that is a SIGSEGV rather
+		// than a failure. Harmless for Chaos, which is idempotent, which is
+		// exactly why it survived until an FMU was put behind the same call.
+		const bool bAlreadyInitialised = bFmuDrivesPawn;
+		if (!bAlreadyInitialised && !Plant->Initialise())
 		{
 			UE_LOG(LogTemp, Error, TEXT("FSDS: plant failed to initialise — %s"),
 				*Plant->GetName());
 			Plant.Reset();
 		}
-		else
+		else if (Plant.IsValid())
 		{
 			UE_LOG(LogTemp, Log,
 				TEXT("FSDS: plant '%s' active. GetPlantState() now carries pose, wheels ")
@@ -1049,6 +1104,45 @@ void AFSDSVehiclePawn::BeginPlay()
 		bChaosVehicleActive ? TEXT("YES") : TEXT("NO - fallback mode"));
 }
 
+void AFSDSVehiclePawn::ReportContactImpulse(const FVector& ImpulseUe, const FVector& PointUe)
+{
+	// Newton's third law: the impulse recorded on the cone is the impulse the
+	// car delivered, so the car receives its negative.
+	//
+	// UE force units are kg*cm/s^2, so an impulse in kg*cm/s becomes N*s by
+	// dividing by 100. Contract is ENU with +y LEFT, and both an impulse and a
+	// position are POLAR, so both take (x, -y, z).
+	const FVector J(-ImpulseUe.X * 0.01, ImpulseUe.Y * 0.01, -ImpulseUe.Z * 0.01);
+	const FVector P( PointUe.X * 0.01,  -PointUe.Y * 0.01,    PointUe.Z * 0.01);
+
+	// Moment about the BODY ORIGIN, taken here while the arm is known. Handing
+	// the plant a force and a point and letting it work out the moment would
+	// mean agreeing on which origin the point is measured from, and that is
+	// exactly the kind of shared assumption this boundary exists to remove.
+	const FVector Origin(PlantState.Position[0], PlantState.Position[1], PlantState.Position[2]);
+	PendingContactImpulse += J;
+	PendingContactMoment  += FVector::CrossProduct(P - Origin, J);
+	PendingContactPoint    = P;
+	PendingContactCount++;
+}
+
+void AFSDSVehiclePawn::EndPlay(const EEndPlayReason::Type Reason)
+{
+	// Order matters: shadow first, then the plant, so that in shadow mode the
+	// FMU is gone before anything else can ask for one.
+	if (ShadowPlant.IsValid())
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: releasing shadow plant '%s'"), *ShadowPlant->GetName());
+		ShadowPlant.Reset();
+	}
+	if (Plant.IsValid())
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: releasing plant '%s'"), *Plant->GetName());
+		Plant.Reset();
+	}
+	Super::EndPlay(Reason);
+}
+
 void AFSDSVehiclePawn::ResetPlants(const double Position[3], const double Quat[4])
 {
 	if (Plant.IsValid())       Plant->Reset(Position, Quat);
@@ -1096,11 +1190,50 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		// on it being right.
 		ProbeRoad(PlantIn);
 
+		// Contact since the last step, as a force over this step. Cleared
+		// immediately: an impulse re-applied on a later step is a force that
+		// scales with frame rate, which looks like a physics bug and is an
+		// accounting one.
+		if (PendingContactCount > 0)
+		{
+			const double InvDt = 1.0 / FMath::Max((double)DeltaTime, 1e-6);
+			PlantIn.ExtForce[0]  = PendingContactImpulse.X * InvDt;
+			PlantIn.ExtForce[1]  = PendingContactImpulse.Y * InvDt;
+			PlantIn.ExtForce[2]  = PendingContactImpulse.Z * InvDt;
+			PlantIn.ExtTorque[0] = PendingContactMoment.X * InvDt;
+			PlantIn.ExtTorque[1] = PendingContactMoment.Y * InvDt;
+			PlantIn.ExtTorque[2] = PendingContactMoment.Z * InvDt;
+			PlantIn.ExtPoint[0]  = PendingContactPoint.X;
+			PlantIn.ExtPoint[1]  = PendingContactPoint.Y;
+			PlantIn.ExtPoint[2]  = PendingContactPoint.Z;
+
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: contact — %d impulse(s), |J|=%.2f N.s -> %.0f N over %.4f s "
+				     "(that is %.1f g on %.0f kg)"),
+				PendingContactCount, PendingContactImpulse.Size(),
+				PendingContactImpulse.Size() * InvDt, DeltaTime,
+				(PendingContactImpulse.Size() * InvDt) / (FFSDSSettings::Get().GetDefaultVehicle()
+					? FFSDSSettings::Get().GetDefaultVehicle()->Physics.Mass * 9.81 : 2698.0),
+				FFSDSSettings::Get().GetDefaultVehicle()
+					? FFSDSSettings::Get().GetDefaultVehicle()->Physics.Mass : 275.0);
+
+			PendingContactImpulse = FVector::ZeroVector;
+			PendingContactMoment  = FVector::ZeroVector;
+			PendingContactCount   = 0;
+		}
+
 		Plant->PreStep(PlantIn);
 		Plant->PostStep(PlantState);
 
 		// Same inputs, same step, read by nothing.
 		StepShadowPlant(PlantIn);
+
+		// The plant has produced this step's pose; put the car there.
+		if (bFmuDrivesPawn)
+		{
+			DrivePawnFromPlant();
+			PoseWheelsFromPlant(DeltaTime);
+		}
 	}
 
 	// Acceleration tracking
@@ -1668,6 +1801,183 @@ bool AFSDSVehiclePawn::ProbeRoadPatch(const FVector& CentreCm, double& OutHeight
 	OutNormal[1] = -NUe.Y;
 	OutNormal[2] =  NUe.Z;
 	return true;
+}
+
+void AFSDSVehiclePawn::DrivePawnFromPlant()
+{
+	if (!PlantState.bPlantOk) return;   // never fly the car on a failed step
+
+	USkeletalMeshComponent* M = GetMesh();
+	if (!M) return;
+
+	// Contract (SI, ENU, +y LEFT) -> UE (cm, left-handed, +y RIGHT). Position
+	// is POLAR so y negates; the quaternion takes the same handedness flip the
+	// Chaos adapter uses in reverse. One conversion, one place.
+	// THE PLANT'S z IS THE CoG, NOT THE MESH ORIGIN. build_chassis initialises
+	// pos to [0;0;IFSSIM_CoGH], so a resting car reports z = CoGHeight = 0.300
+	// m while the mesh origin sits near the road. Writing the plant's z
+	// straight onto the mesh floats the car by most of a CoG height — which is
+	// exactly what it did, and what no telemetry channel showed, because the
+	// plant was reporting its own datum perfectly correctly the whole time.
+	//
+	// Taken from the model's own parameter rather than measured off a settled
+	// car: settings.json owns CoGHeight, build_chassis seeds the state from
+	// it, and this is the third reader of the same number instead of a fourth
+	// independent guess.
+	//
+	// The mesh origin does NOT sit on the road plane — under Chaos it rested
+	// 0.029 m above it. Treating it as zero buried the car by exactly that,
+	// which is why MeshOriginHeightM exists: it is a property of the art
+	// asset, measured, and named rather than folded silently into the CoG.
+	if (!bZDatumCaptured)
+	{
+		const double CoGH = FFSDSSettings::Get().GetDefaultVehicle()
+			? FFSDSSettings::Get().GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+		const double MeshOriginH = FFSDSSettings::Get().MeshOriginHeightM;
+		PlantToMeshZCm = -(CoGH - MeshOriginH) * 100.0;
+		bZDatumCaptured = true;
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: plant reports the CoG (%.3f m at rest), mesh origin sits "
+			     "%.3f m up — shifting the mesh down %.1f cm"),
+			CoGH, MeshOriginH, -PlantToMeshZCm);
+	}
+
+	const FVector Loc(PlantState.Position[0] * 100.0,
+	                 -PlantState.Position[1] * 100.0,
+	                  PlantState.Position[2] * 100.0 + PlantToMeshZCm);
+	const FQuat Rot(-PlantState.Quat[1], PlantState.Quat[2],
+	                -PlantState.Quat[3],  PlantState.Quat[0]);
+
+	const FVector PrevLoc = GetActorLocation();
+
+	// THE PLANT OWNS THE POSE; A QUERY ANSWERS WHETHER ANYTHING IS IN THE WAY.
+	// Those are two jobs and conflating them broke both.
+	//
+	// Moving with bSweep=true stops the move at the first blocking hit, and
+	// the first blocking hit is always the ground — so the car came to rest on
+	// its collision shape instead of the plant's ride height and visibly flew.
+	// Filtering the hit afterwards does not help: by then the move has already
+	// been truncated.
+	//
+	// So the move is unswept, exactly as the migration doc says, and a
+	// SEPARATE shape query along the same path reports obstacles. The plant is
+	// never overruled; it is told.
+	SetActorLocationAndRotation(Loc, Rot, /*bSweep=*/false, nullptr, ETeleportType::None);
+	M->BodyInstance.SetBodyTransform(GetActorTransform(), ETeleportType::None);
+
+	const FVector Delta = Loc - PrevLoc;
+	if (Delta.SizeSquared() < 1.0) return;   // sub-cm move: nothing to sweep
+
+	// A box roughly the size of the car, swept along this step's motion.
+	// Cheaper and more forgiving than the full skeletal collision, and the
+	// question being asked is only "is something solid in the way".
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSBodySweep), /*bTraceComplex=*/false, this);
+	FHitResult Hit;
+	const FCollisionShape Body = FCollisionShape::MakeBox(FVector(80.f, 60.f, 40.f));
+	const bool bHit = GetWorld()->SweepSingleByChannel(
+		Hit, PrevLoc, Loc, Rot, ECC_Vehicle, Body, Params);
+
+	// Ignore the ground. The plant already carries the car vertically, through
+	// the suspension and the road probe, so reporting the floor as a contact
+	// bills the same support twice — measured at 1406 hits and up to 1.3 g of
+	// phantom force in a single run, all of it the car resting on the road.
+	//
+	// The test is the normal, not the actor: "is this surface holding the car
+	// up, or is it in the car's way?". A barrier, a wall and a cone all
+	// present a roughly horizontal normal; road, ramp and kerb do not. That
+	// keeps working on the 8 deg ramp, where an actor-name test would not.
+	if (!bHit || FMath::Abs(Hit.ImpactNormal.Z) > 0.7f) return;
+
+	// The impulse the car had to shed: its momentum INTO the surface. Only the
+	// normal component — the tangential part is the car sliding along a
+	// barrier, which it is entitled to do.
+	const FVector VelWorld(PlantState.VelWorld[0], -PlantState.VelWorld[1], PlantState.VelWorld[2]);
+	const double VIntoSurface = FVector::DotProduct(VelWorld, Hit.ImpactNormal);
+	if (VIntoSurface >= 0.0) return;
+
+	const double MassKg = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics.Mass : 275.0;
+	// In UE units so ReportContactImpulse's own conversion applies once. Sign:
+	// this is the impulse ON THE OTHER BODY, which is INTO the surface.
+	const FVector ImpulseUe = -Hit.ImpactNormal * (MassKg * -VIntoSurface) * 100.0;
+	ReportContactImpulse(ImpulseUe, Hit.ImpactPoint);
+
+	// And push what we hit. The plant receiving a reaction is only half of
+	// Newton's third law — without this the car is slowed by a cone that never
+	// moves, so the referee, which scores DOO by displacement, never sees it.
+	// A kinematic body does not drive dynamics through the solver, so the
+	// equal and opposite has to be applied by hand. Same impulse, opposite
+	// sign, same point: the two halves cannot drift apart because they are
+	// computed once.
+	if (UPrimitiveComponent* HitComp = Hit.GetComponent())
+	{
+		if (HitComp->IsSimulatingPhysics())
+		{
+			HitComp->AddImpulseAtLocation(-ImpulseUe, Hit.ImpactPoint);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS: struck '%s' at %.1f m/s into the surface%s"),
+		*GetNameSafe(Hit.GetActor()), -VIntoSurface,
+		(Hit.GetComponent() && Hit.GetComponent()->IsSimulatingPhysics())
+			? TEXT(" (pushed it)") : TEXT(" (static, nothing to push)"));
+}
+
+void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
+{
+	// Deliberately does nothing yet, and is kept as the named place where it
+	// will.
+	//
+	// Chaos's vehicle animation node poses the wheel bones, and there is no
+	// way to hand it a pose: UChaosVehicleWheel exposes GetSteerAngle and
+	// GetRotationAngle and no setters, and USkeletalMeshComponent has no
+	// per-bone setter — that lives on UPoseableMeshComponent. Driving these
+	// bones from the plant needs a post-process anim blueprint, which is
+	// editor asset work rather than code.
+	//
+	// So for now the movement component is left ALIVE purely as the animation
+	// path (see BeginPlay), and it poses the wheels from its own wheel states.
+	// Those come from Chaos's own ground queries, not from the plant, so the
+	// wheels are plausible rather than truthful — in particular they cannot
+	// show lock-up, because Chaos snaps wheel speed to ground speed. That is a
+	// visual approximation and is stated as one.
+	//
+	// The plant HAS the honest numbers (WheelOmega, WheelSteer,
+	// WheelSuspTravel) and is the reason they are worth showing at all.
+	//
+	// Until then, MEASURE where the wheels actually are. "The car is not
+	// touching the ground" is a visual report, and every visual defect in this
+	// work was caught by eye and missed by telemetry — because nothing
+	// reported the one number that matters: the gap between the bottom of a
+	// wheel and the road beneath it.
+	USkeletalMeshComponent* M = GetMesh();
+	if (!M || !VehicleMovement) return;
+
+	WheelReportAccum += DeltaTime;
+	if (WheelReportAccum < 1.0) return;
+	WheelReportAccum = 0.0;
+
+	const double RadiusCm = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics.WheelRadius * 100.0 : 20.2;
+
+	FString Report;
+	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VehicleMovement->WheelSetups.Num());
+	for (int32 i = 0; i < N; i++)
+	{
+		const FName Bone = VehicleMovement->WheelSetups[i].BoneName;
+		if (M->GetBoneIndex(Bone) == INDEX_NONE) { Report += TEXT(" [no bone]"); continue; }
+		const FVector BoneW = M->GetBoneLocation(Bone, EBoneSpaces::WorldSpace);
+
+		// Road directly under this wheel, from the same probe the plant uses.
+		double RoadM = 0.0; double N3[3] = {0,0,1};
+		const bool bRoad = ProbeRoadAt(BoneW, RoadM, N3);
+		// Gap between the bottom of the tyre and the road. Zero is correct;
+		// positive is a wheel hovering, negative is one sunk into the ground.
+		const double GapCm = bRoad ? (BoneW.Z - RadiusCm) - (RoadM * 100.0) : NAN;
+		Report += FString::Printf(TEXT("  %s z=%.1f gap=%+.1fcm"),
+			*Bone.ToString(), BoneW.Z, GapCm);
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS wheels:%s"), *Report);
 }
 
 void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const

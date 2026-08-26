@@ -1,4 +1,5 @@
 #include "FSDSConeSpawner.h"
+#include "FSDSVehiclePawn.h"
 #include "FSDSRandom.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -209,6 +210,28 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 		TotalSpawned++;
 
 		SpawnedCones.Add(ConeActor);
+
+		// Report collisions so the car can feel them. Off by default on a
+		// static mesh: without SetNotifyRigidBodyCollision the hit delegate
+		// simply never fires, silently, and the cone is knocked over exactly
+		// as before — which is why this was easy to miss.
+		MeshComp->SetNotifyRigidBodyCollision(true);
+		// Log once what a cone actually is, physically. The migration doc
+		// assumed "cones ARE simulating, so NormalImpulse is populated" — an
+		// assumption worth checking, because if they are not simulating there
+		// is no impulse to recover and the contact path can never fire.
+		static bool bLoggedConePhysics = false;
+		if (!bLoggedConePhysics)
+		{
+			bLoggedConePhysics = true;
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS Cone physics: simulating=%s collision=%d objectType=%d mass=%.2f kg"),
+				MeshComp->IsSimulatingPhysics() ? TEXT("YES") : TEXT("NO"),
+				(int32)MeshComp->GetCollisionEnabled(),
+				(int32)MeshComp->GetCollisionObjectType(),
+				MeshComp->GetMass());
+		}
+		MeshComp->OnComponentHit.AddDynamic(this, &AFSDSConeSpawner::OnConeHit);
 
 		// Tag this mesh's CustomDepthStencilValue so the LiDAR's
 		// post-process pass (#321 D-Phase-2 follow-up) can read
@@ -648,4 +671,24 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 		OutLocation.X, OutLocation.Y, YawDeg);
 
 	return true;
+}
+
+
+void AFSDSConeSpawner::OnConeHit(UPrimitiveComponent* /*HitComp*/, AActor* OtherActor,
+                                 UPrimitiveComponent* /*OtherComp*/, FVector NormalImpulse,
+                                 const FHitResult& Hit)
+{
+	// Only the car. Cones hit each other constantly once one is knocked over,
+	// and feeding those to the plant would have the car braked by a collision
+	// happening ten metres behind it.
+	AFSDSVehiclePawn* Pawn = Cast<AFSDSVehiclePawn>(OtherActor);
+	if (!Pawn) return;
+
+	// A zero impulse means the solver had no reaction to report — both bodies
+	// kinematic, or a grazing contact resolved to nothing. Passing it on would
+	// add a contact event carrying no force, and the plant would divide it by
+	// the timestep all the same.
+	if (NormalImpulse.IsNearlyZero()) return;
+
+	Pawn->ReportContactImpulse(NormalImpulse, Hit.ImpactPoint);
 }
