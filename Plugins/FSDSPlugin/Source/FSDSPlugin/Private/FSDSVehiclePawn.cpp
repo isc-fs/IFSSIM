@@ -1049,6 +1049,22 @@ void AFSDSVehiclePawn::BeginPlay()
 		bChaosVehicleActive ? TEXT("YES") : TEXT("NO - fallback mode"));
 }
 
+void AFSDSVehiclePawn::ResetPlants(const double Position[3], const double Quat[4])
+{
+	if (Plant.IsValid())       Plant->Reset(Position, Quat);
+	if (ShadowPlant.IsValid()) ShadowPlant->Reset(Position, Quat);
+
+	// Drop the divergence baseline too. The pawn re-latches on a detected
+	// teleport anyway, but doing it here as well means an explicit reset does
+	// not have to be inferred from a position jump — and a reset that lands
+	// the car within the jump threshold would otherwise go unnoticed.
+	bShadowOriginSet = false;
+	ShadowWorstPosErrM = 0.0;
+	ShadowWorstYawErrDeg = 0.0;
+	ShadowSumPosErrM = 0.0;
+	ShadowSteps = 0;
+}
+
 FString AFSDSVehiclePawn::GetPlantName() const
 {
 	return Plant.IsValid() ? Plant->GetName() : TEXT("<none>");

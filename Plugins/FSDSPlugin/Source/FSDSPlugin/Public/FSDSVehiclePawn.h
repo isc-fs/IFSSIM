@@ -285,6 +285,17 @@ public:
 	/** Which plant is driving. "Chaos" today. */
 	FString GetPlantName() const;
 
+	/** Tell the plant(s) the car has been teleported.
+	 *
+	 *  Must be called from every reset path. A plant that integrates its own
+	 *  state has no other way to know: the platform moving the mesh is
+	 *  invisible to it, so without this it keeps driving from wherever it had
+	 *  got to while the rest of the sim starts a fresh mission.
+	 *
+	 *  Position/Quat are in CONTRACT units (m, ENU, w-first quaternion), not
+	 *  UE centimetres. */
+	void ResetPlants(const double Position[3], const double Quat[4]);
+
 private:
 
 	void SetupVehicleMovement();

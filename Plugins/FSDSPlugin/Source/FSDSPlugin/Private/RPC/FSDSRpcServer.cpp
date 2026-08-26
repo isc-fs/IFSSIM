@@ -22,6 +22,30 @@
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
 
+/**
+ * Tell the vehicle's plant(s) that the car has been teleported.
+ *
+ * Moving the mesh is INVISIBLE to a plant that integrates its own state. Without
+ * this the FMU keeps driving from wherever it had got to while the rest of the
+ * sim starts a fresh mission. Measured before this existed: a 59.5 m step in the
+ * shadow divergence, with the car standing still.
+ *
+ * Every path that repositions the vehicle must call this — loadTrack, reset and
+ * simSetVehiclePose all do. A helper rather than three copies precisely because
+ * the fourth caller is the one that will forget.
+ *
+ * Converts UE (left-handed, centimetres) to the contract (SI, ENU, y LEFT) here,
+ * on the platform side of the boundary, matching FFSDSChaosPlant::Reset.
+ */
+static void NotifyPlantsOfTeleport(AFSDSVehiclePawn* Pawn, const FVector& PosUe, const FQuat& RotUe)
+{
+	if (!Pawn) return;
+	const double PosContract[3] = { PosUe.X * 0.01, -PosUe.Y * 0.01, PosUe.Z * 0.01 };
+	const double QuatContract[4] = { RotUe.W, -RotUe.X, RotUe.Y, -RotUe.Z };
+	Pawn->ResetPlants(PosContract, QuatContract);
+}
+
+
 namespace
 {
 	/**
@@ -1222,6 +1246,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						{
 							VehiclePawn->SetActorLocationAndRotation(
 								StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 						}
 						NumCones = It->SpawnedCones.Num();
 						break;
@@ -1450,6 +1475,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					Mesh->BodyInstance.SetBodyTransform(RestoredXform, ETeleportType::TeleportPhysics);
 				}
 				VehiclePawn->SetActorRotation(HeadingToRestore, ETeleportType::TeleportPhysics);
+
+				NotifyPlantsOfTeleport(VehiclePawn, VehiclePawn->GetActorLocation(), HeadingToRestore);
+
 				// No velocity kick. The previous 5 cm/s body-forward push was
 				// a workaround for Chaos pinning at the (v=0, ω=0) degenerate
 				// state. It was firing during the SLAM's INIT_CALIBRATING
@@ -1701,6 +1729,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 					}
+					NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 					// Chaos vehicles store *wheel* angular velocity in the
 					// vehicle simulation core (FWheeledVehicleSimulation), not
 					// in the rigid-body's angular velocity. Zeroing the body

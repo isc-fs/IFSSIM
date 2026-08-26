@@ -54,8 +54,20 @@ def main() -> int:
     # re-latches on it, but older logs predate that, so drop everything before
     # the last jump here too rather than reporting the teleport as divergence.
     all_rows = None
+    # 5.0 was far too tight and misread ordinary divergence as teleports: two
+    # cars on diverging trajectories at ~3 m/s each separate several metres per
+    # second quite legitimately, and a 1 s sample period turns that into a
+    # multi-metre step. It reported 20 "teleports" in a run containing one real
+    # reset. The bound that means something is kinematic — neither car exceeds
+    # v_max, so they cannot separate faster than 2*v_max, and 25 m in one
+    # sample is beyond anything the pair can do by driving.
+    #
+    # This is now only a backstop for logs predating the explicit reset call.
+    # The authority is the pawn, which re-latches on a teleport at TICK
+    # resolution (1 m in 1/60 s) and logs it — a threshold ordinary divergence
+    # cannot reach, because it would mean 60 m/s of separation.
     jumps = [i for i in range(1, len(rows))
-             if float(rows[i]["pos"]) - float(rows[i - 1]["pos"]) > 5.0]
+             if float(rows[i]["pos"]) - float(rows[i - 1]["pos"]) > 25.0]
     if jumps:
         # Keep the LONGEST clean stretch, not the last one. Taking the last
         # leaves whatever tail follows the final reset, which is usually the

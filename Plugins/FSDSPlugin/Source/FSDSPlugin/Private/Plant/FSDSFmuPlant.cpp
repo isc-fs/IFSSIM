@@ -8,6 +8,8 @@ FFSDSFmuPlant::FFSDSFmuPlant(const FString& InFmuPath)
 
 FFSDSFmuPlant::~FFSDSFmuPlant()
 {
+	// Before Terminate: the state belongs to the instance that produced it.
+	if (PristineState) Fmu.FreeState(PristineState);
 	Fmu.Terminate();
 	Fmu.FreeInstance();
 	Fmu.Unload();
@@ -65,8 +67,36 @@ bool FFSDSFmuPlant::Initialise()
 
 	CurrentTime = 0.0;
 	bReady = true;
-	UE_LOG(LogTemp, Log, TEXT("FSDS Plant: %s ready, %d variables resolved by name"),
-		*GetName(), NameToVR.Num());
+
+	// Snapshot the pristine state NOW, before a single DoStep. This is what
+	// Reset() restores, and taking it here rather than lazily is deliberate:
+	// the first caller to ask for a reset is usually asking mid-mission, and
+	// a snapshot taken then would restore the car to wherever it had got to.
+	if (Package.GetInfo().bCanGetAndSetState)
+	{
+		if (Fmu.GetState(PristineState))
+		{
+			PristineTime = CurrentTime;
+		}
+		else
+		{
+			PristineState = nullptr;
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS Plant: %s declares canGetAndSetFMUState but the call "
+				     "failed — Reset() will not work"), *GetName());
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS Plant: %s cannot save state, so it cannot be reset. "
+			     "A second mission in the same session will run from wherever "
+			     "the first one ended."), *GetName());
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS Plant: %s ready, %d variables resolved by name%s"),
+		*GetName(), NameToVR.Num(),
+		PristineState ? TEXT(", reset snapshot held") : TEXT(", NO reset snapshot"));
 	return true;
 }
 
@@ -192,15 +222,53 @@ void FFSDSFmuPlant::PostStep(FFSDSPlantOutput& Out)
 	Out.PlantStatus = 0;
 }
 
-void FFSDSFmuPlant::Reset(const double /*Position*/[3], const double /*Quat*/[4])
+void FFSDSFmuPlant::Reset(const double Position[3], const double Quat[4])
 {
-	// An FMU's pose is internal state; there is no input to write it to. The
-	// honest reset is a state restore from a snapshot taken at the start line,
-	// or a re-instantiate. Teleporting by writing pose is not available and
-	// pretending otherwise would silently do nothing.
-	UE_LOG(LogTemp, Warning,
-		TEXT("FSDS Plant: %s cannot be teleported — reset via SaveState/RestoreState "
-		     "from a start-line snapshot, or re-Initialise()"), *GetName());
+	if (!bReady) return;
+
+	if (!PristineState)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS Plant: %s has no reset snapshot — ignoring the reset. "
+			     "The plant keeps running from where it was."), *GetName());
+		return;
+	}
+
+	if (!Fmu.SetState(PristineState))
+	{
+		LastError = Fmu.GetLastError();
+		bReady = false;   // a failed restore leaves the FMU in an unknown state
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS Plant: %s failed to restore its reset snapshot (%s) — "
+			     "dropping the plant rather than running from an unknown state"),
+			*GetName(), *LastError);
+		return;
+	}
+
+	// Restoring state restores the FMU's internal time with it, so the
+	// communication point has to go back too. Leaving CurrentTime where it was
+	// would hand DoStep a time the FMU has already passed, which is a spec
+	// violation the FMU is entitled to reject — or worse, silently accept.
+	CurrentTime = PristineTime;
+
+	// Position/Quat are DELIBERATELY not honoured, and this is not laziness.
+	// FMI has no way to write pose into an FMU: it is internal state, reachable
+	// only through a snapshot. So the plant returns to ITS OWN start, not to
+	// the pose the platform asked for.
+	//
+	// For shadow mode that is exactly right — both cars return to their own
+	// start line and the divergence comparison re-latches on the teleport.
+	// For an AUTHORITATIVE FMU it is not enough: the platform must be able to
+	// place the car at an arbitrary start gate. Solving that needs a pose
+	// RESET INPUT on the plant model itself (a bus the model applies to its
+	// own integrator), which is a Simulink change, not an importer change.
+	// Recorded rather than hidden behind a signature that looks like it works.
+	(void)Position; (void)Quat;
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS Plant: %s reset to its start-line snapshot (t=%.3f). Note the "
+		     "requested pose is NOT applied — FMI cannot write pose."),
+		*GetName(), CurrentTime);
 }
 
 bool FFSDSFmuPlant::SupportsStateSaveRestore() const

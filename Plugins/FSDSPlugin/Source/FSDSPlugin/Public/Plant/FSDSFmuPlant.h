@@ -50,4 +50,10 @@ private:
 	TMap<FString, int32>  NameToCount;
 	double CurrentTime = 0.0;
 	bool bReady = false;
+
+	/** The FMU's state immediately after initialisation, before any DoStep.
+	 *  This is what Reset() restores — an FMU's pose is internal state with no
+	 *  input to write, so a snapshot is the only honest reset there is. */
+	void*  PristineState = nullptr;
+	double PristineTime  = 0.0;
 };
