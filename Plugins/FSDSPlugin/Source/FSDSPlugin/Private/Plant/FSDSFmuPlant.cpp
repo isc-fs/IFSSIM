@@ -169,6 +169,32 @@ void FFSDSFmuPlant::PreStep(const FFSDSPlantInput& In)
 	SetArray (TEXT("Env.ext_point"),        In.ExtPoint,  3);
 	SetScalar(TEXT("Env.chassis_grounded"), In.bChassisGrounded ? 1.0 : 0.0);
 
+	// State injection. Written every step, not only when enabled, so the
+	// enable flag is the only thing that changes between a synced and an
+	// unsynced step — leaving stale pose in the other fields would make a
+	// later enable pick up whatever was last written.
+	if (bPendingSync)
+	{
+		// A reset's pose wins over any caller-supplied sync this step. The two
+		// only collide when a reset lands on the same tick as a parity sync,
+		// and then the reset is the one that must survive.
+		const double Zero3[3] = {0,0,0};
+		SetScalar(TEXT("Sync.enable"), 1.0);
+		SetArray (TEXT("Sync.pos"),        PendingPos,  3);
+		SetArray (TEXT("Sync.quat"),       PendingQuat, 4);
+		SetArray (TEXT("Sync.vel_body"),   Zero3,       3);
+		SetArray (TEXT("Sync.omega_body"), Zero3,       3);
+		bPendingSync = false;
+	}
+	else
+	{
+		SetScalar(TEXT("Sync.enable"), In.bSyncState ? 1.0 : 0.0);
+		SetArray (TEXT("Sync.pos"),        In.SyncPosition,  3);
+		SetArray (TEXT("Sync.quat"),       In.SyncQuat,      4);
+		SetArray (TEXT("Sync.vel_body"),   In.SyncVelBody,   3);
+		SetArray (TEXT("Sync.omega_body"), In.SyncOmegaBody, 3);
+	}
+
 	// The FMU integrates here. Synchronous, in-process, on the calling thread:
 	// N calls of exactly DeltaTime, which is what makes the run reproducible.
 	if (!Fmu.DoStep(CurrentTime, In.DeltaTime))
@@ -251,24 +277,22 @@ void FFSDSFmuPlant::Reset(const double Position[3], const double Quat[4])
 	// violation the FMU is entitled to reject — or worse, silently accept.
 	CurrentTime = PristineTime;
 
-	// Position/Quat are DELIBERATELY not honoured, and this is not laziness.
-	// FMI has no way to write pose into an FMU: it is internal state, reachable
-	// only through a snapshot. So the plant returns to ITS OWN start, not to
-	// the pose the platform asked for.
+	// The snapshot restores WHAT the car is (wheel speeds, filter memory,
+	// integrator history); the injection then decides WHERE it is. Neither
+	// alone is a reset: a snapshot puts the car back at its own start rather
+	// than the requested gate, and an injection alone would place a car that
+	// is still spinning its wheels from the previous mission.
 	//
-	// For shadow mode that is exactly right — both cars return to their own
-	// start line and the divergence comparison re-latches on the teleport.
-	// For an AUTHORITATIVE FMU it is not enough: the platform must be able to
-	// place the car at an arbitrary start gate. Solving that needs a pose
-	// RESET INPUT on the plant model itself (a bus the model applies to its
-	// own integrator), which is a Simulink change, not an importer change.
-	// Recorded rather than hidden behind a signature that looks like it works.
-	(void)Position; (void)Quat;
+	// Queued rather than written now, because inputs are only read at the next
+	// PreStep. Writing here would set values the FMU has already passed.
+	for (int32 i = 0; i < 3; i++) PendingPos[i]  = Position[i];
+	for (int32 i = 0; i < 4; i++) PendingQuat[i] = Quat[i];
+	bPendingSync = true;
 
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS Plant: %s reset to its start-line snapshot (t=%.3f). Note the "
-		     "requested pose is NOT applied — FMI cannot write pose."),
-		*GetName(), CurrentTime);
+		TEXT("FSDS Plant: %s reset — snapshot restored (t=%.3f), pose (%.2f, %.2f, %.2f) "
+		     "queued for the next step"),
+		*GetName(), CurrentTime, Position[0], Position[1], Position[2]);
 }
 
 bool FFSDSFmuPlant::SupportsStateSaveRestore() const

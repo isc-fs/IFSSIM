@@ -21,8 +21,11 @@ LINE = re.compile(
     r"FSDS Plant shadow: t=(?P<t>[-\d.]+) "
     r"pos_err=(?P<pos>[-\d.]+) m \(worst (?P<pworst>[-\d.]+), mean (?P<pmean>[-\d.]+)\) "
     r"yaw_err=(?P<yaw>[-\d.]+) deg \(worst (?P<yworst>[-\d.]+)\) \| "
-    r"chaos v=(?P<vc>[-\d.]+) fmu v=(?P<vf>[-\d.]+)"
-    r"(?: \| road (?P<rv>\d)/4 valid, z=(?P<rz>[-\d.]+))?"
+    r"chaos v=(?P<vc>[-\d.]+) fmu v=(?P<vf>[-\d.]+)(?: m/s)?"
+    r"(?: \| road (?P<rv>\d)/4 valid, z=(?P<rz>[-\d.]+) m)?"
+    r"(?: \| synced=(?P<sync>\d) acc_err=(?P<acc>[-\d.]+) m/s2 "
+    r"\(ax (?P<ax>[-+\d.]+) ay (?P<ay>[-+\d.]+)\) "
+    r"yawrate_err=(?P<yr>[-+\d.]+))?"
 )
 
 DEFAULT_LOG = os.path.expanduser(
@@ -152,6 +155,31 @@ def main() -> int:
     if span > 5.0:
         rate = (pos[-1] - pos[0]) / span
         print(f"drift rate     : {rate:+.3f} m/s over the clean stretch")
+    # The synced comparison, when present, is the one that answers the question.
+    synced = [r for r in rows if r.get("sync") == "1" and r.get("acc") is not None]
+    if synced:
+        acc = [float(r["acc"]) for r in synced]
+        ax = [abs(float(r["ax"])) for r in synced]
+        ay = [abs(float(r["ay"])) for r in synced]
+        yr = [abs(float(r["yr"])) for r in synced]
+        mv = [i for i, r in enumerate(synced) if abs(float(r["vc"])) > 0.5]
+        print()
+        print("SAME-STATE RESPONSE  (state forced equal each step — this is the")
+        print("one that measures the PLANT rather than the experiment)")
+        sub = mv if mv else range(len(acc))
+        print(f"  samples      : {len(list(sub))} while moving, of {len(synced)} synced")
+        print(f"  |accel diff| : mean {sum(acc[i] for i in sub)/len(list(sub)):.3f}  "
+              f"max {max(acc[i] for i in sub):.3f} m/s2")
+        print(f"    longitudinal: mean {sum(ax[i] for i in sub)/len(list(sub)):.3f} m/s2")
+        print(f"    lateral     : mean {sum(ay[i] for i in sub)/len(list(sub)):.3f} m/s2")
+        print(f"  |yaw rate diff|: mean {sum(yr[i] for i in sub)/len(list(sub)):.2f}  "
+              f"max {max(yr[i] for i in sub):.2f} deg/s")
+        print()
+        print("  Position and heading divergence above are ~meaningless while")
+        print("  synced: the states are forced equal, so they measure the one")
+        print("  step between syncs, not accumulated drift.")
+        return 0
+
     print()
     print("READ THE POSITION NUMBERS WITH CARE. The shadow is OPEN LOOP:")
     print("the controller measures the REFERENCE car and computes throttle")

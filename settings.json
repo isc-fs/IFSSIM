@@ -9,7 +9,9 @@
     "FmuPath": "matlab/plant/fmu/IFSSIM_Plant.fmu",
     "RoadProbeUpM": 0.6,
     "RoadProbeDownM": 1.2,
-    "RoadDefaultMu": 1.4
+    "RoadDefaultMu": 1.4,
+    "_comment_shadowsync": "Force the shadow's PLANAR state (x, y, yaw and the planar velocities) equal to the reference's every step, so the comparison asks 'same state, same inputs, same response?' instead of 'how far apart do they drift?'. The drift question cannot be answered by an open-loop shadow at all — the controller is steering the reference, so the shadow diverges without bound however good it is. Vertical state is deliberately NOT synced: the two plants do not share a ride-height convention and the suspension is 56,900 N/m per corner, so injecting the reference's z inflates Fz, inflates mu*Fz with it, and produced 12-14 g of phantom lateral force. Set false only to watch a shadow run free, which is a demo rather than a measurement.",
+    "ShadowSync": true
   },
   "Vehicles": {
     "FSCar": {

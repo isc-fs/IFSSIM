@@ -64,6 +64,33 @@ Env = bus('Environment and external forces the platform resolves.', [
     el('chassis_grounded', 1, '1',     'Chassis body touching terrain (nose-down / rollover)')
     ]);
 
+Sync = bus(['State injection. The platform WRITES the plant''s state, rather ' ...
+            'than the plant reporting it.'], [
+    el('enable',     1, '1',     'Nonzero = overwrite the integrator state THIS step with the fields below')
+    el('pos',        3, 'm',     'World ENU position of the body origin')
+    el('quat',       4, '1',     'Body->world orientation [w x y z]')
+    el('vel_body',   3, 'm/s',   'Body-frame velocity')
+    el('omega_body', 3, 'rad/s', 'Body-frame angular velocity')
+    ]);
+% WHY THIS EXISTS, since a plant that lets you overwrite its state looks wrong.
+%
+% Two things are impossible without it, and both are load-bearing.
+%
+% RESET. FMI gives no way to write pose into an FMU: it is internal state, and
+% the only handle is a whole-state snapshot. So an FMU can be returned to where
+% it started and nowhere else, which is not enough for a platform that spawns
+% the car on an arbitrary start gate.
+%
+% PARITY. Comparing this plant against a reference by running both and watching
+% them drift measures the CONTROLLER as much as the plant: an open-loop shadow
+% diverges without bound whatever its quality, so trajectory divergence says
+% nothing. The question worth asking is "given the SAME state and the SAME
+% inputs, does this plant respond the same way?" — which needs the states to be
+% forced equal every step.
+%
+% enable is a per-step flag, not a mode. Normal running leaves it zero and the
+% integrator is untouched, so nothing about the plant's dynamics changes.
+
 %% ---- Plant -> Platform ----------------------------------------------
 
 Pose = bus('Rigid-body pose and motion. The most-read signals in the simulator.', [
@@ -108,6 +135,7 @@ Status = bus('Plant health. Replaces IsSimulatingPhysics() guards.', [
 % other. The suffix also makes it obvious at a port what is a bus and what is a
 % plain vector.
 B = struct('IFSSIM_CmdBus',Cmd, 'IFSSIM_RoadBus',Road, 'IFSSIM_EnvBus',Env, ...
+           'IFSSIM_SyncBus',Sync, ...
            'IFSSIM_PoseBus',Pose, 'IFSSIM_WheelsBus',Wheels, ...
            'IFSSIM_PowertrainBus',Powertrain, 'IFSSIM_StatusBus',Status);
 

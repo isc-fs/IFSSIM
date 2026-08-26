@@ -223,6 +223,17 @@ public:
 	 *  Distinct from VehiclePhysics.TireMu, which is the tyre's own limit. */
 	float RoadDefaultMu = 1.4f;
 
+	/** Shadow mode: force the shadow's state equal to the reference's every
+	 *  step, so the comparison is "same state, same inputs, same response?"
+	 *  rather than "how far apart do they drift?".
+	 *
+	 *  The drift question cannot be answered by an open-loop shadow at all —
+	 *  the controller is steering the REFERENCE, so the shadow diverges
+	 *  without bound however good it is, and the number measures the
+	 *  experiment rather than the plant. Set false only to watch a shadow run
+	 *  free, which is a demo, not a measurement. */
+	bool bShadowSync = true;
+
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 
 	/** Get the first (default) vehicle settings */

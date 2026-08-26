@@ -1626,7 +1626,65 @@ void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
 {
 	if (!ShadowPlant.IsValid()) return;
 
-	ShadowPlant->PreStep(In);
+	// Force the shadow into the reference's state before stepping it. This is
+	// what makes the comparison mean something: both plants then answer the
+	// same question — given THIS state and THESE inputs, what happens next? —
+	// instead of the shadow answering "where do I end up if nobody is steering
+	// me", which is a question about the experiment.
+	// PLANAR STATES ONLY. Injecting the full state looked obviously right and
+	// is not: the two plants do not share a vertical convention, and this
+	// suspension is 56,900 N/m per corner. Chaos's body-origin height differs
+	// from the FMU's ride-height reference by a few centimetres, and a 0.1 m
+	// error is 9.4x static wheel load — which inflates Fmax = mu*Fz and lets
+	// lateral force reach ~13 g. Measured: acc_err of 70-136 m/s2, almost all
+	// lateral, while /imu showed Chaos itself perfectly clean at 1.6 m/s2.
+	//
+	// So the FMU keeps its own z, roll, pitch and the whole vertical stack,
+	// and takes x, y, yaw and the planar velocities from the reference. Those
+	// are the states the two genuinely share and the ones path-following
+	// parity is about. It is also the honest boundary: Chaos cannot report
+	// wheel omega or slip at all, so a "full state" sync was never full.
+	FFSDSPlantInput SyncedIn = In;
+	if (FFSDSSettings::Get().bShadowSync && PlantState.bPlantOk
+	    && ShadowState.bPlantOk && ShadowSteps > 0)
+	{
+		SyncedIn.bSyncState = true;
+
+		// x,y from the reference; z stays the shadow's own.
+		SyncedIn.SyncPosition[0] = PlantState.Position[0];
+		SyncedIn.SyncPosition[1] = PlantState.Position[1];
+		SyncedIn.SyncPosition[2] = ShadowState.Position[2];
+
+		// Planar velocity from the reference; vertical stays the shadow's.
+		SyncedIn.SyncVelBody[0] = PlantState.VelBody[0];
+		SyncedIn.SyncVelBody[1] = PlantState.VelBody[1];
+		SyncedIn.SyncVelBody[2] = ShadowState.VelBody[2];
+
+		// Yaw rate from the reference; roll and pitch rates stay the shadow's.
+		SyncedIn.SyncOmegaBody[0] = ShadowState.OmegaBody[0];
+		SyncedIn.SyncOmegaBody[1] = ShadowState.OmegaBody[1];
+		SyncedIn.SyncOmegaBody[2] = PlantState.OmegaBody[2];
+
+		// Reference YAW, shadow's own roll and pitch. Recomposed rather than
+		// blended: a quaternion lerp between two attitudes would quietly
+		// change roll and pitch too, which is the whole thing being avoided.
+		auto YawOf = [](const double Q[4])
+		{
+			return FMath::Atan2(2.0 * (Q[0]*Q[3] + Q[1]*Q[2]),
+			                    1.0 - 2.0 * (Q[2]*Q[2] + Q[3]*Q[3]));
+		};
+		const FQuat SQ(ShadowState.Quat[1], ShadowState.Quat[2],
+		               ShadowState.Quat[3], ShadowState.Quat[0]);
+		FRotator SR = SQ.Rotator();
+		SR.Yaw = FMath::RadiansToDegrees(YawOf(PlantState.Quat));
+		const FQuat Recomposed = SR.Quaternion();
+		SyncedIn.SyncQuat[0] = Recomposed.W;
+		SyncedIn.SyncQuat[1] = Recomposed.X;
+		SyncedIn.SyncQuat[2] = Recomposed.Y;
+		SyncedIn.SyncQuat[3] = Recomposed.Z;
+	}
+
+	ShadowPlant->PreStep(SyncedIn);
 	ShadowPlant->PostStep(ShadowState);
 
 	if (!ShadowState.bPlantOk)
@@ -1723,14 +1781,26 @@ void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
 		int32 NValid = 0;
 		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++) if (In.bRoadValid[i]) NValid++;
 
+		// With sync on, position error is ~0 by construction and says nothing.
+		// The parity signal is the RESPONSE: same state, same inputs, so any
+		// difference in acceleration is the plants genuinely disagreeing about
+		// the physics rather than about where the car is.
+		const double Ax = ShadowState.AccelProper[0] - PlantState.AccelProper[0];
+		const double Ay = ShadowState.AccelProper[1] - PlantState.AccelProper[1];
+		const double AccErr = FMath::Sqrt(Ax*Ax + Ay*Ay);
+		const double YawRateErr = FMath::RadiansToDegrees(
+			ShadowState.OmegaBody[2] - PlantState.OmegaBody[2]);
+
 		UE_LOG(LogTemp, Log,
 			TEXT("FSDS Plant shadow: t=%.1f pos_err=%.3f m (worst %.3f, mean %.3f) "
 			     "yaw_err=%.2f deg (worst %.2f) | chaos v=%.2f fmu v=%.2f m/s "
-			     "| road %d/4 valid, z=%.3f m"),
+			     "| road %d/4 valid, z=%.3f m | synced=%d "
+			     "acc_err=%.3f m/s2 (ax %+.3f ay %+.3f) yawrate_err=%.2f deg/s"),
 			In.SimTime, PosErr, ShadowWorstPosErrM,
 			ShadowSumPosErrM / FMath::Max((int64)1, ShadowSteps),
 			YawErr, ShadowWorstYawErrDeg,
 			PlantState.VelBody[0], ShadowState.VelBody[0],
-			NValid, In.RoadHeight[FSDS_FL]);
+			NValid, In.RoadHeight[FSDS_FL],
+			SyncedIn.bSyncState ? 1 : 0, AccErr, Ax, Ay, YawRateErr);
 	}
 }

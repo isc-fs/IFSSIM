@@ -48,15 +48,15 @@ subs = {
   'IFSSIM_Brakes',          'braking',     {'Cmd','wheel_omega'},               {'brake_torque'}
   'IFSSIM_TireSuspension',  'dynamics',    {'Road','Pose','steer','drive_torque','brake_torque'}, {'Wheels','tyre_force','tyre_torque'}
   'IFSSIM_Aero',            'aero',        {'Pose'},                            {'aero_force','aero_torque'}
-  'IFSSIM_Chassis',         'dynamics',    {'tyre_force','tyre_torque','aero_force','aero_torque','Env'}, {'Pose'}
+  'IFSSIM_Chassis',         'dynamics',    {'tyre_force','tyre_torque','aero_force','aero_torque','Env','Sync'}, {'Pose'}
 };
 
 % Signal spec: bus name, or numeric width for a plain vector.
 spec = containers.Map( ...
-  {'Cmd','Road','Env','Pose','Wheels','Powertrain', ...
+  {'Cmd','Road','Env','Sync','Pose','Wheels','Powertrain', ...
    'steer','drive_torque','brake_torque','wheel_omega', ...
    'tyre_force','tyre_torque','aero_force','aero_torque'}, ...
-  {'Bus: IFSSIM_CmdBus','Bus: IFSSIM_RoadBus','Bus: IFSSIM_EnvBus','Bus: IFSSIM_PoseBus', ...
+  {'Bus: IFSSIM_CmdBus','Bus: IFSSIM_RoadBus','Bus: IFSSIM_EnvBus','Bus: IFSSIM_SyncBus','Bus: IFSSIM_PoseBus', ...
    'Bus: IFSSIM_WheelsBus','Bus: IFSSIM_PowertrainBus', ...
     4, 4, 4, 4, 3, 3, 3, 3});
 
@@ -75,7 +75,8 @@ configure_model(top, STEP);
 x = 40; y = 40;
 add_typed_port(top,'Inport','Cmd',  spec, [x y]);        y=y+70;
 add_typed_port(top,'Inport','Road', spec, [x y]);        y=y+70;
-add_typed_port(top,'Inport','Env',  spec, [x y]);
+add_typed_port(top,'Inport','Env',  spec, [x y]);        y=y+70;
+add_typed_port(top,'Inport','Sync', spec, [x y]);
 
 % Model reference blocks. Numbered because the number IS the signal-flow order
 % — steering and torques first, then tyre forces, then the chassis that
@@ -122,6 +123,7 @@ add_line(top,'Cmd/1',[BR '/1'],'autorouting','on');
 % platform inputs
 add_line(top,'Road/1',[TS '/1'],'autorouting','on');
 add_line(top,'Env/1', [CH '/5'],'autorouting','on');
+add_line(top,'Sync/1',[CH '/6'],'autorouting','on');
 
 % angles and torques into the tyre block
 add_line(top,[ST '/1'],[TS '/3'],'autorouting','on');

@@ -56,4 +56,12 @@ private:
 	 *  input to write, so a snapshot is the only honest reset there is. */
 	void*  PristineState = nullptr;
 	double PristineTime  = 0.0;
+
+	/** A reset asks for a pose the snapshot alone cannot provide. The snapshot
+	 *  clears the internal state (wheel speeds, filter memory); the injection
+	 *  then puts the body where the platform asked. Applied on the NEXT
+	 *  PreStep because that is when the FMU next reads its inputs. */
+	bool   bPendingSync = false;
+	double PendingPos[3]  = {0,0,0};
+	double PendingQuat[4] = {1,0,0,0};
 };

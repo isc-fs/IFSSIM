@@ -61,10 +61,17 @@ end
 %% ---- environment -------------------------------------------------------
 assignin('base','IFSSIM_RoadFlat', roadFlat(P));
 assignin('base','IFSSIM_EnvFlat',  envFlat());
+assignin('base','IFSSIM_SyncOff',  syncOff());
 add_block('simulink/Sources/Constant',[name '/Flat Road'],'Value','IFSSIM_RoadFlat', ...
     'OutDataTypeStr','Bus: IFSSIM_RoadBus','Position',[250 210 340 240]);
 add_block('simulink/Sources/Constant',[name '/Gravity'],'Value','IFSSIM_EnvFlat', ...
     'OutDataTypeStr','Bus: IFSSIM_EnvBus','Position',[250 260 340 290]);
+% Sync off. Wired explicitly rather than left dangling: an unconnected model
+% -reference inport is the sort of thing that compiles today and stops
+% compiling on somebody else's Simulink version, and a reader cannot tell
+% "deliberately unused" from "forgotten" by looking at empty space.
+add_block('simulink/Sources/Constant',[name '/Sync Off'],'Value','IFSSIM_SyncOff', ...
+    'OutDataTypeStr','Bus: IFSSIM_SyncBus','Position',[250 320 340 350]);
 
 %% ---- plant -------------------------------------------------------------
 add_block('simulink/Ports & Subsystems/Model',[name '/Car'], ...
@@ -72,6 +79,7 @@ add_block('simulink/Ports & Subsystems/Model',[name '/Car'], ...
 add_line(name,'Cmd/1','Car/1','autorouting','on');
 add_line(name,'Flat Road/1','Car/2','autorouting','on');
 add_line(name,'Gravity/1','Car/3','autorouting','on');
+add_line(name,'Sync Off/1','Car/4','autorouting','on');
 
 %% ---- scopes ------------------------------------------------------------
 % Bus Selectors pull out what is worth watching. Add a signal here rather than
@@ -139,6 +147,11 @@ function s = roadFlat(P)
 s = Simulink.Bus.createMATLABStruct('IFSSIM_RoadBus');
 s.valid=ones(4,1); s.height=zeros(4,1); s.mu=P.TireMu*ones(4,1);
 s.normal_x=zeros(4,1); s.normal_y=zeros(4,1); s.normal_z=ones(4,1); s.residual=zeros(4,1);
+end
+function s = syncOff()
+s = Simulink.Bus.createMATLABStruct('IFSSIM_SyncBus');
+s.enable=0; s.pos=[0;0;0]; s.quat=[1;0;0;0];
+s.vel_body=[0;0;0]; s.omega_body=[0;0;0];
 end
 function s = envFlat()
 s = Simulink.Bus.createMATLABStruct('IFSSIM_EnvBus');
