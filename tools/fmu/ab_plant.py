@@ -49,11 +49,38 @@ def main() -> int:
     if starts:
         rows = rows[starts[-1]:]
 
+    # A mission reset teleports the reference car; the FMU cannot follow, so a
+    # step jump appears that has nothing to do with the plant. The pawn
+    # re-latches on it, but older logs predate that, so drop everything before
+    # the last jump here too rather than reporting the teleport as divergence.
+    all_rows = None
+    jumps = [i for i in range(1, len(rows))
+             if float(rows[i]["pos"]) - float(rows[i - 1]["pos"]) > 5.0]
+    if jumps:
+        # Keep the LONGEST clean stretch, not the last one. Taking the last
+        # leaves whatever tail follows the final reset, which is usually the
+        # few seconds after the car has already stopped — the lap itself gets
+        # thrown away and the summary describes nothing.
+        bounds = [0] + jumps + [len(rows)]
+        segs = [(bounds[i + 1] - bounds[i], bounds[i], bounds[i + 1])
+                for i in range(len(bounds) - 1)]
+        n, lo, hi = max(segs)
+        print(f"note: {len(jumps)} reference teleport(s) detected — resets the "
+              f"FMU cannot follow, not plant divergence.")
+        print(f"      POSITION is reported over the longest clean stretch "
+              f"({n} of {len(rows)} samples).")
+        print(f"      SPEED is reported over the WHOLE run: a teleport moves "
+              f"the car, not its speed, so speed needs no such surgery — and "
+              f"it is the reading this experiment can actually support.")
+        all_rows = rows
+        rows = rows[lo:hi]
+
     t = [float(r["t"]) for r in rows]
     pos = [float(r["pos"]) for r in rows]
     yaw = [float(r["yaw"]) for r in rows]
-    vc = [float(r["vc"]) for r in rows]
-    vf = [float(r["vf"]) for r in rows]
+    speed_rows = all_rows if all_rows is not None else rows
+    vc = [float(r["vc"]) for r in speed_rows]
+    vf = [float(r["vf"]) for r in speed_rows]
     dv = [f - c for f, c in zip(vf, vc)]
 
     def rms(xs):
@@ -84,8 +111,7 @@ def main() -> int:
                 print("  friction / rolling-resistance term: with no force at")
                 print("  zero slip, any residual imbalance integrates freely.")
         return 0
-    print(f"moving from    : t={t[moved[0]]:.0f} s "
-          f"({len(moved)} of {len(rows)} samples above 0.5 m/s)")
+    print(f"moving         : {len(moved)} of {len(vc)} samples above 0.5 m/s")
     print()
     print("displacement divergence (each plant measured from its OWN origin)")
     print(f"  final        : {pos[-1]:.3f} m")
@@ -110,10 +136,10 @@ def main() -> int:
     # than the absolute number: a constant lag is a modelling difference, a
     # compounding one is a plant that will not survive being made
     # authoritative.
-    span = t[-1] - t[moved[0]]
+    span = t[-1] - t[0]
     if span > 5.0:
-        rate = (pos[-1] - pos[moved[0]]) / span
-        print(f"drift rate     : {rate:+.3f} m/s of divergence")
+        rate = (pos[-1] - pos[0]) / span
+        print(f"drift rate     : {rate:+.3f} m/s over the clean stretch")
     print()
     print("READ THE POSITION NUMBERS WITH CARE. The shadow is OPEN LOOP:")
     print("the controller measures the REFERENCE car and computes throttle")

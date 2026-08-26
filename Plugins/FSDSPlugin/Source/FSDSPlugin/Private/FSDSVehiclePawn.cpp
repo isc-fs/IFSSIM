@@ -1634,6 +1634,38 @@ void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
 	const double YawC = FMath::Atan2(
 		2.0 * (PlantState.Quat[0]*PlantState.Quat[3] + PlantState.Quat[1]*PlantState.Quat[2]),
 		1.0 - 2.0 * (PlantState.Quat[2]*PlantState.Quat[2] + PlantState.Quat[3]*PlantState.Quat[3]));
+	// A RESET teleports the reference car to the start gate. The FMU cannot
+	// follow — its pose is internal state with no input to write, so
+	// FFSDSFmuPlant::Reset() honestly refuses rather than silently doing
+	// nothing useful. Left alone, that injects a one-step jump (59.5 m was
+	// measured) which then dominates every subsequent number and makes the
+	// position metric describe the teleport instead of the plant.
+	//
+	// So: detect the teleport and restart the comparison. 1 m in a single
+	// tick is 60 m/s at 60 Hz — not something this car does. Divergence is
+	// then honestly "since the last reset", and the count is logged so a run
+	// full of hidden resets cannot pass for a clean one.
+	if (bShadowOriginSet)
+	{
+		const double Jx = PlantState.Position[0] - ShadowPrevChaosPos[0];
+		const double Jy = PlantState.Position[1] - ShadowPrevChaosPos[1];
+		const double Jz = PlantState.Position[2] - ShadowPrevChaosPos[2];
+		if ((Jx*Jx + Jy*Jy + Jz*Jz) > 1.0)
+		{
+			bShadowOriginSet = false;
+			ShadowRelatches++;
+			ShadowWorstPosErrM = 0.0;
+			ShadowWorstYawErrDeg = 0.0;
+			ShadowSumPosErrM = 0.0;
+			ShadowSteps = 0;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS Plant shadow: reference teleported %.1f m at t=%.1f "
+				     "(reset #%d) — restarting the comparison from here"),
+				FMath::Sqrt(Jx*Jx + Jy*Jy + Jz*Jz), In.SimTime, ShadowRelatches);
+		}
+	}
+	for (int32 i = 0; i < 3; i++) ShadowPrevChaosPos[i] = PlantState.Position[i];
+
 	// Latch both origins on the first good step, then compare like with like.
 	if (!bShadowOriginSet)
 	{

@@ -174,6 +174,9 @@ public:
 	double ShadowOriginChaos[3] = {0,0,0};
 	double ShadowYaw0Fmu = 0.0;
 	double ShadowYaw0Chaos = 0.0;
+	/** Reference pose on the PREVIOUS step, to catch teleports. */
+	double ShadowPrevChaosPos[3] = {0,0,0};
+	int32  ShadowRelatches = 0;
 	double ShadowWorstPosErrM = 0.0;
 	double ShadowWorstYawErrDeg = 0.0;
 	double ShadowSumPosErrM = 0.0;
