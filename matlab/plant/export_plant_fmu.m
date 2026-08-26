@@ -56,6 +56,17 @@ for i = 1:size(opts,1)
     end
 end
 
+% Remove any previous export FIRST. Simulink.FMUExporter raises an overwrite
+% dialog when the target already exists, and a dialog in `matlab -batch` is not
+% a prompt — it is a hard error ("Creating dialog boxes that block execution is
+% not supported"). So the export works by hand and fails in CI, which is the
+% worst way round to find out.
+prev = fullfile(outdir, [mdl '.fmu']);
+if isfile(prev)
+    delete(prev);
+    fprintf('removed previous %s\n', prev);
+end
+
 fprintf('exporting %s ...\n', mdl);
 e.export();
 

@@ -74,6 +74,7 @@ params = {'IFSSIM_Ts','IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR','IFSSIM_Rw
           'IFSSIM_kw','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
           'IFSSIM_mu','IFSSIM_LatB','IFSSIM_LatC','IFSSIM_LatE', ...
           'IFSSIM_LonB','IFSSIM_LonC','IFSSIM_LonE','IFSSIM_Iw','IFSSIM_vreg', ...
+          'IFSSIM_Crr', ...
           'IFSSIM_sigk','IFSSIM_siga'};
 existing = {data.Name};
 for k = 1:numel(params)
@@ -224,7 +225,24 @@ L = {
 "    % Linearising Fx about the current slip and solving for w_n adds the tyre"
 "    % stiffness to the effective inertia, which is what makes it stable."
 "    T_brake = brake_t(i) * tanh(w_i(i) * 10);"
-"    T_net   = drive_t(i) - T_brake - Fx0*Rw;"
+"    % Rolling resistance, as a torque rather than a body force, because that"
+"    % is the actual mechanism: under load the contact-patch pressure"
+"    % distribution shifts forward of the axle and the resulting moment"
+"    % opposes rotation. Modelling it as a drag force on the chassis would"
+"    % give a similar top speed and the wrong wheel dynamics."
+"    %"
+"    % Its absence was visible from both ends. A parked car crept at ~1.5 mm/s"
+"    % because nothing opposed motion at zero slip, and on the throttle that"
+"    % holds the Chaos reference at 3.0 m/s this plant reached 8.1 m/s."
+"    %"
+"    % tanh, not sign: sign() chatters about zero every step at 1/960 s, and"
+"    % the wheel-lock logic below would then see a sign flip each step and"
+"    % latch a stationary wheel at random. tanh also means the torque fades"
+"    % smoothly to zero as the wheel stops, so it RESISTS motion but cannot"
+"    % HOLD a stopped car — arresting creep entirely needs a stiction term,"
+"    % which this is not."
+"    T_roll  = IFSSIM_Crr * Fz_i * Rw * tanh(w_i(i) * 10);"
+"    T_net   = drive_t(i) - T_brake - T_roll - Fx0*Rw;"
 "    % dFx/dw = dFx/dkappa * dkappa/dw, by central difference on the curve."
 "    hk   = 1e-4;"
 "    dmf  = (mf(kappa+hk, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE) - ..."

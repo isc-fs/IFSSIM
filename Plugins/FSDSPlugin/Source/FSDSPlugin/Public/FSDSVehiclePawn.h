@@ -159,6 +159,40 @@ public:
 	/** Refreshed once per Tick, read by everything downstream. */
 	FFSDSPlantOutput PlantState;
 
+	/** The FMU running alongside Chaos in Plant.Type="shadow". Stepped with
+	 *  the same inputs, read by nothing — so it cannot change behaviour. */
+	TUniquePtr<IFSDSPlant> ShadowPlant;
+	FFSDSPlantOutput ShadowState;
+	int64 ShadowSteps = 0;
+	/** Each plant's own pose on the first shadow step. The FMU begins at its
+	 *  own initial condition while the Chaos car spawns on the start gate, so
+	 *  absolute positions are not comparable and their difference would be a
+	 *  large meaningless constant. Divergence is measured between DISPLACEMENTS
+	 *  from these origins. */
+	bool   bShadowOriginSet = false;
+	double ShadowOriginFmu[3] = {0,0,0};
+	double ShadowOriginChaos[3] = {0,0,0};
+	double ShadowYaw0Fmu = 0.0;
+	double ShadowYaw0Chaos = 0.0;
+	/** Reference pose on the PREVIOUS step, to catch teleports. */
+	double ShadowPrevChaosPos[3] = {0,0,0};
+	int32  ShadowRelatches = 0;
+	double ShadowWorstPosErrM = 0.0;
+	double ShadowWorstYawErrDeg = 0.0;
+	double ShadowSumPosErrM = 0.0;
+	double ShadowNextLogTime = 0.0;
+
+	/** Fill the road bus by probing terrain under each wheel.
+	 *
+	 *  Deliberately independent of Chaos: it traces from the wheel BONES, not
+	 *  from FWheelStatus::ContactPoint, because Chaos's contact results vanish
+	 *  in Phase 6 and a probe that depends on them would have to be rewritten
+	 *  exactly when it is load-bearing. */
+	void ProbeRoad(FFSDSPlantInput& In) const;
+
+	/** Step the shadow plant and accumulate divergence against PlantState. */
+	void StepShadowPlant(const FFSDSPlantInput& In);
+
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	UFSDSWheeledVehicleMovementComponent* VehicleMovement;
@@ -250,6 +284,26 @@ public:
 
 	/** Which plant is driving. "Chaos" today. */
 	FString GetPlantName() const;
+
+	/** Tell the plant(s) the car has been teleported.
+	 *
+	 *  Must be called from every reset path. A plant that integrates its own
+	 *  state has no other way to know: the platform moving the mesh is
+	 *  invisible to it, so without this it keeps driving from wherever it had
+	 *  got to while the rest of the sim starts a fresh mission.
+	 *
+	 *  Position/Quat are in CONTRACT units (m, ENU, w-first quaternion), not
+	 *  UE centimetres. */
+	void ResetPlants(const double Position[3], const double Quat[4]);
+
+	/** Probe the ground under ONE point. Public and single-point so it can be
+	 *  tested against known geometry: the wheel loop below is a caller, not
+	 *  the unit. A probe only ever exercised through four wheel bones on flat
+	 *  ground cannot be told apart from a stub returning zero.
+	 *
+	 *  StartCm is a world UE position; the trace runs down from above it.
+	 *  Outputs are CONTRACT units — height in m, normal in ENU with +y LEFT. */
+	bool ProbeRoadAt(const FVector& StartCm, double& OutHeightM, double OutNormal[3]) const;
 
 private:
 

@@ -47,6 +47,30 @@ struct FSDSPLUGIN_API FFSDSPlantInput
 
 	double DeltaTime = 1.0 / 60.0;  // s, the communication step
 	double SimTime   = 0.0;         // s
+
+	// --- state injection -------------------------------------------------
+	//
+	// The platform WRITING the plant's state, rather than the plant reporting
+	// it. Off by default; when off, nothing here is read.
+	//
+	// Two things need it. RESET: FMI gives no way to write pose into an FMU —
+	// it is internal state whose only handle is a whole-state snapshot, so an
+	// FMU can be returned to where it started and nowhere else, which is not
+	// enough for a platform that spawns the car on an arbitrary start gate.
+	// PARITY: comparing two plants by running both and watching them drift
+	// measures the CONTROLLER as much as the plant, because an open-loop
+	// shadow diverges without bound whatever its quality. The question worth
+	// asking is whether the same state and the same inputs produce the same
+	// response, and that needs the states forced equal every step.
+	//
+	// A plant that cannot honour this should ignore it rather than approximate
+	// it — a near-miss injection is worse than none, because the comparison
+	// then silently measures the near-miss.
+	bool   bSyncState = false;
+	double SyncPosition[3] = {0,0,0};   // m, world ENU
+	double SyncQuat[4]     = {1,0,0,0}; // w,x,y,z
+	double SyncVelBody[3]  = {0,0,0};   // m/s
+	double SyncOmegaBody[3]= {0,0,0};   // rad/s
 };
 
 /**

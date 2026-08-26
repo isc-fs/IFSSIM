@@ -187,15 +187,20 @@ def request_start(ros_bridge, bag_name: str, *, timeout_s: float = 5.0) -> dict:
     }
 
 
-def request_stop(ros_bridge, *, timeout_s: float = 15.0) -> dict:
+def request_stop(ros_bridge, *, timeout_s: float = 120.0) -> dict:
     """Ask bag_recorder_node to stop the active recording.
 
-    Idempotent: returns state="none" if nothing was recording. Timeout
-    is intentionally generous (15 s default) because the server side
-    has to SIGINT the recorder, wait for mcap to flush its chunk
-    index, then move the staged dir into the bind-mounted output
-    directory — the move can be a couple of seconds for a multi-GB
-    bag on macOS virtiofs.
+    Idempotent: returns state="none" if nothing was recording.
+
+    The server side has to SIGINT the recorder, wait for mcap to flush
+    its chunk index, then move the staged dir into the output
+    directory. That is NOT a couple of seconds: a 3.45 GB autocross
+    bag took over 15 s and blew the old default, which then read as a
+    stop FAILURE and skipped the auto-pull — the bag finalised
+    perfectly and was simply abandoned in the volume.
+
+    A timeout here means "no answer yet", never "the bag is broken".
+    Callers must treat it that way; see `bag_finalised()`.
     """
     try:
         _ensure_clients(ros_bridge)
@@ -446,6 +451,38 @@ def _make_car_parity_copy(container, bag_name: str, cp_name: str) -> tuple:
         text = (output or b"").decode(errors="replace").strip()[-300:]
         return False, f"ros2 bag convert rc={rc}: {text}"
     return True, ""
+
+
+def bag_finalised(bag_name: str) -> bool:
+    """Did this bag actually finish writing, regardless of what the
+    stop service said?
+
+    rosbag2 writes metadata.yaml LAST, when it closes the bag cleanly,
+    so its presence is the honest completion signal — and the one that
+    survives a stop-service timeout. Used to distinguish "the recorder
+    is wedged" from "the recorder finished, just slower than we waited".
+
+    Best-effort: any failure to look returns False, which only costs an
+    auto-pull that the operator can still do by hand.
+    """
+    if not bag_name or "/" in bag_name or ".." in bag_name:
+        return False
+    client = _get_docker_client()
+    if client is None:
+        return False
+    container_name = os.environ.get(
+        "DV_PIPELINE_STACK_CONTAINER", "ifssim-dv_pipeline_stack-1",
+    ).strip()
+    try:
+        container = client.containers.get(container_name)
+        rc, _ = container.exec_run(
+            ["test", "-f", f"/bags/{bag_name}/metadata.yaml"],
+            demux=False, stdout=True, stderr=True,
+        )
+        return rc == 0
+    except Exception as ex:  # noqa: BLE001
+        _LOG.warning("bag_recorder: could not check %s: %s", bag_name, ex)
+        return False
 
 
 def auto_pull_and_clean(

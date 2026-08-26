@@ -83,7 +83,20 @@ struct FFSDSVehiclePhysics
 	FString Drivetrain = TEXT("RWD"); // RWD, FWD, AWD
 	float WheelRadius = 0.200f;      // meters
 	float WheelWidth = 0.190f;       // meters
-	float MaxSteerAngle = 28.f;      // degrees
+	float MaxSteerAngle = 22.4f;     // degrees
+	// Resistive wheel torque Crr*Fz*Rw. ASSUMED, not measured on the IFS-08.
+	//
+	// CONSUMED BY THE FMU PLANT, NOT BY CHAOS. Chaos has no equivalent knob we
+	// drive, so this field changes nothing in a Plant.Type="chaos" run — it is
+	// here because ifssim_params.m mirrors this struct field-for-field and a
+	// silent divergence between the two is the bug that mirror exists to stop.
+	//
+	// It reaches the FMU by being BAKED IN AT EXPORT: export_plant_fmu.m reads
+	// settings.json into IFSSIM_Crr and Simulink freezes it into the .fmu. So
+	// editing this value does NOT change an already-exported FMU. Re-export
+	// (matlab/plant/export_plant_fmu.m) or the number here and the number the
+	// plant actually uses will quietly disagree.
+	float RollingResistance = 0.020f;
 	float MotorMaxTorque = 230.f;    // Nm (at motor)
 	float MotorMaxPower = 80000.f;   // Watts
 	// Regen braking limits. The IFS-08 has no hydraulic service brake —
@@ -175,6 +188,51 @@ public:
 	// randomness falls back to the clock and the run logs itself as
 	// non-reproducible. See FSDSRandom.h.
 	int32 ScenarioSeed = 1;
+
+	// --- Plant selection -------------------------------------------------
+	//
+	// Which implementation of IFSDSPlant stands behind the vehicle.
+	//
+	//   "chaos"  — Chaos observes the car it is already integrating. Default,
+	//              and the only validated reference.
+	//   "shadow" — Chaos still DRIVES; the FMU is stepped alongside it with
+	//              the same inputs and the divergence is logged. Behaviour is
+	//              unchanged by construction, because nothing downstream reads
+	//              the shadow. This is how parity gets measured before the
+	//              kinematic swap, per docs/fmu_plant_migration.md Phase 6.
+	//   "fmu"    — the FMU is the plant. NOT yet the authoritative driver: the
+	//              pawn is still Chaos-integrated, so selecting this makes the
+	//              sensors read a car the mesh is not flying. Only useful for
+	//              bring-up until the Phase 6 kinematic swap lands.
+	//
+	// Kept out of VehiclePhysics on purpose. This is not a property of the
+	// car; it is a choice about which simulator runs it.
+	FString PlantType = TEXT("chaos");
+
+	/** Path to the .fmu for "shadow"/"fmu". Relative paths resolve against the
+	 *  project directory. Empty means fall back to chaos, loudly. */
+	FString PlantFmuPath;
+
+	/** Metres above the wheel centre to start each road probe, and metres
+	 *  below to end it. The defaults straddle a 0.2 m wheel with room for
+	 *  suspension travel without reaching through thin geometry. */
+	float RoadProbeUpM   = 0.6f;
+	float RoadProbeDownM = 1.2f;
+
+	/** Surface friction handed to the plant where the probe cannot tell.
+	 *  Distinct from VehiclePhysics.TireMu, which is the tyre's own limit. */
+	float RoadDefaultMu = 1.4f;
+
+	/** Shadow mode: force the shadow's state equal to the reference's every
+	 *  step, so the comparison is "same state, same inputs, same response?"
+	 *  rather than "how far apart do they drift?".
+	 *
+	 *  The drift question cannot be answered by an open-loop shadow at all —
+	 *  the controller is steering the REFERENCE, so the shadow diverges
+	 *  without bound however good it is, and the number measures the
+	 *  experiment rather than the plant. Set false only to watch a shadow run
+	 *  free, which is a demo, not a measurement. */
+	bool bShadowSync = true;
 
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 

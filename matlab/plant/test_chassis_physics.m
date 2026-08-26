@@ -35,6 +35,12 @@ add_block('simulink/Sources/Constant',[h '/ENV'], ...
     'Position',[60 y 130 y+30]);
 add_line(h,'ENV/1','Chassis/5','autorouting','on');
 
+assignin('base','SYNC_OFF', syncStruct(0));
+add_block('simulink/Sources/Constant',[h '/SYNC'], ...
+    'Value','SYNC_OFF','OutDataTypeStr','Bus: IFSSIM_SyncBus', ...
+    'Position',[60 y+60 130 y+90]);
+add_line(h,'SYNC/1','Chassis/6','autorouting','on');
+
 add_block('simulink/Sinks/To Workspace',[h '/pose_out'], ...
     'VariableName','pose_log','SaveFormat','Timeseries', ...
     'Position',[470 130 540 160]);
@@ -69,6 +75,43 @@ r = sim(h);
 pose = last_pose(r);
 ok = check(ok,'yaw rate from M=I*alpha', pose.omega_body(3), Mz/P.Assumed.Izz*T, 0.02);
 
+%% 4. State injection.
+%
+% The platform can WRITE the plant's state. Two things depend on it and both
+% fail silently if it quietly does nothing: resetting an FMU to an arbitrary
+% start gate, and comparing this plant against a reference from an identical
+% state. A no-op injection looks exactly like a plant that agrees.
+set_param([h '/TT'],'Value','[0;0;0]');
+
+% 4a. enable = 0 must change NOTHING. Tested first, because an injection that
+% always fires would pass every test below and break every normal run.
+assignin('base','SYNC_OFF', syncStruct(0));
+r = sim(h);
+base = last_pose(r);
+
+% 4b. enable = 1 places the body somewhere it could not have fallen to.
+target = [12.0; -3.0; 7.5];
+tvel   = [4.0; 0.5; 0.0];
+sy = syncStruct(1); sy.pos = target; sy.vel_body = tvel;
+assignin('base','SYNC_OFF', sy);
+r = sim(h);
+pose = last_pose(r);
+
+% Held for the whole run, so the body starts each step from the injected state
+% and only integrates one step's worth of gravity away from it. The position
+% check is loose in z for exactly that reason; x and y have nothing acting on
+% them and must land on the target.
+ok = check(ok,'sync: x is written',  pose.position(1), target(1), 1e-6);
+ok = check(ok,'sync: y is written',  pose.position(2), target(2), 1e-6);
+ok = check(ok,'sync: velocity is written', pose.vel_body(1), tvel(1), 1e-6);
+
+% And the proof that 4a meant something: the un-synced run must NOT be sitting
+% at the target, or the test above proves nothing.
+ok = check(ok,'sync: disabled run is unaffected', ...
+           double(abs(base.position(1) - target(1)) > 1.0), 1, 0);
+
+assignin('base','SYNC_OFF', syncStruct(0));
+
 %% 4. Quaternion stays unit after a second of rotation.
 ok = check(ok,'quaternion remains unit', norm(pose.quat), 1.0, 1e-9);
 
@@ -95,6 +138,12 @@ for i = 1:numel(names)
     d  = ts.Data;
     p.(names{i}) = double(reshape(d(end,:), [], 1));
 end
+end
+
+function s = syncStruct(en)
+s = Simulink.Bus.createMATLABStruct('IFSSIM_SyncBus');
+s.enable = en; s.pos = [0;0;0]; s.quat = [1;0;0;0];
+s.vel_body = [0;0;0]; s.omega_body = [0;0;0];
 end
 
 function ok = check(ok, name, got, want, tol)

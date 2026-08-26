@@ -96,6 +96,31 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 	}
 	Root->TryGetStringField(TEXT("SpectatorServerPassword"), SpectatorServerPassword);
 
+	// Plant selection. A top-level "Plant" block, because which simulator
+	// runs the car is not a property of the car.
+	const TSharedPtr<FJsonObject>* PlantObj;
+	if (Root->TryGetObjectField(TEXT("Plant"), PlantObj))
+	{
+		double PlantDbl = 0.0;
+		(*PlantObj)->TryGetStringField(TEXT("Type"), PlantType);
+		(*PlantObj)->TryGetStringField(TEXT("FmuPath"), PlantFmuPath);
+		if ((*PlantObj)->TryGetNumberField(TEXT("RoadProbeUpM"), PlantDbl))   RoadProbeUpM   = (float)PlantDbl;
+		if ((*PlantObj)->TryGetNumberField(TEXT("RoadProbeDownM"), PlantDbl)) RoadProbeDownM = (float)PlantDbl;
+		if ((*PlantObj)->TryGetNumberField(TEXT("RoadDefaultMu"), PlantDbl))  RoadDefaultMu  = (float)PlantDbl;
+		(*PlantObj)->TryGetBoolField(TEXT("ShadowSync"), bShadowSync);
+
+		PlantType = PlantType.ToLower();
+		if (PlantType != TEXT("chaos") && PlantType != TEXT("shadow") && PlantType != TEXT("fmu"))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS Settings: Plant.Type '%s' not recognised (chaos|shadow|fmu) — using chaos"),
+				*PlantType);
+			PlantType = TEXT("chaos");
+		}
+		UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Plant type=%s fmu='%s' probe=+%.2f/-%.2f m mu=%.2f"),
+			*PlantType, *PlantFmuPath, RoadProbeUpM, RoadProbeDownM, RoadDefaultMu);
+	}
+
 	// Vehicles
 	const TSharedPtr<FJsonObject>* VehiclesObj;
 	if (Root->TryGetObjectField(TEXT("Vehicles"), VehiclesObj))
@@ -162,6 +187,7 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelRadius"), DblVal)) P.WheelRadius = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelWidth"), DblVal)) P.WheelWidth = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxSteerAngle"), DblVal)) P.MaxSteerAngle = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollingResistance"), DblVal)) P.RollingResistance = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxTorque"), DblVal)) P.MotorMaxTorque = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxPower"), DblVal)) P.MotorMaxPower = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxRegenTorque"), DblVal)) P.MaxRegenTorque = DblVal;

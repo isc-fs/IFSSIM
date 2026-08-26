@@ -21,6 +21,31 @@
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
+#include "Test/FSDSTestTerrain.h"
+
+/**
+ * Tell the vehicle's plant(s) that the car has been teleported.
+ *
+ * Moving the mesh is INVISIBLE to a plant that integrates its own state. Without
+ * this the FMU keeps driving from wherever it had got to while the rest of the
+ * sim starts a fresh mission. Measured before this existed: a 59.5 m step in the
+ * shadow divergence, with the car standing still.
+ *
+ * Every path that repositions the vehicle must call this — loadTrack, reset and
+ * simSetVehiclePose all do. A helper rather than three copies precisely because
+ * the fourth caller is the one that will forget.
+ *
+ * Converts UE (left-handed, centimetres) to the contract (SI, ENU, y LEFT) here,
+ * on the platform side of the boundary, matching FFSDSChaosPlant::Reset.
+ */
+static void NotifyPlantsOfTeleport(AFSDSVehiclePawn* Pawn, const FVector& PosUe, const FQuat& RotUe)
+{
+	if (!Pawn) return;
+	const double PosContract[3] = { PosUe.X * 0.01, -PosUe.Y * 0.01, PosUe.Z * 0.01 };
+	const double QuatContract[4] = { RotUe.W, -RotUe.X, RotUe.Y, -RotUe.Z };
+	Pawn->ResetPlants(PosContract, QuatContract);
+}
+
 
 namespace
 {
@@ -1222,6 +1247,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						{
 							VehiclePawn->SetActorLocationAndRotation(
 								StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 						}
 						NumCones = It->SpawnedCones.Num();
 						break;
@@ -1450,6 +1476,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					Mesh->BodyInstance.SetBodyTransform(RestoredXform, ETeleportType::TeleportPhysics);
 				}
 				VehiclePawn->SetActorRotation(HeadingToRestore, ETeleportType::TeleportPhysics);
+
+				NotifyPlantsOfTeleport(VehiclePawn, VehiclePawn->GetActorLocation(), HeadingToRestore);
+
 				// No velocity kick. The previous 5 cm/s body-forward push was
 				// a workaround for Chaos pinning at the (v=0, ω=0) degenerate
 				// state. It was firing during the SLAM's INIT_CALIBRATING
@@ -1465,6 +1494,100 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			}
 		});
 		return TEXT("true");
+	}
+
+	else if (Method == TEXT("validateRoadProbe"))
+	{
+		// Build deliberately non-flat ground and check the probe against the
+		// analytic surface. Every lap so far ran on dead-flat terrain, where a
+		// working probe and a stub returning zero produce identical logs — so
+		// "4/4 valid on every sample" was never evidence of anything.
+		//
+		// The crown is the load-bearing case. Its two faces have normals with
+		// OPPOSITE y components, so a probe using the axial rule (-x,y,-z)
+		// instead of the polar rule (x,-y,z) reports the camber backwards. On
+		// flat ground the two rules agree exactly, because y is zero.
+		//
+		// EVERYTHING HERE RUNS ON THE GAME THREAD. Actor iteration, spawning
+		// and line traces all assert IsInGameThread(), and RPC handlers do
+		// not run there — calling them directly took the editor down with a
+		// SIGSEGV rather than returning an error.
+		if (!VehiclePawn) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			UWorld* ProbeWorld = VehiclePawn ? VehiclePawn->GetWorld() : nullptr;
+			if (!ProbeWorld) return TEXT("{\"ok\":false,\"error\":\"no world\"}");
+
+			AFSDSTestTerrain* Terrain = nullptr;
+			for (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It; ++It) { Terrain = *It; break; }
+			if (!Terrain)
+			{
+				Terrain = ProbeWorld->SpawnActor<AFSDSTestTerrain>(AFSDSTestTerrain::StaticClass());
+				if (!Terrain) return TEXT("{\"ok\":false,\"error\":\"spawn failed\"}");
+				Terrain->Build();
+			}
+
+			int32 Checked = 0, Missed = 0, BadHeight = 0, BadNormal = 0;
+			double WorstHeight = 0.0, WorstNormal = 0.0;
+			FString WorstWhere;
+			// Per-patch detail. A single pass/fail cannot tell "the probe is
+			// wrong" from "the test's geometry is wrong", and I wrote both.
+			FString Detail;
+
+			for (const FFSDSTestPatch& P : Terrain->GetPatches())
+			{
+				// Sample inside the patch, away from the edges — an edge
+				// sample would be testing the slab's extent, not the probe.
+				for (int32 ix = -1; ix <= 1; ix++)
+				for (int32 iy = -1; iy <= 1; iy++)
+				{
+					const double X = P.CentreX + ix * P.HalfLenX * 0.5;
+					const double Y = P.CentreY + iy * P.HalfLenY * 0.5;
+					const double TrueZ = P.HeightAt(X, Y);
+
+					// Contract -> UE for the trace start: y negates, m to cm.
+					const FVector StartCm(X * 100.0, -Y * 100.0, (TrueZ + 0.3) * 100.0);
+
+					double GotZ = 0.0, GotN[3] = {0,0,1};
+					Checked++;
+					if (!VehiclePawn->ProbeRoadAt(StartCm, GotZ, GotN)) { Missed++; continue; }
+
+					const double dZ = FMath::Abs(GotZ - TrueZ);
+					const double dN = FMath::Sqrt(
+						FMath::Square(GotN[0] - P.Normal[0]) +
+						FMath::Square(GotN[1] - P.Normal[1]) +
+						FMath::Square(GotN[2] - P.Normal[2]));
+
+					if (dZ > WorstHeight) { WorstHeight = dZ; WorstWhere = P.Name; }
+					if (dN > WorstNormal) WorstNormal = dN;
+					if (dZ > 0.01) BadHeight++;      // 1 cm
+					if (dN > 0.02) BadNormal++;      // ~1.1 deg
+
+					if (ix == 0 && iy == 0)
+					{
+						Detail += FString::Printf(
+							TEXT("%s{\"patch\":\"%s\",\"x\":%.2f,\"y\":%.2f,")
+							TEXT("\"trueZ\":%.4f,\"gotZ\":%.4f,")
+							TEXT("\"trueN\":[%.3f,%.3f,%.3f],\"gotN\":[%.3f,%.3f,%.3f]}"),
+							Detail.IsEmpty() ? TEXT("") : TEXT(","),
+							*P.Name, X, Y, TrueZ, GotZ,
+							P.Normal[0], P.Normal[1], P.Normal[2],
+							GotN[0], GotN[1], GotN[2]);
+					}
+				}
+			}
+
+			const bool bOk = (Missed == 0 && BadHeight == 0 && BadNormal == 0);
+			return FString::Printf(
+				TEXT("{\"ok\":%s,\"checked\":%d,\"missed\":%d,\"badHeight\":%d,")
+				TEXT("\"badNormal\":%d,\"worstHeightM\":%.4f,\"worstNormal\":%.4f,")
+				TEXT("\"worstPatch\":\"%s\",\"centres\":[%s]}"),
+				bOk ? TEXT("true") : TEXT("false"),
+				Checked, Missed, BadHeight, BadNormal,
+				WorstHeight, WorstNormal, *WorstWhere, *Detail);
+		}, 20.0, FString(TEXT("{\"ok\":false,\"error\":\"game-thread timeout\"}")),
+		   TEXT("validateRoadProbe"));
 	}
 
 	// === New Sensors ===
@@ -1701,6 +1824,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 					}
+					NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 					// Chaos vehicles store *wheel* angular velocity in the
 					// vehicle simulation core (FWheeledVehicleSimulation), not
 					// in the rigid-body's angular velocity. Zeroing the body

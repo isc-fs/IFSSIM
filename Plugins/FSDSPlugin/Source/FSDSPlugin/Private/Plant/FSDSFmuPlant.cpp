@@ -8,6 +8,8 @@ FFSDSFmuPlant::FFSDSFmuPlant(const FString& InFmuPath)
 
 FFSDSFmuPlant::~FFSDSFmuPlant()
 {
+	// Before Terminate: the state belongs to the instance that produced it.
+	if (PristineState) Fmu.FreeState(PristineState);
 	Fmu.Terminate();
 	Fmu.FreeInstance();
 	Fmu.Unload();
@@ -65,8 +67,36 @@ bool FFSDSFmuPlant::Initialise()
 
 	CurrentTime = 0.0;
 	bReady = true;
-	UE_LOG(LogTemp, Log, TEXT("FSDS Plant: %s ready, %d variables resolved by name"),
-		*GetName(), NameToVR.Num());
+
+	// Snapshot the pristine state NOW, before a single DoStep. This is what
+	// Reset() restores, and taking it here rather than lazily is deliberate:
+	// the first caller to ask for a reset is usually asking mid-mission, and
+	// a snapshot taken then would restore the car to wherever it had got to.
+	if (Package.GetInfo().bCanGetAndSetState)
+	{
+		if (Fmu.GetState(PristineState))
+		{
+			PristineTime = CurrentTime;
+		}
+		else
+		{
+			PristineState = nullptr;
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS Plant: %s declares canGetAndSetFMUState but the call "
+				     "failed — Reset() will not work"), *GetName());
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS Plant: %s cannot save state, so it cannot be reset. "
+			     "A second mission in the same session will run from wherever "
+			     "the first one ended."), *GetName());
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS Plant: %s ready, %d variables resolved by name%s"),
+		*GetName(), NameToVR.Num(),
+		PristineState ? TEXT(", reset snapshot held") : TEXT(", NO reset snapshot"));
 	return true;
 }
 
@@ -139,6 +169,32 @@ void FFSDSFmuPlant::PreStep(const FFSDSPlantInput& In)
 	SetArray (TEXT("Env.ext_point"),        In.ExtPoint,  3);
 	SetScalar(TEXT("Env.chassis_grounded"), In.bChassisGrounded ? 1.0 : 0.0);
 
+	// State injection. Written every step, not only when enabled, so the
+	// enable flag is the only thing that changes between a synced and an
+	// unsynced step — leaving stale pose in the other fields would make a
+	// later enable pick up whatever was last written.
+	if (bPendingSync)
+	{
+		// A reset's pose wins over any caller-supplied sync this step. The two
+		// only collide when a reset lands on the same tick as a parity sync,
+		// and then the reset is the one that must survive.
+		const double Zero3[3] = {0,0,0};
+		SetScalar(TEXT("Sync.enable"), 1.0);
+		SetArray (TEXT("Sync.pos"),        PendingPos,  3);
+		SetArray (TEXT("Sync.quat"),       PendingQuat, 4);
+		SetArray (TEXT("Sync.vel_body"),   Zero3,       3);
+		SetArray (TEXT("Sync.omega_body"), Zero3,       3);
+		bPendingSync = false;
+	}
+	else
+	{
+		SetScalar(TEXT("Sync.enable"), In.bSyncState ? 1.0 : 0.0);
+		SetArray (TEXT("Sync.pos"),        In.SyncPosition,  3);
+		SetArray (TEXT("Sync.quat"),       In.SyncQuat,      4);
+		SetArray (TEXT("Sync.vel_body"),   In.SyncVelBody,   3);
+		SetArray (TEXT("Sync.omega_body"), In.SyncOmegaBody, 3);
+	}
+
 	// The FMU integrates here. Synchronous, in-process, on the calling thread:
 	// N calls of exactly DeltaTime, which is what makes the run reproducible.
 	if (!Fmu.DoStep(CurrentTime, In.DeltaTime))
@@ -192,15 +248,51 @@ void FFSDSFmuPlant::PostStep(FFSDSPlantOutput& Out)
 	Out.PlantStatus = 0;
 }
 
-void FFSDSFmuPlant::Reset(const double /*Position*/[3], const double /*Quat*/[4])
+void FFSDSFmuPlant::Reset(const double Position[3], const double Quat[4])
 {
-	// An FMU's pose is internal state; there is no input to write it to. The
-	// honest reset is a state restore from a snapshot taken at the start line,
-	// or a re-instantiate. Teleporting by writing pose is not available and
-	// pretending otherwise would silently do nothing.
-	UE_LOG(LogTemp, Warning,
-		TEXT("FSDS Plant: %s cannot be teleported — reset via SaveState/RestoreState "
-		     "from a start-line snapshot, or re-Initialise()"), *GetName());
+	if (!bReady) return;
+
+	if (!PristineState)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS Plant: %s has no reset snapshot — ignoring the reset. "
+			     "The plant keeps running from where it was."), *GetName());
+		return;
+	}
+
+	if (!Fmu.SetState(PristineState))
+	{
+		LastError = Fmu.GetLastError();
+		bReady = false;   // a failed restore leaves the FMU in an unknown state
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS Plant: %s failed to restore its reset snapshot (%s) — "
+			     "dropping the plant rather than running from an unknown state"),
+			*GetName(), *LastError);
+		return;
+	}
+
+	// Restoring state restores the FMU's internal time with it, so the
+	// communication point has to go back too. Leaving CurrentTime where it was
+	// would hand DoStep a time the FMU has already passed, which is a spec
+	// violation the FMU is entitled to reject — or worse, silently accept.
+	CurrentTime = PristineTime;
+
+	// The snapshot restores WHAT the car is (wheel speeds, filter memory,
+	// integrator history); the injection then decides WHERE it is. Neither
+	// alone is a reset: a snapshot puts the car back at its own start rather
+	// than the requested gate, and an injection alone would place a car that
+	// is still spinning its wheels from the previous mission.
+	//
+	// Queued rather than written now, because inputs are only read at the next
+	// PreStep. Writing here would set values the FMU has already passed.
+	for (int32 i = 0; i < 3; i++) PendingPos[i]  = Position[i];
+	for (int32 i = 0; i < 4; i++) PendingQuat[i] = Quat[i];
+	bPendingSync = true;
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS Plant: %s reset — snapshot restored (t=%.3f), pose (%.2f, %.2f, %.2f) "
+		     "queued for the next step"),
+		*GetName(), CurrentTime, Position[0], Position[1], Position[2]);
 }
 
 bool FFSDSFmuPlant::SupportsStateSaveRestore() const
