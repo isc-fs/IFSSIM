@@ -1147,6 +1147,42 @@ void AFSDSVehiclePawn::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
+bool AFSDSVehiclePawn::IsVehicleMotionLive() const
+{
+	if (bFmuDrivesPawn) return PlantState.bPlantOk;
+	const USkeletalMeshComponent* M = GetMesh();
+	return M && M->IsSimulatingPhysics();
+}
+
+FVector AFSDSVehiclePawn::GetVehicleVelocityUe() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		// Contract world ENU (m/s, +y LEFT) -> UE world (cm/s, +y RIGHT).
+		// Velocity is a POLAR vector, so y negates.
+		return FVector( PlantState.VelWorld[0] * 100.0,
+		               -PlantState.VelWorld[1] * 100.0,
+		                PlantState.VelWorld[2] * 100.0);
+	}
+	return GetVelocity();
+}
+
+FVector AFSDSVehiclePawn::GetVehicleAngularVelocityUe() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		// Body-frame contract -> UE body: angular velocity is AXIAL, so the
+		// rule is (-x, y, -z), not the polar (x, -y, z) used for velocity.
+		// Getting this wrong flips the yaw rate's sign, which reads as a car
+		// that steers the wrong way rather than as an obvious bug.
+		const FVector OmegaBodyUe(-PlantState.OmegaBody[0],
+		                           PlantState.OmegaBody[1],
+		                          -PlantState.OmegaBody[2]);
+		return GetActorQuat().RotateVector(OmegaBodyUe);
+	}
+	return GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+}
+
 double AFSDSVehiclePawn::PlantMeshZOffsetM()
 {
 	const FFSDSSettings& S = FFSDSSettings::Get();
@@ -1248,7 +1284,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	}
 
 	// Acceleration tracking
-	FVector CurrentVelocity = GetVelocity();
+	FVector CurrentVelocity = GetVehicleVelocityUe();
 	if (DeltaTime > 0.f)
 	{
 		CurrentAcceleration = (CurrentVelocity - PreviousVelocity) / DeltaTime;
@@ -1320,7 +1356,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			// the fallback wheel-speed derivation and the EMRAX trace below.
 			const float VFwdMs = (bFmuDrivesPawn && PlantState.bPlantOk)
 				? (float)PlantState.VelBody[0]
-				: FVector::DotProduct(GetVelocity(), GetActorForwardVector()) * 0.01f;
+				: FVector::DotProduct(GetVehicleVelocityUe(), GetActorForwardVector()) * 0.01f;
 
 			float WheelOmega;
 			if (bFmuDrivesPawn && PlantState.bPlantOk)
@@ -1416,7 +1452,7 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	USkeletalMeshComponent* VehicleMesh = GetMesh();
 	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
 
-	FVector Velocity = GetVelocity(); // cm/s
+	FVector Velocity = GetVehicleVelocityUe(); // cm/s
 	float SpeedMs = Velocity.Size() / 100.f; // m/s
 
 	if (SpeedMs < 1.0f) return; // No aero below 1 m/s
@@ -1547,11 +1583,11 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 {
 	FCarState State;
 
-	State.Speed = GetVelocity().Size() / 100.f;
+	State.Speed = GetVehicleVelocityUe().Size() / 100.f;
 	State.Position = GetActorLocation();
 	State.Orientation = GetActorQuat();
-	State.LinearVelocity = GetVelocity();
-	State.AngularVelocity = GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+	State.LinearVelocity = GetVehicleVelocityUe();
+	State.AngularVelocity = GetVehicleAngularVelocityUe();
 	State.LinearAcceleration = CurrentAcceleration;
 	State.bHandbrake = CurrentControls.bHandbrake;
 
@@ -1690,6 +1726,19 @@ AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
 	// matching the parametric path. The ratio across all four wheels
 	// stays correct either way (cm units factor out), but the absolute
 	// numbers only line up with the parametric Fz once converted.
+	// When the FMU drives, Chaos is deactivated and every GetWheelState()
+	// returns zero — so this reported a car carrying no load at all. The
+	// plant publishes the real per-wheel normal force, already in Newtons,
+	// and it is a genuine state rather than a spring-force readback.
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		Out.FL = (float)PlantState.WheelFz[FSDS_FL];
+		Out.FR = (float)PlantState.WheelFz[FSDS_FR];
+		Out.RL = (float)PlantState.WheelFz[FSDS_RL];
+		Out.RR = (float)PlantState.WheelFz[FSDS_RR];
+		return Out;
+	}
+
 	constexpr float CmToM = 0.01f;
 	Out.FL = VehicleMovement->GetWheelState(0).SpringForce * CmToM;
 	Out.FR = VehicleMovement->GetWheelState(1).SpringForce * CmToM;

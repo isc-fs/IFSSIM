@@ -2091,7 +2091,7 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// remains the production sensor path. (LiDAR-over-TCP was
 		// retired in #322; sensors still ride the TCP push because the
 		// ~40 KB/s rate isn't bandwidth-bound.)
-		const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;
+		const FVector WorldVel = VehiclePawn->GetVehicleVelocityUe() * 0.01f;
 		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
 		Frame.GtVelBodyX =  BodyVel.X;
 		Frame.GtVelBodyY = -BodyVel.Y;
@@ -2103,9 +2103,9 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// them directly to read off the bias/noise the filter has to bound.
 		if (UPrimitiveComponent* RootPrim =
 				Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
-			RootPrim && RootPrim->IsSimulatingPhysics())
+			RootPrim && VehiclePawn->IsVehicleMotionLive())
 		{
-			const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+			const FVector WorldAngVel = VehiclePawn->GetVehicleAngularVelocityUe();
 			const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
 			// UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
 			// Angular velocity is an axial vector; under the Y-reflection
