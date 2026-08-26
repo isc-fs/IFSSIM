@@ -905,7 +905,9 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			// height so the plant's datum can be aligned to it on the first
 			// step, rather than the car jumping to the plant's CoG height.
 			PawnZAtSwapCm = P0.Z;
-			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01, P0.Z * 0.01 };
+			// + the CoG offset: the plant's z is its CoG, not the mesh origin.
+			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01,
+			                         P0.Z * 0.01 + PlantMeshZOffsetM() };
 			const double QuatC[4] = { Q0.W, -Q0.X, Q0.Y, -Q0.Z };
 			ResetPlants(PosC, QuatC);
 
@@ -1143,6 +1145,13 @@ void AFSDSVehiclePawn::EndPlay(const EEndPlayReason::Type Reason)
 		Plant.Reset();
 	}
 	Super::EndPlay(Reason);
+}
+
+double AFSDSVehiclePawn::PlantMeshZOffsetM()
+{
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const double CoGH = S.GetDefaultVehicle() ? S.GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+	return CoGH - S.MeshOriginHeightM;
 }
 
 void AFSDSVehiclePawn::ResetPlants(const double Position[3], const double Quat[4])
@@ -1863,15 +1872,11 @@ void AFSDSVehiclePawn::DrivePawnFromPlant()
 	// asset, measured, and named rather than folded silently into the CoG.
 	if (!bZDatumCaptured)
 	{
-		const double CoGH = FFSDSSettings::Get().GetDefaultVehicle()
-			? FFSDSSettings::Get().GetDefaultVehicle()->Physics.CoGHeight : 0.30;
-		const double MeshOriginH = FFSDSSettings::Get().MeshOriginHeightM;
-		PlantToMeshZCm = -(CoGH - MeshOriginH) * 100.0;
+		PlantToMeshZCm = -PlantMeshZOffsetM() * 100.0;
 		bZDatumCaptured = true;
 		UE_LOG(LogTemp, Warning,
-			TEXT("FSDS: plant reports the CoG (%.3f m at rest), mesh origin sits "
-			     "%.3f m up — shifting the mesh down %.1f cm"),
-			CoGH, MeshOriginH, -PlantToMeshZCm);
+			TEXT("FSDS: plant/mesh vertical offset %.3f m — shifting the mesh down %.1f cm"),
+			PlantMeshZOffsetM(), -PlantToMeshZCm);
 	}
 
 	const FVector Loc(PlantState.Position[0] * 100.0,

@@ -355,6 +355,21 @@ public:
 	 *  UE centimetres. */
 	void ResetPlants(const double Position[3], const double Quat[4]);
 
+	/** Vertical offset between the MESH origin and the PLANT's body origin,
+	 *  in metres: plant_z = mesh_z + this.
+	 *
+	 *  The plant reports its CoG (build_chassis seeds pos to [0;0;CoGH]); the
+	 *  mesh origin sits MeshOriginHeightM above the road. Both directions of
+	 *  this conversion exist, and having them written out separately is how
+	 *  they came to disagree: the plant->mesh path was corrected and the
+	 *  mesh->plant path was not, so a teleport buried the plant's CoG by a
+	 *  full CoG height. The suspension bottomed out, front and rear compressed
+	 *  differently under their different static loads, and the car settled
+	 *  PITCHED — measured as a 3.85 m/s^2 longitudinal "bias" that the EKF
+	 *  then calibrated in, after which SLAM never produced a pose and the
+	 *  watchdog fired. One function, used by both directions. */
+	static double PlantMeshZOffsetM();
+
 	/** Report a contact impulse the car just delivered, recovered from the
 	 *  OTHER body.
 	 *
