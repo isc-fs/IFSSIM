@@ -905,9 +905,10 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			// height so the plant's datum can be aligned to it on the first
 			// step, rather than the car jumping to the plant's CoG height.
 			PawnZAtSwapCm = P0.Z;
-			// + the CoG offset: the plant's z is its CoG, not the mesh origin.
-			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01,
-			                         P0.Z * 0.01 + PlantMeshZOffsetM() };
+			// Mesh height, plain. ResetPlants resolves the road beneath and
+			// places the CoG at rest height, so adding the offset here would
+			// apply it twice.
+			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01, P0.Z * 0.01 };
 			const double QuatC[4] = { Q0.W, -Q0.X, Q0.Y, -Q0.Z };
 			ResetPlants(PosC, QuatC);
 
@@ -1192,8 +1193,53 @@ double AFSDSVehiclePawn::PlantMeshZOffsetM()
 
 void AFSDSVehiclePawn::ResetPlants(const double Position[3], const double Quat[4])
 {
-	if (Plant.IsValid())       Plant->Reset(Position, Quat);
-	if (ShadowPlant.IsValid()) ShadowPlant->Reset(Position, Quat);
+	// PLACE THE PLANT AT ITS SETTLED HEIGHT, NOT AT THE CALLER'S z.
+	//
+	// The platform pads its spawn height for clearance — loadTrack drops the
+	// car onto the start gate from slightly above so it cannot spawn inside
+	// geometry. Chaos absorbs that: it falls a few centimetres and settles.
+	// The plant does not. It is handed the padded height as its CoG, starts
+	// there, and FALLS.
+	//
+	// That fall lands inside the EKF's 3 s stationary calibration window, so
+	// the filter measures the drop as sensor bias: accel_bias z = -12.4 m/s^2
+	// and gyro_bias y = -0.53 rad/s were recorded, after which SLAM never
+	// produced a pose and the watchdog stopped the car. The car never even
+	// began the lap.
+	//
+	// So ask the road where it is and put the CoG exactly one ride height
+	// above it. Nothing to settle, nothing to calibrate away.
+	double Placed[3] = { Position[0], Position[1], Position[2] };
+	{
+		const FFSDSSettings& S = FFSDSSettings::Get();
+		const double CoGH = S.GetDefaultVehicle()
+			? S.GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+		// Probe from above the requested point; contract -> UE, y negates.
+		const FVector ProbeStart(Position[0] * 100.0, -Position[1] * 100.0,
+		                         Position[2] * 100.0 + 50.0);
+		double RoadM = 0.0, Nrm[3] = {0,0,1};
+		if (ProbeRoadAt(ProbeStart, RoadM, Nrm))
+		{
+			Placed[2] = RoadM + CoGH;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: plant placed at rest height — road %.3f m + CoG %.3f m = %.3f m "
+				     "(caller asked for %.3f m, a %.3f m drop avoided)"),
+				RoadM, CoGH, Placed[2], Position[2] + CoGH,
+				(Position[2] + CoGH) - Placed[2]);
+		}
+		else
+		{
+			// No road under the requested pose: keep the caller's height and
+			// say so, rather than silently placing the car at zero.
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: no road under the reset pose (%.2f, %.2f) — using the "
+				     "caller's height %.3f m; expect a settle transient"),
+				Position[0], Position[1], Position[2]);
+		}
+	}
+
+	if (Plant.IsValid())       Plant->Reset(Placed, Quat);
+	if (ShadowPlant.IsValid()) ShadowPlant->Reset(Placed, Quat);
 
 	// Drop the divergence baseline too. The pawn re-latches on a detected
 	// teleport anyway, but doing it here as well means an explicit reset does

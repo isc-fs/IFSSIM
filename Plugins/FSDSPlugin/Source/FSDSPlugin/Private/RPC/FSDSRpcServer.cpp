@@ -41,10 +41,11 @@
 static void NotifyPlantsOfTeleport(AFSDSVehiclePawn* Pawn, const FVector& PosUe, const FQuat& RotUe)
 {
 	if (!Pawn) return;
-	// + the CoG offset: the plant's z is its CoG, not the mesh origin. Without
-	// this a teleport buries the plant by a full CoG height.
-	const double PosContract[3] = { PosUe.X * 0.01, -PosUe.Y * 0.01,
-	                                PosUe.Z * 0.01 + AFSDSVehiclePawn::PlantMeshZOffsetM() };
+	// Mesh height, plain. ResetPlants resolves the road beneath the pose and
+	// places the CoG one ride height above it, so the offset belongs there
+	// and not here — applying it at both ends is how the car ended up
+	// dropped from a clearance-padded spawn.
+	const double PosContract[3] = { PosUe.X * 0.01, -PosUe.Y * 0.01, PosUe.Z * 0.01 };
 	const double QuatContract[4] = { RotUe.W, -RotUe.X, RotUe.Y, -RotUe.Z };
 	Pawn->ResetPlants(PosContract, QuatContract);
 }
