@@ -355,6 +355,53 @@ public:
 	 *  UE centimetres. */
 	void ResetPlants(const double Position[3], const double Quat[4]);
 
+	/** Vertical offset between the MESH origin and the PLANT's body origin,
+	 *  in metres: plant_z = mesh_z + this.
+	 *
+	 *  The plant reports its CoG (build_chassis seeds pos to [0;0;CoGH]); the
+	 *  mesh origin sits MeshOriginHeightM above the road. Both directions of
+	 *  this conversion exist, and having them written out separately is how
+	 *  they came to disagree: the plant->mesh path was corrected and the
+	 *  mesh->plant path was not, so a teleport buried the plant's CoG by a
+	 *  full CoG height. The suspension bottomed out, front and rear compressed
+	 *  differently under their different static loads, and the car settled
+	 *  PITCHED — measured as a 3.85 m/s^2 longitudinal "bias" that the EKF
+	 *  then calibrated in, after which SLAM never produced a pose and the
+	 *  watchdog fired. One function, used by both directions. */
+	static double PlantMeshZOffsetM();
+
+	/** The car's velocity in UE units (cm/s, world), from the PLANT when it is
+	 *  driving and from the actor otherwise.
+	 *
+	 *  AActor::GetVelocity() is derived from movement-component motion, and a
+	 *  plant-driven car is placed by transform rather than moved — so it reads
+	 *  zero however fast the car is going. Everything downstream then believes
+	 *  the car is parked: motor rpm went to zero, which starved the odometry
+	 *  filter, which diverged the EKF, which collapsed SLAM's data association
+	 *  and drove the car off the track; and Mission Control's speed readout
+	 *  sat at zero throughout.
+	 *
+	 *  One accessor, so the next reader of vehicle motion cannot reintroduce
+	 *  it by calling GetVelocity() out of habit. */
+	FVector GetVehicleVelocityUe() const;
+
+	/** Angular velocity in UE units (rad/s, world), same reasoning. */
+	FVector GetVehicleAngularVelocityUe() const;
+
+	/** Is the car's motion live — by ANY simulator?
+	 *
+	 *  Replaces `Mesh->IsSimulatingPhysics()` at every site that meant "is
+	 *  this car actually moving". That test asks CHAOS, and when the FMU
+	 *  drives, the mesh is kinematic so it answers no — silently, with no
+	 *  error, disabling whatever it guards. An audit found thirteen such
+	 *  guards; the damaging ones were in the UDP sensor frame and the
+	 *  ground-truth RPC, which between them fed the autonomy a car that was
+	 *  not moving.
+	 *
+	 *  Ask what you actually want to know: is there a live plant behind this
+	 *  vehicle. */
+	bool IsVehicleMotionLive() const;
+
 	/** Report a contact impulse the car just delivered, recovered from the
 	 *  OTHER body.
 	 *

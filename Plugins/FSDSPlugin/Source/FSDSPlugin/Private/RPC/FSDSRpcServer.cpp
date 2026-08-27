@@ -41,6 +41,10 @@
 static void NotifyPlantsOfTeleport(AFSDSVehiclePawn* Pawn, const FVector& PosUe, const FQuat& RotUe)
 {
 	if (!Pawn) return;
+	// Mesh height, plain. ResetPlants resolves the road beneath the pose and
+	// places the CoG one ride height above it, so the offset belongs there
+	// and not here — applying it at both ends is how the car ended up
+	// dropped from a clearance-padded spawn.
 	const double PosContract[3] = { PosUe.X * 0.01, -PosUe.Y * 0.01, PosUe.Z * 0.01 };
 	const double QuatContract[4] = { RotUe.W, -RotUe.X, RotUe.Y, -RotUe.Z };
 	Pawn->ResetPlants(PosContract, QuatContract);
@@ -2088,7 +2092,7 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// remains the production sensor path. (LiDAR-over-TCP was
 		// retired in #322; sensors still ride the TCP push because the
 		// ~40 KB/s rate isn't bandwidth-bound.)
-		const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;
+		const FVector WorldVel = VehiclePawn->GetVehicleVelocityUe() * 0.01f;
 		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
 		Frame.GtVelBodyX =  BodyVel.X;
 		Frame.GtVelBodyY = -BodyVel.Y;
@@ -2100,9 +2104,9 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// them directly to read off the bias/noise the filter has to bound.
 		if (UPrimitiveComponent* RootPrim =
 				Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
-			RootPrim && RootPrim->IsSimulatingPhysics())
+			RootPrim && VehiclePawn->IsVehicleMotionLive())
 		{
-			const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+			const FVector WorldAngVel = VehiclePawn->GetVehicleAngularVelocityUe();
 			const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
 			// UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
 			// Angular velocity is an axial vector; under the Y-reflection

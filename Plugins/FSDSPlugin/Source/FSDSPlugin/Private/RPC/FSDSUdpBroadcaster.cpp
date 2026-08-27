@@ -249,7 +249,10 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	// convention matches the GSS fields above (X forward, Y left, Z up):
 	// UE5 returns body-frame Y in the right direction, so we negate it on
 	// the way out to match ROS / ENU's left-positive Y.
-	const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;          // cm/s → m/s
+	// From the PLANT when it is driving. GetVelocity() is movement-component
+	// motion, and a plant-driven car is placed by transform, so this read was
+	// sending the autonomy a stationary car at any speed.
+	const FVector WorldVel = VehiclePawn->GetVehicleVelocityUe() * 0.01f;  // cm/s → m/s
 	const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
 	Frame.GtVelBodyX =  BodyVel.X;
 	Frame.GtVelBodyY = -BodyVel.Y;
@@ -264,9 +267,9 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 	// started, etc. — same path the IMU sensor takes.
 	if (UPrimitiveComponent* RootPrim =
 			Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
-		RootPrim && RootPrim->IsSimulatingPhysics())
+		RootPrim && VehiclePawn->IsVehicleMotionLive())
 	{
-		const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+		const FVector WorldAngVel = VehiclePawn->GetVehicleAngularVelocityUe();
 		const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
 		// Convert UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
 		// Angular velocity is a pseudo-vector — under the Y-axis reflection

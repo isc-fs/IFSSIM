@@ -905,6 +905,9 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 			// height so the plant's datum can be aligned to it on the first
 			// step, rather than the car jumping to the plant's CoG height.
 			PawnZAtSwapCm = P0.Z;
+			// Mesh height, plain. ResetPlants resolves the road beneath and
+			// places the CoG at rest height, so adding the offset here would
+			// apply it twice.
 			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01, P0.Z * 0.01 };
 			const double QuatC[4] = { Q0.W, -Q0.X, Q0.Y, -Q0.Z };
 			ResetPlants(PosC, QuatC);
@@ -1145,10 +1148,98 @@ void AFSDSVehiclePawn::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
+bool AFSDSVehiclePawn::IsVehicleMotionLive() const
+{
+	if (bFmuDrivesPawn) return PlantState.bPlantOk;
+	const USkeletalMeshComponent* M = GetMesh();
+	return M && M->IsSimulatingPhysics();
+}
+
+FVector AFSDSVehiclePawn::GetVehicleVelocityUe() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		// Contract world ENU (m/s, +y LEFT) -> UE world (cm/s, +y RIGHT).
+		// Velocity is a POLAR vector, so y negates.
+		return FVector( PlantState.VelWorld[0] * 100.0,
+		               -PlantState.VelWorld[1] * 100.0,
+		                PlantState.VelWorld[2] * 100.0);
+	}
+	return GetVelocity();
+}
+
+FVector AFSDSVehiclePawn::GetVehicleAngularVelocityUe() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		// Body-frame contract -> UE body: angular velocity is AXIAL, so the
+		// rule is (-x, y, -z), not the polar (x, -y, z) used for velocity.
+		// Getting this wrong flips the yaw rate's sign, which reads as a car
+		// that steers the wrong way rather than as an obvious bug.
+		const FVector OmegaBodyUe(-PlantState.OmegaBody[0],
+		                           PlantState.OmegaBody[1],
+		                          -PlantState.OmegaBody[2]);
+		return GetActorQuat().RotateVector(OmegaBodyUe);
+	}
+	return GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+}
+
+double AFSDSVehiclePawn::PlantMeshZOffsetM()
+{
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const double CoGH = S.GetDefaultVehicle() ? S.GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+	return CoGH - S.MeshOriginHeightM;
+}
+
 void AFSDSVehiclePawn::ResetPlants(const double Position[3], const double Quat[4])
 {
-	if (Plant.IsValid())       Plant->Reset(Position, Quat);
-	if (ShadowPlant.IsValid()) ShadowPlant->Reset(Position, Quat);
+	// PLACE THE PLANT AT ITS SETTLED HEIGHT, NOT AT THE CALLER'S z.
+	//
+	// The platform pads its spawn height for clearance — loadTrack drops the
+	// car onto the start gate from slightly above so it cannot spawn inside
+	// geometry. Chaos absorbs that: it falls a few centimetres and settles.
+	// The plant does not. It is handed the padded height as its CoG, starts
+	// there, and FALLS.
+	//
+	// That fall lands inside the EKF's 3 s stationary calibration window, so
+	// the filter measures the drop as sensor bias: accel_bias z = -12.4 m/s^2
+	// and gyro_bias y = -0.53 rad/s were recorded, after which SLAM never
+	// produced a pose and the watchdog stopped the car. The car never even
+	// began the lap.
+	//
+	// So ask the road where it is and put the CoG exactly one ride height
+	// above it. Nothing to settle, nothing to calibrate away.
+	double Placed[3] = { Position[0], Position[1], Position[2] };
+	{
+		const FFSDSSettings& S = FFSDSSettings::Get();
+		const double CoGH = S.GetDefaultVehicle()
+			? S.GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+		// Probe from above the requested point; contract -> UE, y negates.
+		const FVector ProbeStart(Position[0] * 100.0, -Position[1] * 100.0,
+		                         Position[2] * 100.0 + 50.0);
+		double RoadM = 0.0, Nrm[3] = {0,0,1};
+		if (ProbeRoadAt(ProbeStart, RoadM, Nrm))
+		{
+			Placed[2] = RoadM + CoGH;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: plant placed at rest height — road %.3f m + CoG %.3f m = %.3f m "
+				     "(caller asked for %.3f m, a %.3f m drop avoided)"),
+				RoadM, CoGH, Placed[2], Position[2] + CoGH,
+				(Position[2] + CoGH) - Placed[2]);
+		}
+		else
+		{
+			// No road under the requested pose: keep the caller's height and
+			// say so, rather than silently placing the car at zero.
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: no road under the reset pose (%.2f, %.2f) — using the "
+				     "caller's height %.3f m; expect a settle transient"),
+				Position[0], Position[1], Position[2]);
+		}
+	}
+
+	if (Plant.IsValid())       Plant->Reset(Placed, Quat);
+	if (ShadowPlant.IsValid()) ShadowPlant->Reset(Placed, Quat);
 
 	// Drop the divergence baseline too. The pawn re-latches on a detected
 	// teleport anyway, but doing it here as well means an explicit reset does
@@ -1239,7 +1330,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	}
 
 	// Acceleration tracking
-	FVector CurrentVelocity = GetVelocity();
+	FVector CurrentVelocity = GetVehicleVelocityUe();
 	if (DeltaTime > 0.f)
 	{
 		CurrentAcceleration = (CurrentVelocity - PreviousVelocity) / DeltaTime;
@@ -1296,12 +1387,42 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			// single-quadrant regen — refuses braking torque on a
 			// backward-rotating wheel, which would otherwise drive the
 			// chassis further in reverse.
-			const float VFwdMs = FVector::DotProduct(
-				GetVelocity(), GetActorForwardVector()) * 0.01f;
-			// Wheel angular velocity assuming no slip, then geared
-			// up to motor rotor speed. WheelRadius / GearRatio are
-			// captured from settings in SetupSensorsFromSettings.
-			const float WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			// WHERE THIS NUMBER COMES FROM DECIDES WHETHER THE CAR CAN
+			// DRIVE ITSELF. It becomes SensorFrame.rpm -> /motor_rpm, which
+			// is the odometry filter's only wheel-speed input.
+			//
+			// GetVelocity() is the ACTOR's velocity, and when the FMU drives,
+			// the actor is teleported each tick rather than moved by a
+			// movement component — so it reads ~zero. The pipeline then sees a
+			// stationary car while the IMU reports acceleration, the EKF
+			// diverges, SLAM's data association collapses (every cone reads as
+			// new), and the car drives straight off the track. Observed
+			// exactly that: DOO 1, OC 1, zero laps.
+			// Forward speed, from the plant when it is driving. Used both for
+			// the fallback wheel-speed derivation and the EMRAX trace below.
+			const float VFwdMs = (bFmuDrivesPawn && PlantState.bPlantOk)
+				? (float)PlantState.VelBody[0]
+				: FVector::DotProduct(GetVehicleVelocityUe(), GetActorForwardVector()) * 0.01f;
+
+			float WheelOmega;
+			if (bFmuDrivesPawn && PlantState.bPlantOk)
+			{
+				// The DRIVEN wheels' actual speed, which is what a real motor
+				// encoder is geared to. Using the plant's own omega rather
+				// than a no-slip guess means wheelspin and lock-up reach the
+				// pipeline — the signal Chaos structurally cannot produce,
+				// because it snaps wheel speed to ground speed.
+				WheelOmega = 0.5f * (float)(PlantState.WheelOmega[FSDS_RL]
+				                          + PlantState.WheelOmega[FSDS_RR]);
+			}
+			else
+			{
+				// Chaos path, unchanged. Its plant reports WheelOmega as zero
+				// by design — it has no independent wheel state — so the
+				// no-slip derivation from body velocity is the only honest
+				// option there.
+				WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			}
 			const float MotorOmega = WheelOmega * GearRatio;
 			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));
 			Motor->SetMechRpm(MotorRpm);
@@ -1377,7 +1498,7 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	USkeletalMeshComponent* VehicleMesh = GetMesh();
 	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
 
-	FVector Velocity = GetVelocity(); // cm/s
+	FVector Velocity = GetVehicleVelocityUe(); // cm/s
 	float SpeedMs = Velocity.Size() / 100.f; // m/s
 
 	if (SpeedMs < 1.0f) return; // No aero below 1 m/s
@@ -1508,11 +1629,11 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 {
 	FCarState State;
 
-	State.Speed = GetVelocity().Size() / 100.f;
+	State.Speed = GetVehicleVelocityUe().Size() / 100.f;
 	State.Position = GetActorLocation();
 	State.Orientation = GetActorQuat();
-	State.LinearVelocity = GetVelocity();
-	State.AngularVelocity = GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+	State.LinearVelocity = GetVehicleVelocityUe();
+	State.AngularVelocity = GetVehicleAngularVelocityUe();
 	State.LinearAcceleration = CurrentAcceleration;
 	State.bHandbrake = CurrentControls.bHandbrake;
 
@@ -1651,6 +1772,19 @@ AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
 	// matching the parametric path. The ratio across all four wheels
 	// stays correct either way (cm units factor out), but the absolute
 	// numbers only line up with the parametric Fz once converted.
+	// When the FMU drives, Chaos is deactivated and every GetWheelState()
+	// returns zero — so this reported a car carrying no load at all. The
+	// plant publishes the real per-wheel normal force, already in Newtons,
+	// and it is a genuine state rather than a spring-force readback.
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		Out.FL = (float)PlantState.WheelFz[FSDS_FL];
+		Out.FR = (float)PlantState.WheelFz[FSDS_FR];
+		Out.RL = (float)PlantState.WheelFz[FSDS_RL];
+		Out.RR = (float)PlantState.WheelFz[FSDS_RR];
+		return Out;
+	}
+
 	constexpr float CmToM = 0.01f;
 	Out.FL = VehicleMovement->GetWheelState(0).SpringForce * CmToM;
 	Out.FR = VehicleMovement->GetWheelState(1).SpringForce * CmToM;
@@ -1833,15 +1967,11 @@ void AFSDSVehiclePawn::DrivePawnFromPlant()
 	// asset, measured, and named rather than folded silently into the CoG.
 	if (!bZDatumCaptured)
 	{
-		const double CoGH = FFSDSSettings::Get().GetDefaultVehicle()
-			? FFSDSSettings::Get().GetDefaultVehicle()->Physics.CoGHeight : 0.30;
-		const double MeshOriginH = FFSDSSettings::Get().MeshOriginHeightM;
-		PlantToMeshZCm = -(CoGH - MeshOriginH) * 100.0;
+		PlantToMeshZCm = -PlantMeshZOffsetM() * 100.0;
 		bZDatumCaptured = true;
 		UE_LOG(LogTemp, Warning,
-			TEXT("FSDS: plant reports the CoG (%.3f m at rest), mesh origin sits "
-			     "%.3f m up — shifting the mesh down %.1f cm"),
-			CoGH, MeshOriginH, -PlantToMeshZCm);
+			TEXT("FSDS: plant/mesh vertical offset %.3f m — shifting the mesh down %.1f cm"),
+			PlantMeshZOffsetM(), -PlantToMeshZCm);
 	}
 
 	const FVector Loc(PlantState.Position[0] * 100.0,
