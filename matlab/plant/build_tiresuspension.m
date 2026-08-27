@@ -4,7 +4,7 @@ function build_tiresuspension(outdir)
 %   Every force that steers, accelerates or stops the car is generated here.
 %
 %   Simplified deliberately: quasi-static suspension (no unsprung-mass DOF),
-%   Magic Formula with a friction ellipse (no relaxation length, camber thrust,
+%   Magic Formula with a friction ellipse and relaxation length (no camber thrust,
 %   load-sensitive mu or thermal model).
 %
 %   Wheel spin IS a real integrated state — Chaos snaps it to ground speed, so
@@ -211,8 +211,24 @@ L = {
 "    vref = max(abs(vx), IFSSIM_vreg);     % see note on regularisation"
 ""
 "    % ---- slip --------------------------------------------------------"
-"    kappa = (w_i(i)*Rw - vx) / vref;"
-"    alpha = atan2(vy, vref);"
+"    % Steady-state slip: what this corner would settle at if it rolled long"
+"    % enough at these velocities."
+"    kap_ss = (w_i(i)*Rw - vx) / vref;"
+"    alp_ss = atan2(vy, vref);"
+""
+"    % RELAXATION LENGTH. Slip is a STATE, not an algebraic quantity — the"
+"    % carcass has to deform before it carries the force, and that deformation"
+"    % takes DISTANCE, not time: dkappa/dt = (vref/sigma)*(kappa_ss - kappa)."
+"    %"
+"    % Integrated in exact discrete form, a = 1 - exp(-Ts*vref/sigma), rather"
+"    % than forward Euler. Euler needs Ts*vref/sigma < 2 to stay stable, and"
+"    % that is a speed-dependent condition this model cannot guarantee — the"
+"    % exact form puts a in [0,1) at every speed, so it can neither overshoot"
+"    % nor go unstable no matter how fast the car is going."
+"    ak = 1 - exp(-Ts * vref / IFSSIM_sigk);"
+"    aa = 1 - exp(-Ts * vref / IFSSIM_siga);"
+"    kappa = kap_i(i) + ak * (kap_ss - kap_i(i));"
+"    alpha = alp_i(i) + aa * (alp_ss - alp_i(i));"
 "    kap_n(i) = kappa;  alp_n(i) = alpha;"
 ""
 "    % ---- Pacejka ---------------------------------------------------"
@@ -269,6 +285,13 @@ L = {
 "            mf(kappa-hk, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE)) / (2*hk);"
 "    % Clamped at zero: past the peak the slope is negative, and letting that"
 "    % reduce the effective inertia would destabilise the very case this fixes."
+"    % NOT scaled by the relaxation factor, though it is tempting. kappa is"
+"    % computed from w_i, the OLD wheel speed, so Fx never actually depended on"
+"    % w_n and this was never a true sensitivity — it is a deliberate implicit"
+"    % OVER-damping that keeps the wheel-speed update stable. Scaling it by ak"
+"    % removes almost all of it at low speed (ak ~ 0.005 at vref = vreg), and"
+"    % the EBS stop then chatters: 8.5 m/s^2 falls to 5.3 and a wheel reverses"
+"    % through zero. Measured, not theorised — see test_brakes_physics."
 "    dFx_dw = max(Fmax * dmf * Rw / vref, 0);"
 "    w_n(i) = w_i(i) + T_net / (IFSSIM_Iw/Ts + dFx_dw*Rw);"
 "    % LOCK, DO NOT REVERSE. Brake torque is a magnitude opposing rotation, so"
