@@ -97,10 +97,32 @@ ok = check(ok,'friction ellipse holds per wheel', all(res <= cap), true, 0);
 % and it is simply rolling. That is exactly the behaviour Chaos cannot produce
 % — it snaps wheel speed to ground speed, so the wheel never has a dynamic
 % state to spin up. Here it is integrated from torque, so it does.
-ok = check(ok,'free wheels spin up until slip -> 0', W.slip_ratio(1), 0, 1e-3);
-ok = check(ok,'spun-up speed matches vx/Rw', W.omega(1), 10/P.WheelRadius, 0.5);
+% ...but NOT to zero slip, and not at this pose. The body is at [10;10;0] --
+% a 45 degree slip angle -- and a Magic Formula tyre generates a longitudinal
+% force at a slip angle even when the longitudinal slip is zero. An undriven
+% wheel therefore settles where that induced force is cancelled, which is at
+% kappa ~ -0.2, not at zero.
+%
+% This is the combined-slip coupling the tyre was swapped in for. The friction
+% ellipse it replaced could only ever SCALE Fx and Fy, so Fx was identically
+% zero whenever kappa was, and the wheel settled at exactly vx/Rw. Asserting
+% that here would be asserting the old model's simplification.
+ok = check(ok,'undriven wheels spin up from rest', W.omega(1) > 0.5*10/P.WheelRadius, true, 0);
+ok = check(ok,'slip angle induces longitudinal slip', W.slip_ratio(1) < -0.05, true, 0);
 % Once rolling, the friction budget is available laterally again.
 ok = check(ok,'rolling at slip angle: |Fy| > |Fx|', abs(F(2)) > abs(F(1)), true, 0);
+
+% The strict version of the spin-up check, at the pose where it is actually
+% exact: straight ahead, no slip angle, nothing to couple into. Here an
+% undriven wheel must come to true free rolling, and the speed it settles at
+% is the one the REST OF THE STACK depends on -- the pipeline converts motor
+% rpm to road speed with this radius, so a tyre quietly rolling on a different
+% one puts a bias into /odom that no odometry test would attribute to a tyre.
+assignin('base','POSE_STRAIGHT', poseStruct(P.CoGHeight, [10;0;0], [0;0;0]));
+set_param([h '/POSE'],'Value','POSE_STRAIGHT');
+r = sim(h);  W = wheels(r);
+ok = check(ok,'straight: free wheels spin up until slip -> 0', W.slip_ratio(1), 0, 1e-3);
+ok = check(ok,'straight: spun-up speed matches vx/Rw', W.omega(1), 10/P.WheelRadius, 0.5);
 set_param([h '/POSE'],'Value','POSE_REST');
 
 %% 4. Wheel spin: airborne, so no tyre force resists the torque.
