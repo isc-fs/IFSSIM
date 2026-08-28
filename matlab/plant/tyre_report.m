@@ -63,7 +63,9 @@ fprintf('  nobody validated; the assumptions above are typical values. FSAE TTC\
 fprintf('  data would replace the whole first block and most of the second.\n');
 
 constraints = {
- sprintf('Fz held at %.0f N (static, per wheel) -- NO load transfer', Fz)
+ sprintf('Fz held at %.0f N (static, per wheel): THE RIG has no load', Fz)
+ 'transfer. The PLANT does -- per corner, from suspension'
+ 'deflection; see the pitch/roll checks in test_tiresuspension'
  sprintf('Vx = %g m/s throughout; MF has speed-dependent terms', Vx)
  'camber = 0, turn slip off, ply steer off'
  'pressure = nominal, so every pressure term is inert'

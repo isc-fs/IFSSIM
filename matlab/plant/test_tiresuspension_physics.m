@@ -58,6 +58,44 @@ ok = check(ok,'dropped wheel: reported out of contact', W.in_contact(1), 0, 0);
 ok = check(ok,'dropped wheel: others still loaded', W.fz(2) > 0, true, 0);
 set_param([h '/ROAD'],'Value','ROAD_FLAT');
 
+%% 2b. LOAD TRANSFER. Four corners, not two axles.
+%
+% This went untested for a long time, and it is the assumption every grip
+% number downstream leans on. The suspension is what produces it: each
+% corner's load follows its OWN deflection and deflection rate, taken at its
+% own position through the body rotation, so pitching or rolling the body
+% moves load between corners. There is no explicit transfer term anywhere --
+% it falls out of the geometry, which is why it covers longitudinal and
+% lateral transfer at once and why a two-axle algebraic formula is not needed.
+%
+% Pitch rate about y: the front corners move INTO the road while the rears
+% move away from it, so the fronts must gain load and the rears must lose it,
+% left and right staying equal because a pitch is symmetric.
+%
+% 0.1 rad/s deliberately, not something violent. At 0.5 the rear corner
+% unloads completely and clamps at zero, and the assertion then passes on the
+% lift clamp rather than on the transfer it is supposed to be testing.
+assignin('base','POSE_PITCH', poseStruct(P.CoGHeight, [0;0;0], [0;0.1;0]));
+set_param([h '/POSE'],'Value','POSE_PITCH');
+r = sim(h);  Wp = wheels(r);
+ok = check(ok,'pitch: front corners gain load', Wp.fz(1) > P.Derived.StaticLoadFront, true, 0);
+ok = check(ok,'pitch: rear corners shed load',  Wp.fz(3) < P.Derived.StaticLoadRear,  true, 0);
+ok = check(ok,'pitch: left and right stay equal', Wp.fz(1) - Wp.fz(2), 0, 1e-9);
+
+% Roll rate about x: now it is left against right, and front against rear
+% must stay put. y is POSITIVE LEFT, so a positive roll rate drives the LEFT
+% corners down.
+assignin('base','POSE_ROLL', poseStruct(P.CoGHeight, [0;0;0], [0.1;0;0]));
+set_param([h '/POSE'],'Value','POSE_ROLL');
+r = sim(h);  Wr = wheels(r);
+ok = check(ok,'roll: left and right loads diverge', abs(Wr.fz(1) - Wr.fz(2)) > 1, true, 0);
+ok = check(ok,'roll: front pair mirrors rear pair', ...
+           sign(Wr.fz(1)-Wr.fz(2)), sign(Wr.fz(3)-Wr.fz(4)), 0);
+fprintf('        pitch @0.1 rad/s: front %.0f N (static %.0f), rear %.0f N (static %.0f)\n', ...
+        Wp.fz(1), P.Derived.StaticLoadFront, Wp.fz(3), P.Derived.StaticLoadRear);
+fprintf('        roll  @0.1 rad/s: left %.0f N, right %.0f N\n', Wr.fz(1), Wr.fz(2));
+set_param([h '/POSE'],'Value','POSE_REST');
+
 %% 3. Lateral force opposes lateral slip, and saturates at mu*Fz.
 % Sliding LEFT (+vy in ISO 8855) must produce force to the RIGHT.
 assignin('base','POSE_SLIP', poseStruct(P.CoGHeight, [10;1;0], [0;0;0]));
