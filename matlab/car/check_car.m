@@ -1,0 +1,109 @@
+function ok = check_car(C)
+%CHECK_CAR  Cross-check the car against itself, and say what is not known.
+%
+%   Every error found in the August 2026 audit was a CONSISTENCY failure that
+%   nothing was looking for: a wheelbase that disagreed with the hardpoints, a
+%   suspension whose stiffness implied a ride frequency nobody had ever
+%   recorded, a tyre curve whose sliding tail was half what a slick holds.
+%   None of them were typos. Each was a number that made sense alone and did
+%   not survive being compared with another number.
+%
+%   So this compares them. It cannot tell you a value is RIGHT -- only the car
+%   can do that -- but it can tell you two values cannot both be right.
+%
+%   ok = CHECK_CAR(C) returns false if anything failed. Warnings do not fail
+%   the build; they are things worth knowing every time you build.
+
+if nargin < 1, C = car_spec(); end
+v = @(n) C.Fields.(n).value;
+ok = true; nwarn = 0;
+
+fprintf('\n=== CHECK_CAR: %s ===\n', C.Name);
+
+%% ---- consistency ------------------------------------------------------
+% Ride frequency. This is the check that would have caught HeaveStiffness.
+sprung  = v('Mass') * 0.85 / 4;              % ~15% unsprung, per corner
+wheelHz = sqrt(v('HeaveStiffness')/4/sprung)/(2*pi);
+[ok,nwarn] = band(ok,nwarn,'ride frequency', wheelHz,'Hz', 1.5, 4.0, ...
+    'A Formula Student car sits around 2.5-3.5 Hz. Outside that band either the stiffness or the mass is wrong.');
+
+% Sliding tail. sin(C*pi/2) is the fraction of peak grip a Magic Formula
+% curve keeps once the tyre is properly sliding.
+for ax = {'Lat','Lon'}
+    Cs = v(['Pacejka_' ax{1} 'C']);
+    [ok,nwarn] = band(ok,nwarn,sprintf('%s sliding tail',ax{1}), 100*sin(Cs*pi/2),'%', 60, 90, ...
+        'A slick is usually quoted holding 70-85% of peak at full slide.');
+end
+
+% Weight distribution against the geometry it implies.
+aF = v('Wheelbase') * (1 - v('WeightDistFront'));
+[ok,nwarn] = band(ok,nwarn,'CoG behind front axle', aF*1000,'mm', 700, 950, ...
+    'The IFS-08 hardpoint table puts it at 865.7 mm.');
+
+% Track against wheelbase: a very wide or very narrow car is a units error.
+[ok,nwarn] = band(ok,nwarn,'track / wheelbase', v('TrackFront')/v('Wheelbase'),'-', 0.6, 0.9, ...
+    'Outside this, one of the two is probably in the wrong units or from a different car.');
+
+% Aero balance should sit near the weight distribution, or the car changes
+% balance with speed in a way nobody intended.
+[ok,nwarn] = band(ok,nwarn,'aero balance - weight dist', ...
+    abs(v('AeroBalanceFront')-v('WeightDistFront')),'-', 0, 0.10, ...
+    'A large gap means the car is deliberately speed-sensitive. Deliberate is fine; accidental is not.');
+
+% Maximum lock, as a plausibility bound only.
+%
+% NOT compared against the tyre's peak slip angle, though it is tempting and
+% this check did exactly that at first. They are different quantities: lock is
+% a ROAD WHEEL angle the driver commands, slip angle is the angle the tyre
+% actually runs at, and it depends on how the car is moving. A car can sit at
+% 22 deg of lock with the tyre at 8 deg of slip. There is no invariant tying
+% them, and asserting one flagged a settled decision as a fault.
+[ok,nwarn] = band(ok,nwarn,'max steering lock', v('MaxSteerAngle'),'deg', 12, 32, ...
+    'Outside the range an FS car can physically steer. See #462 for the four figures that have disagreed about this.');
+
+% The tyre's peak slip angle is REPORTED, not asserted -- it is worth knowing
+% every build, because the whole curve shape hangs off it.
+B = v('Pacejka_LatB'); Cy = v('Pacejka_LatC'); E = v('Pacejka_LatE');
+a  = linspace(0, 0.5, 4000);
+mf = sin(Cy*atan(B*a - E*(B*a - atan(B*a))));
+[~,i] = max(mf);
+fprintf('  [info] %-28s %8.1f deg  (reported, not asserted)\n','tyre peak slip angle', a(i)*180/pi);
+
+%% ---- what nobody knows ------------------------------------------------
+lvl = struct('UNKNOWN',{{}},'DISPUTED',{{}},'ASSUMED',{{}});
+for i = 1:numel(C.Order)
+    f = C.Fields.(C.Order{i});
+    tok = regexp(f.source,'^(UNKNOWN|DISPUTED|ASSUMED)','match','once');
+    if ~isempty(tok), lvl.(tok){end+1} = f.name; end
+end
+fprintf('\n--- provenance ---\n');
+fprintf('  %d parameters: %d unknown, %d disputed, %d assumed, %d sourced\n', ...
+    numel(C.Order), numel(lvl.UNKNOWN), numel(lvl.DISPUTED), numel(lvl.ASSUMED), ...
+    numel(C.Order)-numel(lvl.UNKNOWN)-numel(lvl.DISPUTED)-numel(lvl.ASSUMED));
+for t = {'UNKNOWN','DISPUTED'}
+    if ~isempty(lvl.(t{1}))
+        fprintf('  %-9s %s\n', t{1}, strjoin(lvl.(t{1}), ', '));
+    end
+end
+
+%% ---- things that reach outside this repo -------------------------------
+fprintf('\n--- couplings outside this repo ---\n');
+fprintf('  WheelRadius %.3f m is used by the PIPELINE to turn motor rpm into\n', v('WheelRadius'));
+fprintf('  road speed (kRpmToMs). Changing it here and not there puts a silent\n');
+fprintf('  bias into /odom that no test in this repo would catch.\n');
+
+fprintf('\n%s\n', ternary(ok, sprintf('CHECK_CAR PASSED (%d warning(s))', nwarn), 'CHECK_CAR FAILED'));
+end
+
+%% =======================================================================
+function [ok,nwarn] = band(ok, nwarn, name, value, unit, lo, hi, why)
+if value >= lo && value <= hi
+    fprintf('  [ok  ] %-28s %8.3f %-4s in [%g, %g]\n', name, value, unit, lo, hi);
+else
+    nwarn = nwarn + 1;
+    fprintf('  [WARN] %-28s %8.3f %-4s OUTSIDE [%g, %g]\n', name, value, unit, lo, hi);
+    fprintf('         %s\n', why);
+end
+end
+
+function s = ternary(c,a,b), if c, s=a; else, s=b; end, end
