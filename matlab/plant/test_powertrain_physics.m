@@ -56,7 +56,7 @@ Pelec = Pmech / P.DrivetrainEfficiency;
 Ipack = Pelec / max(B.batt_voltage, 1);
 ok = check(ok,'power limited below torque limit', B.motor_torque < P.MotorMaxTorque, true, 0);
 ok = check(ok,'accumulator, not motor, is the cap', Pmech < P.MotorMaxPower, true, 0);
-ok = check(ok,'draws exactly what the pack can pass', Ipack, PK.IMaxPulse, 1e-3);
+ok = check(ok,'draws exactly the measured current limit', Ipack, PK.IOperating, 1e-3);
 fprintf('        pack-limited: %.1f kW to the shaft at %.0f V, %.0f A\n', ...
         Pmech/1000, B.batt_voltage, Ipack);
 

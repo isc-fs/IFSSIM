@@ -85,8 +85,13 @@ flat = struct( ...
     ... % See matlab/car/pack_from_cells. These come from the CELL PART NUMBER
     ... % and how many are arranged which way, so a different cell or a
     ... % different module count moves them without anyone editing a pack figure.
-    'IFSSIM_Ipk',   PK.IMaxPulse, ...           % A, what the pack can pass
-    'IFSSIM_Icont', PK.IMaxCont, ...            % A, continuous
+    ... % The MEASURED operating limit, not the sum of the cell ratings. Cells
+    ... % deliver what is asked of them; the rating is about heat and cycle
+    ... % life. The car has been logged at 200 A, which is above the cells'
+    ... % own 30 A -- check_car says so rather than the plant pretending it
+    ... % cannot happen.
+    'IFSSIM_Ipk',   PK.IOperating, ...          % A, what the car actually draws
+    'IFSSIM_Icont', PK.IMaxCont, ...            % A, what the cells are rated to hold
     ... % --- battery (harvested from IFS_Sim, NOT settings.json) ---
     'IFSSIM_Vmax',  P.Derived.BatteryVMax, ...
     'IFSSIM_Vmin',  P.Derived.BatteryVMin, ...

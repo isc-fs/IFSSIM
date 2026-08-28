@@ -36,5 +36,12 @@ K.IMaxPulse = K.Np * v('Cell.IMaxPulse');
 K.PMaxCont  = K.IMaxCont  * (K.VNom - K.IMaxCont *K.Rint);
 K.PMaxPulse = K.IMaxPulse * (K.VNom - K.IMaxPulse*K.Rint);
 
+% What the car is actually allowed to pull, and what that delivers. This is
+% the operating point, as distinct from K.IMaxPulse which is the sum of the
+% cells' own ratings.
+K.IOperating = v('Pack.CurrentLimit');
+K.POperating = K.IOperating * (K.VNom - K.IOperating*K.Rint);
+K.CellAmpsAtOperating = K.IOperating / K.Np;
+
 K.Mass = K.NCells * v('Cell.Mass');
 end

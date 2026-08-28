@@ -108,6 +108,18 @@ C = par(C,'Pack.CellsParallelPerModule',  6, '-','MEASURED accumulator team: eac
 C = par(C,'Pack.ModulesInSeries',         5, '-','MEASURED 5 modules in series -> 95s overall');
 C = par(C,'Pack.ModulesInParallel',       1, '-','MEASURED modules are in series only');
 
+% WHAT THE CAR ACTUALLY DRAWS, which is not the same as what the cells are
+% rated for and must not be confused with it. Logged on the car at up to
+% 200 A. Across six parallel that is 33 A per cell, ABOVE the VTC6's 30 A
+% maximum -- which is what a short burst looks like, because a cell does not
+% refuse current. The rating is a statement about heat and cycle life, not a
+% wall the current cannot cross.
+%
+% This is the number the torque envelope uses. The cell ratings above are
+% what check_car compares it against, so exceeding them is visible rather
+% than silently modelled as impossible.
+C = par(C,'Pack.CurrentLimit',         200, 'A','MEASURED logged on the car, bursts to 200 A');
+
 %% ---- tyre curve ------------------------------------------------------
 % Shape factors, not measurements. LonC sets how much grip survives at full
 % slide: sin(C*pi/2), so 1.46 -> 75%. It was 1.7 (45%) until the Magic
