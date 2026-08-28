@@ -3,12 +3,27 @@ function build_tiresuspension(outdir)
 %
 %   Every force that steers, accelerates or stops the car is generated here.
 %
-%   Simplified deliberately: quasi-static suspension (no unsprung-mass DOF),
-%   Magic Formula with a friction ellipse and relaxation length (no camber thrust,
-%   load-sensitive mu or thermal model).
+%   The TYRE ITSELF is Simscape Vehicle Dynamics Blockset's Fiala Wheel 2DOF
+%   block, vectorised across all four corners in a single instance. What this
+%   file still owns is everything AROUND it: the suspension that decides the
+%   vertical load, the kinematics that turn a body-frame state into per-wheel
+%   contact-patch velocities, the drive/brake/rolling torques that go onto the
+%   axle, and the assembly of four wheel forces back into a body wrench.
 %
-%   Wheel spin IS a real integrated state — Chaos snaps it to ground speed, so
-%   longitudinal slip cannot exist there.
+%   The block is configured with its own brake, rolling-resistance and vertical
+%   models switched OFF (BrakeType/rollingType/vertType = None). That is
+%   deliberate. We already model all three, they are calibrated against this
+%   car, and the rolling-resistance coefficient in particular is a settled
+%   number. What we take from the block is the part we could not write
+%   honestly ourselves: combined slip, relaxation length, and a separate peak
+%   and sliding friction.
+%
+%   Vertical load therefore goes IN through Fext and comes back out unchanged
+%   as Fz -- verified, not assumed. Wheel spin is a state INSIDE the block now;
+%   it used to be integrated here.
+%
+%   Simplified still: quasi-static suspension (no unsprung-mass DOF), no
+%   thermal model, camber held at zero.
 
 if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
@@ -22,8 +37,16 @@ f = fullfile(outdir,[name '.slx']);
 if isfile(f), delete(f); end
 
 new_system(name,'Model');
-set_param(name,'SolverType','Fixed-step','Solver','FixedStepDiscrete', ...
-               'FixedStep','1/960','StartTime','0','StopTime','inf');
+% ode1, NOT FixedStepDiscrete. The Fiala block carries continuous states and a
+% discrete solver refuses to compile a model containing them. ode1 is forward
+% Euler at the same fixed step, so every block that was already discrete steps
+% exactly as it did before -- this widens what the model can contain, it does
+% not change how the existing content is integrated.
+%
+% The step must be BIT-IDENTICAL to the parent plant's; see the long note on
+% STEP in build_plant_skeleton.m for why it is 2 ulp off 1/960.
+set_param(name,'SolverType','Fixed-step','Solver','ode1', ...
+               'FixedStep','0.0010416666666666671','StartTime','0','StopTime','inf');
 
 %% ---- inputs -----------------------------------------------------------
 add_block('simulink/Sources/In1',[name '/Road'],'Position',[30 40 60 60], ...
@@ -46,103 +69,228 @@ for i = 1:numel(vecIn)
     y = y + 60;
 end
 
-%% ---- the model --------------------------------------------------------
-fcn = [name '/Tyre and Suspension'];
-add_block('simulink/User-Defined Functions/MATLAB Function', fcn, ...
-          'Position',[280 40 520 460]);
+%% ---- suspension and kinematics ---------------------------------------
+PRE = 'Suspension and Kinematics';
+pre = [name '/' PRE];
+add_block('simulink/User-Defined Functions/MATLAB Function', pre, ...
+          'Position',[250 40 430 420]);
 S = sfroot;
-chart = S.find('-isa','Stateflow.EMChart','Path',fcn);
-chart.Script = tiresusp_code();
-
-% Explicit sizes: the wheel-speed state feeds back through a delay, so nothing
-% can be inferred. Same circular-inference trap as the chassis.
-sizes = struct( ...
+cpre = S.find('-isa','Stateflow.EMChart','Path',pre);
+cpre.Script = pre_code();
+set_sizes(cpre, struct( ...
   'road_valid',4,'road_h',4,'road_mu',4,'road_res',4, ...
   'pos',3,'quat',4,'velb',3,'omegab',3, ...
-  'steer_in',4,'drive_t',4,'brake_t',4,'w_i',4,'kap_i',4,'alp_i',4, ...
-  'w_n',4,'kap_n',4,'alp_n',4, ...
-  'omega',4,'steer',4,'fz',4,'fx',4,'fy',4, ...
-  'slip_ratio',4,'slip_angle',4,'susp_travel',4,'in_contact',4, ...
-  'tyre_force',3,'tyre_torque',3);
+  'steer_in',4,'drive_t',4,'brake_t',4,'w_fb',4, ...
+  'Fz',4,'Vxw',4,'Vyw',4,'AxlTrq',4,'steer_o',4, ...
+  'susp_travel',4,'in_contact',4,'muScale',4));
+add_params(cpre, {'IFSSIM_Ts','IFSSIM_Iw','IFSSIM_wreg','IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR','IFSSIM_Rw', ...
+                  'IFSSIM_kw','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
+                  'IFSSIM_mu','IFSSIM_Crr'});
+
+%% ---- the tyre ---------------------------------------------------------
+% One instance, four corners. Every port carries a 4-vector; the block is
+% built to vectorise and this was confirmed by compiling it at width 4 before
+% anything here depended on it.
+TY = 'Tyre';
+ty = [name '/' TY];
+load_system('vehdynlibtire');
+add_block('vehdynlibtire/Fiala Wheel 2DOF', ty, 'Position',[520 120 640 300]);
+set_param(ty, ...
+    'tireType',    'User defined', ...  % our own stiffnesses, not a stock dataset
+    'BrakeType',   'None', ...          % we model the brakes
+    'rollingType', 'None', ...          % we model rolling resistance (settled Crr)
+    'vertType',    'None', ...          % we model the suspension; Fz comes in on Fext
+    'UNLOADED_RADIUS','IFSSIM_Rw', ...
+    'IYY',        'IFSSIM_Iw', ...
+    'omegao',     '0', ...
+    'WIDTH',      'IFSSIM_Twidth', ...
+    'Calpha',     'IFSSIM_Calpha', ...
+    'Ckappa',     'IFSSIM_Ckappa', ...
+    'Cgamma',     '0', ...              % camber is held at zero, so this is unused
+    'muMin',      'IFSSIM_muMin', ...
+    'muMax',      'IFSSIM_muMax', ...
+    'Lrelx',      'IFSSIM_sigk', ...
+    'Lrely',      'IFSSIM_siga', ...
+    'NOMPRES',    'IFSSIM_Ppres', ...
+    'FZMIN',      '0', ...             % a lifted wheel must really carry nothing
+    ... % RIGID CARCASS, deliberately. Fiala derives an effective rolling radius
+    ... % from tyre deflection, so a loaded tyre rolls on a slightly smaller
+    ... % radius and spins ~1.3% faster than v/R_unloaded. That is real, and it
+    ... % is switched off here for two reasons: our suspension already carries
+    ... % all of the compliance in IFSSIM_kw, so a deflecting tyre on top of it
+    ... % double-counts; and the wheel radius is a SETTLED, EXTERNALLY CONSUMED
+    ... % number -- the pipeline's odometry converts motor rpm to speed with it,
+    ... % and quietly changing the effective radius here would put a 1.3% bias
+    ... % into /odom that nobody would think to look for in a tyre model.
+    'VERTICAL_STIFFNESS', '1e9', ...
+    'VERTICAL_DAMPING',   '0');
+
+% Ports the block still exposes but this car does not drive. Camber is zero
+% because the suspension model has no camber DOF; YawRate feeds turn-slip,
+% which needs a steer RATE we do not currently produce; Gnd is inert with the
+% vertical model off; pressure is set equal to nominal so its ratio is 1.
+konst = {'Camber','0'; 'YawRate','0'; 'Prs','IFSSIM_Ppres'; 'Gnd','0'};
+yk = 340;
+for i = 1:size(konst,1)
+    add_block('simulink/Sources/Constant',[name '/' konst{i,1}], ...
+              'Position',[400 yk 460 yk+20], ...
+              'Value',['ones(4,1)*' konst{i,2}]);
+    yk = yk + 40;
+end
+
+%% ---- wheel forces back to the body ------------------------------------
+POST = 'Wheel Forces';
+post = [name '/' POST];
+add_block('simulink/User-Defined Functions/MATLAB Function', post, ...
+          'Position',[720 60 880 380]);
+
+S = sfroot;
+cpost = S.find('-isa','Stateflow.EMChart','Path',post);
+cpost.Script = post_code();
+set_sizes(cpost, struct( ...
+  'Fx_in',4,'Fy_in',4,'Fz_in',4,'Om',4,'steer_in',4,'Vxw',4,'Vyw',4, ...
+  'omega',4,'fz',4,'fx',4,'fy',4,'slip_ratio',4,'slip_angle',4, ...
+  'tyre_force',3,'tyre_torque',3));
+add_params(cpost, {'IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR', ...
+                   'IFSSIM_Rw','IFSSIM_vreg'});
+
+%% ---- wheel-speed feedback ---------------------------------------------
+% The block integrates wheel spin itself, but our brake and rolling-resistance
+% torques both need to know which way the wheel is turning before they can
+% oppose it. Taking Omega straight back into the axle torque would be an
+% algebraic loop, so it goes through a one-step delay.
+add_block('simulink/Discrete/Memory',[name '/wheel omega (delay)'], ...
+          'Position',[520 420 590 450],'InitialCondition','0');
+% MEMORY, not Unit Delay. Both break the loop, but a Unit Delay declares a
+% DISCRETE RATE, and that made this model a hybrid of discrete and continuous
+% components -- at which point Simulink stops being lenient and demands that
+% the parent and referenced model agree on step size to the last bit of the
+% double. They never did: both sides are negotiated fundamental sample times,
+% the plant landing on 0.0010416666666666671 and this model on ...667, and no
+% literal written on either side changes that, because neither is parsed.
+% Memory carries no rate of its own, so the model stays continuous and the
+% question of matching never arises.
+
+%% ---- outputs ----------------------------------------------------------
+add_block('simulink/Signal Routing/Bus Creator',[name '/Wheels Bus'], ...
+          'Position',[940 40 950 320],'Inputs','9', ...
+          'OutDataTypeStr','Bus: IFSSIM_WheelsBus','NonVirtualBus','on');
+add_block('simulink/Sinks/Out1',[name '/Wheels'],'Position',[1000 170 1030 190], ...
+          'OutDataTypeStr','Bus: IFSSIM_WheelsBus');
+add_line(name,'Wheels Bus/1','Wheels/1','autorouting','on');
+add_block('simulink/Sinks/Out1',[name '/tyre_force'],'Position',[1000 360 1030 380], ...
+          'PortDimensions','3');
+add_block('simulink/Sinks/Out1',[name '/tyre_torque'],'Position',[1000 420 1030 440], ...
+          'PortDimensions','3');
+% Info is a 27-field diagnostic bus. Nothing downstream consumes it.
+add_block('simulink/Sinks/Terminator',[name '/Info'],'Position',[720 20 740 40]);
+% Mx/My/Mz: overturning, rolling-resistance and self-aligning moments. The
+% chassis takes a force and a moment arm from us, not per-wheel moments, so
+% these are deliberately dropped -- but they must still be TERMINATED, or the
+% model has unconnected ports and will not compile.
+for mo = {'Mx','My','Mz'}
+    add_block('simulink/Sinks/Terminator',[name '/' mo{1}], ...
+              'Position',[720 400 740 420]);
+end
+
+%% ---- wiring -----------------------------------------------------------
+% Indices are written as running offsets, never as literals. The last time
+% they were literals a bus gained a field and the mis-wiring type-checked
+% perfectly, because every port on this boundary is a double.
+nRoad = 4;   % valid, height, mu, residual
+nPose = 4;   % position, quat, vel_body, omega_body
+for i = 1:nRoad, add_line(name,sprintf('Road Select/%d',i),sprintf('%s/%d',PRE,i),'autorouting','on'); end
+for i = 1:nPose, add_line(name,sprintf('Pose Select/%d',i),sprintf('%s/%d',PRE,nRoad+i),'autorouting','on'); end
+for i = 1:3,     add_line(name,[vecIn{i} '/1'],sprintf('%s/%d',PRE,nRoad+nPose+i),'autorouting','on'); end
+add_line(name,'wheel omega (delay)/1',sprintf('%s/%d',PRE,nRoad+nPose+4),'autorouting','on');
+
+% pre -> tyre.  Port order on the block under THIS configuration is
+% AxlTrq, Vx, Vy, Camber, YawRate, Prs, Gnd, Fext, ScaleFctr -- read off the
+% block itself, because switching the brake model off deletes a port and
+% renumbers everything after it.
+pOut = struct('Fz',1,'Vxw',2,'Vyw',3,'AxlTrq',4,'steer_o',5, ...
+              'susp_travel',6,'in_contact',7,'muScale',8);
+add_line(name,sprintf('%s/%d',PRE,pOut.AxlTrq), [TY '/1'],'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.Vxw),    [TY '/2'],'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.Vyw),    [TY '/3'],'autorouting','on');
+add_line(name,'Camber/1',                       [TY '/4'],'autorouting','on');
+add_line(name,'YawRate/1',                      [TY '/5'],'autorouting','on');
+add_line(name,'Prs/1',                          [TY '/6'],'autorouting','on');
+add_line(name,'Gnd/1',                          [TY '/7'],'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.Fz),     [TY '/8'],'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.muScale),[TY '/9'],'autorouting','on');
+
+% tyre outputs: Info, Omega, Fx, Fy, Fz, Mx, My, Mz
+add_line(name,[TY '/1'],'Info/1','autorouting','on');
+add_line(name,[TY '/2'],'wheel omega (delay)/1','autorouting','on');
+add_line(name,[TY '/3'],sprintf('%s/1',POST),'autorouting','on');   % Fx
+add_line(name,[TY '/4'],sprintf('%s/2',POST),'autorouting','on');   % Fy
+add_line(name,[TY '/5'],sprintf('%s/3',POST),'autorouting','on');   % Fz
+add_line(name,[TY '/2'],sprintf('%s/4',POST),'autorouting','on');   % Omega
+add_line(name,sprintf('%s/%d',PRE,pOut.steer_o),sprintf('%s/5',POST),'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.Vxw),    sprintf('%s/6',POST),'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.Vyw),    sprintf('%s/7',POST),'autorouting','on');
+
+% Wheels bus: omega, steer, fz, fx, fy, slip_ratio, slip_angle, susp_travel, in_contact
+add_line(name,sprintf('%s/1',POST),'Wheels Bus/1','autorouting','on');   % omega
+% Named explicitly: the bus object calls this element 'steer' but the function
+% output is 'steer_o', and an unnamed line makes Simulink warn on every compile.
+lh = add_line(name,sprintf('%s/%d',PRE,pOut.steer_o),'Wheels Bus/2','autorouting','on');
+set_param(lh,'Name','steer');
+add_line(name,sprintf('%s/2',POST),'Wheels Bus/3','autorouting','on');   % fz
+add_line(name,sprintf('%s/3',POST),'Wheels Bus/4','autorouting','on');   % fx
+add_line(name,sprintf('%s/4',POST),'Wheels Bus/5','autorouting','on');   % fy
+add_line(name,sprintf('%s/5',POST),'Wheels Bus/6','autorouting','on');   % slip_ratio
+add_line(name,sprintf('%s/6',POST),'Wheels Bus/7','autorouting','on');   % slip_angle
+add_line(name,sprintf('%s/%d',PRE,pOut.susp_travel),'Wheels Bus/8','autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.in_contact), 'Wheels Bus/9','autorouting','on');
+add_line(name,sprintf('%s/7',POST),'tyre_force/1','autorouting','on');
+add_line(name,sprintf('%s/8',POST),'tyre_torque/1','autorouting','on');
+add_line(name,[TY '/6'],'Mx/1','autorouting','on');
+add_line(name,[TY '/7'],'My/1','autorouting','on');
+add_line(name,[TY '/8'],'Mz/1','autorouting','on');
+
+save_system(name,f);
+fprintf('wrote %s\n',f);
+fprintf('  Fiala tyre: Calpha %.0f N/rad, Ckappa %.0f N, mu %.2f..%.2f, sigma %.2f/%.2f m\n', ...
+        P.Derived.CorneringStiffness, P.Derived.LongSlipStiffness, ...
+        P.TireMu*P.Assumed.SlideFrictionRatio, P.TireMu, ...
+        P.Assumed.RelaxLengthLong, P.Assumed.RelaxLengthLat);
+fprintf('  suspension: wheel rate %.0f N/m, damping %.0f N.s/m\n', ...
+        P.Derived.WheelRateEach, P.Derived.SuspensionDampingCoeff);
+close_system(name,0);
+end
+
+%% =======================================================================
+function set_sizes(chart, sizes)
 data = chart.find('-isa','Stateflow.Data');
 for k = 1:numel(data)
     d = data(k);
     if isfield(sizes,d.Name), d.Props.Array.Size = num2str(sizes.(d.Name)); end
 end
+end
 
-params = {'IFSSIM_Ts','IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR','IFSSIM_Rw', ...
-          'IFSSIM_kw','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
-          'IFSSIM_mu','IFSSIM_LatB','IFSSIM_LatC','IFSSIM_LatE', ...
-          'IFSSIM_LonB','IFSSIM_LonC','IFSSIM_LonE','IFSSIM_Iw','IFSSIM_vreg', ...
-          'IFSSIM_Crr', ...
-          'IFSSIM_sigk','IFSSIM_siga'};
+function add_params(chart, params)
+data = chart.find('-isa','Stateflow.Data');
 existing = {data.Name};
 for k = 1:numel(params)
     if any(strcmp(existing,params{k})), continue; end
     d = Stateflow.Data(chart);
     d.Name = params{k}; d.Scope = 'Parameter'; d.Props.Array.Size = '1';
 end
-
-%% ---- wheel-speed state ------------------------------------------------
-add_block('simulink/Discrete/Unit Delay',[name '/wheel omega (state)'], ...
-          'Position',[330 520 400 550],'InitialCondition','[0;0;0;0]','SampleTime','-1');
-add_block('simulink/Discrete/Unit Delay',[name '/slip ratio (state)'], ...
-          'Position',[330 570 400 600],'InitialCondition','[0;0;0;0]','SampleTime','-1');
-add_block('simulink/Discrete/Unit Delay',[name '/slip angle (state)'], ...
-          'Position',[330 620 400 650],'InitialCondition','[0;0;0;0]','SampleTime','-1');
-
-%% ---- outputs ----------------------------------------------------------
-add_block('simulink/Signal Routing/Bus Creator',[name '/Wheels Bus'], ...
-          'Position',[600 40 610 320],'Inputs','9', ...
-          'OutDataTypeStr','Bus: IFSSIM_WheelsBus','NonVirtualBus','on');
-add_block('simulink/Sinks/Out1',[name '/Wheels'],'Position',[680 170 710 190], ...
-          'OutDataTypeStr','Bus: IFSSIM_WheelsBus');
-add_line(name,'Wheels Bus/1','Wheels/1','autorouting','on');
-add_block('simulink/Sinks/Out1',[name '/tyre_force'],'Position',[680 360 710 380], ...
-          'PortDimensions','3');
-add_block('simulink/Sinks/Out1',[name '/tyre_torque'],'Position',[680 420 710 440], ...
-          'PortDimensions','3');
-
-%% ---- wiring -----------------------------------------------------------
-FB = 'Tyre and Suspension';
-% Road now carries residual as well, so every downstream input index shifts
-% by one. Written as offsets from the block before it rather than as literals,
-% because the last time these were literals a bus gained a field and the
-% mis-wiring type-checked perfectly - every port on this boundary is a double.
-nRoad = 4;   % valid, height, mu, residual
-nPose = 4;   % position, quat, vel_body, omega_body
-for i = 1:nRoad, add_line(name,sprintf('Road Select/%d',i),sprintf('%s/%d',FB,i),'autorouting','on'); end
-for i = 1:nPose, add_line(name,sprintf('Pose Select/%d',i),sprintf('%s/%d',FB,nRoad+i),'autorouting','on'); end
-for i = 1:3, add_line(name,[vecIn{i} '/1'],sprintf('%s/%d',FB,nRoad+nPose+i),'autorouting','on'); end
-add_line(name,'wheel omega (state)/1',sprintf('%s/%d',FB,nRoad+nPose+4),'autorouting','on');
-add_line(name,'slip ratio (state)/1', sprintf('%s/%d',FB,nRoad+nPose+5),'autorouting','on');
-add_line(name,'slip angle (state)/1', sprintf('%s/%d',FB,nRoad+nPose+6),'autorouting','on');
-
-add_line(name,sprintf('%s/1',FB),'wheel omega (state)/1','autorouting','on');
-add_line(name,sprintf('%s/2',FB),'slip ratio (state)/1','autorouting','on');
-add_line(name,sprintf('%s/3',FB),'slip angle (state)/1','autorouting','on');
-for i = 1:9, add_line(name,sprintf('%s/%d',FB,3+i),sprintf('Wheels Bus/%d',i),'autorouting','on'); end
-add_line(name,sprintf('%s/13',FB),'tyre_force/1','autorouting','on');
-add_line(name,sprintf('%s/14',FB),'tyre_torque/1','autorouting','on');
-
-save_system(name,f);
-fprintf('wrote %s\n',f);
-fprintf('  wheel rate %.0f N/m, damping %.0f N.s/m, mu %.2f, Pacejka LatB %.1f\n', ...
-        P.Derived.WheelRateEach, P.Derived.SuspensionDampingCoeff, P.TireMu, P.Pacejka.LatB);
-close_system(name,0);
 end
 
 %% =======================================================================
-function c = tiresusp_code()
+function c = pre_code()
 L = {
-"function [w_n, kap_n, alp_n, omega, steer, fz, fx, fy, slip_ratio, slip_angle, susp_travel, in_contact, tyre_force, tyre_torque] = ..."
-"         tiresusp(road_valid, road_h, road_mu, road_res, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_i, kap_i, alp_i)"
+"function [Fz, Vxw, Vyw, AxlTrq, steer_o, susp_travel, in_contact, muScale] = ..."
+"         tiresusp_pre(road_valid, road_h, road_mu, road_res, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_fb)"
 "%#codegen"
-"% Per-wheel suspension and tyre forces, summed into a body-frame wrench."
+"% Suspension load and contact-patch kinematics for four corners, plus the"
+"% axle torque that drives the tyre block."
 "%"
 "% Wheel order FL, FR, RL, RR. Body frame ISO 8855: x forward, y LEFT, z up."
 ""
-"Ts = IFSSIM_Ts;"
 "Rw = IFSSIM_Rw;"
 ""
 "% Wheel positions in the body frame, at CoG height. y is POSITIVE LEFT, so the"
@@ -154,15 +302,12 @@ L = {
 ""
 "q = quat / max(norm(quat), eps);"
 "R = q2r(q);                      % body -> world"
-"vel_world = R * velb;"
+"vel_world   = R * velb;"
 "omega_world = R * omegab;"
 ""
-"omega      = zeros(4,1);  steer      = zeros(4,1);"
-"fz         = zeros(4,1);  fx         = zeros(4,1);  fy = zeros(4,1);"
-"slip_ratio = zeros(4,1);  slip_angle = zeros(4,1);"
-"susp_travel= zeros(4,1);  in_contact = zeros(4,1);"
-"w_n        = zeros(4,1);  kap_n      = zeros(4,1);  alp_n = zeros(4,1);"
-"F_sum = zeros(3,1);  M_sum = zeros(3,1);"
+"Fz      = zeros(4,1);  Vxw     = zeros(4,1);  Vyw        = zeros(4,1);"
+"AxlTrq  = zeros(4,1);  steer_o = zeros(4,1);  susp_travel= zeros(4,1);"
+"in_contact = zeros(4,1);  muScale = ones(4,1);"
 ""
 "for i = 1:4"
 "    r_b = [rx(i); ry(i); 0];"
@@ -208,131 +353,55 @@ L = {
 "    cd  = cos(d); sd = sin(d);"
 "    vx =  v_b(1)*cd + v_b(2)*sd;          % along the wheel"
 "    vy = -v_b(1)*sd + v_b(2)*cd;          % across it"
-"    vref = max(abs(vx), IFSSIM_vreg);     % see note on regularisation"
 ""
-"    % ---- slip --------------------------------------------------------"
-"    % Steady-state slip: what this corner would settle at if it rolled long"
-"    % enough at these velocities."
-"    kap_ss = (w_i(i)*Rw - vx) / vref;"
-"    alp_ss = atan2(vy, vref);"
-""
-"    % RELAXATION LENGTH. Slip is a STATE, not an algebraic quantity — the"
-"    % carcass has to deform before it carries the force, and that deformation"
-"    % takes DISTANCE, not time: dkappa/dt = (vref/sigma)*(kappa_ss - kappa)."
+"    % ---- axle torque -----------------------------------------------"
+"    % The tyre block's own brake and rolling-resistance models are switched"
+"    % off, so both arrive here as torque on the axle instead."
 "    %"
-"    % Integrated in exact discrete form, a = 1 - exp(-Ts*vref/sigma), rather"
-"    % than forward Euler. Euler needs Ts*vref/sigma < 2 to stay stable, and"
-"    % that is a speed-dependent condition this model cannot guarantee — the"
-"    % exact form puts a in [0,1) at every speed, so it can neither overshoot"
-"    % nor go unstable no matter how fast the car is going."
-"    ak = 1 - exp(-Ts * vref / IFSSIM_sigk);"
-"    aa = 1 - exp(-Ts * vref / IFSSIM_siga);"
-"    kappa = kap_i(i) + ak * (kap_ss - kap_i(i));"
-"    alpha = alp_i(i) + aa * (alp_ss - alp_i(i));"
-"    kap_n(i) = kappa;  alp_n(i) = alpha;"
-""
-"    % ---- Pacejka ---------------------------------------------------"
-"    muw = road_mu(i);"
-"    if muw <= 0, muw = IFSSIM_mu; end"
-"    Fmax = muw * Fz_i;"
-""
-"    Fx0 =  Fmax * mf(kappa, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE);"
-"    % Lateral force OPPOSES lateral slip, hence the minus."
-"    Fy0 = -Fmax * mf(alpha, IFSSIM_LatB, IFSSIM_LatC, IFSSIM_LatE);"
-""
-"    % Friction ellipse: the tyre has one budget, spent on both axes."
-"    if Fmax > 0"
-"        s = sqrt((Fx0/Fmax)^2 + (Fy0/Fmax)^2);"
-"        if s > 1, Fx0 = Fx0/s; Fy0 = Fy0/s; end"
-"    end"
-""
-"    % ---- wheel spin, SEMI-IMPLICIT -----------------------------------"
-"    % Iw*dw = drive - brake - Fx*Rw, but solved accounting for the fact that"
-"    % Fx itself depends on the wheel speed we are solving for."
+"    % w_fb is last step's wheel speed, delayed. Using it rather than the"
+"    % block's live Omega is what keeps this out of an algebraic loop; at"
+"    % 1/960 s the wheel cannot turn far enough in one step for the"
+"    % difference to matter."
 "    %"
-"    % An explicit step is UNSTABLE here at 1/960 s. From rest at half throttle"
-"    % the wheel gains ~0.15 of slip ratio in ONE step while the longitudinal"
-"    % curve peaks at ~0.10 — so it overshoots the peak before the tyre reacts,"
-"    % and past the peak more slip means LESS force, so it runs away. The car"
-"    % wheelspins at torque levels the tyre could comfortably have held."
-"    % Relaxation length does not fix this: delaying the force build-up makes"
-"    % the launch transient worse, not better."
+"    % tanh, not sign: sign() chatters about zero every step at 1/960 s. tanh"
+"    % also means both torques fade smoothly to zero as the wheel stops, so"
+"    % they RESIST motion but cannot HOLD a stopped car - arresting creep"
+"    % entirely needs a stiction term, which this is not."
+"    % Smoothed over IFSSIM_wreg, which is deliberately WIDER than the wheel"
+"    % speed one step of brake torque can produce. Narrower than that and this"
+"    % is sign() in all but name, and the stop ends in a limit cycle."
+"    dirw    = tanh(w_fb(i) / IFSSIM_wreg);"
+"    % LOCK, DO NOT REVERSE. Brake torque is a magnitude opposing rotation, so"
+"    % it must never be large enough to drive the wheel backwards through zero."
+"    % The old hand-written tyre clamped the wheel state directly after"
+"    % integrating; wheel spin now lives inside the tyre block, where we cannot"
+"    % reach it, so the limit has to be applied to the TORQUE instead."
 "    %"
-"    % Linearising Fx about the current slip and solving for w_n adds the tyre"
-"    % stiffness to the effective inertia, which is what makes it stable."
-"    T_brake = brake_t(i) * tanh(w_i(i) * 10);"
-"    % Rolling resistance, as a torque rather than a body force, because that"
-"    % is the actual mechanism: under load the contact-patch pressure"
+"    % Iw*|w|/Ts is exactly the torque that brings this wheel to rest in one"
+"    % step. Anything beyond it would reverse the wheel, which a brake cannot"
+"    % do: at 286 N.m on Iw = 0.21 one step moves the wheel 1.4 rad/s, so"
+"    % without this the EBS walks a stopping wheel backwards through zero."
+"    T_cap   = IFSSIM_Iw * abs(w_fb(i)) / IFSSIM_Ts;"
+"    T_brake = min(brake_t(i), T_cap) * dirw;"
+"    % Rolling resistance. Physically the contact patch's pressure"
 "    % distribution shifts forward of the axle and the resulting moment"
 "    % opposes rotation. Modelling it as a drag force on the chassis would"
 "    % give a similar top speed and the wrong wheel dynamics."
-"    %"
-"    % Its absence was visible from both ends. A parked car crept at ~1.5 mm/s"
-"    % because nothing opposed motion at zero slip, and on the throttle that"
-"    % holds the Chaos reference at 3.0 m/s this plant reached 8.1 m/s."
-"    %"
-"    % tanh, not sign: sign() chatters about zero every step at 1/960 s, and"
-"    % the wheel-lock logic below would then see a sign flip each step and"
-"    % latch a stationary wheel at random. tanh also means the torque fades"
-"    % smoothly to zero as the wheel stops, so it RESISTS motion but cannot"
-"    % HOLD a stopped car — arresting creep entirely needs a stiction term,"
-"    % which this is not."
-"    T_roll  = IFSSIM_Crr * Fz_i * Rw * tanh(w_i(i) * 10);"
-"    T_net   = drive_t(i) - T_brake - T_roll - Fx0*Rw;"
-"    % dFx/dw = dFx/dkappa * dkappa/dw, by central difference on the curve."
-"    hk   = 1e-4;"
-"    dmf  = (mf(kappa+hk, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE) - ..."
-"            mf(kappa-hk, IFSSIM_LonB, IFSSIM_LonC, IFSSIM_LonE)) / (2*hk);"
-"    % Clamped at zero: past the peak the slope is negative, and letting that"
-"    % reduce the effective inertia would destabilise the very case this fixes."
-"    % NOT scaled by the relaxation factor, though it is tempting. kappa is"
-"    % computed from w_i, the OLD wheel speed, so Fx never actually depended on"
-"    % w_n and this was never a true sensitivity — it is a deliberate implicit"
-"    % OVER-damping that keeps the wheel-speed update stable. Scaling it by ak"
-"    % removes almost all of it at low speed (ak ~ 0.005 at vref = vreg), and"
-"    % the EBS stop then chatters: 8.5 m/s^2 falls to 5.3 and a wheel reverses"
-"    % through zero. Measured, not theorised — see test_brakes_physics."
-"    dFx_dw = max(Fmax * dmf * Rw / vref, 0);"
-"    w_n(i) = w_i(i) + T_net / (IFSSIM_Iw/Ts + dFx_dw*Rw);"
-"    % LOCK, DO NOT REVERSE. Brake torque is a magnitude opposing rotation, so"
-"    % if it is large enough to drive the wheel past zero in one step the wheel"
-"    % has locked — it does not start spinning backwards. Without this clamp the"
-"    % EBS chatters the wheel about zero every step (286 N.m at Iw=0.21 moves it"
-"    % 1.4 rad/s per step, so anything slower than that flips sign)."
-"    if brake_t(i) > 0"
-"        if w_i(i) * w_n(i) < 0"
-"            w_n(i) = 0;            % crossed zero against the brake: locked"
-"        elseif abs(w_i(i)) < 1e-6"
-"            % ALREADY STOPPED. A sign test alone does not catch this — zero"
-"            % times anything is zero — so a stationary wheel could be pushed"
-"            % backwards one step at a time. It stays locked unless the drive"
-"            % and tyre torques together exceed what the brake can hold."
-"            if abs(drive_t(i) - Fx0*Rw) <= brake_t(i)"
-"                w_n(i) = 0;"
-"            end"
-"        end"
-"    end"
+"    T_roll  = IFSSIM_Crr * Fz_i * Rw * dirw;"
+"    AxlTrq(i) = drive_t(i) - T_brake - T_roll;"
 ""
-"    % ---- to the body frame -----------------------------------------"
-"    Fb = [Fx0*cd - Fy0*sd; Fx0*sd + Fy0*cd; Fz_i];"
-"    F_sum = F_sum + Fb;"
-"    M_sum = M_sum + cross(r_b, Fb);"
+"    % ---- friction scaling ------------------------------------------"
+"    % The block carries ONE pair of friction coefficients, but the road can"
+"    % differ under each wheel. ScaleFctr is how per-wheel mu gets in: it is"
+"    % expressed as a RATIO to the nominal mu the block was parameterised"
+"    % with, so a road reporting the nominal value scales by exactly 1."
+"    muw = road_mu(i);"
+"    if muw <= 0, muw = IFSSIM_mu; end"
+"    muScale(i) = muw / IFSSIM_mu;"
 ""
-"    omega(i)=w_i(i); steer(i)=d; fz(i)=Fz_i; fx(i)=Fx0; fy(i)=Fy0;"
-"    slip_ratio(i)=kappa; slip_angle(i)=alpha;"
+"    Fz(i)=Fz_i; Vxw(i)=vx; Vyw(i)=vy; steer_o(i)=d;"
 "    susp_travel(i)=delta; in_contact(i)=double(contact);"
 "end"
-""
-"tyre_force  = F_sum;"
-"tyre_torque = M_sum;"
-"end"
-""
-"function y = mf(x, B, C, E)"
-"%#codegen"
-"% Pacejka Magic Formula '96 shape, peak normalised to 1 so the caller scales"
-"% by mu*Fz. y = sin(C*atan(B*x - E*(B*x - atan(B*x))))"
-"Bx = B*x;"
-"y  = sin(C * atan(Bx - E*(Bx - atan(Bx))));"
 "end"
 ""
 "function R = q2r(q)"
@@ -343,8 +412,50 @@ L = {
 "       2*(x*z-y*w),   2*(y*z+x*w), 1-2*(x*x+y*y)];"
 "end"
 };
-% L holds string scalars (double-quoted), so it is a cell of strings —
-% neither a string array nor a cell of char vectors. Convert explicitly.
 c = char(strjoin(string(L), newline));
 end
 
+%% =======================================================================
+function c = post_code()
+L = {
+"function [omega, fz, fx, fy, slip_ratio, slip_angle, tyre_force, tyre_torque] = ..."
+"         tiresusp_post(Fx_in, Fy_in, Fz_in, Om, steer_in, Vxw, Vyw)"
+"%#codegen"
+"% Four wheel forces, in their own wheel frames, assembled into one body-frame"
+"% wrench -- plus the reported per-wheel state."
+""
+"rx = [ IFSSIM_aF;  IFSSIM_aF; -IFSSIM_bR; -IFSSIM_bR];"
+"ry = [ IFSSIM_tF/2; -IFSSIM_tF/2;  IFSSIM_tR/2; -IFSSIM_tR/2];"
+"Rw = IFSSIM_Rw;"
+""
+"omega = reshape(Om,    4, 1);"
+"fx    = reshape(Fx_in, 4, 1);"
+"fy    = reshape(Fy_in, 4, 1);"
+"fz    = reshape(Fz_in, 4, 1);"
+""
+"slip_ratio = zeros(4,1);  slip_angle = zeros(4,1);"
+"F_sum = zeros(3,1);       M_sum      = zeros(3,1);"
+""
+"for i = 1:4"
+"    % Slip is REPORTED here, not used. The tyre block computes its own"
+"    % internally, with relaxation; this is the algebraic value, recomputed"
+"    % for telemetry so the bus still carries the quantity it always did."
+"    vref = max(abs(Vxw(i)), IFSSIM_vreg);"
+"    slip_ratio(i) = (omega(i)*Rw - Vxw(i)) / vref;"
+"    slip_angle(i) = atan2(Vyw(i), vref);"
+""
+"    % Wheel frame -> body frame. Fx acts along the wheel, Fy across it, and"
+"    % the wheel is rotated by the steer angle relative to the body."
+"    d  = steer_in(i);"
+"    cd = cos(d); sd = sin(d);"
+"    Fb = [fx(i)*cd - fy(i)*sd; fx(i)*sd + fy(i)*cd; fz(i)];"
+"    F_sum = F_sum + Fb;"
+"    M_sum = M_sum + cross([rx(i); ry(i); 0], Fb);"
+"end"
+""
+"tyre_force  = F_sum;"
+"tyre_torque = M_sum;"
+"end"
+};
+c = char(strjoin(string(L), newline));
+end

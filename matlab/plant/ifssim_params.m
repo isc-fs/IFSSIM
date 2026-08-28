@@ -111,6 +111,19 @@ P.Derived.CoGFromFrontAxle = P.Wheelbase * (1 - P.WeightDistFront);    % m
 P.Derived.CoGOffsetFromMid = P.Wheelbase * (P.WeightDistFront - 0.5);  % m, -ve = rearward
 P.Derived.StaticLoadFront  = P.Mass * 9.81 * P.WeightDistFront / 2;    % N per wheel
 P.Derived.StaticLoadRear   = P.Mass * 9.81 * (1-P.WeightDistFront) / 2;
+
+% Slip stiffnesses, in the form a physically-parameterised tyre model wants.
+% NOT new information: they are the initial slope of the Magic Formula we
+% already fitted. For y = D*sin(C*atan(B*x - ...)), dy/dx at the origin is
+% D*C*B, and D is mu*Fz — so these are what our own curve already implies,
+% expressed as N/rad and N per unit slip ratio instead of as shape factors.
+% Derived rather than assumed on purpose: change the Pacejka fit and these
+% follow, so the two descriptions of the tyre cannot drift apart.
+P.Derived.NominalWheelLoad  = (P.Derived.StaticLoadFront + P.Derived.StaticLoadRear)/2;  % N
+P.Derived.CorneringStiffness = P.TireMu * P.Derived.NominalWheelLoad * ...
+                               P.Pacejka.LatC * P.Pacejka.LatB;   % N/rad
+P.Derived.LongSlipStiffness  = P.TireMu * P.Derived.NominalWheelLoad * ...
+                               P.Pacejka.LonC * P.Pacejka.LonB;   % N per unit slip
 P.Derived.PeakWheelTorque  = P.MotorMaxTorque * P.GearRatio * P.DrivetrainEfficiency;
 P.Derived.UnsprungPerCorner = 10.0;                    % kg, from the wheel classes  ASSUMPTION
 P.Derived.SprungPerCorner   = (P.Mass - 4*P.Derived.UnsprungPerCorner)/4;
@@ -137,6 +150,19 @@ P.Assumed.WheelInertia = 0.21;   % kg*m^2 per corner   ASSUMPTION
 % max(|vx|, this). Below this speed the tyre model is not trustworthy.
 P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
 
+% The same idea one level down, for WHEEL speed. Brake and rolling-resistance
+% torques oppose rotation, so they must change sign with it, and the direction
+% term has to be smoothed or it chatters about zero every step.
+%
+% The scale is not free: it has to be wider than the wheel-speed change one
+% step can produce, or the smoothing does nothing. The EBS applies 286 N.m to
+% a 0.21 kg.m^2 wheel, which is 1.42 rad/s in a single 1/960 s step -- so a
+% 0.1 rad/s transition, as this used to be, IS sign(), and the brake bang-bangs
+% the wheel across zero at the end of every stop. 2 rad/s is wider than that
+% step, which turns the last part of the stop into proportional damping
+% instead of a limit cycle.
+P.Assumed.WheelSpeedRegularisation = 2.0;   % rad/s
+
 % RELAXATION LENGTH. Slip is a STATE, not an algebraic quantity: a tyre needs
 % to roll a certain distance before its carcass has deformed enough to build
 % the force. dkappa/dt = (|vx|/sigma) * (kappa_steady - kappa).
@@ -151,6 +177,24 @@ P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
 % 0.2-0.3 m is typical for a race slick.
 P.Assumed.RelaxLengthLong = 0.20;   % m   ASSUMPTION
 P.Assumed.RelaxLengthLat  = 0.30;   % m   ASSUMPTION
+
+% SLIDING vs PEAK friction. Our Magic Formula has a single mu: the force at
+% full slide equals the force at the peak. Real tyres fall away past the peak,
+% and the Fiala tyre block requires muMin < muMax and will not accept a single
+% value at all. 0.95 is deliberately close to 1 so the swap to that block stays
+% behaviour-preserving; a real slick is nearer 0.7-0.8, and moving this number
+% is the single easiest way to make the car harder to catch once it lets go.
+P.Assumed.SlideFrictionRatio = 0.95;   % muMin/muMax   ASSUMPTION
+
+% Tyre pressure. Only used by force models that are pressure-sensitive, which
+% ours are configured NOT to be — it is set equal to the block's own nominal
+% pressure so every pressure ratio is exactly 1 and nothing scales. It exists
+% so the port has something honest on it, not because we know the pressure.
+P.Assumed.TyrePressure = 220000;   % Pa   NEUTRAL, not measured
+
+% Contact width. Only reaches the overturning moment Mx, which we do not
+% currently feed back into the chassis. Hoosier 16x7.5-10 is about this.
+P.Assumed.TyreWidth = 0.190;   % m   ASSUMPTION
 
 % Air density. Not in settings.json. Sea level, 15 C. Aero scales linearly with
 % it, so a hot day at altitude is a real few percent — worth a parameter rather

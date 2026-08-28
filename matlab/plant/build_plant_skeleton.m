@@ -35,7 +35,39 @@ fprintf('  parameters from %s (%s)\n', P.SettingsPath, P.VehicleName);
 % Fixed step chosen to match the FMU internal rate the platform requires: the
 % first 60-divisible rate at which the EMRAX current-loop time constant is
 % actually representable. See docs/fmu_plant_migration.md.
-STEP = '1/960';
+STEP = '0.0010416666666666671';   % 1/960 plus 2 ulp -- yes, really; see below
+% This is NOT the double nearest 1/960. That is ...667; this is two units in
+% the last place above it, and the difference is deliberate.
+%
+% Once the tyre model carries continuous states (it holds a Vehicle Dynamics
+% Blockset tyre block), Simulink stops being lenient about a parent and a
+% referenced model agreeing on step size and requires them to match to the
+% bit. What it compares is not these strings -- it is the NEGOTIATED
+% fundamental sample time each model arrives at from its own contents. Written
+% as '1/960', or as the exact decimal ...667, the plant negotiated to ...671
+% and the tyre model to ...667, and the build failed with the two values
+% printed side by side. Setting both to ...671 makes the negotiation agree.
+%
+% The physical cost is nothing: 2 ulp is a relative error of 8e-16, under a
+% nanosecond per step. The cost of NOT pinning it is that the plant does not
+% compile at all.
+%
+% The obvious worry is the FMU: its internal step is now 2 ulp off 1/960, so
+% 16 of them no longer span exactly one 60 Hz frame, and the export declares
+% canHandleVariableCommunicationStepSize="false". Checked against the FMU's own
+% generated fmi3DoStep rather than assumed, and it is fine:
+%
+%     steps = (int)(communicationStepSize / 0.001041666666666667 + 0.5);
+%     for (i = 0; i < steps; i++) rtOneStep(...);
+%     modelData->time += communicationStepSize;
+%
+% It ROUNDS to the nearest whole number of internal steps -- 15.999999999999993
+% + 0.5 truncates to 16 -- and then advances its clock by the communication
+% step, not by 16 internal steps. So each frame still takes exactly 16 steps
+% and the FMU clock never drifts from the platform's.
+%
+% If a future block changes the negotiation again, the error message names
+% both values -- take the one it attributes to the PARENT and put it here.
 
 %% ---- referenced subsystem models -------------------------------------
 % owner: which engineer this belongs to. It is written into the model as an
@@ -237,7 +269,11 @@ function configure_model(mdl, step)
 % needs, applied up front so nobody discovers it at export time.
 set_param(mdl, ...
     'SolverType','Fixed-step', ...
-    'Solver','FixedStepDiscrete', ...
+    ... % ode1, NOT FixedStepDiscrete: the tyre is a Vehicle Dynamics Blockset
+    ... % block with continuous states, and a discrete solver will not compile a
+    ... % model that contains them. ode1 is forward Euler at the same fixed step,
+    ... % so everything that was already discrete steps exactly as it did before.
+    'Solver','ode1', ...
     'FixedStep',step, ...
     'StartTime','0', ...
     'StopTime','inf', ...

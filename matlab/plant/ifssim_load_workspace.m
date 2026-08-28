@@ -54,8 +54,16 @@ flat = struct( ...
     'IFSSIM_Iw',    P.Assumed.WheelInertia, ...   % kg*m^2  ASSUMPTION
     'IFSSIM_Crr',   P.RollingResistance, ...                 % rolling resistance coeff
     'IFSSIM_vreg',  P.Assumed.SlipRegularisationSpeed, ... % m/s
+    'IFSSIM_wreg',  P.Assumed.WheelSpeedRegularisation, ... % rad/s
     'IFSSIM_sigk',  P.Assumed.RelaxLengthLong, ...          % m  ASSUMPTION
     'IFSSIM_siga',  P.Assumed.RelaxLengthLat, ...           % m  ASSUMPTION
+    ... % --- tyre, as the Fiala block wants it stated ---
+    'IFSSIM_Calpha', P.Derived.CorneringStiffness, ...      % N/rad, from our Pacejka
+    'IFSSIM_Ckappa', P.Derived.LongSlipStiffness, ...       % N per unit slip
+    'IFSSIM_muMax',  P.TireMu, ...
+    'IFSSIM_muMin',  P.TireMu * P.Assumed.SlideFrictionRatio, ...   % ASSUMPTION
+    'IFSSIM_Ppres',  P.Assumed.TyrePressure, ...            % Pa, neutral
+    'IFSSIM_Twidth', P.Assumed.TyreWidth, ...               % m  ASSUMPTION
     ... % --- steering ---
     'IFSSIM_dmax',  P.Derived.MaxSteerAngleRad, ...          % rad at the road wheel
     'IFSSIM_L',     P.Wheelbase, ...                         % m
