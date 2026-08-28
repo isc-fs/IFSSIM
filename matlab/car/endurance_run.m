@@ -39,7 +39,25 @@ for k = 0:nLaps-1
     v = [v; c(1:end-1,2)];            %#ok<AGROW>
 end
 t(end+1) = nLaps*lapT; v(end+1) = c(end,2);
-assignin('base','END_CYCLE',[t v]);
+% FEED-FORWARD, not a gain on the error. The first version of this drove the
+% lap with throttle = 0.6 * speed error, which saturates at any error over
+% 1.7 m/s -- so the car ran full throttle or full regen and almost nothing
+% between, tracked the trace with an RMS error of 5.4 m/s, and sat pinned at
+% the current limit for a quarter of the lap. That measured the controller,
+% not the track.
+%
+% The cycle already says what acceleration is wanted at every instant, so the
+% torque needed to produce it can simply be computed: F = m*a + drag +
+% rolling, and the throttle that asks for it. Feedback is left in at low gain
+% to correct drift, not to do the driving.
+P2 = ifssim_params();
+aT = [0; diff(v)./max(diff(t),1e-3)];
+Fdrag = 0.5*1.225*P2.CdA*v.^2 + P2.RollingResistance*P2.Mass*9.81;
+Freq  = P2.Mass*aT + Fdrag;
+Treq  = Freq * P2.WheelRadius / (P2.GearRatio*P2.DrivetrainEfficiency);
+ffThr = max(0, min(1,  Treq / P2.MotorMaxTorque));
+ffReg = max(0, min(1, -Treq / P2.MaxRegenTorque));
+assignin('base','END_CYCLE',[t v ffThr ffReg]);
 Tend = t(end);
 
 h = 'endurance_harness';
@@ -61,15 +79,17 @@ drv = [h '/Driver'];
 add_block('simulink/User-Defined Functions/MATLAB Function', drv, 'Position',[170 40 290 140]);
 S = sfroot; ch = S.find('-isa','Stateflow.EMChart','Path',drv);
 ch.Script = char(strjoin(string({
-"function [throttle, regen] = driver(v_target, v_actual)"
+"function [throttle, regen] = driver(v_target, v_actual, ff_thr, ff_reg)"
 "%#codegen"
-"% Track the speed trace. Proportional only, deliberately: this is a duty"
-"% cycle generator, not a controller study, and integral action would smooth"
-"% away the current spikes that are the entire point of the exercise."
+"% FEED-FORWARD plus a light correction. The feed-forward terms already carry"
+"% the torque the lap asks for, computed from the trace and the car; the gain"
+"% below only trims drift. A gain large enough to DRIVE would saturate on"
+"% every corner and turn this into a bang-bang duty cycle, which is what it"
+"% used to be and what made the current figure meaningless."
 "e = v_target - v_actual;"
-"k = 0.6;"
-"throttle = min(1, max(0,  k*e));"
-"regen    = min(1, max(0, -k*e));"
+"k = 0.08;"
+"throttle = min(1, max(0, ff_thr + k*e));"
+"regen    = min(1, max(0, ff_reg - k*e));"
 "end"}), newline));
 
 add_block('simulink/Signal Routing/Bus Creator',[h '/CmdB'],'Position',[320 40 330 160], ...
@@ -90,8 +110,12 @@ add_block('simulink/Sources/Constant',[h '/ROAD'],'Value','END_ROAD', ...
 add_block('simulink/Sources/Constant',[h '/ENV'],'Value','END_ENV', ...
           'OutDataTypeStr','Bus: IFSSIM_EnvBus','Position',[300 350 370 380]);
 
-add_line(h,'Cycle/1','Driver/1','autorouting','on');
-add_line(h,'v fb/1','Driver/2','autorouting','on');
+add_block('simulink/Signal Routing/Demux',[h '/Cyc'],'Outputs','3','Position',[120 40 125 120]);
+add_line(h,'Cycle/1','Cyc/1','autorouting','on');
+add_line(h,'Cyc/1','Driver/1','autorouting','on');   % target speed
+add_line(h,'Cyc/2','Driver/3','autorouting','on');   % feed-forward throttle
+add_line(h,'Cyc/3','Driver/4','autorouting','on');   % feed-forward regen
+add_line(h,'v fb/1','Driver/2','autorouting','on');  % measured speed
 L = {'Driver/1','CmdB/1','throttle'; 'Driver/2','CmdB/2','regen'; 'z/1','CmdB/3','steer_norm'; ...
      'z/1','CmdB/4','ebs_latch'; 'z/1','CmdB/5','handbrake'};
 for i = 1:size(L,1)
