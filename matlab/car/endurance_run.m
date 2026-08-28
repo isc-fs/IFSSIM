@@ -23,9 +23,16 @@ P  = ifssim_load_workspace();
 PK = pack_from_cells(car_spec());
 ifssim_plant_buses;
 
-cyc = load(fullfile(here,'..','MODEL_IFS_08','SIMSCAPE','fsDCycle.mat'));
-c   = cyc.fsdCycle;
+% The lap comes from FS_TRACK_CYCLE, not from the drive cycle shipped in
+% MODEL_IFS_08/SIMSCAPE. That one is a MathWorks demo trace: it contains
+% accelerations of 6.5 g, which nothing can do, and holds above 70 km/h for
+% 99 m where the rules cap a straight at 80. Its speeds were never driven by
+% a car. FS_TRACK_CYCLE builds a lap from the geometry the rules allow and
+% solves the fastest way round it, which lands at the ~50 km/h average the
+% rules describe for endurance.
+c = fs_track_cycle(false);
 lapT = c(end,1);
+lapLen = 895;   % m, from fs_track_cycle
 t = []; v = [];
 for k = 0:nLaps-1
     t = [t; c(1:end-1,1) + k*lapT];   %#ok<AGROW>
@@ -134,15 +141,15 @@ fprintf('  peak                          %6.1f A   = %5.2f A per cell\n', R.I_pe
 fprintf('  most negative (regen)         %6.1f A\n', R.I_regen);
 fprintf('  speed tracked                 %.1f m/s mean, %.1f peak\n', mean(vx), max(vx));
 R.pack_watts = R.watts_cell * PK.NCells;
-nl = ceil(22000/1327);
+nl = ceil(22000/lapLen);
 fprintf('\n  heat, at the RMS current:\n');
 fprintf('     %.1f W per cell, %.2f kW into the whole pack\n', R.watts_cell, R.pack_watts/1000);
 fprintf('\n  ADIABATIC temperature rise -- NO cooling, no loss to air or structure.\n');
 fprintf('  This is an upper bound, and the gap between it and reality IS the\n');
 fprintf('  cooling requirement:\n');
-fprintf('     %5.1f K over one 85 s lap\n', R.KperSec*85);
+fprintf('     %5.1f K over one %.0f s lap\n', R.KperSec*lapT, lapT);
 fprintf('     %5.1f K over a 22 km endurance (%d laps, %.0f min)\n', ...
-        R.KperSec*85*nl, nl, 85*nl/60);
+        R.KperSec*lapT*nl, nl, lapT*nl/60);
 fprintf('\n  So the pack must shed of order %.1f kW to hold temperature, and\n', R.pack_watts/1000);
 fprintf('  from 25 C ambient it reaches the datasheet''s 80 C test limit after\n');
 fprintf('  about %.0f minutes with no cooling at all.\n', 55/R.KperSec/60);
