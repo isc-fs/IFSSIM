@@ -103,10 +103,10 @@ C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');
 % were computed once by hand and pasted somewhere.
 %
 % A different cell is the block above. A different arrangement is here.
-C = par(C,'Pack.CellsSeriesPerModule',   19, '-','ASSUMED chosen so 5 modules give the 95s the plant has always assumed');
-C = par(C,'Pack.CellsParallelPerModule',  3, '-','ASSUMED gives 9.0 A*h, near the 8.5 the plant has always assumed');
-C = par(C,'Pack.ModulesInSeries',         5, '-','ASSUMED 5 x 19s = 95s');
-C = par(C,'Pack.ModulesInParallel',       1, '-','ASSUMED');
+C = par(C,'Pack.CellsSeriesPerModule',   19, '-','MEASURED accumulator team: each module is 19s6p');
+C = par(C,'Pack.CellsParallelPerModule',  6, '-','MEASURED accumulator team: each module is 19s6p');
+C = par(C,'Pack.ModulesInSeries',         5, '-','MEASURED 5 modules in series -> 95s overall');
+C = par(C,'Pack.ModulesInParallel',       1, '-','MEASURED modules are in series only');
 
 %% ---- tyre curve ------------------------------------------------------
 % Shape factors, not measurements. LonC sets how much grip survives at full

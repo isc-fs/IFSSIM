@@ -15,7 +15,7 @@ function ok = check_car(C)
 %   the build; they are things worth knowing every time you build.
 
 if nargin < 1, C = car_spec(); end
-v = @(n) C.Fields.(n).value;
+v = @(n) C.Fields.(strrep(n,'.','_')).value;   % dotted names are stored flattened
 ok = true; nwarn = 0;
 
 fprintf('\n=== CHECK_CAR: %s ===\n', C.Name);
@@ -79,6 +79,17 @@ fprintf('  %d cells: %ds%dp in %d modules, %.0f V max, %.1f A*h, %.2f kWh, %.1f 
 fprintf('  internal resistance %.3f ohm   (cell Rint * Ns / Np)\n', K.Rint);
 fprintf('  deliverable power   %.1f kW continuous, %.1f kW pulse (after its own sag)\n', ...
         K.PMaxCont/1000, K.PMaxPulse/1000);
+% FS ACCUMULATOR SEGMENT RULES. A segment may not exceed 120 V maximum or
+% 6 MJ, which is usually what decides how the pack is split in the first
+% place -- so if a proposed arrangement breaks them, it is not a pack.
+Vseg = v('Pack.CellsSeriesPerModule') * v('Cell.VMax');
+Eseg = v('Pack.CellsSeriesPerModule') * v('Pack.CellsParallelPerModule') * ...
+       v('Cell.CapacityAh') * v('Cell.VNom') * 3600 / 1e6;      % MJ
+[ok,nwarn] = band(ok,nwarn,'segment voltage', Vseg,'V', 0, 120, ...
+    'FS rules cap an accumulator segment at 120 V maximum.');
+[ok,nwarn] = band(ok,nwarn,'segment energy',  Eseg,'MJ', 0, 6, ...
+    'FS rules cap an accumulator segment at 6 MJ.');
+
 [ok,nwarn] = band(ok,nwarn,'pack pulse power / motor power', K.PMaxPulse/v('MotorMaxPower'), '-', 1.0, 4.0, ...
     sprintf(['The motor is allowed %.0f kW and the accumulator can deliver %.1f kW. ' ...
              'A pack that cannot feed the motor means the motor figure is fiction, ' ...
