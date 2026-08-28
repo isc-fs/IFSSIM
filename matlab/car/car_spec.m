@@ -91,8 +91,26 @@ C = par(C,'Cell.VMax',            4.20,   'V',  'DATASHEET charge cut-off');
 C = par(C,'Cell.VNom',            3.60,   'V',  'DATASHEET nominal');
 C = par(C,'Cell.VMin',            2.50,   'V',  'ASSUMED datasheet says 2.0 V; 2.5 is the usual design floor and is kinder to cycle life');
 C = par(C,'Cell.Rint',            0.020,  'ohm','ASSUMED DC internal resistance. The 13 mOhm usually quoted is the 1 kHz AC figure and is NOT what sags under load.');
-C = par(C,'Cell.IMaxCont',        20,     'A',  'DISPUTED Sony quote 30 A with an 80 C cut-off, which is not a designable rating. 20 A is the figure the pack should be sized on.');
-C = par(C,'Cell.IMaxPulse',       30,     'A',  'DATASHEET absolute maximum, seconds only');
+% CURRENT. There is no maximum. This is the thing most easily got wrong about
+% this cell, in both directions, and it was got wrong here in both.
+%
+% The Murata datasheet states NO maximum continuous current and NO pulse
+% rating. What it contains is discharge curves at 3, 5, 10, 15, 20 and 30 A,
+% and the test condition reads "2.5 V cut OR 80 deg.C cut" -- so 30 A is
+% simply the highest rate they characterised, and the test terminates on
+% TEMPERATURE. Reading it as an absolute ceiling, which this file used to,
+% invents a wall the cell does not have. Reading the 40 A and 60 A figures
+% printed on rewrapped VTC6s as real is the opposite error: those are
+% resellers' numbers, and independent testing calls them what they are.
+%
+% What actually limits the cell is heat, so the limit depends on HOW LONG.
+% At 33 A a cell dissipates 22 W and warms about 2 K over a four-second
+% acceleration run, 12 K over an autocross lap, and would cook itself in a
+% minute of it. CHECK_CAR works this out per event rather than comparing
+% against a number that does not exist.
+C = par(C,'Cell.ICharacterised',  30,     'A',  'DATASHEET highest rate on the discharge curves; the test cuts at 80 C. NOT stated as a maximum.');
+C = par(C,'Cell.ISustained',      15,     'A',  'SECONDARY independent bench testing puts sustained discharge near 15 A, or 20-25 A if the cell is held below 75-80 C. Murata publish no continuous rating.');
+C = par(C,'Cell.SpecificHeat',   900,     'J/(kg*K)','ASSUMED typical for an 18650; sets how fast it heats at a given current');
 C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');
 
 %% ---- accumulator: the topology ---------------------------------------
