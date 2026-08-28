@@ -21,6 +21,10 @@ function P = ifssim_load_workspace()
 %   source and it is still the file. Do not hand-edit them.
 
 P = ifssim_params();
+% The accumulator is a cell part number and an arrangement, in
+% matlab/car/car_spec; everything the plant needs about it is derived.
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+PK = pack_from_cells(car_spec());
 assignin('base','IFSSIM_P', P);
 ifssim_plant_buses();
 
@@ -77,6 +81,12 @@ flat = struct( ...
     'IFSSIM_Pmax',  P.MotorMaxPower, ...         % W
     'IFSSIM_Treg',  P.MaxRegenTorque, ...        % Nm at the motor, negative side
     'IFSSIM_Preg',  P.MaxRegenPower, ...         % W, cell input current limit
+    ... % --- accumulator, derived from the cell and the arrangement ---
+    ... % See matlab/car/pack_from_cells. These come from the CELL PART NUMBER
+    ... % and how many are arranged which way, so a different cell or a
+    ... % different module count moves them without anyone editing a pack figure.
+    'IFSSIM_Ipk',   PK.IMaxPulse, ...           % A, what the pack can pass
+    'IFSSIM_Icont', PK.IMaxCont, ...            % A, continuous
     ... % --- battery (harvested from IFS_Sim, NOT settings.json) ---
     'IFSSIM_Vmax',  P.Derived.BatteryVMax, ...
     'IFSSIM_Vmin',  P.Derived.BatteryVMin, ...

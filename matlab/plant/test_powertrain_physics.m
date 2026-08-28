@@ -4,6 +4,8 @@ function ok = test_powertrain_physics()
 here = fileparts(mfilename('fullpath'));
 addpath(here); addpath(fullfile(here,'models'));
 P = ifssim_load_workspace();
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+PK = pack_from_cells(car_spec());
 
 h = 'powertrain_test_harness';
 if bdIsLoaded(h), close_system(h,0); end
@@ -39,9 +41,24 @@ ok = check(ok,'front wheels get nothing (RWD)', max(abs(T(1:2))), 0, 0);
 wfast = 200;                                  % rad/s at the wheel
 drive(1, 0, wfast); r = sim(h); B = bus(r);
 wm = wfast * P.GearRatio;
-ok = check(ok,'high speed: power limited', B.motor_torque, P.MotorMaxPower/wm, 1e-6);
+% THE CAP IS THE ACCUMULATOR, NOT THE MOTOR. These used to assert
+% MotorMaxPower, 80 kW, and passed because the battery was computed and then
+% ignored -- the envelope was min(Tmax, Pmax/w) and no pack quantity appeared
+% in it. The pack is five Simscape modules now and it binds first: 180 A is
+% what 6 cells in parallel can pass, and at the voltage the pack is actually
+% sitting at that is around 54 kW to the shaft, not 80.
+%
+% So the assertion is that mechanical power equals what the PACK can give,
+% and that this is below the motor's own limit. Asserting 80 kW here would be
+% asserting that the accumulator is not part of the car.
+Pmech = B.motor_torque * wm;
+Pelec = Pmech / P.DrivetrainEfficiency;
+Ipack = Pelec / max(B.batt_voltage, 1);
 ok = check(ok,'power limited below torque limit', B.motor_torque < P.MotorMaxTorque, true, 0);
-ok = check(ok,'mechanical power at the cap', B.motor_torque*wm, P.MotorMaxPower, 1e-6);
+ok = check(ok,'accumulator, not motor, is the cap', Pmech < P.MotorMaxPower, true, 0);
+ok = check(ok,'draws exactly what the pack can pass', Ipack, PK.IMaxPulse, 1e-3);
+fprintf('        pack-limited: %.1f kW to the shaft at %.0f V, %.0f A\n', ...
+        Pmech/1000, B.batt_voltage, Ipack);
 
 %% 3. REGEN IS POWER LIMITED. This is what sets the braking capability, and it
 %    binds by a large factor at any real speed.

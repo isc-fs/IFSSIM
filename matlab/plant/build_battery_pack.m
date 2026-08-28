@@ -44,6 +44,7 @@ Rmod = cv('Cell.Rint') * ns / np;
 % fitted-looking curve would be a fiction with more decimal places. The shape
 % is the first thing to replace when somebody runs a cell.
 socv = [0 .1 .25 .5 .75 .9 1];
+soc0 = P.Assumed.BatteryInitialSoC;
 vcell = cv('Cell.VMin') + (cv('Cell.VMax') - cv('Cell.VMin')) * socv;
 V0   = ns * vcell;
 R0   = Rmod * ones(size(socv));
@@ -78,6 +79,13 @@ for m = 1:nMod
     set_param(b, 'SOC_vec', mat2str(socv), 'V0_vec', mat2str(V0,8), ...
                  'R0_vec', mat2str(R0,8), 'AH', num2str(AH,8), ...
                  'SOC_port','simscape.enum.tablebattery.enable.yes');
+    % START BELOW FULL. The block defaults to a state of charge of exactly 1
+    % and then asserts, every step, that charge cannot exceed 1 -- so the
+    % smallest rounding in the wrong direction fills the log with warnings
+    % before the car has moved. Specifying it is also just more honest: a car
+    % does not roll to the line on a perfectly full pack.
+    set_param(b, 'stateOfCharge_specify','on', ...
+                 'stateOfCharge', num2str(soc0,6));
     add_block(PS2S, sprintf('%s/P2S%d',sys,m), 'Position',[500 45+90*(m-1) 540 75+90*(m-1)]);
     % Port numbers are PINNED, not left to creation order. Left implicit the
     % SoC outputs take ports 1..n and v_pack lands last, so anything reading
