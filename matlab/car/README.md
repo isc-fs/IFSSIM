@@ -77,3 +77,28 @@ every run.
 cell references. Read it before changing anything geometric — and note that
 the workbook's `MONO` design block is labelled **IFS-06/07**, so most of it
 describes the *previous* car. Only `Susp_Geometry` is IFS-08.
+
+## Running an event on the plant
+
+```matlab
+accel_run(75)      % FS acceleration event, on the plant
+accel_compare(75)  % the same event, plant vs the old point-mass model
+```
+
+`accel_run` is the pattern for the manual team. The point is not the number
+it prints — it is that the number comes from the **same plant** the
+driverless simulator drives, parameterised from the **same `car_spec`**.
+The longitudinal model in `DYNAMIC_MOD/GeneralCalculations` answers the same
+question with its own copy of the mass, the tyre and the drag, and its own
+copy of a number is its own copy of a mistake.
+
+What the plant gives you that a point-mass model cannot: wheel spin as a
+real state, load transfer through the suspension, the actual tyre at the
+actual slip including past the peak, and aero, brakes and battery already
+wired in.
+
+`accel_compare` exists because the two models currently disagree by most of
+a second and a half on a four-second event, and that gap is worth looking at
+rather than averaging away. Most of it is launch wheelspin — the point-mass
+model caps traction at μ·Fz, which is a car with perfect traction control,
+while the plant spins to a slip ratio of 26. Neither is right.
