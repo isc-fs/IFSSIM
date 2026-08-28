@@ -124,52 +124,11 @@ add_block('vehdynlibtire/Combined Slip Wheel 2DOF', ty, 'Position',[520 120 640 
 %     initialisation, which puts vertType back to 'Magic Formula' -- and that
 %     computes Fz from ground penetration rather than taking it from Fext, so
 %     the tyre silently reports zero vertical load and the car has no grip.
-TP = build_tyre_paramset(outdir);
-
-% BOTH the file AND the dialog fields have to be ours, because the block reads
-% from both. Coefficients that appear as dialog fields are taken from there
-% (step 2 below), but ones that DON'T appear -- Q_RE0 and the rest of the
-% vertical set are hidden once vertType is None -- are still read from this
-% file. Left pointing at the shipped passenger-car set, Q_RE0 = 1.267 silently
-% multiplied our rolling radius: a free wheel turned at 39.2 rad/s instead of
-% 49.5, because it was rolling on 0.202*1.267 = 0.256 m.
-%
-% Referenced by bare filename, not an absolute path, so the model stays
-% portable; the build puts outdir on the MATLAB path.
-set_param(ty,'tireParamSet','ifssim_tyre.mat');
-set_param(ty,'tireType','External file');
-mn = get_param(ty,'MaskNames');
-nset = 0;
-for k = 1:numel(mn)
-    % NOT 'f' -- that name holds the .slx path this function saves to, and
-    % shadowing it here renamed the model after whichever coefficient came last.
-    fld = mn{k};
-    if ~isfield(TP,fld), continue; end
-    v = TP.(fld);
-    if ~isnumeric(v) || ~isscalar(v), continue; end
-    try, set_param(ty, fld, num2str(v,16)); nset = nset + 1; catch, end %#ok<CTCH>
-end
-
-% Wheel, as opposed to tyre. These live on the block rather than in the tyre
-% file: the file describes the rubber, these describe the thing it is wrapped
-% around. br = 0 because bearing drag is already in our rolling resistance.
-set_param(ty, ...
-    'UNLOADED_RADIUS','IFSSIM_Rw', ...
-    'IYY',            'IFSSIM_Iw', ...
-    'br',             '0', ...
-    'omegao',         '0');
-
-% Q_RE0 scales the free rolling radius, and it is HIDDEN from the dialog while
-% vertType is None -- so it cannot be written in the loop above, and the block
-% does not take it from the tyre file either. Left alone it keeps the shipped
-% 1.267 and the tyre rolls on 0.202*1.267 = 0.256 m: a free wheel turns at 39.2
-% rad/s where it should turn 49.5, and every speed derived from wheel rotation
-% is 26% out. Expose it, write it, hide it again.
-set_param(ty,'vertType','Magic Formula');
-set_param(ty,'Q_RE0','1','Q_V1','0','Q_V2','0');
-
-% LAST -- see (3) above.
-set_param(ty,'BrakeType','None','vertType','None','turnslip','off','plySteer','off');
+TP   = build_tyre_paramset(outdir);
+% One recipe, shared with tyre_report so the report cannot validate a
+% configuration the plant does not actually use. Every ordering constraint in
+% there was established by experiment; see the comments in the function.
+nset = configure_tyre_block(ty, TP);
 
 % Ports the block still exposes but this car does not drive. Camber is zero
 % because the suspension model has no camber DOF; YawRate feeds turn-slip,
