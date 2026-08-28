@@ -1,0 +1,40 @@
+function K = pack_from_cells(C)
+%PACK_FROM_CELLS  Derive every pack quantity from the cell and the topology.
+%
+%   The plant needs pack voltage, capacity, resistance and current limits.
+%   None of those are typed anywhere: they come from the cell part number and
+%   how many of them are arranged which way, so changing the arrangement
+%   cannot leave a stale pack value behind somewhere else.
+%
+%   K = PACK_FROM_CELLS(CAR_SPEC).
+
+if nargin < 1, C = car_spec(); end
+v = @(n) C.Fields.(strrep(n,'.','_')).value;
+
+K.Ns = v('Pack.CellsSeriesPerModule')   * v('Pack.ModulesInSeries');    % cells in series
+K.Np = v('Pack.CellsParallelPerModule') * v('Pack.ModulesInParallel');  % strings in parallel
+K.NModules = v('Pack.ModulesInSeries') * v('Pack.ModulesInParallel');
+K.NCells   = K.Ns * K.Np;
+
+K.VMax = K.Ns * v('Cell.VMax');
+K.VNom = K.Ns * v('Cell.VNom');
+K.VMin = K.Ns * v('Cell.VMin');
+
+K.CapacityAh = K.Np * v('Cell.CapacityAh');
+K.EnergyWh   = K.CapacityAh * K.VNom;
+
+% Series adds resistance, parallel divides it.
+K.Rint = v('Cell.Rint') * K.Ns / K.Np;
+
+% Current limits are set by the PARALLEL count; voltage by the series count.
+K.IMaxCont  = K.Np * v('Cell.IMaxCont');
+K.IMaxPulse = K.Np * v('Cell.IMaxPulse');
+
+% Power the pack can actually deliver, at nominal voltage and allowing for
+% the sag its own resistance causes at that current. This is the number the
+% torque envelope should be respecting and currently is not.
+K.PMaxCont  = K.IMaxCont  * (K.VNom - K.IMaxCont *K.Rint);
+K.PMaxPulse = K.IMaxPulse * (K.VNom - K.IMaxPulse*K.Rint);
+
+K.Mass = K.NCells * v('Cell.Mass');
+end

@@ -80,6 +80,34 @@ C = par(C,'CdA',             0.90, 'm^2','UNKNOWN no CFD or tunnel run is record
 C = par(C,'ClA',             1.80, 'm^2','UNKNOWN no CFD or tunnel run is recorded');
 C = par(C,'AeroBalanceFront',0.45, '-',  'ASSUMED slightly rearward of the weight distribution');
 
+%% ---- accumulator: the cell -------------------------------------------
+% Sony/Murata US18650VTC6. Datasheet figures, with the caveats stated:
+% the continuous-current rating is genuinely disputed (Sony quote 30 A with
+% a 80 C cut-off, which is not a rating you can design to), and DC internal
+% resistance is not the 1 kHz AC figure usually printed.
+C = par(C,'Cell.Name',            0,      '-',  'DATASHEET Sony/Murata US18650VTC6 -- the value here is a placeholder; the name is the point');
+C = par(C,'Cell.CapacityAh',      3.000,  'A*h','DATASHEET 3000 mAh nominal (2800 minimum)');
+C = par(C,'Cell.VMax',            4.20,   'V',  'DATASHEET charge cut-off');
+C = par(C,'Cell.VNom',            3.60,   'V',  'DATASHEET nominal');
+C = par(C,'Cell.VMin',            2.50,   'V',  'ASSUMED datasheet says 2.0 V; 2.5 is the usual design floor and is kinder to cycle life');
+C = par(C,'Cell.Rint',            0.020,  'ohm','ASSUMED DC internal resistance. The 13 mOhm usually quoted is the 1 kHz AC figure and is NOT what sags under load.');
+C = par(C,'Cell.IMaxCont',        20,     'A',  'DISPUTED Sony quote 30 A with an 80 C cut-off, which is not a designable rating. 20 A is the figure the pack should be sized on.');
+C = par(C,'Cell.IMaxPulse',       30,     'A',  'DATASHEET absolute maximum, seconds only');
+C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');
+
+%% ---- accumulator: the topology ---------------------------------------
+% THIS IS THE PART THAT IS MEANT TO CHANGE. Every pack quantity the plant
+% uses -- voltage, capacity, resistance, current and power limits -- is
+% DERIVED from these four numbers and the cell above, so trying a different
+% arrangement is editing four integers, not hunting for pack values that
+% were computed once by hand and pasted somewhere.
+%
+% A different cell is the block above. A different arrangement is here.
+C = par(C,'Pack.CellsSeriesPerModule',   19, '-','ASSUMED chosen so 5 modules give the 95s the plant has always assumed');
+C = par(C,'Pack.CellsParallelPerModule',  3, '-','ASSUMED gives 9.0 A*h, near the 8.5 the plant has always assumed');
+C = par(C,'Pack.ModulesInSeries',         5, '-','ASSUMED 5 x 19s = 95s');
+C = par(C,'Pack.ModulesInParallel',       1, '-','ASSUMED');
+
 %% ---- tyre curve ------------------------------------------------------
 % Shape factors, not measurements. LonC sets how much grip survives at full
 % slide: sin(C*pi/2), so 1.46 -> 75%. It was 1.7 (45%) until the Magic

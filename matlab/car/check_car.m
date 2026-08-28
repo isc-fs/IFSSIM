@@ -69,6 +69,21 @@ mf = sin(Cy*atan(B*a - E*(B*a - atan(B*a))));
 [~,i] = max(mf);
 fprintf('  [info] %-28s %8.1f deg  (reported, not asserted)\n','tyre peak slip angle', a(i)*180/pi);
 
+% THE ACCUMULATOR AGAINST THE MOTOR. The pack is built from a cell part
+% number and an arrangement, so what it can actually deliver is derived, not
+% asserted -- and it has to be at least what the motor is allowed to draw.
+K = pack_from_cells(C);
+fprintf('\n--- accumulator ---\n');
+fprintf('  %d cells: %ds%dp in %d modules, %.0f V max, %.1f A*h, %.2f kWh, %.1f kg\n', ...
+        K.NCells, K.Ns, K.Np, K.NModules, K.VMax, K.CapacityAh, K.EnergyWh/1000, K.Mass);
+fprintf('  internal resistance %.3f ohm   (cell Rint * Ns / Np)\n', K.Rint);
+fprintf('  deliverable power   %.1f kW continuous, %.1f kW pulse (after its own sag)\n', ...
+        K.PMaxCont/1000, K.PMaxPulse/1000);
+[ok,nwarn] = band(ok,nwarn,'pack pulse power / motor power', K.PMaxPulse/v('MotorMaxPower'), '-', 1.0, 4.0, ...
+    sprintf(['The motor is allowed %.0f kW and the accumulator can deliver %.1f kW. ' ...
+             'A pack that cannot feed the motor means the motor figure is fiction, ' ...
+             'or the pack is bigger than car_spec says.'], v('MotorMaxPower')/1000, K.PMaxPulse/1000));
+
 %% ---- what nobody knows ------------------------------------------------
 lvl = struct('UNKNOWN',{{}},'DISPUTED',{{}},'ASSUMED',{{}});
 for i = 1:numel(C.Order)
