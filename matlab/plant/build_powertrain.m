@@ -11,6 +11,11 @@ if nargin < 1 || isempty(outdir)
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 P = ifssim_load_workspace();
+% The REAL pack, from the cell and the arrangement. The printout below used to
+% quote P.Derived.BatteryVMax/BatteryWh, which come from a 2024-25 model of a
+% possibly different car and said "399 V 3.4 kWh" about a 6.3 kWh accumulator.
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+PKp = pack_from_cells(car_spec());
 
 name = 'IFSSIM_Powertrain';
 if bdIsLoaded(name), close_system(name,0); end
@@ -126,7 +131,7 @@ save_system(name,f);
 fprintf('wrote %s\n',f);
 fprintf('  motor %.0f Nm / %.0f kW, gear %.3f, eta %.2f, pack %.0f V %.1f kWh\n', ...
         P.MotorMaxTorque, P.MotorMaxPower/1000, P.GearRatio, P.DrivetrainEfficiency, ...
-        P.Derived.BatteryVMax, P.Derived.BatteryWh/1000);
+        PKp.VMax, PKp.EnergyWh/1000);
 close_system(name,0);
 end
 

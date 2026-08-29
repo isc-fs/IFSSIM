@@ -38,16 +38,39 @@ np   = cv('Pack.CellsParallelPerModule');
 AH   = np * cv('Cell.CapacityAh');
 Rmod = cv('Cell.Rint') * ns / np;
 
-% Open-circuit voltage against state of charge. A straight line between the
-% cell's own limits, times the series count. It is crude and it is honest:
-% nobody has discharged one of these cells and recorded the curve, so a
-% fitted-looking curve would be a fiction with more decimal places. The shape
-% is the first thing to replace when somebody runs a cell.
-socv = [0 .1 .25 .5 .75 .9 1];
+% OPEN-CIRCUIT VOLTAGE AGAINST STATE OF CHARGE. A real NMC shape, not a
+% straight line between the cell's two limits.
+%
+% The line this replaces ran V = VMin + (VMax-VMin)*soc, which gives 3.35 V
+% per cell at half charge where an 18650 of this chemistry sits near 3.7.
+% Across 95 series that is 24 V of error in the middle of the usable range,
+% and it made the plant and pack_from_cells disagree by 14% about the power
+% of the same pack at the same current, and by 7% about its energy. The line
+% was very nearly right at the 0.9 start point, which is why nothing noticed.
+%
+% Shape is SECONDARY, not datasheet: a standard NMC 18650 open-circuit curve,
+% anchored at the cell's own VMax and at a floor. Murata publish discharge
+% curves at 3-30 A rather than an OCV table, so digitising their lowest-rate
+% curve is the upgrade path -- the breakpoints below already accept any shape.
+%
+% Self-consistency check, which is why these particular numbers: integrating
+% this curve over SoC gives a mean open-circuit voltage of 3.69 V, against a
+% 3.6 V nominal quoted under load. Mean OCV sitting a little above nominal is
+% exactly right, because nominal carries the IR drop and this does not.
+% READ FROM car_spec, not restated here. Writing the table out in this file
+% as well would recreate exactly the fault being fixed: two places describing
+% the same cell, free to drift.
+socv  = cv('Cell.OCV_SoC');
+vcell = cv('Cell.OCV_V');
+if abs(vcell(end) - cv('Cell.VMax')) > 1e-6
+    vcell = vcell * cv('Cell.VMax') / vcell(end);   % honour the cell's own top
+end
 soc0 = P.Assumed.BatteryInitialSoC;
-vcell = cv('Cell.VMin') + (cv('Cell.VMax') - cv('Cell.VMin')) * socv;
-V0   = ns * vcell;
-R0   = Rmod * ones(size(socv));
+
+% Per-module tables: series count multiplies voltage, series-over-parallel
+% multiplies resistance.
+V0 = ns * vcell;
+R0 = Rmod * ones(size(socv));
 
 load_system('batt_lib');
 sys = [mdl '/' sysName];

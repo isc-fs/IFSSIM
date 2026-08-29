@@ -78,7 +78,7 @@ ok = check(ok,'drive+regen sum, neither discarded', B.motor_torque, max(0,expect
 drive(1, 0, wroll); r = sim(h); B = bus(r); soc = socTrace(r);
 ok = check(ok,'SoC decreases under drive', soc(end) < soc(1), true, 0);
 ok = check(ok,'SoC stays in [0,1]', all(soc>=0 & soc<=1), true, 0);
-ok = check(ok,'terminal voltage sags under load', B.batt_voltage < P.Derived.BatteryVMax, true, 0);
+ok = check(ok,'terminal voltage sags under load', B.batt_voltage < PK.VMax, true, 0);
 
 close_system(h,0);
 fprintf('\n%s\n', ternary(ok,'powertrain checks PASS.','POWERTRAIN CHECKS FAILED.'));

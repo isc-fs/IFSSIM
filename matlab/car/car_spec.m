@@ -111,6 +111,22 @@ C = par(C,'Cell.Rint',            0.020,  'ohm','ASSUMED DC internal resistance.
 C = par(C,'Cell.ICharacterised',  30,     'A',  'DATASHEET highest rate on the discharge curves; the test cuts at 80 C. NOT stated as a maximum.');
 C = par(C,'Cell.ISustained',      15,     'A',  'SECONDARY independent bench testing puts sustained discharge near 15 A, or 20-25 A if the cell is held below 75-80 C. Murata publish no continuous rating.');
 C = par(C,'Cell.SpecificHeat',   900,     'J/(kg*K)','ASSUMED typical for an 18650; sets how fast it heats at a given current');
+
+% OPEN-CIRCUIT VOLTAGE against state of charge, as a table. Lives here rather
+% than in the pack builder because it is a property of the CELL, and because
+% two files were previously describing the same pack's voltage differently --
+% the Simscape pack on a straight line between the cell limits, pack_from_cells
+% on a flat nominal -- and they disagreed by 14% about the power of the same
+% pack at the same current. One table, both consumers.
+%
+% SECONDARY, not datasheet: a standard NMC 18650 shape anchored on this cell's
+% own VMax. Murata publish discharge curves at 3-30 A rather than an OCV table,
+% so digitising their lowest-rate curve is the upgrade and only these numbers
+% change. Integrating it over SoC gives a mean of 3.69 V against the 3.6 V
+% nominal quoted under load, which is the right relationship: nominal carries
+% the IR drop and open-circuit does not.
+C = par(C,'Cell.OCV_SoC', [0 .1 .25 .5 .75 .9 1],        '-','SECONDARY breakpoints for the curve below');
+C = par(C,'Cell.OCV_V',   [2.90 3.40 3.55 3.68 3.88 4.05 4.20],'V','SECONDARY standard NMC 18650 open-circuit shape');
 C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');
 
 %% ---- accumulator: the topology ---------------------------------------

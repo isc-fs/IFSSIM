@@ -241,16 +241,18 @@ P.Assumed.SteerRateLimit = 100.0;         % rad/s   ASSUMPTION (effectively none
 P.Assumed.SteerLagTau    = 1e-3;          % s       ASSUMPTION (effectively none)
 
 % --- battery ----------------------------------------------------------
-% From matlab/IFS_Sim (2024-25), NOT settings.json. That model also carries mass
-% 237 kg and tyre radius 0.30 m, which disagree with settings.json — so it may
-% describe a different car. Confirm, then move these into settings.json.
-P.Assumed.BatterySeriesCells = 95;
-P.Assumed.BatteryCellVMax    = 4.2;      % V, fully charged
-P.Assumed.BatteryCellVMin    = 3.2;      % V, empty. IFS_Sim did not record this.
-P.Assumed.BatteryCapacityAh  = 8.5;      % Ah
+% THE PACK LIVES IN car_spec NOW, as a cell part number and an arrangement;
+% pack_from_cells derives voltage, capacity, resistance and current from it.
+% What stood here was a THIRD description of a pack -- 95s, 8.5 A*h, 0.10 ohm,
+% carried over from matlab/IFS_Sim (2024-25), a model that also lists 237 kg
+% and a 0.30 m tyre radius and so may not even be this car. Nothing read it
+% any more except a printout, which used it to announce "399 V 3.4 kWh" about
+% a 6.3 kWh accumulator. Removed rather than left to be reconnected by
+% accident.
+%
+% Initial state of charge stays, because the Simscape pack genuinely needs it
+% and it belongs to the RUN rather than to the cell.
 P.Assumed.BatteryInitialSoC  = 0.9;
-% Not in IFS_Sim and not measured. Only affects terminal voltage sag.
-P.Assumed.BatteryResistance  = 0.10;     % ohm     ASSUMPTION
 
 % CoG height above ground. settings.json declares 0.3 m; kept here as the value
 % the chassis actually uses so there is one place to change it.
@@ -271,10 +273,10 @@ P.Derived.aFront = P.Wheelbase * (1 - P.WeightDistFront);   % m, CoG -> front ax
 P.Derived.bRear  = P.Wheelbase * P.WeightDistFront;         % m, CoG -> rear axle
 
 % --- battery, derived -------------------------------------------------
-P.Derived.BatteryVMax  = P.Assumed.BatterySeriesCells * P.Assumed.BatteryCellVMax;
-P.Derived.BatteryVMin  = P.Assumed.BatterySeriesCells * P.Assumed.BatteryCellVMin;
-P.Derived.BatteryAs    = P.Assumed.BatteryCapacityAh * 3600;   % amp-seconds
-P.Derived.BatteryWh    = P.Derived.BatteryVMax * P.Assumed.BatteryCapacityAh;
+% Pack voltage, capacity and energy are derived by pack_from_cells from the
+% cell and the arrangement in car_spec. They are deliberately NOT restated
+% here: this file used to carry a second set, computed from a different car's
+% numbers, and anything reading them got a 3.4 kWh answer about a 6.3 kWh pack.
 
 % Regen is POWER limited long before torque limited, and by a lot. This is the
 % number that actually sets braking capability.

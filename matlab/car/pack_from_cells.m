@@ -20,8 +20,19 @@ K.VMax = K.Ns * v('Cell.VMax');
 K.VNom = K.Ns * v('Cell.VNom');
 K.VMin = K.Ns * v('Cell.VMin');
 
+% Open-circuit voltage from the CELL'S OWN CURVE, at whatever state of charge
+% you ask about. Using a flat nominal here is what made this file and the
+% Simscape pack disagree by 14% about the same pack: the plant sat on its
+% actual OCV while this printed 342 V regardless.
+K.OCV = @(soc) K.Ns * interp1(v('Cell.OCV_SoC'), v('Cell.OCV_V'), ...
+                              max(0,min(1,soc)), 'linear');
+K.SoC0 = 0.9;
+K.VOpen0 = K.OCV(K.SoC0);
+
 K.CapacityAh = K.Np * v('Cell.CapacityAh');
-K.EnergyWh   = K.CapacityAh * K.VNom;
+% Energy by integrating the curve, not capacity times a nominal voltage.
+sg = linspace(0,1,201);
+K.EnergyWh   = K.CapacityAh * trapz(sg, K.OCV(sg));
 
 % Series adds resistance, parallel divides it.
 K.Rint = v('Cell.Rint') * K.Ns / K.Np;
@@ -33,14 +44,14 @@ K.IMaxPulse = K.Np * v('Cell.ICharacterised');   % highest rate characterised
 % Power the pack can actually deliver, at nominal voltage and allowing for
 % the sag its own resistance causes at that current. This is the number the
 % torque envelope should be respecting and currently is not.
-K.PMaxCont  = K.IMaxCont  * (K.VNom - K.IMaxCont *K.Rint);
-K.PMaxPulse = K.IMaxPulse * (K.VNom - K.IMaxPulse*K.Rint);
+K.PMaxCont  = K.IMaxCont  * (K.VOpen0 - K.IMaxCont *K.Rint);
+K.PMaxPulse = K.IMaxPulse * (K.VOpen0 - K.IMaxPulse*K.Rint);
 
 % What the car is actually allowed to pull, and what that delivers. This is
 % the operating point, as distinct from K.IMaxPulse which is the sum of the
 % cells' own ratings.
 K.IOperating = v('Pack.CurrentLimit');
-K.POperating = K.IOperating * (K.VNom - K.IOperating*K.Rint);
+K.POperating = K.IOperating * (K.VOpen0 - K.IOperating*K.Rint);
 K.CellAmpsAtOperating = K.IOperating / K.Np;
 
 % Self-heating per cell at the operating current. This, not a rating, is what
