@@ -210,6 +210,52 @@ P.Assumed.RimWidth = 0.1905;   % m   ASSUMPTION
 % terms, which the block's vertical model (switched off) would use.
 P.Assumed.TyreMass = 5.0;   % kg   ASSUMPTION, an FS 16x7.5-10 is about this
 
+% Load sensitivity of peak friction: mu = TireMu + this * (Fz - Fz0)/Fz0.
+% MF calls it PDY2 (and PDX2 -- we set both, because how much grip the rubber
+% has is a property of the rubber and not of the direction it slides, and
+% splitting them would make the friction circle change SHAPE with load, which
+% nothing supports and which would break the combined-slip fit).
+%
+% Zero is not the neutral choice here, it is the claim that grip is exactly
+% proportional to load -- and that claim makes an axle's peak force invariant
+% to how load splits across its two wheels, which is to say it makes load
+% transfer free. Restoring the moment arm without this would give a car that
+% visibly rolls and whose balance still cannot respond to it.
+%
+% -0.15 is the strong end of the range typical MF passenger sets use, and it
+% is probably CONSERVATIVE for a slick -- FSAE TTC runs generally imply nearer
+% -0.3 to -0.6, and conservative is the dangerous direction here, because it
+% flatters the simulator in corners.
+%
+% Swept on the assembled plant before settling on it, at the grip limit:
+%
+%     PDY2      0     -0.15    -0.30
+%     peak ay  11.87   11.68    11.52   m/s^2
+%
+% so the whole 0 -> -0.30 span is worth 2.9% of peak lateral acceleration and
+% the choice between 0 and -0.15 is worth 1.6%. That is smaller than it looks
+% like it should be, and the reason is worth knowing: the grip an axle loses
+% to load transfer goes as PDY2 * d^2, second order in the transfer, so this
+% number is not a sensitive one for peak grip.
+%
+% What it IS the sensitive one for is BALANCE -- it is the mechanism by which
+% a front/rear roll-stiffness split becomes understeer or oversteer. The plant
+% has no such split today (four identical wheel rates, equal tracks, so the
+% transfer is exactly 50/50 and unchangeable), so that half of its job is
+% currently inert. Revisit this number when the suspension gets a rate split,
+% not before: that is when getting it wrong starts to cost something.
+P.Assumed.TyreLoadSensitivity = -0.15;   % -   ASSUMPTION, never measured
+
+% Where cornering stiffness peaks, as a multiple of the static corner load.
+% MF calls it PKY2: Kya = PKY1*Fz0*sin(PKY4*atan(Fz/(PKY2*Fz0))), which peaks
+% at Fz = PKY2*Fz0 when PKY4 = 2. It was pinned at 1 purely so the sine
+% collapsed to exactly 1 at nominal load and PKY1 could be read off as
+% Ca/Fz0 -- convenient, but it put the peak AT the static load, so cornering
+% stiffness fell as a wheel loaded up. Real tyres peak well above their
+% working load and stiffen with load across it. PKY1 is now solved for
+% instead, so the calibrated Ca still comes out exact at static load.
+P.Assumed.TyreStiffnessPeakLoadRatio = 2.0;   % -   ASSUMPTION, never measured
+
 % Reference velocity for the tyre model. NOT cosmetic: it sets how quickly
 % friction falls with slip speed, mu/(1 + Vs/RefVelocity). Inherited at 16 m/s
 % from a passenger-car tyre set, where it governed launch recovery in a car

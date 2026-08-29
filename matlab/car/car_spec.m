@@ -160,6 +160,15 @@ C = par(C,'Cell.SpecificHeat',   900,     'J/(kg*K)','ASSUMED typical for an 186
 % then the honest error is the one that does not invent a number.
 C = par(C,'Tyre.RefVelocity', 1000, 'm/s','ZEROED: disables a real friction-vs-slip-speed effect we cannot measure. 16 was inherited from the passenger-car tyre set and governs launch recovery.');
 
+% Load sensitivity of peak friction. NOT zeroed, and it is the one place in
+% this file where zero would have been a stronger claim than a number: zero
+% says grip is exactly proportional to load, which makes an axle's peak force
+% invariant to how load splits across its wheels -- i.e. it makes load
+% transfer free. Ships with the moment-arm fix in build_tiresuspension for
+% exactly that reason; either alone is worse than neither.
+C = par(C,'Tyre.LoadSensitivity', -0.15, '-','ASSUMED strong end of a typical MF passenger set. Probably conservative for a slick (TTC implies -0.3 to -0.6) and conservative is the DANGEROUS direction: it flatters the sim in corners.');
+C = par(C,'Tyre.StiffnessPeakLoadRatio', 2.0, '-','ASSUMED cornering stiffness peaks at twice static load. Was pinned at 1 for algebraic convenience, which put the peak AT static load and made a loading wheel go soft.');
+
 C = par(C,'Cell.OCV_SoC', [0 .1 .25 .5 .75 .9 1],        '-','SECONDARY breakpoints for the curve below');
 C = par(C,'Cell.OCV_V',   [2.90 3.40 3.55 3.68 3.88 4.05 4.20],'V','SECONDARY standard NMC 18650 open-circuit shape');
 C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');

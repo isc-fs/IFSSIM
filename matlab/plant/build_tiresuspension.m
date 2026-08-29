@@ -157,7 +157,7 @@ set_sizes(cpost, struct( ...
   'omega',4,'fz',4,'fx',4,'fy',4,'slip_ratio',4,'slip_angle',4, ...
   'tyre_force',3,'tyre_torque',3));
 add_params(cpost, {'IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR', ...
-                   'IFSSIM_Rw','IFSSIM_vreg'});
+                   'IFSSIM_Rw','IFSSIM_vreg','IFSSIM_CoGH'});
 
 %% ---- wheel-speed feedback ---------------------------------------------
 % The block integrates wheel spin itself, but our brake and rolling-resistance
@@ -466,7 +466,35 @@ L = {
 "    cd = cos(d); sd = sin(d);"
 "    Fb = [fx(i)*cd - fy(i)*sd; fx(i)*sd + fy(i)*cd; fz(i)];"
 "    F_sum = F_sum + Fb;"
-"    M_sum = M_sum + cross([rx(i); ry(i); 0], Fb);"
+""
+"    % The tyre force acts at the CONTACT PATCH, on the road, not at the CoG."
+"    % That arm IS load transfer: it is what turns a lateral force into a roll"
+"    % moment and a longitudinal force into a pitch moment."
+"    %"
+"    % This used to be [rx; ry; 0], and the reason it survived so long is that"
+"    % a zero z still gives the RIGHT answer for three of the six terms. Yaw"
+"    % (rx*fy - ry*fx) has no z in it at all, and the roll and pitch from the"
+"    % VERTICAL loads (ry*fz, -rx*fz) do not either. So the car rolled"
+"    % correctly whenever something else rolled it -- which is every test that"
+"    % imposes a body rate. What it could not do was roll ITSELF: the two"
+"    % missing terms, -rz*fy and +rz*fx, are precisely the ones by which the"
+"    % tyres act on the body. Measured before the fix: 0.000000 rad of roll in"
+"    % a 1.2 g corner, and load transfer at 0.1% of what m*a*h/t requires."
+"    %"
+"    % Taking the arm all the way to the ground puts the roll centre at ground"
+"    % level, so every newton of lateral transfer goes through the springs and"
+"    % none through the suspension links. That is a real assumption and it is"
+"    % stated here rather than hidden: this model HAS no links -- no wishbones,"
+"    % no instantaneous centres -- so a non-zero roll centre would not be a"
+"    % better number, it would be an invented one. It costs less than it"
+"    % sounds: the TOTAL transfer is m*a*h/t whatever the roll centre does."
+"    % What a real one would change is the elastic/geometric split, and with"
+"    % it the roll ANGLE and the transient, not the steady-state load split."
+"    %"
+"    % The height is held constant at the static CoG height. Tracking ride"
+"    % height through suspension travel would be a centimetre of correction on"
+"    % a 34 cm arm, sitting on top of a CoG height nobody has measured."
+"    M_sum = M_sum + cross([rx(i); ry(i); -IFSSIM_CoGH], Fb);"
 "end"
 ""
 "tyre_force  = F_sum;"

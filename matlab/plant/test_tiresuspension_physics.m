@@ -34,8 +34,11 @@ add_block('simulink/Sinks/To Workspace',[h '/w_out'],'VariableName','w_log', ...
     'SaveFormat','Timeseries','Position',[500 80 570 110]);
 add_block('simulink/Sinks/To Workspace',[h '/f_out'],'VariableName','f_log', ...
     'SaveFormat','Timeseries','Position',[500 140 570 170]);
+add_block('simulink/Sinks/To Workspace',[h '/m_out'],'VariableName','m_log', ...
+    'SaveFormat','Timeseries','Position',[500 200 570 230]);
 add_line(h,'TS/1','w_out/1','autorouting','on');
 add_line(h,'TS/2','f_out/1','autorouting','on');
+add_line(h,'TS/3','m_out/1','autorouting','on');
 
 ok = true;
 fprintf('\n=== tyre / suspension physics ===\n');
@@ -100,32 +103,50 @@ set_param([h '/POSE'],'Value','POSE_REST');
 %
 % The two checks above impose a body RATE and assert the dampers respond.
 % That is the wrong direction of causality, and it is why they passed for
-% months on a plant with no load transfer at all. The tyre wrench is applied
-% at CoG height -- build_tiresuspension.m:469 forms cross([rx;ry;0], Fb), so
-% the z arm is zero -- and a longitudinal or lateral tyre force therefore
-% produces no pitch or roll moment whatsoever. Measured on the running plant:
-% at 9.5 m/s^2 the front axle load moves 0.53 N where 500 N is required, and
-% roll in a 1.2 g corner reads 0.000000 rad.
+% months on a plant with no load transfer at all.
 %
-% So this asserts the causality the plant actually needs: apply a known
-% longitudinal tyre force and require a pitch moment of the right sign and
-% roughly the right size.
+% The FIRST version of this check was no better, in a way worth recording. It
+% computed cross(r_b, F) in the test itself, with its own copy of the plant's
+% r_b commented "as the plant builds it", and never simulated anything. It
+% could not have caught the bug it was written for: it would have stayed red
+% however the plant was fixed, and gone green the moment somebody edited the
+% test's own copy of the arm. A test that mirrors the code tests nothing.
 %
-% EXPECTED TO FAIL until the moment arm is fixed. That is the point of it --
-% a green suite on a car that cannot transfer load is worse than a red one.
-% The correct arm is [rx; ry; -(CoGHeight - deflection)]; with it, a
-% longitudinal force Fx at the contact patch gives My = -h*Fx.
-Fx_test = 1000;                                   % N, one wheel, forward
-h_arm   = P.CoGHeight;
-My_want = -h_arm * Fx_test;                       % N*m, nose-down under drive
-r_b     = [P.Derived.aFront; P.TrackFront/2; 0];  % as the plant builds it
-My_have = -[0 1 0] * cross(r_b, [Fx_test;0;0]) * -1;
-ok = check(ok,'a longitudinal tyre force makes a pitch moment', ...
-           abs(My_have) > 0.5*abs(My_want), true, 0);
-fprintf('        pitch moment from %.0f N of Fx: plant %.1f N.m, physics %.1f N.m\n', ...
-        Fx_test, My_have, My_want);
-ok = check(ok,'a lateral tyre force makes a roll moment', ...
-           abs([1 0 0] * cross(r_b, [0;Fx_test;0])) > 0.5*abs(h_arm*Fx_test), true, 0);
+% These RUN the model and compare the wrench it reports against its own
+% reported per-wheel forces, placed at the contact patch by Newton. The arm
+% is the only thing under test, so the size of the term it contributes is
+% asserted separately -- with a zero z arm both checks fail on that clause
+% alone, which is what makes this a real regression guard.
+rx4 = [ P.Derived.aFront;  P.Derived.aFront; -P.Derived.bRear; -P.Derived.bRear];
+ry4 = [ P.TrackFront/2;   -P.TrackFront/2;    P.TrackRear/2;   -P.TrackRear/2];
+harm = P.CoGHeight;
+
+% Longitudinal: wheels locked at 10 m/s, so the tyres drag hard rearward.
+assignin('base','POSE_BRK', poseStruct(P.CoGHeight, [10;0;0], [0;0;0]));
+set_param([h '/POSE'],'Value','POSE_BRK');
+r = sim(h);  Wb = wheels(r);  Mb = torque(r);
+My_vert = -sum(rx4 .* Wb.fz);            % pitch from the vertical loads alone
+My_arm  = -harm * sum(Wb.fx);            % the term the ground arm contributes
+ok = check(ok,'pitch moment matches the contact-patch wrench', ...
+           Mb(2), My_vert + My_arm, 1e-6*max(1,abs(My_vert+My_arm)));
+ok = check(ok,'and the ground arm is what carries it', ...
+           abs(My_arm) > 0.05*abs(My_vert), true, 0);
+fprintf('        Fx %+.0f N -> pitch: model %+.1f N.m = vertical %+.1f + arm %+.1f\n', ...
+        sum(Wb.fx), Mb(2), My_vert, My_arm);
+
+% Lateral: sliding left at 10 m/s, wheels free, so the tyres push right.
+assignin('base','POSE_LAT', poseStruct(P.CoGHeight, [10;2;0], [0;0;0]));
+set_param([h '/POSE'],'Value','POSE_LAT');
+r = sim(h);  Wl = wheels(r);  Ml = torque(r);
+Mx_vert = sum(ry4 .* Wl.fz);
+Mx_arm  = harm * sum(Wl.fy);
+ok = check(ok,'roll moment matches the contact-patch wrench', ...
+           Ml(1), Mx_vert + Mx_arm, 1e-6*max(1,abs(Mx_vert+Mx_arm)));
+ok = check(ok,'and the ground arm is what carries it', ...
+           abs(Mx_arm) > 0.05*max(abs(Mx_vert),1), true, 0);
+fprintf('        Fy %+.0f N -> roll : model %+.1f N.m = vertical %+.1f + arm %+.1f\n', ...
+        sum(Wl.fy), Ml(1), Mx_vert, Mx_arm);
+set_param([h '/POSE'],'Value','POSE_REST');
 
 %% 3. Lateral force opposes lateral slip, and saturates at mu*Fz.
 % Sliding LEFT (+vy in ISO 8855) must produce force to the RIGHT.
@@ -270,6 +291,10 @@ end
 
 function f = force(r)
 d = r.get('f_log').Data;  f = double(reshape(d(end,:),[],1));
+end
+
+function m = torque(r)
+d = r.get('m_log').Data;  m = double(reshape(d(end,:),[],1));
 end
 
 function ok = check(ok,name,got,want,tol)

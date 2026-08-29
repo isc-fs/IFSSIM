@@ -129,6 +129,32 @@ for i = 1:numel(C.Order)
 end
 fprintf('verified: settings.json parses and every generated value reads back correctly.\n');
 
+% The Tyre.* group does NOT reach settings.json -- those coefficients belong
+% to the Simulink tyre model, not to the simulator's own physics. car_spec
+% still carries them because this file is where a number gets a source, and
+% that leaves two copies of each: the sourced one here and the live one in
+% ifssim_params. Two copies with nothing tying them together is how the
+% numbers in this project drifted apart in the first place, so they are tied
+% together here. A Tyre.X entry must match P.Assumed.TyreX exactly.
+Pp = ifssim_params();
+for i = 1:numel(C.Order)
+    f = C.Fields.(C.Order{i});
+    if ~startsWith(f.name,'Tyre.'), continue; end
+    live = ['Tyre' extractAfter(f.name,'Tyre.')];
+    if ~isfield(Pp.Assumed, live)
+        error('build_car:noLiveTyreParam', ...
+              ['car_spec declares %s but ifssim_params has no P.Assumed.%s, ' ...
+               'so the sourced value reaches nothing.'], f.name, live);
+    end
+    if abs(Pp.Assumed.(live) - f.value) > 1e-9*max(1,abs(f.value))
+        error('build_car:tyreDrift', ...
+              ['%s is %g in car_spec but P.Assumed.%s is %g. The plant uses ' ...
+               'the second one; the first is what anybody reads for a source.'], ...
+              f.name, f.value, live, Pp.Assumed.(live));
+    end
+end
+fprintf('verified: the Tyre.* group agrees with ifssim_params.\n');
+
 %% ---- the plant --------------------------------------------------------
 if any(strcmp(what,{'plant','all'}))
     fprintf('\nbuilding the Simulink plant...\n');

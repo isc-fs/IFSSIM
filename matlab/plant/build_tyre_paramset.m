@@ -85,21 +85,30 @@ T.IXX  = P.Assumed.WheelInertia / 2;
 % E the curvature. This is the SAME curve, restated in MF 6.2's names.
 T.PCY1 = P.Pacejka.LatC;
 T.PDY1 = P.TireMu;
-% PDY2 (load sensitivity) and PDY3 (camber) stay at the stripped zero: we
-% have never measured either. PDY2 is the one that pairs with the load
-% transfer fix -- see the note in build_tiresuspension.
-% Cornering stiffness. MF builds it as PKY1*FNOMIN*sin(PKY4*atan(Fz/(PKY2*FNOMIN))),
-% so with PKY4 = 2 and PKY2 = 1 the sine is exactly 1 at Fz = FNOMIN and the
-% whole thing collapses to PKY1*FNOMIN. Negative because Fy opposes slip.
+% Load sensitivity of mu. Not zero, and the reasoning for that is in
+% ifssim_params next to the number: a zero here makes an axle's peak force
+% invariant to how load splits across its wheels, i.e. it makes the load
+% transfer the moment-arm fix restores completely inconsequential.
+T.PDY2 = P.Assumed.TyreLoadSensitivity;
+% PDY3 (camber) stays at the stripped zero: the suspension has no camber DOF.
 T.PEY1 = P.Pacejka.LatE;
-T.PKY1 = -P.Derived.CorneringStiffness / T.FNOMIN;
-T.PKY2 = 1;
+% Cornering stiffness: Kya = PKY1*FNOMIN*sin(PKY4*atan(Fz/(PKY2*FNOMIN))),
+% which peaks at Fz = PKY2*FNOMIN when PKY4 = 2. PKY2 used to be 1 so that the
+% sine was exactly 1 at nominal load and PKY1 was just Ca/FNOMIN -- but that
+% put the stiffness PEAK at the static load, so a wheel taking on load got
+% LESS responsive, which is backwards. With the peak moved above the working
+% load, PKY1 is solved for so the calibrated Ca still lands exactly at static
+% load. Negative because Fy opposes slip.
 T.PKY4 = 2;
+T.PKY2 = P.Assumed.TyreStiffnessPeakLoadRatio;
+T.PKY1 = -P.Derived.CorneringStiffness / ...
+         (T.FNOMIN * sin(T.PKY4 * atan(1/T.PKY2)));
 % PHY* (conicity) and PVY* (ply steer) stay zero: not in our fit.
 
 % ---- longitudinal, pure slip -----------------------------------------
 T.PCX1 = P.Pacejka.LonC;
 T.PDX1 = P.TireMu;
+T.PDX2 = P.Assumed.TyreLoadSensitivity;   % same rubber, same load sensitivity
 T.PEX1 = P.Pacejka.LonE;
 T.PKX1 = P.Derived.LongSlipStiffness / T.FNOMIN;
 
@@ -245,8 +254,11 @@ fpath = fullfile(outdir,'ifssim_tyre.mat');
 ifssim_tyre = T;                                     %#ok<NASGU>
 save(fpath,'ifssim_tyre');
 fprintf('wrote %s\n', fpath);
+Ca_at_Fz0 = -T.PKY1*T.FNOMIN*sin(T.PKY4*atan(1/T.PKY2));
 fprintf('  MF 6.2 from settings.json: mu %.2f, Ca %.0f N/rad, Ck %.0f N, Fz0 %.0f N, R %.3f m\n', ...
-        T.PDY1, -T.PKY1*T.FNOMIN, T.PKX1*T.FNOMIN, T.FNOMIN, T.UNLOADED_RADIUS);
+        T.PDY1, Ca_at_Fz0, T.PKX1*T.FNOMIN, T.FNOMIN, T.UNLOADED_RADIUS);
+fprintf('  load sensitivity PDY2/PDX2 %.2f, stiffness peaks at %.1f x static load\n', ...
+        T.PDY2, T.PKY2);
 fprintf('  combined slip derived: RBX1 %.3f RBY1 %.3f, envelope %.4f-%.4f of mu*Fz\n', ...
         T.RBX1, T.RBY1, Dcs.EnvelopeMin, Dcs.EnvelopeMax);
 end
