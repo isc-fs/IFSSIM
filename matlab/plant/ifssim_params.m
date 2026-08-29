@@ -187,20 +187,40 @@ P.Assumed.RelaxLengthLat  = 0.30;   % m   ASSUMPTION
 P.Assumed.SlideFrictionRatio = 0.95;   % muMin/muMax   ASSUMPTION
 
 % Tyre pressure. Only used by force models that are pressure-sensitive, which
-% ours are configured NOT to be — it is set equal to the block's own nominal
-% pressure so every pressure ratio is exactly 1 and nothing scales. It exists
-% so the port has something honest on it, not because we know the pressure.
-P.Assumed.TyrePressure = 220000;   % Pa   NEUTRAL, not measured
+% ours are configured NOT to be — the block's nominal pressure is set equal to
+% this and the pressure input to the same again, so every pressure ratio is
+% exactly 1 and nothing scales. It exists so the port has something honest on
+% it, not because we know the pressure. It was 220 kPa, which is not a
+% "neutral" number at all: it is the shipped passenger-car set's, 32 psi,
+% about three times what an FS slick runs. Inert either way, but a number
+% nobody could read without being misled.
+P.Assumed.TyrePressure = 83000;   % Pa (12 psi)   ASSUMPTION, not measured
 
 % Contact width. Only reaches the overturning moment Mx, which we do not
 % currently feed back into the chassis. Hoosier 16x7.5-10 is about this.
 P.Assumed.TyreWidth = 0.190;   % m   ASSUMPTION
+
+% Rim width. Reaches nothing we compute — the tyre model wants it for contact
+% patch geometry, which turn slip uses and we have off. A 7.5 in tyre on a
+% 7.5 in rim; the base file's 5.9 in was the passenger car's.
+P.Assumed.RimWidth = 0.1905;   % m   ASSUMPTION
+
+% Mass of the rubber alone, as distinct from P.Assumed.WheelInertia which is
+% the whole rotating corner. The tyre model carries it for its own inertia
+% terms, which the block's vertical model (switched off) would use.
+P.Assumed.TyreMass = 5.0;   % kg   ASSUMPTION, an FS 16x7.5-10 is about this
 
 % Reference velocity for the tyre model. NOT cosmetic: it sets how quickly
 % friction falls with slip speed, mu/(1 + Vs/RefVelocity). Inherited at 16 m/s
 % from a passenger-car tyre set, where it governed launch recovery in a car
 % that never sees a passenger car's slip speeds. Set far above anything this
 % car reaches, which disables an effect we have no measurement of.
+%
+% This is the ONLY handle on that effect. The scaling factor LMUV, which the
+% Magic Formula spec says switches the decay off when it is zero, is written
+% as zero into the parameter file and ignored by the block -- measured: with
+% LMUV = 0 and this back at 16, 0-75 m at full throttle regresses 5.085 ->
+% 6.745 s. Do not "correct" this to a realistic rig speed.
 P.Assumed.TyreRefVelocity = 1000;   % m/s  ZEROED, see car_spec Tyre.RefVelocity
 
 % Air density. Not in settings.json. Sea level, 15 C. Aero scales linearly with

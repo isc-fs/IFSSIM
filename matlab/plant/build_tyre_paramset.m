@@ -15,12 +15,22 @@ function T = build_tyre_paramset(outdir)
 %   gives sliding grip its own value rather than a guessed ratio, and slots
 %   with the right names for real data to go into when it exists.
 %
-%   The base is the shipped passenger-car set, used ONLY so that all 243
-%   fields exist and are self-consistent. Every coefficient that describes
-%   what KIND of tyre this is gets overwritten below, and every effect we
-%   have no data for is zeroed rather than left at a passenger car's value --
-%   inheriting a road tyre's load sensitivity by omission would be worse than
-%   admitting we do not model it.
+%   THE BASE FILE SUPPLIES FIELD NAMES, NOTHING ELSE. An earlier version of
+%   this file loaded the shipped passenger-car set and overwrote the
+%   coefficients it thought mattered, claiming in this very comment that the
+%   base was used "ONLY so that all 243 fields exist". That was not true: 64
+%   of 238 numeric fields were overwritten and 174 were still a 235/45R18
+%   road radial's -- the whole combined-slip family, the whole aligning- and
+%   overturning-moment families, the effective-radius shape, and 27 scaling
+%   factors that a fitting tool had left at 0.99-ish instead of 1.
+%
+%   So now the base is loaded, every numeric field is STRIPPED TO ZERO, and
+%   nothing exists in the output that was not written deliberately below. A
+%   guard at the bottom fails the build if a non-zero passenger-car value
+%   ever survives again. Zero is the right default because it is MF's
+%   no-effect value nearly everywhere -- the exceptions are listed and set
+%   explicitly, and the one place where zero is actively WRONG (combined
+%   slip) is derived instead, see fit_combined_slip.
 
 if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
@@ -28,63 +38,126 @@ end
 P = ifssim_params();
 
 base = fullfile(matlabroot,'toolbox','vdynblks','vdynblksutilities','vdynPassCar.mat');
-S = load(base);
-T = S.vdynPassCar;          % FITTYP 62 -- Magic Formula 6.2
+S    = load(base);
+T    = S.vdynPassCar;          % FITTYP 62 -- Magic Formula 6.2
+BASE = T;                      % kept only so the guard can police inheritance
+
+% ---- strip ------------------------------------------------------------
+% Every numeric field goes to zero. The char fields (FILE_TYPE, TYRESIDE,
+% FUNCTION_NAME and friends) are format, not physics, and stay.
+fn = fieldnames(T);
+for k = 1:numel(fn)
+    if isnumeric(T.(fn{k})), T.(fn{k}) = 0; end
+end
+
+% ---- file format ------------------------------------------------------
+% Not physics: these tell the block how to read the rest.
+T.FILE_VERSION   = BASE.FILE_VERSION;
+T.FITTYP         = 62;      % Magic Formula 6.2
+T.N_TIRE_STATES  = BASE.N_TIRE_STATES;
+T.USE_MODE       = 0;
 
 % ---- what kind of tyre this is ---------------------------------------
 T.UNLOADED_RADIUS = P.WheelRadius;
 T.WIDTH           = P.Assumed.TyreWidth;
 T.RIM_RADIUS      = P.WheelRadius * 0.62;      % 10 in rim in a 16 in tyre
+T.RIM_WIDTH       = P.Assumed.RimWidth;
 T.ASPECT_RATIO    = 0.45;
 T.FNOMIN          = P.Derived.NominalWheelLoad;   % OUR static corner load
 T.NOMPRES         = P.Assumed.TyrePressure;
+T.INFLPRES        = P.Assumed.TyrePressure;       % run at nominal: dpi = 0
 % See Tyre.RefVelocity in car_spec: this is not a cosmetic reference speed,
 % it sets how fast friction decays with slip velocity, and at the inherited
 % 16 m/s it is what stops a spinning wheel recovering.
 T.LONGVL          = P.Assumed.TyreRefVelocity;
 T.VXLOW           = P.Assumed.SlipRegularisationSpeed;
 
+% Tyre mass and inertia. The block's own wheel inertia is written separately
+% by configure_tyre_block from P.Assumed.WheelInertia, which is the whole
+% rotating corner; these are the rubber's share of it and must not contradict
+% it. IXX is taken as half of IYY, the thin-ring relation.
+T.MASS = P.Assumed.TyreMass;
+T.IYY  = P.Assumed.WheelInertia;
+T.IXX  = P.Assumed.WheelInertia / 2;
+
 % ---- lateral, pure slip ----------------------------------------------
 % Straight from our Magic Formula fit: C is the shape factor, mu the peak,
 % E the curvature. This is the SAME curve, restated in MF 6.2's names.
 T.PCY1 = P.Pacejka.LatC;
 T.PDY1 = P.TireMu;
-T.PDY2 = 0;   % no load sensitivity of mu -- we have never measured it
-T.PDY3 = 0;   % no camber sensitivity -- the suspension has no camber DOF
-T.PEY1 = P.Pacejka.LatE;
-T.PEY2 = 0; T.PEY3 = 0; T.PEY4 = 0; T.PEY5 = 0;
+% PDY2 (load sensitivity) and PDY3 (camber) stay at the stripped zero: we
+% have never measured either. PDY2 is the one that pairs with the load
+% transfer fix -- see the note in build_tiresuspension.
 % Cornering stiffness. MF builds it as PKY1*FNOMIN*sin(PKY4*atan(Fz/(PKY2*FNOMIN))),
 % so with PKY4 = 2 and PKY2 = 1 the sine is exactly 1 at Fz = FNOMIN and the
 % whole thing collapses to PKY1*FNOMIN. Negative because Fy opposes slip.
+T.PEY1 = P.Pacejka.LatE;
 T.PKY1 = -P.Derived.CorneringStiffness / T.FNOMIN;
-T.PKY2 = 1; T.PKY3 = 0; T.PKY4 = 2; T.PKY5 = 0; T.PKY6 = 0; T.PKY7 = 0;
-T.PHY1 = 0; T.PHY2 = 0;      % no horizontal shift: no conicity in our fit
-T.PVY1 = 0; T.PVY2 = 0; T.PVY3 = 0; T.PVY4 = 0;   % no ply steer
+T.PKY2 = 1;
+T.PKY4 = 2;
+% PHY* (conicity) and PVY* (ply steer) stay zero: not in our fit.
 
 % ---- longitudinal, pure slip -----------------------------------------
 T.PCX1 = P.Pacejka.LonC;
 T.PDX1 = P.TireMu;
-T.PDX2 = 0; T.PDX3 = 0;
 T.PEX1 = P.Pacejka.LonE;
-T.PEX2 = 0; T.PEX3 = 0; T.PEX4 = 0;
 T.PKX1 = P.Derived.LongSlipStiffness / T.FNOMIN;
-T.PKX2 = 0; T.PKX3 = 0;
-T.PHX1 = 0; T.PHX2 = 0;
-T.PVX1 = 0; T.PVX2 = 0;
+
+% ---- combined slip ----------------------------------------------------
+% The one family where the stripped zero is not "no assumption" but a bad
+% one: it would uncouple Fx from Fy entirely and let the resultant reach
+% 1.4142*mu*Fz. Derived from our own pure-slip curves instead, by requiring
+% the force envelope to be a circle. See fit_combined_slip for the argument
+% and for what the passenger-car values were doing to it.
+[RBX1, RBY1, Dcs] = fit_combined_slip(P);
+T.RBX1 = RBX1;   T.RCX1 = 1;    % REX*, RHX1 stay zero: no curvature, no shift
+T.RBY1 = RBY1;   T.RCY1 = 1;    % REY*, RHY*, RVY* stay zero, likewise
+% RBX2/RBX3 and RBY2/RBY3/RBY4 (load and camber dependence of the coupling)
+% stay zero. RVY1-6, the kappa-induced lateral force, stays zero: it is a
+% ply-steer coupling and plySteer is switched off in the block anyway.
+
+% ---- scaling factors --------------------------------------------------
+% These exist so a user can stretch a fitted dataset without refitting it.
+% Ours IS the fit, so every one of them is 1 by definition. The base file
+% had them at 0.98-1.02, the residue of somebody else's fitting run, which
+% is a silent few-percent error on every quantity they touch.
+for f = {'LFZ0','LCX','LMUX','LEX','LKX','LHX','LVX','LCY','LMUY','LEY', ...
+         'LKY','LHY','LVY','LTR','LRES','LXAL','LYKA','LVYKA','LS','LKYC', ...
+         'LKZC','LVMX','LMX','LMY','LMP','LCZ','LGAX','LGAY','LGAZ','LGYR', ...
+         'LSGKP','LSGAL','LMUY_star','LCM'}
+    if isfield(T,f{1}), T.(f{1}) = 1; end
+end
+% LMUV is the exception and stays at the stripped zero: it scales the decay
+% of friction with slip velocity, mu/(1 + LMUV*Vs/LONGVL), which is exactly
+% the effect we have chosen not to model.
+%
+% Setting it is NOT sufficient, and this was measured rather than assumed.
+% With LMUV = 0 in this file and LONGVL back at 16 m/s, the decay returns in
+% full: 0-75 m at full throttle goes 5.085 -> 6.745 s and 45% throttle beats
+% 100% again, the exact symptom LONGVL was raised to cure. The block is not
+% reading LMUV out of the parameter file -- it keeps its own mask default of
+% 1. So LONGVL is the only working handle on this effect, the zero here is a
+% statement of intent rather than a control, and anyone who "tidies" LONGVL
+% back to a realistic rig speed will silently reintroduce the bug.
 
 % ---- pressure sensitivity: none --------------------------------------
-% The tyre runs at NOMPRES and the pressure input is set equal to it, so
-% these would multiply zero anyway. Zeroed so that a future change to the
-% pressure input cannot quietly introduce a passenger car's response.
-for f = {'PPX1','PPX2','PPX3','PPX4','PPY1','PPY2','PPY3','PPY4','PPY5','PPMX1','PPZ1','PPZ2'}
-    T.(f{1}) = 0;
-end
+% The tyre runs at NOMPRES and the pressure input is set equal to it, so the
+% PP* and P**P* families would multiply zero anyway. Left at the stripped
+% zero so that a future change to the pressure input cannot quietly
+% introduce a passenger car's response.
 
 % ---- rolling resistance: OFF -----------------------------------------
 % Unlike the Fiala block there is no rollingType switch here; MF always
-% computes My. Zeroing the QSY set turns it off so the plant keeps its own
-% Crr, which is a settled number and is applied as an axle torque.
-for i = 1:8, T.(sprintf('QSY%d',i)) = 0; end
+% computes My. The QSY set is at the stripped zero, which turns it off so
+% the plant keeps its own Crr, a settled number applied as an axle torque.
+
+% ---- moments we do not use -------------------------------------------
+% Mx (overturning), My (rolling resistance) and Mz (self-aligning) are all
+% TERMINATED in build_tiresuspension: the chassis takes a force and a moment
+% arm from us, not per-wheel moments, and the steering is kinematic so no
+% self-aligning torque comes back. The QSX, Q*Z, SSZ and turn-slip families
+% therefore stay at the stripped zero rather than carrying a road radial's
+% pneumatic trail into a model that throws it away.
 
 % ---- vertical: rigid carcass -----------------------------------------
 % See the note in build_tiresuspension: the effective rolling radius must
@@ -106,7 +179,12 @@ T.VERTICAL_DAMPING   = 0;
 % load, and they took the blame for it. They were innocent: the real cause
 % was the block's configuration order resetting vertType back to its own
 % vertical model. Recorded here so nobody re-learns it the same way.)
-T.Q_RE0 = 1;  T.Q_V1 = 0;  T.Q_V2 = 0;
+T.Q_RE0 = 1;
+% Q_V1, Q_V2, BREFF, DREFF, FREFF, PFZ1, BOTTOM_*, Q_FZ2, Q_FC*, Q_CAM* and
+% Q_FYS* stay at the stripped zero, which leaves Re = R0 exactly and the
+% vertical model rigid -- which is what vertType = 'None' in the block asks
+% for anyway. Q_RA*/Q_RB* (contact patch shape) are turn-slip inputs and
+% turn slip is off.
 
 % ---- relaxation ------------------------------------------------------
 % Magic Formula does not take a relaxation LENGTH; it takes carcass
@@ -121,17 +199,54 @@ T.Q_RE0 = 1;  T.Q_V1 = 0;  T.Q_V2 = 0;
 % and the car left the line spinning its wheels at twenty times road speed.
 T.LONGITUDINAL_STIFFNESS = P.Derived.LongSlipStiffness  / P.Assumed.RelaxLengthLong;
 T.LATERAL_STIFFNESS      = P.Derived.CorneringStiffness / P.Assumed.RelaxLengthLat;
+% The yaw carcass mode feeds Mz only, and Mz is terminated. It still has to
+% be finite or the yaw relaxation length is infinite, so it is shaped from
+% the lateral stiffness over a half-width rather than left at a road tyre's.
+T.YAW_STIFFNESS = T.LATERAL_STIFFNESS * (T.WIDTH/2)^2;
 
 % ---- operating envelope ----------------------------------------------
-T.FZMIN = 0;    % a lifted wheel must really carry nothing
-T.FZMAX = 10 * T.FNOMIN;
+% Validity limits, not physics: they only have to bracket what the car does.
+T.FZMIN   = 0;              % a lifted wheel must really carry nothing
+T.FZMAX   = 10 * T.FNOMIN;
 T.PRESMIN = T.NOMPRES/2;  T.PRESMAX = T.NOMPRES*2;
+T.KPUMIN  = -1.5;  T.KPUMAX = 1.5;      % a locked wheel is -1, spin exceeds it
+T.ALPMIN  = -pi/2; T.ALPMAX = pi/2;     % a spinning car reaches full lateral
+T.CAMMIN  = -0.2;  T.CAMMAX = 0.2;      % gamma is identically 0: no camber DOF
+
+% ---- guard ------------------------------------------------------------
+% The failure this file exists to prevent: a non-zero passenger-car number
+% surviving because nobody noticed the base still supplied it. A field that
+% is zero in both is ours by choice, not inheritance -- zero is what the
+% strip wrote. The allowlist is for the handful we deliberately set to the
+% same value the base happened to hold.
+allow = {'FILE_VERSION','FITTYP','N_TIRE_STATES','USE_MODE', ...
+         'KPUMIN','KPUMAX', ...   % a locked wheel is -1 whoever fitted the tyre
+         'CAMMIN','CAMMAX'};      % gamma is identically zero; any bracket does
+stale = {};
+fn = fieldnames(BASE);
+for k = 1:numel(fn)
+    f = fn{k};
+    if ~isnumeric(BASE.(f)) || BASE.(f) == 0, continue; end
+    if any(strcmp(f,allow)), continue; end
+    % A scaling factor of exactly 1 is "no scaling" -- our choice, which the
+    % base happens to share for the few it did not leave at a fit residue.
+    if f(1) == 'L' && T.(f) == 1, continue; end
+    if isequal(T.(f), BASE.(f)), stale{end+1} = f; end %#ok<AGROW>
+end
+if ~isempty(stale)
+    error('build_tyre_paramset:inherited', ...
+          ['%d field(s) still hold the passenger-car value: %s\n' ...
+           'Either set them from car_spec or leave them at the stripped zero.'], ...
+          numel(stale), strjoin(stale, ' '));
+end
 
 if ~isfolder(outdir), mkdir(outdir); end
-f = fullfile(outdir,'ifssim_tyre.mat');
+fpath = fullfile(outdir,'ifssim_tyre.mat');
 ifssim_tyre = T;                                     %#ok<NASGU>
-save(f,'ifssim_tyre');
-fprintf('wrote %s\n', f);
+save(fpath,'ifssim_tyre');
+fprintf('wrote %s\n', fpath);
 fprintf('  MF 6.2 from settings.json: mu %.2f, Ca %.0f N/rad, Ck %.0f N, Fz0 %.0f N, R %.3f m\n', ...
         T.PDY1, -T.PKY1*T.FNOMIN, T.PKX1*T.FNOMIN, T.FNOMIN, T.UNLOADED_RADIUS);
+fprintf('  combined slip derived: RBX1 %.3f RBY1 %.3f, envelope %.4f-%.4f of mu*Fz\n', ...
+        T.RBX1, T.RBY1, Dcs.EnvelopeMin, Dcs.EnvelopeMax);
 end

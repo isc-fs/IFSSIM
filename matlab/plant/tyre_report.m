@@ -30,6 +30,10 @@ Rw   = P.WheelRadius;
 Tset = 0.35;            % long enough for relaxation to settle: sigma/Vx = 0.03 s
 
 %% ---- what is being assumed, and where each number came from -----------
+% The coefficients as actually written to the block, so the table below
+% reports what the tyre IS rather than what this file thinks it should be.
+TPcs = load(fullfile(fileparts(mfilename('fullpath')),'models','ifssim_tyre.mat'));
+TPcs = TPcs.ifssim_tyre;
 prov = {
  'peak friction mu',        sprintf('%.2f',P.TireMu),                    'settings.json'
  'lateral shape  LatC',     sprintf('%.2f',P.Pacejka.LatC),              'settings.json'
@@ -51,6 +55,11 @@ prov = {
  'ply steer / turn slip',   'off',                                        'ZEROED: no data'
  'MF rolling resistance',   'QSY1..8 = 0',                                'ZEROED: plant applies its own Crr'
  'carcass vertical stiff.', '1e9 N/m (rigid)',                            'FORCED: keeps rolling radius = wheel radius'
+ 'friction vs slip speed',  sprintf('LONGVL %.0f m/s',P.Assumed.TyreRefVelocity), 'ZEROED: no data; LMUV is ignored by the block'
+ 'combined slip RBX1/RBY1', sprintf('%.2f / %.2f',TPcs.RBX1,TPcs.RBY1),   'DERIVED: friction circle, see fit_combined_slip'
+ 'Mx / My / Mz families',   'QSX, QSY, Q*Z = 0',                          'ZEROED: all three moments are terminated'
+ 'MF scaling factors L*',   '1',                                          'DERIVED: ours IS the fit, so nothing to scale'
+ 'anything not listed',     '0',                                          'STRIPPED: nothing is inherited, see build_tyre_paramset'
 };
 
 fprintf('\n=== TYRE: what the model is, and what it rests on ===\n');
