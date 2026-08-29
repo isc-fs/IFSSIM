@@ -137,6 +137,29 @@ C = par(C,'Cell.SpecificHeat',   900,     'J/(kg*K)','ASSUMED typical for an 186
 % change. Integrating it over SoC gives a mean of 3.69 V against the 3.6 V
 % nominal quoted under load, which is the right relationship: nominal carries
 % the IR drop and open-circuit does not.
+% FRICTION AGAINST SLIP SPEED. The tyre block reduces friction as the contact
+% patch slides, by mu/(1 + Vs/RefVelocity) -- measured, not assumed: the
+% deficit collapses onto slip velocity alone, and different Vx/kappa pairs
+% reaching the same Vs agree within a few points.
+%
+% This number was inherited at 16 m/s from the passenger-car set the tyre file
+% is built on, where it is the speed the tyre was measured at. Nobody chose it
+% for this car, and it turned out to govern a first-order behaviour: at 16 the
+% tyre keeps 98% of its curve while cruising and 60% once a wheel is spinning,
+% which is the positive feedback that makes a launch spin unrecoverable and
+% makes 45% throttle out-accelerate 100%.
+%
+% ZEROED IN EFFECT, by setting the reference far above any slip speed this car
+% reaches -- the same treatment given to load sensitivity, camber and pressure,
+% and for the same reason: the effect is real, we have no measurement of it,
+% and a passenger car's version of it is not this car's.
+%
+% THIS MAKES THE CAR FLATTER, AND THAT IS THE COST. Real rubber does lose grip
+% as it slides, so a real launch spin is harder to recover from than this will
+% now suggest. A tyre rig, or TTC data, is what replaces this properly. Until
+% then the honest error is the one that does not invent a number.
+C = par(C,'Tyre.RefVelocity', 1000, 'm/s','ZEROED: disables a real friction-vs-slip-speed effect we cannot measure. 16 was inherited from the passenger-car tyre set and governs launch recovery.');
+
 C = par(C,'Cell.OCV_SoC', [0 .1 .25 .5 .75 .9 1],        '-','SECONDARY breakpoints for the curve below');
 C = par(C,'Cell.OCV_V',   [2.90 3.40 3.55 3.68 3.88 4.05 4.20],'V','SECONDARY standard NMC 18650 open-circuit shape');
 C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');

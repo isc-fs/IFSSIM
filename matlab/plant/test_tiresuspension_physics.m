@@ -177,7 +177,15 @@ ok = check(ok,'friction ellipse holds per wheel', all(res <= cap), true, 0);
 % zero whenever kappa was, and the wheel settled at exactly vx/Rw. Asserting
 % that here would be asserting the old model's simplification.
 ok = check(ok,'undriven wheels spin up from rest', W.omega(1) > 0.5*10/P.WheelRadius, true, 0);
-ok = check(ok,'slip angle induces longitudinal slip', W.slip_ratio(1) < -0.05, true, 0);
+fprintf('        at 45 deg slip: kappa settles at %+.4f, omega %.1f rad/s\n', W.slip_ratio(1), W.omega(1));
+% Threshold -0.01, not -0.05. The original -0.05 was picked when this settled
+% at -0.208, and that figure was inflated by a friction-vs-slip-speed decay
+% inherited from the passenger-car tyre set: at a 45 degree slip angle the
+% contact patch slides at 10 m/s, where the old reference velocity cost 40% of
+% the grip. With that disabled the coupling settles at about -0.028 -- still
+% forty times the straight-ahead residual of -0.0007, so the effect is real
+% and this still tests it, but the old bound was measuring the artifact.
+ok = check(ok,'slip angle induces longitudinal slip', W.slip_ratio(1) < -0.01, true, 0);
 % Once rolling, the friction budget is available laterally again.
 ok = check(ok,'rolling at slip angle: |Fy| > |Fx|', abs(F(2)) > abs(F(1)), true, 0);
 

@@ -196,6 +196,13 @@ P.Assumed.TyrePressure = 220000;   % Pa   NEUTRAL, not measured
 % currently feed back into the chassis. Hoosier 16x7.5-10 is about this.
 P.Assumed.TyreWidth = 0.190;   % m   ASSUMPTION
 
+% Reference velocity for the tyre model. NOT cosmetic: it sets how quickly
+% friction falls with slip speed, mu/(1 + Vs/RefVelocity). Inherited at 16 m/s
+% from a passenger-car tyre set, where it governed launch recovery in a car
+% that never sees a passenger car's slip speeds. Set far above anything this
+% car reaches, which disables an effect we have no measurement of.
+P.Assumed.TyreRefVelocity = 1000;   % m/s  ZEROED, see car_spec Tyre.RefVelocity
+
 % Air density. Not in settings.json. Sea level, 15 C. Aero scales linearly with
 % it, so a hot day at altitude is a real few percent — worth a parameter rather
 % than a constant buried in the aero block.

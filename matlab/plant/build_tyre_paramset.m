@@ -38,7 +38,10 @@ T.RIM_RADIUS      = P.WheelRadius * 0.62;      % 10 in rim in a 16 in tyre
 T.ASPECT_RATIO    = 0.45;
 T.FNOMIN          = P.Derived.NominalWheelLoad;   % OUR static corner load
 T.NOMPRES         = P.Assumed.TyrePressure;
-T.LONGVL          = 16;                        % reference speed for the fit
+% See Tyre.RefVelocity in car_spec: this is not a cosmetic reference speed,
+% it sets how fast friction decays with slip velocity, and at the inherited
+% 16 m/s it is what stops a spinning wheel recovering.
+T.LONGVL          = P.Assumed.TyreRefVelocity;
 T.VXLOW           = P.Assumed.SlipRegularisationSpeed;
 
 % ---- lateral, pure slip ----------------------------------------------

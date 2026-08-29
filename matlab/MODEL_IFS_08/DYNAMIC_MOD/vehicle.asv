@@ -1,0 +1,24 @@
+%% Vehicle parameters function
+function vehicle = vehicle_parameters(); 
+
+% Physical parameters: 
+
+vehicle.mass = 300; 
+vehicle.wheelbase = 1575/1000; 
+vehicle.TrackFront = 1200/1000; 
+vehicle.TrackRear = 1200/1000;
+
+mu = 1.0 %Mu of a normal circuit asfalt
+% Center of gravity
+vehicle.cg_height = 344.1/1000; 
+vehicle.cg_front = 865.7/1000;
+vehicle.cg_rear = vehicle.wheelbase - vehicle.cg_front
+
+g = 9.8 % m/s^2
+
+
+
+%% Maximum aceleration possible
+
+a_max = ((mu*g*vehicle.cg_front)/vehicle.wheelbase)/(1-(mu*vehicle.cg_height)/vehicle.wheelbase);
+
