@@ -27,13 +27,25 @@ wheelHz = sqrt(v('HeaveStiffness')/4/sprung)/(2*pi);
 [ok,nwarn] = band(ok,nwarn,'ride frequency', wheelHz,'Hz', 1.5, 4.0, ...
     'A Formula Student car sits around 2.5-3.5 Hz. Outside that band either the stiffness or the mass is wrong.');
 
-% Sliding tail. sin(C*pi/2) is the fraction of peak grip a Magic Formula
-% curve keeps once the tyre is properly sliding.
+% Sliding tail of THE FIT -- and only of the fit. sin(C*pi/2) is the fraction
+% of peak grip the analytic B/C/E curve keeps once sliding.
+%
+% THIS IS NOT WHAT THE PLANT PRODUCES, and reporting it as though it were is
+% how a 75%% tail came to be certified on a plant that delivers 48%%. The car
+% runs a Magic Formula 6.2 block whose tail is a property of ITS OWN
+% coefficients, not of C. The only way to know that number is to sweep the
+% block, which tyre_report does and this cannot -- a parameter check must not
+% take minutes to run.
+%
+% So this reports the fit's tail as an input to the block, says so, and defers
+% the number that matters to the measurement.
 for ax = {'Lat','Lon'}
     Cs = v(['Pacejka_' ax{1} 'C']);
-    [ok,nwarn] = band(ok,nwarn,sprintf('%s sliding tail',ax{1}), 100*sin(Cs*pi/2),'%', 60, 90, ...
-        'A slick is usually quoted holding 70-85% of peak at full slide.');
+    fprintf('  [info] %-28s %8.1f %%   of peak, IN THE FIT (not the block)\n', ...
+            sprintf('%s sliding tail', ax{1}), 100*sin(Cs*pi/2));
 end
+fprintf('         the block''s own tail is measured by tyre_report, and last\n');
+fprintf('         measured 48%% against the fit''s 75%%. A slick holds 70-85%%.\n');
 
 % Weight distribution against the geometry it implies.
 aF = v('Wheelbase') * (1 - v('WeightDistFront'));

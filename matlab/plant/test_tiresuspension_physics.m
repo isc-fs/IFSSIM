@@ -96,6 +96,37 @@ fprintf('        pitch @0.1 rad/s: front %.0f N (static %.0f), rear %.0f N (stat
 fprintf('        roll  @0.1 rad/s: left %.0f N, right %.0f N\n', Wr.fz(1), Wr.fz(2));
 set_param([h '/POSE'],'Value','POSE_REST');
 
+%% 2c. THE TEST THAT WAS MISSING: does a TYRE FORCE produce a body moment?
+%
+% The two checks above impose a body RATE and assert the dampers respond.
+% That is the wrong direction of causality, and it is why they passed for
+% months on a plant with no load transfer at all. The tyre wrench is applied
+% at CoG height -- build_tiresuspension.m:469 forms cross([rx;ry;0], Fb), so
+% the z arm is zero -- and a longitudinal or lateral tyre force therefore
+% produces no pitch or roll moment whatsoever. Measured on the running plant:
+% at 9.5 m/s^2 the front axle load moves 0.53 N where 500 N is required, and
+% roll in a 1.2 g corner reads 0.000000 rad.
+%
+% So this asserts the causality the plant actually needs: apply a known
+% longitudinal tyre force and require a pitch moment of the right sign and
+% roughly the right size.
+%
+% EXPECTED TO FAIL until the moment arm is fixed. That is the point of it --
+% a green suite on a car that cannot transfer load is worse than a red one.
+% The correct arm is [rx; ry; -(CoGHeight - deflection)]; with it, a
+% longitudinal force Fx at the contact patch gives My = -h*Fx.
+Fx_test = 1000;                                   % N, one wheel, forward
+h_arm   = P.CoGHeight;
+My_want = -h_arm * Fx_test;                       % N*m, nose-down under drive
+r_b     = [P.Derived.aFront; P.TrackFront/2; 0];  % as the plant builds it
+My_have = -[0 1 0] * cross(r_b, [Fx_test;0;0]) * -1;
+ok = check(ok,'a longitudinal tyre force makes a pitch moment', ...
+           abs(My_have) > 0.5*abs(My_want), true, 0);
+fprintf('        pitch moment from %.0f N of Fx: plant %.1f N.m, physics %.1f N.m\n', ...
+        Fx_test, My_have, My_want);
+ok = check(ok,'a lateral tyre force makes a roll moment', ...
+           abs([1 0 0] * cross(r_b, [0;Fx_test;0])) > 0.5*abs(h_arm*Fx_test), true, 0);
+
 %% 3. Lateral force opposes lateral slip, and saturates at mu*Fz.
 % Sliding LEFT (+vy in ISO 8855) must produce force to the RIGHT.
 assignin('base','POSE_SLIP', poseStruct(P.CoGHeight, [10;1;0], [0;0;0]));
