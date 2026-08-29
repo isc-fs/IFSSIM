@@ -26,7 +26,7 @@
         "Drivetrain": "RWD",
         "WheelRadius": 0.202,
         "WheelWidth": 0.190,
-        "MaxSteerAngle": 22.4,
+        "MaxSteerAngle": 18.2,
         "MotorMaxTorque": 230,
         "MotorMaxPower": 80000,
         "_comment_regen": "Regen is the ONLY braking channel on this car — there is no hydraulic service brake, and EBS is a separate pneumatic system on the handbrake channel. These two therefore define the entire service-deceleration authority of the vehicle. They were previously C++ defaults in FSDSSettings.h with no entry here, which meant the braking model was inheriting numbers nobody had chosen. MaxRegenTorque is the motor-side negative-torque cap; MaxRegenPower is the battery cell input-current limit and is the binding constraint at most speeds.",

@@ -330,11 +330,15 @@ private:
     // does not clamp the command, so it cannot reduce controller authority
     // — the earlier note here claiming otherwise was mistaken, and the
     // value is now pinned to the plugin rather than held pending a re-tune.
-    // Sandra's confirmation of the true rack limit is still outstanding:
-    // four numbers disagree (28 deg invented, 22.4 tyre peak, 18.2 uDV
-    // MAX_STEER_ROADWHEEL_DEG, 19.25 from the MONO sheet above).
-    // Tracked in issue #462.
-    double max_steering_angle_rad_ = 0.390954;
+    // RESOLVED 2026-08, #462. Of the four numbers that disagreed -- 28 deg
+    // invented, 22.4 the tyre's peak slip angle, 19.25 from a MONO block that
+    // turns out to describe IFS-06/07, and 18.2 measured at the road wheel --
+    // 18.2 is the only one measured on this car, and the autonomy controller
+    // was already using it as MAX_STEER_ROADWHEEL_DEG. This side was the
+    // outlier: at 22.4 a normalised command produced 1.23x the road-wheel
+    // angle the controller intended, so every gain tuned in sim was wrong by
+    // that factor on the car.
+    double max_steering_angle_rad_ = 0.317650;   // 18.2 deg, see above
 
     // Steering ratio (steering wheel angle / road-wheel angle). The
     // Bosch LWS measures the wheel column rotation; the

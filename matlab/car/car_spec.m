@@ -62,10 +62,22 @@ C = par(C,'RollCenterRear',  0.060, 'm','ASSUMED Susp_Geometry has the hardpoint
 C = par(C,'SuspensionDamping',1.5,  '-','ASSUMED damping ratio, never measured');
 
 %% ---- steering --------------------------------------------------------
-% Four sources have disagreed about maximum lock; see issue #462. This is the
-% tyre's peak-grip slip angle rather than a mechanical limit, chosen because
-% steering past peak grip only ever loses grip.
-C = par(C,'MaxSteerAngle',   22.4, 'deg','DERIVED peak-grip slip angle of the tyre curve, via characterise_plant. See #462: uDV says 18.2 deg, the workbook implies 19.25 deg from an IFS-07 wheelbase.');
+% Settled, 2026-08. Four sources disagreed about maximum lock (#462): 28 deg
+% invented in FSDSWheelFront, 22.4 the tyre's peak-grip slip angle, 19.25 from
+% a workbook block that turns out to describe IFS-06/07, and 18.2 measured at
+% the road wheel via tools/steering_check and already used by the autonomy
+% controller as MAX_STEER_ROADWHEEL_DEG.
+%
+% 18.2 wins because it is the only one that was MEASURED on this car, and
+% because the controller was already using it -- the plant was the outlier.
+% With the plant at 22.4 and the controller at 18.2, a normalised steer
+% command meant 1.23x more road-wheel angle than the controller intended, so
+% every gain tuned in simulation was wrong by that factor on the real car.
+%
+% The old provenance for 22.4 said DERIVED from the tyre's peak-grip slip
+% angle. That was false twice over: a road-wheel angle and a slip angle are
+% different quantities, and the current fit peaks at 10.6 deg, not 22.4.
+C = par(C,'MaxSteerAngle',   18.2, 'deg','MEASURED at the road wheel, tools/steering_check; matches the controller''s MAX_STEER_ROADWHEEL_DEG. Settles #462.');
 
 %% ---- powertrain ------------------------------------------------------
 C = par(C,'GearRatio',       2.909,'-',  'MEASURED workbook MONO ratio 2.909, matches motor/wheel speeds quoted beside it');

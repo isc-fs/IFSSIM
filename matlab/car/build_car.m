@@ -40,7 +40,29 @@ changed = {};
 for i = 1:numel(C.Order)
     f = C.Fields.(C.Order{i});
     key = f.name;
-    if contains(key,'.'), parts = split(key,'.'); key = parts{end}; end   % Pacejka.LatB -> LatB
+    if contains(key,'.')
+        parts = split(key,'.');
+        grp   = parts{1};
+        % ONLY Pacejka is a real nested group in settings.json. Cell and Pack
+        % are plant-side blocks the simulator does not carry, and flattening a
+        % dotted name to its last segment silently wrote Cell.Mass into the
+        % car's Mass -- settings.json went from 275 kg to 0.0467, the derived
+        % wheel loads collapsed, and the tyre block failed to compile with a
+        % port-dimension error three files away. Nothing in the chain said
+        % 'mass'.
+        if ~strcmp(grp,'Pacejka'), continue; end
+        key = parts{end};
+    end
+    % A dotted name must never collide with a top-level one. If Pacejka ever
+    % gains a field that shares a name with a vehicle parameter, fail loudly
+    % rather than overwrite it.
+    if contains(f.name,'.')
+        clash = any(strcmp(key, cellfun(@(k) C.Fields.(k).name, C.Order, 'uni', 0)));
+        if clash
+            error('build_car:keyClash', ...
+                  '%s flattens to "%s", which is also a top-level parameter.', f.name, key);
+        end
+    end
     pat = ['("' key '"\s*:\s*)(-?[0-9][0-9eE.+-]*)'];
     tok = regexp(txt, pat, 'tokens', 'once');
     if isempty(tok)

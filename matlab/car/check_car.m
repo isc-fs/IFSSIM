@@ -122,6 +122,29 @@ fprintf('     %5.1f K over 5 minutes of endurance\n',  K.CellKperSec*300);
              'A pack that cannot feed the motor means the motor figure is fiction, ' ...
              'or the pack is bigger than car_spec says.'], v('MotorMaxPower')/1000, K.POperating/1000));
 
+% THE PLANT AND THE CONTROLLER MUST AGREE ABOUT FULL LOCK. This assertion did
+% not exist anywhere, and for months they did not agree: the plant clamped at
+% 22.4 deg while the autonomy controller normalised against 18.2, so a steer
+% command of 1.0 produced 1.23x the road-wheel angle the controller intended.
+% Every gain tuned against this plant was wrong by that factor on the car, and
+% nothing in either repo could notice, because the constant lives on one side
+% of a boundary and its meaning on the other.
+here = fileparts(mfilename('fullpath'));
+cn = fullfile(here,'..','..','pipeline','control','control','control_node.py');
+if isfile(cn)
+    txt = fileread(cn);
+    tok = regexp(txt, 'declare_parameter\("max_steer_deg",\s*([0-9.]+)\)', 'tokens', 'once');
+    if ~isempty(tok)
+        ctl = str2double(tok{1});
+        [ok,nwarn] = band(ok,nwarn,'plant vs controller full lock', v('MaxSteerAngle')-ctl,'deg', -0.05, 0.05, ...
+            sprintf(['The plant clamps at %.2f deg and the controller normalises against ' ...
+                     '%.2f. A steer command of 1.0 then means two different angles, and every ' ...
+                     'gain tuned here is wrong by %.3fx on the car.'], v('MaxSteerAngle'), ctl, v('MaxSteerAngle')/ctl));
+    end
+else
+    fprintf('  [info] %-28s %s\n','plant vs controller lock','pipeline submodule not checked out; not compared');
+end
+
 %% ---- what nobody knows ------------------------------------------------
 lvl = struct('UNKNOWN',{{}},'DISPUTED',{{}},'ASSUMED',{{}});
 for i = 1:numel(C.Order)
