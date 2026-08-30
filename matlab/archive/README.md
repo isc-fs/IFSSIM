@@ -29,6 +29,12 @@ powertrain / cooling set plus a MATLAB dynamics study. Still referenced by
 `matlab/vd/accel_compare.m`, which compares our acceleration run against it,
 so this is a live dependency rather than pure history.
 
-Its `SIMSCAPE/fsDCycle.mat` drive cycle is a **MathWorks demo trace**, not a
-Formula Student lap — it contains sustained speeds and accelerations no FS
-track allows. `matlab/vd/fs_track_cycle.m` exists because of that.
+Its `SIMSCAPE/` subtree is **gone**, deliberately. It was MathWorks'
+"Simscape Essentials for Automotive Student Teams" download — third party, not
+ISC's work, and freely re-downloadable. The only thing anything used from it
+was `fsDCycle.mat`, and that cycle is a MathWorks demo trace rather than a
+Formula Student lap: sustained speeds and accelerations no FS track allows.
+`matlab/vd/fs_track_cycle.m` exists because of that, and is what replaced it.
+
+What remains is ISC's own: `DYNAMIC_MOD` (a live dependency of
+`vd/accel_compare`), `ISC_IFS_08.xlsx` and `Performance.xlsx`.
