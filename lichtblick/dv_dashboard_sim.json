@@ -1,0 +1,554 @@
+{
+  "configById": {
+    "3D!scene": {
+      "cameraState": {
+        "distance": 32,
+        "perspective": true,
+        "phi": 52,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 45,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-position",
+      "followTf": "base_link",
+      "scene": {
+        "backgroundColor": "#0e0e12",
+        "transforms": {
+          "showLabel": false
+        }
+      },
+      "transforms": {},
+      "topics": {
+        "/Conos": {
+          "visible": true
+        },
+        "/Conos_full": {
+          "visible": false
+        },
+        "/Conos_Orange": {
+          "visible": true
+        },
+        "/Conos_raw": {
+          "visible": false
+        },
+        "/Path": {
+          "visible": true
+        },
+        "/path_planning/debug": {
+          "visible": true
+        },
+        "/slam/pose": {
+          "visible": true,
+          "type": "arrow",
+          "color": "#ff2d95",
+          "arrowScale": [
+            2,
+            0.5,
+            0.5
+          ]
+        },
+        "/lidar_points/viz": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "pointSize": 2
+        },
+        "/testing_only/track": {
+          "visible": false
+        },
+        "/cone_slam/gt_aligned": {
+          "visible": false
+        }
+      },
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {}
+    },
+    "Plot!gg": {
+      "title": "G-G diagram: lateral ay (x) vs longitudinal ax (y), g",
+      "paths": [
+        {
+          "value": "/gg_g.ax_g",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "accel point (g)",
+          "showLine": false,
+          "lineSize": 5
+        }
+      ],
+      "xAxisVal": "custom",
+      "xAxisPath": {
+        "value": "/gg_g.ay_g",
+        "enabled": true,
+        "timestampMethod": "receiveTime"
+      },
+      "minXValue": -2,
+      "maxXValue": 2,
+      "minYValue": -2,
+      "maxYValue": 2,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": false,
+      "sidebarDimension": 200
+    },
+    "Gauge!front_speed": {
+      "path": "/odom.twist.twist.linear.x",
+      "minValue": 0,
+      "maxValue": 30,
+      "colorMode": "colormap",
+      "colorMap": "turbo",
+      "gradient": [
+        "#0000ff",
+        "#ff0000"
+      ],
+      "reverse": false,
+      "style": "dial",
+      "tickInterval": 0.1,
+      "showTicks": false,
+      "reverseDirection": false
+    },
+    "Gauge!steer": {
+      "path": "/motor_rpm.data",
+      "minValue": 0,
+      "maxValue": 6000,
+      "colorMode": "colormap",
+      "colorMap": "turbo",
+      "gradient": [
+        "#ff0000",
+        "#00ff00"
+      ],
+      "reverse": false,
+      "style": "dial",
+      "tickInterval": 0.1,
+      "showTicks": false,
+      "reverseDirection": false,
+      "foxglovePanelTitle": "motor rpm"
+    },
+    "Plot!cmd": {
+      "title": "Control command (/ctrl/cmd_internal)",
+      "paths": [
+        {
+          "value": "/ctrl/cmd_internal.throttle",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "throttle"
+        },
+        {
+          "value": "/ctrl/cmd_internal.steering",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "steering"
+        },
+        {
+          "value": "/ctrl/cmd_internal.brake",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "brake"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!speed": {
+      "title": "Speed: setpoint vs actual (m/s)",
+      "paths": [
+        {
+          "value": "/control/v_set_mps.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "v_set (m/s)",
+          "color": "#4e98e2"
+        },
+        {
+          "value": "/odom.twist.twist.linear.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "actual vx (m/s)",
+          "color": "#f7df71"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!path_err": {
+      "title": "Lateral deviation from path (m, + left)",
+      "paths": [
+        {
+          "value": "/path_error.lateral_deviation_m",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "lateral dev (m)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!imu_accel": {
+      "title": "IMU linear acceleration (m/s^2)",
+      "paths": [
+        {
+          "value": "/imu.linear_acceleration.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "ax"
+        },
+        {
+          "value": "/imu.linear_acceleration.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "ay"
+        },
+        {
+          "value": "/imu.linear_acceleration.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "az"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!imu_gyro": {
+      "title": "IMU angular velocity (rad/s)",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "gx"
+        },
+        {
+          "value": "/imu.angular_velocity.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "gy"
+        },
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "gz"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!odom_twist": {
+      "title": "Filtered odometry twist (/odom)",
+      "paths": [
+        {
+          "value": "/odom.twist.twist.linear.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "vx (m/s)"
+        },
+        {
+          "value": "/odom.twist.twist.angular.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "yaw rate (rad/s)"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Plot!yaw_resid": {
+      "title": "Yaw residual (rad/s)",
+      "paths": [
+        {
+          "value": "/odom_diag/yaw_residual_rad_s.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "yaw_residual"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Indicator!slip": {
+      "path": "/odom_diag/slip_flag.data",
+      "style": "background",
+      "fallbackColor": "#68758d",
+      "fallbackLabel": "no data",
+      "rules": [
+        {
+          "operator": "=",
+          "rawValue": "true",
+          "color": "#d32f2f",
+          "label": "SLIP"
+        },
+        {
+          "operator": "=",
+          "rawValue": "false",
+          "color": "#2e7d32",
+          "label": "grip OK"
+        }
+      ],
+      "fontSize": 36
+    },
+    "StateTransitions!states": {
+      "paths": [
+        {
+          "value": "/state_labels.assi",
+          "timestampMethod": "receiveTime",
+          "label": "AS state"
+        },
+        {
+          "value": "/state_labels.dv",
+          "timestampMethod": "receiveTime",
+          "label": "DV status"
+        },
+        {
+          "value": "/state_labels.ami",
+          "timestampMethod": "receiveTime",
+          "label": "AMI mission"
+        },
+        {
+          "value": "/state_labels.emergency",
+          "timestampMethod": "receiveTime",
+          "label": "emergency"
+        },
+        {
+          "value": "/state_labels.finished",
+          "timestampMethod": "receiveTime",
+          "label": "SLAM finished"
+        }
+      ],
+      "isSynced": true
+    },
+    "Tab!main": {
+      "activeTabIdx": 1,
+      "tabs": [
+        {
+          "title": "Perception & SLAM",
+          "layout": {
+            "direction": "row",
+            "first": "3D!scene",
+            "second": {
+              "direction": "column",
+              "first": "Plot!gg",
+              "second": "Gauge!front_speed",
+              "splitPercentage": 62
+            },
+            "splitPercentage": 68
+          }
+        },
+        {
+          "title": "Control",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "direction": "row",
+              "first": "Plot!cmd",
+              "second": "Plot!speed",
+              "splitPercentage": 50
+            },
+            "second": {
+              "direction": "row",
+              "first": "Gauge!steer",
+              "second": {
+                "direction": "row",
+                "first": "Plot!kappa",
+                "second": "Plot!path_err",
+                "splitPercentage": 50
+              },
+              "splitPercentage": 30
+            },
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "Sensors & Odometry",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "direction": "row",
+              "first": "Plot!imu_accel",
+              "second": "Plot!imu_gyro",
+              "splitPercentage": 50
+            },
+            "second": {
+              "direction": "row",
+              "first": "Plot!odom_twist",
+              "second": {
+                "direction": "column",
+                "first": "Plot!yaw_resid",
+                "second": "Indicator!slip",
+                "splitPercentage": 62
+              },
+              "splitPercentage": 58
+            },
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "Mission & AS State",
+          "layout": "StateTransitions!states"
+        },
+        {
+          "title": "Ground Truth",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "direction": "row",
+              "first": "Plot!gt_error",
+              "second": "RawMessages!status_msg",
+              "splitPercentage": 55
+            },
+            "second": {
+              "direction": "row",
+              "first": "RawMessages!est_pose",
+              "second": "RawMessages!gt_odom",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 50
+          }
+        }
+      ]
+    },
+    "Plot!kappa": {
+      "title": "Curvature limit kappa_max (1/m)",
+      "paths": [
+        {
+          "value": "/control/kappa_max_per_m.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "kappa_max"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "RawMessages!status_msg": {
+      "topicPath": "/dv/status_msg",
+      "expansion": "all",
+      "fontSize": 12
+    },
+    "Plot!gt_error": {
+      "title": "SLAM vs GT position error (m)",
+      "paths": [
+        {
+          "value": "/cone_slam/gt_error_m.data",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "label": "gt_error_m"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "RawMessages!est_pose": {
+      "topicPath": "/slam/pose",
+      "expansion": "all",
+      "fontSize": 11
+    },
+    "RawMessages!gt_odom": {
+      "topicPath": "/testing_only/odom",
+      "expansion": "all",
+      "fontSize": 11
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {
+    "gg_in_g": {
+      "name": "gg_in_g",
+      "sourceCode": "import { Input } from \"./types\";\n\nexport const inputs = [\"/imu\"];\nexport const output = \"/gg_g\";\n\n// Republish IMU linear acceleration in g (1 g = 9.81 m/s^2) so the\n// G-G plot can show lateral/longitudinal load directly in g.\nexport default function (event: Input<\"/imu\">): { ax_g: number; ay_g: number } {\n  const G = 9.81;\n  return {\n    ax_g: event.message.linear_acceleration.x / G,\n    ay_g: event.message.linear_acceleration.y / G,\n  };\n}\n"
+    },
+    "path_error": {
+      "name": "path_error",
+      "sourceCode": "import { Input } from \"./types\";\n\ntype Output = { lateral_deviation_m: number };\nexport const inputs = [\"/slam/pose\", \"/Path\"];\nexport const output = \"/path_error\";\n\n// Cached path polyline (map frame). Refreshed whenever /Path arrives.\nlet pathPts: { x: number; y: number }[] = [];\n\n// Signed perpendicular distance from the SLAM pose to the nearest /Path\n// segment. Both topics are in the map frame, so a plain 2D projection\n// works. Sign: + = car is left of the path direction, - = right.\nexport default function (\n  event: Input<\"/slam/pose\"> | Input<\"/Path\">,\n): Output | undefined {\n  if (event.topic === \"/Path\") {\n    pathPts = event.message.poses.map((p) => ({\n      x: p.pose.position.x,\n      y: p.pose.position.y,\n    }));\n    return undefined;\n  }\n  if (pathPts.length < 2) return undefined;\n  const p = event.message.pose.pose.position;\n  let bestD = Infinity;\n  let bestSigned = 0;\n  for (let i = 0; i < pathPts.length - 1; i++) {\n    const a = pathPts[i];\n    const b = pathPts[i + 1];\n    const abx = b.x - a.x, aby = b.y - a.y;\n    const apx = p.x - a.x, apy = p.y - a.y;\n    const len2 = abx * abx + aby * aby;\n    let t = len2 > 0 ? (apx * abx + apy * aby) / len2 : 0;\n    t = Math.max(0, Math.min(1, t));\n    const dx = apx - t * abx, dy = apy - t * aby;\n    const dist = Math.sqrt(dx * dx + dy * dy);\n    if (dist < bestD) {\n      bestD = dist;\n      const cross = abx * apy - aby * apx; // + = left of path direction\n      bestSigned = cross >= 0 ? dist : -dist;\n    }\n  }\n  return { lateral_deviation_m: bestSigned };\n}\n"
+    },
+    "state_labels": {
+      "name": "state_labels",
+      "sourceCode": "import { Input } from \"./types\";\n\ntype In =\n  | Input<\"/assi/state\"> | Input<\"/dv/status\"> | Input<\"/ami/mission\">\n  | Input<\"/ctrl/emergency\"> | Input<\"/slam/finished\">;\n\ntype Labels = { assi: string; dv: string; ami: string; emergency: string; finished: string };\n\nexport const inputs = [\"/assi/state\", \"/dv/status\", \"/ami/mission\",\n  \"/ctrl/emergency\", \"/slam/finished\"];\nexport const output = \"/state_labels\";\n\nconst st = { assi: -1, dv: -1, ami: -1, emergency: false, finished: false };\n\nconst ASSI = [\"OFF\", \"EMERGENCY\", \"READY\", \"DRIVING\", \"FINISHED\"];\nconst DV = [\"IDLE\", \"PREPARING\", \"READY\", \"RUNNING\", \"FINISHED\", \"EMERGENCY\", \"FAILED\"];\nconst AMI = [\"Manual\", \"Acceleration\", \"Skidpad\", \"Autocross\", \"Trackdrive\",\n  \"EVS/EBS\", \"Inspection\", \"Shutdown\", \"Aux1\", \"Aux2\"];\n\nfunction pick(a: string[], i: number): string {\n  return i >= 0 && i < a.length ? a[i] : \"?\" + i;\n}\n\nexport default function (event: In): Labels {\n  switch (event.topic) {\n    case \"/assi/state\": st.assi = event.message.data; break;\n    case \"/dv/status\": st.dv = event.message.data; break;\n    case \"/ami/mission\": st.ami = event.message.data; break;\n    case \"/ctrl/emergency\": st.emergency = event.message.data; break;\n    case \"/slam/finished\": st.finished = event.message.data; break;\n  }\n  return {\n    assi: pick(ASSI, st.assi),\n    dv: pick(DV, st.dv),\n    ami: pick(AMI, st.ami),\n    emergency: st.emergency ? \"EBS REQUESTED\" : \"nominal\",\n    finished: st.finished ? \"FINISHED\" : \"running\",\n  };\n}\n"
+    }
+  },
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": "Tab!main"
+}

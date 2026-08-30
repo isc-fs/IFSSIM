@@ -1,0 +1,260 @@
+{
+ "configById": {
+  "3D!scene": {
+   "cameraState": {
+    "distance": 32,
+    "perspective": true,
+    "phi": 52,
+    "target": [
+     0,
+     0,
+     0
+    ],
+    "targetOffset": [
+     0,
+     0,
+     0
+    ],
+    "targetOrientation": [
+     0,
+     0,
+     0,
+     1
+    ],
+    "thetaOffset": 45,
+    "fovy": 45,
+    "near": 0.5,
+    "far": 5000
+   },
+   "followMode": "follow-position",
+   "followTf": "base_link",
+   "scene": {
+    "backgroundColor": "#0e0e12",
+    "transforms": {
+     "showLabel": false
+    }
+   },
+   "transforms": {},
+   "topics": {
+    "/Conos": {
+     "visible": true
+    },
+    "/Conos_full": {
+     "visible": false
+    },
+    "/Conos_Orange": {
+     "visible": true
+    },
+    "/Conos_raw": {
+     "visible": false
+    },
+    "/Path": {
+     "visible": true
+    },
+    "/path_planning/debug": {
+     "visible": true
+    },
+    "/slam/pose": {
+     "visible": true,
+     "type": "arrow",
+     "color": "#ff2d95",
+     "arrowScale": [
+      2,
+      0.5,
+      0.5
+     ]
+    },
+    "/lidar_points": {
+     "visible": true,
+     "colorField": "z",
+     "colorMode": "colormap",
+     "colorMap": "turbo",
+     "pointSize": 2
+    }
+   },
+   "layers": {},
+   "publish": {
+    "type": "point",
+    "poseTopic": "/move_base_simple/goal",
+    "pointTopic": "/clicked_point",
+    "poseEstimateTopic": "/initialpose",
+    "poseEstimateXDeviation": 0.5,
+    "poseEstimateYDeviation": 0.5,
+    "poseEstimateThetaDeviation": 0.26179939
+   },
+   "synchronize": false,
+   "imageMode": {}
+  },
+  "Plot!cmd": {
+   "title": "Controller command  /ctrl/cmd_internal",
+   "paths": [
+    {
+     "value": "/ctrl/cmd_internal.throttle",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "throttle"
+    },
+    {
+     "value": "/ctrl/cmd_internal.brake",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "brake (regen)"
+    },
+    {
+     "value": "/ctrl/cmd_internal.steering",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "steering cmd"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "sidebarDimension": 200
+  },
+  "Plot!speed": {
+   "title": "Speed:  v_set  vs  odom.vx  (m/s)",
+   "paths": [
+    {
+     "value": "/control/v_set_mps.data",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "v_set"
+    },
+    {
+     "value": "/odom.twist.twist.linear.x",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "odom.vx"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "sidebarDimension": 200
+  },
+  "Plot!motor": {
+   "title": "Motor feedback  /motor_rpm",
+   "paths": [
+    {
+     "value": "/motor_rpm.data",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "motor_rpm"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "sidebarDimension": 200
+  },
+  "Plot!steer": {
+   "title": "Steering:  command  vs  /steering_angle feedback",
+   "paths": [
+    {
+     "value": "/ctrl/cmd_internal.steering",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "cmd (norm)"
+    },
+    {
+     "value": "/steering_angle.data",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "feedback (rad)"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "sidebarDimension": 200
+  },
+  "Plot!kappa": {
+   "title": "Path curvature  /control/kappa_max_per_m",
+   "paths": [
+    {
+     "value": "/control/kappa_max_per_m.data",
+     "enabled": true,
+     "timestampMethod": "receiveTime",
+     "label": "kappa_max"
+    }
+   ],
+   "xAxisVal": "timestamp",
+   "showXAxisLabels": true,
+   "showYAxisLabels": true,
+   "showLegend": true,
+   "legendDisplay": "floating",
+   "showPlotValuesInLegend": true,
+   "isSynced": true,
+   "sidebarDimension": 200
+  },
+  "RawMessages!as": {
+   "topicPath": "/assi/state"
+  }
+ },
+ "globalVariables": {},
+ "userNodes": {
+  "gg_in_g": {
+   "name": "gg_in_g",
+   "sourceCode": "import { Input } from \"./types\";\n\nexport const inputs = [\"/imu\"];\nexport const output = \"/gg_g\";\n\n// Republish IMU linear acceleration in g (1 g = 9.81 m/s^2) so the\n// G-G plot can show lateral/longitudinal load directly in g.\nexport default function (event: Input<\"/imu\">): { ax_g: number; ay_g: number } {\n  const G = 9.81;\n  return {\n    ax_g: event.message.linear_acceleration.x / G,\n    ay_g: event.message.linear_acceleration.y / G,\n  };\n}\n"
+  },
+  "path_error": {
+   "name": "path_error",
+   "sourceCode": "import { Input } from \"./types\";\n\ntype Output = { lateral_deviation_m: number };\nexport const inputs = [\"/slam/pose\", \"/Path\"];\nexport const output = \"/path_error\";\n\n// Cached path polyline (map frame). Refreshed whenever /Path arrives.\nlet pathPts: { x: number; y: number }[] = [];\n\n// Signed perpendicular distance from the SLAM pose to the nearest /Path\n// segment. Both topics are in the map frame, so a plain 2D projection\n// works. Sign: + = car is left of the path direction, - = right.\nexport default function (\n  event: Input<\"/slam/pose\"> | Input<\"/Path\">,\n): Output | undefined {\n  if (event.topic === \"/Path\") {\n    pathPts = event.message.poses.map((p) => ({\n      x: p.pose.position.x,\n      y: p.pose.position.y,\n    }));\n    return undefined;\n  }\n  if (pathPts.length < 2) return undefined;\n  const p = event.message.pose.pose.position;\n  let bestD = Infinity;\n  let bestSigned = 0;\n  for (let i = 0; i < pathPts.length - 1; i++) {\n    const a = pathPts[i];\n    const b = pathPts[i + 1];\n    const abx = b.x - a.x, aby = b.y - a.y;\n    const apx = p.x - a.x, apy = p.y - a.y;\n    const len2 = abx * abx + aby * aby;\n    let t = len2 > 0 ? (apx * abx + apy * aby) / len2 : 0;\n    t = Math.max(0, Math.min(1, t));\n    const dx = apx - t * abx, dy = apy - t * aby;\n    const dist = Math.sqrt(dx * dx + dy * dy);\n    if (dist < bestD) {\n      bestD = dist;\n      const cross = abx * apy - aby * apx; // + = left of path direction\n      bestSigned = cross >= 0 ? dist : -dist;\n    }\n  }\n  return { lateral_deviation_m: bestSigned };\n}\n"
+  },
+  "state_labels": {
+   "name": "state_labels",
+   "sourceCode": "import { Input } from \"./types\";\n\ntype In =\n  | Input<\"/assi/state\"> | Input<\"/dv/status\"> | Input<\"/res/status\">\n  | Input<\"/res/go\"> | Input<\"/ami/mission\"> | Input<\"/ctrl/emergency\">\n  | Input<\"/slam/finished\"> | Input<\"/imu/status\">;\n\ntype Labels = {\n  assi: string; dv: string; res: string; res_go: string;\n  ami: string; emergency: string; finished: string; imu: string;\n};\n\nexport const inputs = [\"/assi/state\", \"/dv/status\", \"/res/status\", \"/res/go\",\n  \"/ami/mission\", \"/ctrl/emergency\", \"/slam/finished\", \"/imu/status\"];\nexport const output = \"/state_labels\";\n\n// Latest raw value of each machine (updated as messages arrive).\nconst st = { assi: -1, dv: -1, res: -99, res_go: -1, ami: -1,\n  emergency: false, finished: false, imu: -1 };\n\nconst ASSI = [\"OFF\", \"EMERGENCY\", \"READY\", \"DRIVING\", \"FINISHED\"];\nconst DV = [\"IDLE\", \"PREPARING\", \"READY\", \"RUNNING\", \"FINISHED\", \"EMERGENCY\", \"FAILED\"];\nconst AMI = [\"Manual\", \"Acceleration\", \"Skidpad\", \"Autocross\", \"Trackdrive\",\n  \"EVS/EBS\", \"Inspection\", \"Shutdown\", \"Aux1\", \"Aux2\"];\n\nfunction pick(a: string[], i: number): string {\n  return i >= 0 && i < a.length ? a[i] : \"?\" + i;\n}\nfunction resName(s: number): string {\n  return s === 0 ? \"OK\" : s === 1 ? \"STOP\" : s === 2 ? \"GO\"\n    : s === -1 ? \"TIMEOUT\" : s === -2 ? \"NONE\" : \"?\" + s;\n}\n\nexport default function (event: In): Labels {\n  switch (event.topic) {\n    case \"/assi/state\": st.assi = event.message.data; break;\n    case \"/dv/status\": st.dv = event.message.data; break;\n    case \"/res/status\": st.res = event.message.data; break;\n    case \"/res/go\": st.res_go = event.message.data; break;\n    case \"/ami/mission\": st.ami = event.message.data; break;\n    case \"/ctrl/emergency\": st.emergency = event.message.data; break;\n    case \"/slam/finished\": st.finished = event.message.data; break;\n    case \"/imu/status\": st.imu = event.message.data; break;\n  }\n  return {\n    assi: pick(ASSI, st.assi),\n    dv: pick(DV, st.dv),\n    res: resName(st.res),\n    res_go: st.res_go === 1 ? \"GO\" : st.res_go === 0 ? \"no go\" : \"?\" + st.res_go,\n    ami: pick(AMI, st.ami),\n    emergency: st.emergency ? \"EBS REQUESTED\" : \"nominal\",\n    finished: st.finished ? \"FINISHED\" : \"running\",\n    imu: st.imu === 0 ? \"OK\" : \"fault (\" + st.imu + \")\",\n  };\n}\n"
+  }
+ },
+ "playbackConfig": {
+  "speed": 1
+ },
+ "layout": {
+  "direction": "row",
+  "splitPercentage": 52,
+  "first": "3D!scene",
+  "second": {
+   "direction": "column",
+   "splitPercentage": 50,
+   "first": {
+    "direction": "row",
+    "splitPercentage": 50,
+    "first": "Plot!cmd",
+    "second": "Plot!steer"
+   },
+   "second": {
+    "direction": "column",
+    "splitPercentage": 50,
+    "first": {
+     "direction": "row",
+     "splitPercentage": 50,
+     "first": "Plot!speed",
+     "second": "Plot!motor"
+    },
+    "second": {
+     "direction": "row",
+     "splitPercentage": 60,
+     "first": "Plot!kappa",
+     "second": "RawMessages!as"
+    }
+   }
+  }
+ }
+}
