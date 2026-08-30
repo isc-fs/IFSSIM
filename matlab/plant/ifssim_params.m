@@ -129,6 +129,36 @@ P.Derived.UnsprungPerCorner = 10.0;                    % kg, from the wheel clas
 P.Derived.SprungPerCorner   = (P.Mass - 4*P.Derived.UnsprungPerCorner)/4;
 P.Derived.RideFreqHz        = sqrt(P.Derived.WheelRateEach / P.Derived.SprungPerCorner)/(2*pi);
 
+% ---- anti-roll bars ---------------------------------------------------
+% RollStiffnessFront/Rear are the TOTAL roll stiffness of each axle. The
+% springs already supply 0.5*k_wheel*track^2 of it; the bar is the remainder.
+%
+% Deriving it this way rather than declaring a bar rate is what keeps the
+% three suspension numbers honest. If somebody raises HeaveStiffness without
+% raising the roll stiffnesses, the springs eventually supply more roll
+% stiffness than the axle is declared to have, the bar rate goes negative,
+% and the guard below stops the build instead of quietly modelling a bar that
+% pushes the car over in corners. That is exactly the state this file was in:
+% HeaveStiffness 227600 needed a front bar of -13968 N*m/rad.
+P.Derived.RollStiffFromSpringsFront = 0.5*P.Derived.WheelRateEach*P.TrackFront^2;
+P.Derived.RollStiffFromSpringsRear  = 0.5*P.Derived.WheelRateEach*P.TrackRear^2;
+P.Derived.ArbFront = P.RollStiffnessFront - P.Derived.RollStiffFromSpringsFront;
+P.Derived.ArbRear  = P.RollStiffnessRear  - P.Derived.RollStiffFromSpringsRear;
+if P.Derived.ArbFront < 0 || P.Derived.ArbRear < 0
+    error('ifssim_params:impossibleRollStiffness', ...
+          ['The springs alone give %.0f/%.0f N*m/rad of roll stiffness front/rear, ' ...
+           'but the axles are declared to have %.0f/%.0f. An anti-roll bar can only ' ...
+           'ADD, so these cannot all be true. Either HeaveStiffness is too high or ' ...
+           'the roll stiffnesses are too low.'], ...
+          P.Derived.RollStiffFromSpringsFront, P.Derived.RollStiffFromSpringsRear, ...
+          P.RollStiffnessFront, P.RollStiffnessRear);
+end
+% The fraction of roll stiffness at the front. This one number is the car's
+% balance: raise it and the front axle takes more of the lateral transfer,
+% loses more grip to load sensitivity, and the car understeers.
+P.Derived.RollStiffnessFrontFraction = ...
+    P.RollStiffnessFront / (P.RollStiffnessFront + P.RollStiffnessRear);
+
 % Values the plant needs that settings.json does not carry. Separate from the
 % configured parameters on purpose, so what is guessed is visible at a glance.
 % README has the table of why each matters and how to measure it.

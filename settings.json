@@ -52,7 +52,7 @@
         "RollCenterRear": 0.060,
         "RollStiffnessFront": 27000.0,
         "RollStiffnessRear": 22000.0,
-        "HeaveStiffness": 227600.0,
+        "HeaveStiffness": 80737.0,
         "PitchStiffness": 155600.0,
         "Pacejka": {
           "LatB": 10.0,

@@ -44,6 +44,8 @@ flat = struct( ...
     ... % --- suspension ---
     'IFSSIM_kw',    P.Derived.WheelRateEach, ...  % N/m per corner
     'IFSSIM_cw',    P.Derived.SuspensionDampingCoeff, ...  % N*s/m
+    'IFSSIM_arbF',  P.Derived.ArbFront, ...                % N*m/rad, anti-roll bar
+    'IFSSIM_arbR',  P.Derived.ArbRear, ...                 % N*m/rad
     'IFSSIM_L0',    P.Derived.StaticSuspLength, ...        % m
     'IFSSIM_FzF',   P.Derived.StaticLoadFront, ...         % N per front wheel
     'IFSSIM_FzR',   P.Derived.StaticLoadRear, ...          % N per rear wheel

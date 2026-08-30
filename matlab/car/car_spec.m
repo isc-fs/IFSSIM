@@ -53,10 +53,27 @@ C = par(C,'RollingResistance',0.020,'-', 'ASSUMED typical for a warm slick. Tyre
 % where the workbook records 2.9-3.0 Hz beside a 24-25 N/mm wheel rate. That
 % wheel rate is the IFS-06/07 car, so it cannot simply be adopted -- but ours
 % agrees with nothing at all. CHECK_CAR warns about this every build.
-C = par(C,'HeaveStiffness', 227600.0,'N/m','UNKNOWN no source anywhere. Implies 4.95 Hz ride frequency; the only recorded figure is 2.9-3.0 Hz, for IFS-06/07.');
+% 4 * (2*pi*2.95)^2 * 58.75 kg of sprung mass per corner. Derived FROM the
+% one recorded number rather than left at a figure with no source at all:
+% 227600 implied a 4.97 Hz ride frequency, which check_car has been warning
+% about, and which is not a racing car -- it is a go-kart. 2.95 Hz is the
+% midpoint of the only figure anybody wrote down (2.9-3.0 Hz, IFS-06/07).
+%
+% It is also the number that makes the suspension self-consistent. At 227600
+% the springs alone give 40968 N*m/rad of roll stiffness per axle, which is
+% MORE than the 27000/22000 declared below -- and an anti-roll bar can only
+% ever add. The three numbers could not all be true. At 2.95 Hz the springs
+% give 14533, the bars make up the rest, and both bar rates come out positive.
+C = par(C,'HeaveStiffness',  80737.0,'N/m','DERIVED from the recorded 2.9-3.0 Hz ride frequency (IFS-06/07) and the sprung mass. Replaces an unsourced 227600 that implied 4.97 Hz and made the roll stiffnesses below impossible.');
 C = par(C,'PitchStiffness', 155600.0,'N/m','UNKNOWN no source anywhere');
-C = par(C,'RollStiffnessFront',27000.0,'N*m/rad','UNKNOWN no source anywhere');
-C = par(C,'RollStiffnessRear', 22000.0,'N*m/rad','UNKNOWN no source anywhere');
+% These are now LIVE, where before they were read by nothing at all. They are
+% the TOTAL roll stiffness of each axle, springs plus anti-roll bar, and the
+% plant derives the bar rate as this minus what the springs already give. The
+% values are still unsourced -- but their RATIO is the car's balance, and a
+% car with no balance knob cannot understeer or oversteer at all, which is
+% what the plant was before this. 55.1% front is mildly understeering.
+C = par(C,'RollStiffnessFront',27000.0,'N*m/rad','UNKNOWN no source, but now LIVE: with the rear it sets roll stiffness distribution (55.1%% front) and therefore the balance. ARB rate is derived as this minus the springs.');
+C = par(C,'RollStiffnessRear', 22000.0,'N*m/rad','UNKNOWN no source, but now LIVE: see RollStiffnessFront.');
 C = par(C,'RollCenterFront', 0.040, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
 C = par(C,'RollCenterRear',  0.060, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
 C = par(C,'SuspensionDamping',1.5,  '-','ASSUMED damping ratio, never measured');
