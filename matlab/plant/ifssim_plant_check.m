@@ -23,7 +23,7 @@ fprintf('\n================ IFSSIM PLANT CHECK ================\n');
 try
     P = ifssim_load_workspace();
     nDefault = sum(strcmp(struct2cell(P.Source), 'default'));
-    fprintf('parameters  %s\n', P.SettingsPath);
+    fprintf('parameters  %s\n', P.SpecPath);
     fprintf('            %d field(s) using defaults (ifssim_params_report shows which)\n', nDefault);
     results(end+1,:) = {'parameters load', true};
 catch ME

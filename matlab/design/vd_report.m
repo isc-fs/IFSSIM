@@ -9,10 +9,12 @@ function R = vd_report(M)
 %       >> cd matlab/design
 %       >> vd_report
 %
-%   To try a setup change, edit the number in matlab/car/car_spec.m, run
-%   build_car, and run this again. The parameters come from settings.json
-%   through ifssim_params, so the car described here is the same car the
-%   simulator drives -- there is no second copy to keep in step.
+%   To try a setup change without committing to it, use vd_study. To make one
+%   real, edit the number in matlab/car/car_spec.m and run build_car.
+%
+%   Every number here comes from car_spec through ifssim_params. Nothing in
+%   MATLAB reads settings.json -- that file is an EXPORT for the UE5 bridge
+%   and the ROS tools, generated from the same spec, so it cannot disagree.
 %
 %   THE LEVERS WORTH TURNING FIRST, and what they do here:
 %     RollStiffnessFront / RollStiffnessRear  -> understeer gradient, balance

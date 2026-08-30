@@ -33,7 +33,7 @@ if isempty(varargin)
 end
 
 P0 = ifssim_params();
-P1 = ifssim_params([], varargin);
+P1 = ifssim_params(varargin);
 M0 = dualtrack_build(P0);
 M1 = dualtrack_build(P1);
 

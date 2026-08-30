@@ -11,6 +11,7 @@ function ifssim_plant_build()
 
 here = fileparts(mfilename('fullpath'));
 addpath(here); addpath(fullfile(here,'models'));
+ifssim_workdir();
 
 fprintf('\n=== building plant ===\n');
 build_plant_skeleton();          % top level + placeholders for anything unfilled

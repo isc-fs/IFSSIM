@@ -21,10 +21,10 @@ function M = dualtrack_build(P, tyreMat)
 %       KINEMATIC bicycle -- no tyres, no slip -- and has the vy drift to
 %       show for it
 %
-%   It shares car_spec/settings.json with the plant, and it loads the SAME
-%   Magic Formula coefficients the plant's tyre block loads. A design model
-%   that drifts from its plant is worse than no design model, so the two
-%   cannot be given different tyres by accident.
+%   It shares car_spec with the plant, and derives the SAME Magic Formula
+%   coefficients the plant's tyre block is built from. A design model that
+%   drifts from its plant is worse than no design model, so test_dualtrack
+%   asserts the two derivations agree.
 
 if nargin < 1 || isempty(P), P = ifssim_params(); end
 if nargin < 2 || isempty(tyreMat)

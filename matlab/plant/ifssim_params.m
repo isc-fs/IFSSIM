@@ -1,120 +1,98 @@
-function P = ifssim_params(settingsPath, overrides)
-%IFSSIM_PARAMS  Load the vehicle parameters from IFSSIM's settings.json.
+function P = ifssim_params(overrides)
+%IFSSIM_PARAMS  The car, from car_spec.m. The single source of truth.
 %
-%   P = IFSSIM_PARAMS()            reads <repo>/settings.json
-%   P = IFSSIM_PARAMS(path)        reads a specific file
+%   P = IFSSIM_PARAMS()             the car as specified
+%   P = IFSSIM_PARAMS({'TireMu',1.65})   with study overrides applied
 %
-%   settings.json IS THE SOURCE OF TRUTH. Not a copy of it, not a set of
-%   numbers retyped into a script — the same file the simulator itself parses.
-%   That is the entire point: the plant model and the simulator must not be
-%   able to disagree about what car they are simulating.
+%   CAR_SPEC IS THE SOURCE OF TRUTH, and nothing here reads settings.json.
 %
+%   The dependency used to run through it: car_spec wrote settings.json and
+%   this read it back. That made every MATLAB parameter round-trip through the
+%   game engine's config file, which is backwards for work that has nothing to
+%   do with the engine. It cost real bugs -- a dotted name flattened on the way
+%   out once wrote Cell.Mass into the car's Mass, and settings.json went from
+%   275 kg to 0.0467 -- and it meant the vehicle-dynamics team could not open
+%   MATLAB and study a parameter without the simulator's file being correct.
+%
+%   settings.json still exists and is still generated, by build_car, because
+%   the UE5 bridge and the ROS tools parse it. But it is now an EXPORT. It is
+%   downstream of car_spec, the same as the Simulink models are, and nothing
+%   in MATLAB depends on it.
+%
+%   Every value carries the source string car_spec gave it, so
+%   ifssim_params_report can say where each number came from rather than just
+%   "settings.json", which was never an answer to that question.
 
+here = fileparts(mfilename('fullpath'));
+addpath(fullfile(here, '..', 'car'));
+C = car_spec();
 
-if nargin < 1 || isempty(settingsPath)
-    here = fileparts(mfilename('fullpath'));
-    settingsPath = fullfile(here, '..', '..', 'settings.json');
-end
-settingsPath = char(settingsPath);
-if ~isfile(settingsPath)
-    error('ifssim_params:notFound', 'settings.json not found at %s', settingsPath);
-end
+% Field names the plant and the design model rely on. Listed so that deleting
+% one from car_spec fails here, with the name, instead of somewhere downstream
+% as a missing-field error three files away.
+REQUIRED = {'Mass','Wheelbase','TrackFront','TrackRear','CoGHeight','WeightDistFront', ...
+            'WheelRadius','WheelWidth','TireMu','RollingResistance','MaxSteerAngle', ...
+            'HeaveStiffness','PitchStiffness','RollStiffnessFront','RollStiffnessRear', ...
+            'RollCenterFront','RollCenterRear','SuspensionDamping','CdA','ClA', ...
+            'AeroBalanceFront','MotorMaxTorque','MotorMaxPower','MaxRegenTorque', ...
+            'GearRatio','DrivetrainEfficiency'};
 
-raw = jsondecode(fileread(settingsPath));
+P = struct();  P.Source = struct();
+P.Pacejka = struct();  P.Cell = struct();  P.Pack = struct();  P.Assumed = struct();
 
-% Locate the vehicle block. settings.json nests as Vehicles.<name>.VehiclePhysics
-phys = struct();
-vehicleName = '';
-if isfield(raw,'Vehicles')
-    names = fieldnames(raw.Vehicles);
-    if ~isempty(names)
-        vehicleName = names{1};
-        v = raw.Vehicles.(vehicleName);
-        if isfield(v,'VehiclePhysics'), phys = v.VehiclePhysics; end
+for i = 1:numel(C.Order)
+    f    = C.Fields.(C.Order{i});
+    name = f.name;
+    if ~contains(name,'.')
+        P.(name) = f.value;
+        P.Source.(name) = f.source;
+        continue;
     end
-end
-if isempty(vehicleName)
-    warning('ifssim_params:noVehicle', ...
-        'no Vehicles block in %s — every parameter will fall back to defaults', settingsPath);
-end
-
-% ---------------------------------------------------------------------
-% Defaults MIRROR the C++ struct. If FSDSSettings.h changes, change these
-% and say so in the same commit — a silent divergence here reintroduces
-% precisely the class of bug this function exists to prevent.
-% Source: Plugins/FSDSPlugin/Source/FSDSPlugin/Public/FSDSSettings.h
-%         Plugins/FSDSPlugin/Source/FSDSPlugin/Public/FSDSPacejkaTireModel.h
-% ---------------------------------------------------------------------
-D = struct( ...
-    'Mass',                 290.0, ...    % kg
-    'WheelRadius',          0.200, ...    % m
-    'WheelWidth',           0.190, ...    % m
-    'MaxSteerAngle',        22.4, ...     % deg, road wheel (peak-grip clamp)
-    'RollingResistance',    0.020, ...   % Crr, ASSUMED not measured
-    'MotorMaxTorque',       230.0, ...    % Nm at motor
-    'MotorMaxPower',        80000.0, ...  % W
-    'MaxRegenTorque',       230.0, ...    % Nm at motor, negative side
-    'MaxRegenPower',        6000.0, ...   % W, cell input current limit
-    'GearRatio',            2.909, ...
-    'DrivetrainEfficiency', 0.92, ...
-    'CdA',                  0.95, ...     % m^2
-    'ClA',                  3.0, ...      % m^2, positive = downforce
-    'AeroBalanceFront',     0.45, ...
-    'TireMu',               1.65, ...
-    'WeightDistFront',      0.438, ...
-    'CoGHeight',            0.344, ...    % m
-    'SuspensionDamping',    1.5, ...      % damping RATIO (zeta)
-    'Wheelbase',            1.627, ...    % m
-    'TrackFront',           1.220, ...    % m
-    'TrackRear',            1.190, ...    % m
-    'RollCenterFront',      0.040, ...    % m
-    'RollCenterRear',       0.060, ...    % m
-    'RollStiffnessFront',   27000.0, ...  % Nm/rad
-    'RollStiffnessRear',    22000.0, ...  % Nm/rad
-    'HeaveStiffness',       227600.0, ... % N/m, SUM of 4 wheel rates
-    'PitchStiffness',       155600.0);    % Nm/rad
-
-P = struct(); P.Source = struct();
-f = fieldnames(D);
-for i = 1:numel(f)
-    k = f{i};
-    if isfield(phys, k) && isnumeric(phys.(k)) && isscalar(phys.(k))
-        P.(k) = double(phys.(k));  P.Source.(k) = 'settings.json';
-    else
-        P.(k) = D.(k);             P.Source.(k) = 'default';
+    parts = split(name,'.');
+    grp = parts{1};  key = parts{2};
+    switch grp
+        case 'Pacejka'
+            P.Pacejka.(key) = f.value;
+            P.Source.(['Pacejka_' key]) = f.source;
+        case 'Tyre'
+            % Tyre.X is a coefficient of the Magic Formula set, not of the
+            % simulator's car, so it lands under Assumed as TyreX -- which is
+            % where build_tyre_paramset and the design model already look for
+            % it. There used to be a second, hand-written copy of these in
+            % this file and a guard in build_car to stop the two drifting.
+            % There is one copy now, so there is nothing to drift.
+            P.Assumed.(['Tyre' key]) = f.value;
+            P.Source.(['Tyre_' key]) = f.source;
+        case {'Cell','Pack'}
+            P.(grp).(key) = f.value;
+            P.Source.([grp '_' key]) = f.source;
+        otherwise
+            error('ifssim_params:unknownGroup', ...
+                  ['car_spec declares "%s" but nothing knows where group "%s" ' ...
+                   'belongs. Add a case here.'], name, grp);
     end
 end
 
-% Pacejka lives in its own nested block.
-PD = struct('LatB',10.0,'LatC',1.9,'LatE',-1.5,'LonB',12.0,'LonC',1.7,'LonE',-0.5);
-pf = fieldnames(PD);
-pj = struct();
-if isfield(phys,'Pacejka'), pj = phys.Pacejka; end
-P.Pacejka = struct();
-for i = 1:numel(pf)
-    k = pf{i};
-    if isfield(pj,k) && isnumeric(pj.(k)) && isscalar(pj.(k))
-        P.Pacejka.(k) = double(pj.(k)); P.Source.(['Pacejka_' k]) = 'settings.json';
-    else
-        P.Pacejka.(k) = PD.(k);         P.Source.(['Pacejka_' k]) = 'default';
-    end
+missing = REQUIRED(~cellfun(@(k) isfield(P,k), REQUIRED));
+if ~isempty(missing)
+    error('ifssim_params:missing', ...
+          'car_spec is missing parameters the plant needs: %s', strjoin(missing,' '));
 end
 
-P.SettingsPath = settingsPath;
-P.VehicleName  = vehicleName;
+P.SpecName = C.Name;
+P.SpecPath = fullfile(here, '..', 'car', 'car_spec.m');
 
 % ---- study overrides --------------------------------------------------
 % An engineer asking "what if the CoG were 40 mm higher" should not have to
-% edit settings.json to find out. Overrides are applied HERE, before anything
-% is derived, so every downstream quantity recomputes -- change the wheel rate
+% edit the spec to find out. Overrides are applied HERE, before anything is
+% derived, so every downstream quantity recomputes -- change the wheel rate
 % and the ride frequency, the damping coefficient and the anti-roll bar rates
 % all move with it. Applying them afterwards would give a car whose numbers
 % disagree with each other.
 %
-% They are a STUDY tool and deliberately leave no trace: settings.json is
-% untouched, so the simulator and the plant still describe the car as built.
-% To make a change real, edit matlab/car/car_spec.m and run build_car.
-if nargin < 2, overrides = struct(); end
+% They are a STUDY tool and deliberately leave no trace. To make a change
+% real, edit matlab/car/car_spec.m, where a number has to carry a source.
+if nargin < 1, overrides = struct(); end
 overrides = ifssim_normalise_overrides(overrides);
 P = ifssim_apply_overrides(P, overrides);
 P.Overrides = overrides;
@@ -178,7 +156,8 @@ P.Derived.RollStiffnessFrontFraction = ...
 % Values the plant needs that settings.json does not carry. Separate from the
 % configured parameters on purpose, so what is guessed is visible at a glance.
 % README has the table of why each matters and how to measure it.
-P.Assumed = struct();
+% NOT re-initialised: the Tyre.* group from car_spec already landed here as
+% P.Assumed.Tyre*, and a fresh struct() would silently wipe it.
 
 % Typical values for a ~275 kg FS car. settings.json has no inertia and UE only
 % scales what its physics asset computes, so there is nothing to read.
@@ -232,90 +211,20 @@ P.Assumed.RelaxLengthLat  = 0.30;   % m   ASSUMPTION
 % is the single easiest way to make the car harder to catch once it lets go.
 P.Assumed.SlideFrictionRatio = 0.95;   % muMin/muMax   ASSUMPTION
 
-% Tyre pressure. Only used by force models that are pressure-sensitive, which
-% ours are configured NOT to be — the block's nominal pressure is set equal to
-% this and the pressure input to the same again, so every pressure ratio is
-% exactly 1 and nothing scales. It exists so the port has something honest on
-% it, not because we know the pressure. It was 220 kPa, which is not a
-% "neutral" number at all: it is the shipped passenger-car set's, 32 psi,
-% about three times what an FS slick runs. Inert either way, but a number
-% nobody could read without being misled.
-P.Assumed.TyrePressure = 83000;   % Pa (12 psi)   ASSUMPTION, not measured
-
-% Contact width. Only reaches the overturning moment Mx, which we do not
-% currently feed back into the chassis. Hoosier 16x7.5-10 is about this.
-P.Assumed.TyreWidth = 0.190;   % m   ASSUMPTION
-
-% Rim width. Reaches nothing we compute — the tyre model wants it for contact
-% patch geometry, which turn slip uses and we have off. A 7.5 in tyre on a
-% 7.5 in rim; the base file's 5.9 in was the passenger car's.
-P.Assumed.RimWidth = 0.1905;   % m   ASSUMPTION
-
-% Mass of the rubber alone, as distinct from P.Assumed.WheelInertia which is
-% the whole rotating corner. The tyre model carries it for its own inertia
-% terms, which the block's vertical model (switched off) would use.
-P.Assumed.TyreMass = 5.0;   % kg   ASSUMPTION, an FS 16x7.5-10 is about this
-
-% Load sensitivity of peak friction: mu = TireMu + this * (Fz - Fz0)/Fz0.
-% MF calls it PDY2 (and PDX2 -- we set both, because how much grip the rubber
-% has is a property of the rubber and not of the direction it slides, and
-% splitting them would make the friction circle change SHAPE with load, which
-% nothing supports and which would break the combined-slip fit).
+% The tyre's own assumptions -- pressure, rim width, mass, load sensitivity,
+% stiffness peak load and reference velocity -- are declared in car_spec under
+% Tyre.*, and arrive here as P.Assumed.Tyre*. They used to be hand-written in
+% BOTH files, with a guard in build_car to stop the two copies drifting apart.
+% There is one copy now, so there is nothing to guard.
 %
-% Zero is not the neutral choice here, it is the claim that grip is exactly
-% proportional to load -- and that claim makes an axle's peak force invariant
-% to how load splits across its two wheels, which is to say it makes load
-% transfer free. Restoring the moment arm without this would give a car that
-% visibly rolls and whose balance still cannot respond to it.
-%
-% -0.15 is the strong end of the range typical MF passenger sets use, and it
-% is probably CONSERVATIVE for a slick -- FSAE TTC runs generally imply nearer
-% -0.3 to -0.6, and conservative is the dangerous direction here, because it
-% flatters the simulator in corners.
-%
-% Swept on the assembled plant before settling on it, at the grip limit:
-%
-%     PDY2      0     -0.15    -0.30
-%     peak ay  11.87   11.68    11.52   m/s^2
-%
-% so the whole 0 -> -0.30 span is worth 2.9% of peak lateral acceleration and
-% the choice between 0 and -0.15 is worth 1.6%. That is smaller than it looks
-% like it should be, and the reason is worth knowing: the grip an axle loses
-% to load transfer goes as PDY2 * d^2, second order in the transfer, so this
-% number is not a sensitive one for peak grip.
-%
-% What it IS the sensitive one for is BALANCE -- it is the mechanism by which
-% a front/rear roll-stiffness split becomes understeer or oversteer. The plant
-% has no such split today (four identical wheel rates, equal tracks, so the
-% transfer is exactly 50/50 and unchangeable), so that half of its job is
-% currently inert. Revisit this number when the suspension gets a rate split,
-% not before: that is when getting it wrong starts to cost something.
-P.Assumed.TyreLoadSensitivity = -0.15;   % -   ASSUMPTION, never measured
+% Contact width is not among them: it is the same number as WheelWidth, which
+% car_spec already declares from the workbook, and two names for one width is
+% how they end up disagreeing.
 
-% Where cornering stiffness peaks, as a multiple of the static corner load.
-% MF calls it PKY2: Kya = PKY1*Fz0*sin(PKY4*atan(Fz/(PKY2*Fz0))), which peaks
-% at Fz = PKY2*Fz0 when PKY4 = 2. It was pinned at 1 purely so the sine
-% collapsed to exactly 1 at nominal load and PKY1 could be read off as
-% Ca/Fz0 -- convenient, but it put the peak AT the static load, so cornering
-% stiffness fell as a wheel loaded up. Real tyres peak well above their
-% working load and stiffen with load across it. PKY1 is now solved for
-% instead, so the calibrated Ca still comes out exact at static load.
-P.Assumed.TyreStiffnessPeakLoadRatio = 2.0;   % -   ASSUMPTION, never measured
 
-% Reference velocity for the tyre model. NOT cosmetic: it sets how quickly
-% friction falls with slip speed, mu/(1 + Vs/RefVelocity). Inherited at 16 m/s
-% from a passenger-car tyre set, where it governed launch recovery in a car
-% that never sees a passenger car's slip speeds. Set far above anything this
-% car reaches, which disables an effect we have no measurement of.
-%
-% This is the ONLY handle on that effect. The scaling factor LMUV, which the
-% Magic Formula spec says switches the decay off when it is zero, is written
-% as zero into the parameter file and ignored by the block -- measured: with
-% LMUV = 0 and this back at 16, 0-75 m at full throttle regresses 5.085 ->
-% 6.745 s. Do not "correct" this to a realistic rig speed.
-P.Assumed.TyreRefVelocity = 1000;   % m/s  ZEROED, see car_spec Tyre.RefVelocity
 
-% Air density. Not in settings.json. Sea level, 15 C. Aero scales linearly with
+
+% Air density. Not a property of the car. Sea level, 15 C. Aero scales linearly with
 % it, so a hot day at altitude is a real few percent — worth a parameter rather
 % than a constant buried in the aero block.
 P.Assumed.AirDensity = 1.225;      % kg/m^3   ASSUMPTION

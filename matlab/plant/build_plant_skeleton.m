@@ -30,7 +30,7 @@ addpath(outdir);
 P = ifssim_load_workspace();
 
 fprintf('building plant skeleton in %s\n', outdir);
-fprintf('  parameters from %s (%s)\n', P.SettingsPath, P.VehicleName);
+fprintf('  parameters from %s (%s)\n', P.SpecPath, P.SpecName);
 
 % Fixed step chosen to match the FMU internal rate the platform requires: the
 % first 60-divisible rate at which the EMRAX current-loop time constant is

@@ -24,6 +24,7 @@ P = ifssim_params();
 % The accumulator is a cell part number and an arrangement, in
 % matlab/car/car_spec; everything the plant needs about it is derived.
 addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+ifssim_workdir();   % keep Simulink's cache out of the repo
 PK = pack_from_cells(car_spec());
 assignin('base','IFSSIM_P', P);
 ifssim_plant_buses();
@@ -69,7 +70,7 @@ flat = struct( ...
     'IFSSIM_muMax',  P.TireMu, ...
     'IFSSIM_muMin',  P.TireMu * P.Assumed.SlideFrictionRatio, ...   % ASSUMPTION
     'IFSSIM_Ppres',  P.Assumed.TyrePressure, ...            % Pa, neutral
-    'IFSSIM_Twidth', P.Assumed.TyreWidth, ...               % m  ASSUMPTION
+    'IFSSIM_Twidth', P.WheelWidth, ...               % m  ASSUMPTION
     ... % --- steering ---
     'IFSSIM_dmax',  P.Derived.MaxSteerAngleRad, ...          % rad at the road wheel
     'IFSSIM_L',     P.Wheelbase, ...                         % m

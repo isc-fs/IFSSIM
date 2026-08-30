@@ -59,9 +59,9 @@ T.USE_MODE       = 0;
 
 % ---- what kind of tyre this is ---------------------------------------
 T.UNLOADED_RADIUS = P.WheelRadius;
-T.WIDTH           = P.Assumed.TyreWidth;
+T.WIDTH           = P.WheelWidth;
 T.RIM_RADIUS      = P.WheelRadius * 0.62;      % 10 in rim in a 16 in tyre
-T.RIM_WIDTH       = P.Assumed.RimWidth;
+T.RIM_WIDTH       = P.Assumed.TyreRimWidth;
 T.ASPECT_RATIO    = 0.45;
 T.FNOMIN          = P.Derived.NominalWheelLoad;   % OUR static corner load
 T.NOMPRES         = P.Assumed.TyrePressure;

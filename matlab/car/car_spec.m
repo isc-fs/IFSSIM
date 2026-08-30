@@ -1,7 +1,7 @@
 function C = car_spec()
 %CAR_SPEC  THE car. Every number the simulator runs on, and where it came from.
 %
-%   THIS IS THE FILE YOU EDIT. Nothing else. settings.json is generated from
+%   THIS IS THE FILE YOU EDIT. Nothing else. Everything else is generated from
 %   it, the Simulink plant is built from it, and the FMU the UE5 simulator
 %   loads is exported from that. Change a number here and run BUILD_CAR, and
 %   every one of those follows.
@@ -183,6 +183,13 @@ C = par(C,'Tyre.RefVelocity', 1000, 'm/s','ZEROED: disables a real friction-vs-s
 % invariant to how load splits across its wheels -- i.e. it makes load
 % transfer free. Ships with the moment-arm fix in build_tiresuspension for
 % exactly that reason; either alone is worse than neither.
+% The tyre's own assumptions. These do NOT reach settings.json -- they are
+% coefficients of the Magic Formula set the Simulink plant builds, not of the
+% simulator's car -- but they are declared here because this is where a number
+% gets a source, and because having them in two files is how they drift.
+C = par(C,'Tyre.Pressure',  83000, 'Pa','ASSUMED 12 psi, an FS slick. Inert while every pressure term is zeroed. Was 220 kPa, which was the shipped passenger-car set''s 32 psi and unreadable without misleading somebody.');
+C = par(C,'Tyre.RimWidth',  0.1905,'m', 'ASSUMED a 7.5 in tyre on a 7.5 in rim. Reaches only contact-patch geometry, which turn slip uses and we have off.');
+C = par(C,'Tyre.Mass',      5.0,   'kg','ASSUMED an FS 16x7.5-10 is about this. The rubber alone, as distinct from WheelInertia which is the whole rotating corner.');
 C = par(C,'Tyre.LoadSensitivity', -0.15, '-','ASSUMED strong end of a typical MF passenger set. Probably conservative for a slick (TTC implies -0.3 to -0.6) and conservative is the DANGEROUS direction: it flatters the sim in corners.');
 C = par(C,'Tyre.StiffnessPeakLoadRatio', 2.0, '-','ASSUMED cornering stiffness peaks at twice static load. Was pinned at 1 for algebraic convenience, which put the peak AT static load and made a loading wheel go soft.');
 

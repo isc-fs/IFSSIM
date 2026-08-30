@@ -48,7 +48,7 @@ prov = {
  'slip stiffness',          sprintf('%.0f N',P.Derived.LongSlipStiffness),      'DERIVED: mu*Fz*LonC*LonB'
  'wheel inertia',           sprintf('%.2f kg m^2',P.Assumed.WheelInertia),'ASSUMED, never measured'
  'relaxation long/lat',     sprintf('%.2f / %.2f m',P.Assumed.RelaxLengthLong,P.Assumed.RelaxLengthLat),'ASSUMED, never measured'
- 'tyre width',              sprintf('%.3f m',P.Assumed.TyreWidth),        'ASSUMED, never measured'
+ 'tyre width',              sprintf('%.3f m',P.WheelWidth),        'ASSUMED, never measured'
  'load sensitivity PDY2',   '0',                                          'ZEROED: no data'
  'camber sensitivity',      '0',                                          'ZEROED: suspension has no camber DOF'
  'pressure sensitivity',    '0',                                          'ZEROED: runs at nominal pressure'
