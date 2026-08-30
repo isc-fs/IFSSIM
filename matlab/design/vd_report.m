@@ -91,13 +91,24 @@ end
 fprintf('\n---- STEP STEER (transient response) ------------------------------\n');
 fprintf('  How quickly the car answers a sudden input. Only this section is\n');
 fprintf('  sensitive to yaw inertia, which is an ASSUMPTION (%.0f kg.m^2).\n\n', M.Izz);
+ayTarget = 0.4*9.81;
+fprintf('  Each step is sized to reach the SAME lateral acceleration (%.1f g), not\n', ayTarget/9.81);
+fprintf('  the same steering angle. A fixed angle would put 0.4 g on the car at\n');
+fprintf('  8 m/s and 1.4 g at 16 -- one comfortable, one at the grip limit --\n');
+fprintf('  and the rows would not be comparable.\n\n');
 fprintf('    v         steer      yaw rate    time to 90%%   overshoot   sideslip\n');
-R.step = struct('v',{},'t90',{},'overshoot',{},'r_ss',{});
+R.step = struct('v',{},'t90',{},'overshoot',{},'r_ss',{},'delta',{});
 for v = [8 12 16]
-    S2 = vd_step_steer(v, 4*pi/180, M);
-    fprintf('  %4.1f m/s   %4.1f deg   %6.3f r/s   %6.3f s      %5.1f%%     %+5.2f deg\n', ...
-            v, 4, S2.r_ss, S2.t90, S2.overshoot, S2.beta_ss*180/pi);
-    R.step(end+1) = struct('v',v,'t90',S2.t90,'overshoot',S2.overshoot,'r_ss',S2.r_ss); %#ok<AGROW>
+    d = steer_for_ay(v, ayTarget, M);
+    if isnan(d)
+        fprintf('  %4.1f m/s   -- cannot reach %.1f g at this speed\n', v, ayTarget/9.81);
+        continue;
+    end
+    S2 = vd_step_steer(v, d, M);
+    fprintf('  %4.1f m/s   %4.2f deg   %6.3f r/s   %6.3f s      %5.1f%%     %+5.2f deg\n', ...
+            v, d*180/pi, S2.r_ss, S2.t90, S2.overshoot, S2.beta_ss*180/pi);
+    R.step(end+1) = struct('v',v,'t90',S2.t90,'overshoot',S2.overshoot, ...
+                           'r_ss',S2.r_ss,'delta',d); %#ok<AGROW>
 end
 
 %% ---- the one lever ---------------------------------------------------
@@ -122,4 +133,35 @@ fprintf('  fit to no data at all, and CoGHeight, Izz and the roll stiffnesses\n'
 fprintf('  are unmeasured. Treat these as what the CAR AS DESCRIBED would do,\n');
 fprintf('  not as what the car does.\n');
 fprintf('===================================================================\n\n');
+
+end
+
+function d = steer_for_ay(v, ayWant, M)
+%STEER_FOR_AY  The steer angle that settles at a given lateral acceleration.
+%
+%   Found by scanning up from straight ahead, NOT by bracketing on full lock.
+%   Lateral acceleration is not monotonic in steer angle: it rises to the grip
+%   limit and falls away past it, so at any speed where full lock is beyond
+%   the limit, testing the endpoint says "cannot reach 0.4 g" about a car that
+%   reaches 1.4.
+d = NaN;
+lo = 1e-4;  alo = trimay(lo, v, M);
+for hi = linspace(0.01, M.maxSteer, 60)
+    ahi = trimay(hi, v, M);
+    if ahi >= ayWant
+        for it = 1:40                        % bisect inside the rising branch
+            mid = 0.5*(lo+hi);
+            if trimay(mid, v, M) < ayWant, lo = mid; else, hi = mid; end
+        end
+        d = 0.5*(lo+hi);
+        return;
+    end
+    if ahi < alo, return; end                % over the peak without reaching it
+    lo = hi;  alo = ahi;
+end
+end
+
+function a = trimay(d, v, M)
+S = dualtrack_trim(v, d, M);
+a = S.ay;
 end
