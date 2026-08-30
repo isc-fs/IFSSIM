@@ -1,4 +1,4 @@
-function P = ifssim_load_workspace()
+function P = ifssim_load_workspace(overrides)
 %IFSSIM_LOAD_WORKSPACE  Put parameters and buses where Simulink can see them.
 %
 %   Call before building, compiling or simulating any plant model.
@@ -17,10 +17,14 @@ function P = ifssim_load_workspace()
 %                         type at compile time. The flat names are the workaround.
 %
 %   These are NOT a second copy of the numbers. They are assigned here from
-%   ifssim_params(), which reads settings.json, so there is still exactly one
+%   ifssim_params(), which reads car_spec, so there is still exactly one
 %   source and it is still the file. Do not hand-edit them.
 
-P = ifssim_params();
+% Study overrides pass straight through to the spec, so a caller can put a
+% different car in the base workspace without editing car_spec. Everything
+% downstream is derived from the result, so the workspace stays self-consistent.
+if nargin < 1, overrides = struct(); end
+P = ifssim_params(overrides);
 % The accumulator is a cell part number and an arrangement, in
 % matlab/spec/car_spec; everything the plant needs about it is derived.
 addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
