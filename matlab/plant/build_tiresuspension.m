@@ -1,4 +1,4 @@
-function build_tiresuspension(outdir)
+function build_tiresuspension(outdir, overrides)
 %BUILD_TIRESUSPENSION  Fill in IFSSIM_TireSuspension.
 %
 %   Every force that steers, accelerates or stops the car is generated here.
@@ -34,7 +34,8 @@ if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
-P = ifssim_load_workspace();
+if nargin < 2, overrides = struct(); end
+P = ifssim_load_workspace(overrides);
 
 name = 'IFSSIM_TireSuspension';
 if bdIsLoaded(name), close_system(name,0); end
@@ -125,7 +126,7 @@ add_block('vehdynlibtire/Combined Slip Wheel 2DOF', ty, 'Position',[520 120 640 
 %     initialisation, which puts vertType back to 'Magic Formula' -- and that
 %     computes Fz from ground penetration rather than taking it from Fext, so
 %     the tyre silently reports zero vertical load and the car has no grip.
-TP   = build_tyre_paramset(outdir);
+TP   = build_tyre_paramset(outdir, overrides);
 % One recipe, shared with tyre_report so the report cannot validate a
 % configuration the plant does not actually use. Every ordering constraint in
 % there was established by experiment; see the comments in the function.

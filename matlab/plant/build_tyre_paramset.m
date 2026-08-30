@@ -1,4 +1,4 @@
-function T = build_tyre_paramset(outdir)
+function T = build_tyre_paramset(outdir, overrides)
 %BUILD_TYRE_PARAMSET  Write the Magic Formula parameter set the tyre block loads.
 %
 %   The Combined Slip Wheel 2DOF block does NOT take its coefficients from its
@@ -35,7 +35,12 @@ function T = build_tyre_paramset(outdir)
 if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
 end
-P = ifssim_params();
+% Study overrides thread all the way down. Without this, plant_study would
+% announce "a tyre parameter changed, so the tyre set has to be rebuilt",
+% spend the minute, and rebuild the BASELINE car -- returning a table of
+% +0.0% rows for the most disputed number in the spec.
+if nargin < 2, overrides = struct(); end
+P = ifssim_params(overrides);
 
 base = fullfile(matlabroot,'toolbox','vdynblks','vdynblksutilities','vdynPassCar.mat');
 S    = load(base);
@@ -63,7 +68,7 @@ T.WIDTH           = P.WheelWidth;
 T.RIM_RADIUS      = P.WheelRadius * 0.62;      % 10 in rim in a 16 in tyre
 T.RIM_WIDTH       = P.Assumed.TyreRimWidth;
 T.ASPECT_RATIO    = 0.45;
-T.FNOMIN          = P.Derived.NominalWheelLoad;   % OUR static corner load
+T.FNOMIN          = P.Derived.NominalWheelLoad;   % the TYRE's reference load
 T.NOMPRES         = P.Assumed.TyrePressure;
 T.INFLPRES        = P.Assumed.TyrePressure;       % run at nominal: dpi = 0
 % See Tyre.RefVelocity in car_spec: this is not a cosmetic reference speed,

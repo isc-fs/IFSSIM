@@ -62,9 +62,15 @@ ok = chk(ok,'peak ay never exceeds mu*(mg+downforce)/m', peak <= cap*1.02, true,
 ok = chk(ok,'peak ay actually reaches the limit (>85%%)', peak > 0.85*M.mu*M.g, true, 0);
 fprintf('        peak ay %.2f m/s^2, tyre cap %.2f\n', peak, cap);
 
-%% 7. The car understeers at the limit, because it is 55%% front.
-% Not a preference -- a consequence. The front axle carries more of the
-% lateral transfer, loses more grip to load sensitivity, and runs out first.
+%% 7. The front axle gives up first AT THE LIMIT.
+% Note this is NOT the same statement as "the car understeers". The understeer
+% gradient K, measured in the linear range by vd_constant_radius, is NEGATIVE
+% for this car -- it oversteers. What happens at the limit is a different
+% question from what happens at 0.3 g, and a car can do one of each.
+%
+% The front carries more of the lateral transfer (55.1%% roll stiffness) and so
+% loses more to load sensitivity as g builds; the rear starts with more static
+% weight (56.2%%). Which one runs out first depends on where you look.
 Yl2 = dualtrack_sim(tr, M.maxSteer*tr/12, 10, M);
 [~,i] = max(abs(Yl2.ay));
 af = mean(Yl2.alpha(i,1:2));  ar = mean(Yl2.alpha(i,3:4));

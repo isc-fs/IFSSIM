@@ -71,7 +71,15 @@ C = par(C,'PitchStiffness', 155600.0,'N/m','UNKNOWN no source anywhere');
 % plant derives the bar rate as this minus what the springs already give. The
 % values are still unsourced -- but their RATIO is the car's balance, and a
 % car with no balance knob cannot understeer or oversteer at all, which is
-% what the plant was before this. 55.1% front is mildly understeering.
+% what the plant was before this.
+%
+% NOT "55.1%% front is mildly understeering", which this comment used to claim.
+% That is a non-sequitur: roll stiffness distribution alone never sets the SIGN
+% of the understeer gradient. The model built from these very numbers reports
+% K = -0.153 deg/g -- OVERSTEER -- and stays negative across the whole 40-70%%
+% sweep. WeightDistFront 0.438 puts 56.2%% of the mass on the rear, and with
+% load sensitivity the heavier axle gives up first. It takes past 70%% front to
+% approach neutral, so the bars cannot fix this on their own.
 C = par(C,'RollStiffnessFront',27000.0,'N*m/rad','UNKNOWN no source, but now LIVE: with the rear it sets roll stiffness distribution (55.1%% front) and therefore the balance. ARB rate is derived as this minus the springs.');
 C = par(C,'RollStiffnessRear', 22000.0,'N*m/rad','UNKNOWN no source, but now LIVE: see RollStiffnessFront.');
 C = par(C,'RollCenterFront', 0.040, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
@@ -187,6 +195,20 @@ C = par(C,'Tyre.RefVelocity', 1000, 'm/s','ZEROED: disables a real friction-vs-s
 % coefficients of the Magic Formula set the Simulink plant builds, not of the
 % simulator's car -- but they are declared here because this is where a number
 % gets a source, and because having them in two files is how they drift.
+% The load the tyre's coefficients belong to. A PROPERTY OF THE TYRE, not of
+% the car -- in Magic Formula, FNOMIN is the load the data was fitted at.
+%
+% It used to be derived as Mass*g/4, and that had a consequence nobody
+% intended: the tyre re-normalised itself to whatever car it was put on. dfz =
+% (Fz-FNOMIN)/FNOMIN became mass-invariant, so peak mu did too, lateral force
+% scaled exactly with mass, and ay = sum(Fy)/m came out EXACTLY the same for
+% any mass. Measured, with aero off: 200, 275 and 400 kg all returned a skid
+% pad of 5.2779 s to four decimals. The single biggest concept lever there is
+% read as worth nothing.
+%
+% 674.4 N is Mass*g/4 for the car as built, so nothing about today's car
+% changes; it is now fixed instead of following the mass.
+C = par(C,'Tyre.NominalLoad', 674.4375, 'N','ASSUMED equals Mass*g/4 for the car as built, which is where it came from. Should be the load the tyre data was actually taken at, once there is tyre data.');
 C = par(C,'Tyre.Pressure',  83000, 'Pa','ASSUMED 12 psi, an FS slick. Inert while every pressure term is zeroed. Was 220 kPa, which was the shipped passenger-car set''s 32 psi and unreadable without misleading somebody.');
 C = par(C,'Tyre.RimWidth',  0.1905,'m', 'ASSUMED a 7.5 in tyre on a 7.5 in rim. Reaches only contact-patch geometry, which turn slip uses and we have off.');
 C = par(C,'Tyre.Mass',      5.0,   'kg','ASSUMED an FS 16x7.5-10 is about this. The rubber alone, as distinct from WheelInertia which is the whole rotating corner.');

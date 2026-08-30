@@ -63,9 +63,9 @@ end
 
 P1 = ifssim_load_workspace(varargin);
 if needsBuild
-    build_tyre_paramset(fullfile(here,'models'));
-    build_tiresuspension(fullfile(here,'models'));
-    ifssim_load_workspace(varargin);      % the rebuild reloads the baseline
+    % build_tiresuspension calls build_tyre_paramset itself, so one call
+    % threads the override through both.
+    build_tiresuspension(fullfile(here,'models'), varargin);
 end
 B = corner_case(P1, 'study');
 

@@ -113,7 +113,10 @@ P.Derived.StaticLoadRear   = P.Mass * 9.81 * (1-P.WeightDistFront) / 2;
 % expressed as N/rad and N per unit slip ratio instead of as shape factors.
 % Derived rather than assumed on purpose: change the Pacejka fit and these
 % follow, so the two descriptions of the tyre cannot drift apart.
-P.Derived.NominalWheelLoad  = (P.Derived.StaticLoadFront + P.Derived.StaticLoadRear)/2;  % N
+% The tyre's reference load. NOT the car's static corner load, though it
+% equals it for the car as built -- see Tyre.NominalLoad in car_spec for why
+% the two were separated, and what tying them together silently cost.
+P.Derived.NominalWheelLoad  = P.Assumed.TyreNominalLoad;   % N
 P.Derived.CorneringStiffness = P.TireMu * P.Derived.NominalWheelLoad * ...
                                P.Pacejka.LatC * P.Pacejka.LatB;   % N/rad
 P.Derived.LongSlipStiffness  = P.TireMu * P.Derived.NominalWheelLoad * ...
@@ -175,7 +178,16 @@ P.Derived.RollStiffnessFrontFraction = ...
 % Izz sets yaw response, which is what the controller is tuned against.
 P.Assumed.Ixx = 30.0;    % kg*m^2   roll     ASSUMPTION
 P.Assumed.Iyy = 110.0;   % kg*m^2   pitch    ASSUMPTION
-P.Assumed.Izz = 125.0;   % kg*m^2   yaw      ASSUMPTION
+% Yaw inertia, as a RADIUS OF GYRATION rather than a fixed number, so that it
+% follows the mass. Held fixed while lateral force scaled with mass, it made a
+% heavier car answer the wheel FASTER: step-steer response to 90% measured
+% 0.163 s at 200 kg and 0.083 s at 400 kg, which is backwards.
+%
+% 0.6742 m gives exactly 125 kg*m^2 at the 275 kg car, so nothing about today's
+% car changes. It is about 43% of the wheelbase, which is the usual range for
+% a single-seater.
+P.Assumed.YawRadiusOfGyration = 0.6742;   % m   ASSUMPTION
+P.Assumed.Izz = P.Mass * P.Assumed.YawRadiusOfGyration^2;   % kg*m^2  DERIVED
 P.Assumed.InertiaSource = 'ESTIMATE — typical FS values, not measured for this car';
 
 % Wheel+tyre. Corroborated two ways: a solid disc at 10 kg / r=0.202 gives 0.204,
