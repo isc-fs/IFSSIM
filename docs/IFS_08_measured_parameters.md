@@ -1,9 +1,29 @@
 # IFS-08 measured parameters — what the workbook says
 
-`docs/MODEL_IFS_08/ISC_IFS_08.xlsx` is cited as authoritative by the
-steering TODO in `ros2/src/ifssim_bridge/include/ifssim_ros_wrapper.h`,
-and **it is not in version control**. This file records what is in it, so
-the numbers the simulator rests on are reviewable without the workbook.
+`ISC_IFS_08.xlsx` is cited as authoritative by the steering TODO in
+`ros2/src/ifssim_bridge/include/ifssim_ros_wrapper.h`. This file records what
+is in it, so the numbers the simulator rests on are reviewable without opening
+the workbook.
+
+> ## ⚠ THERE ARE TWO COPIES, AND THEY ARE NOT THE SAME FILE
+>
+> | path | in git | size | modified |
+> |---|---|---|---|
+> | `docs/MODEL_IFS_08/ISC_IFS_08.xlsx` | no | 31.8 MB | 12 May |
+> | `matlab/archive/MODEL_IFS_08/ISC_IFS_08.xlsx` | **yes** | 30.4 MB | 28 Aug |
+>
+> Different checksums, different sizes. **Nobody has established which is
+> current**, and the one cited by path above — the one the C++ TODO points at
+> — is the copy that is *not* in version control.
+>
+> Both are being kept deliberately until somebody opens them and decides. Until
+> that happens, treat any number sourced from "the workbook" as needing to say
+> WHICH workbook. The parameters in `matlab/spec/car_spec.m` that cite it are
+> `TrackFront`, `TrackRear`, `Wheelbase`, `WheelWidth` and the steering
+> geometry — see their source strings.
+>
+> Deciding this is cheap and the failure mode is not: a geometry parameter
+> read from the stale copy would be wrong everywhere and wrong quietly.
 
 > **This is a survey, not a full extraction.** Cells were sampled from
 > three of the six sheets. Anything below is quoted with its cell
