@@ -1,4 +1,4 @@
-function P = ifssim_params(settingsPath)
+function P = ifssim_params(settingsPath, overrides)
 %IFSSIM_PARAMS  Load the vehicle parameters from IFSSIM's settings.json.
 %
 %   P = IFSSIM_PARAMS()            reads <repo>/settings.json
@@ -102,6 +102,22 @@ end
 
 P.SettingsPath = settingsPath;
 P.VehicleName  = vehicleName;
+
+% ---- study overrides --------------------------------------------------
+% An engineer asking "what if the CoG were 40 mm higher" should not have to
+% edit settings.json to find out. Overrides are applied HERE, before anything
+% is derived, so every downstream quantity recomputes -- change the wheel rate
+% and the ride frequency, the damping coefficient and the anti-roll bar rates
+% all move with it. Applying them afterwards would give a car whose numbers
+% disagree with each other.
+%
+% They are a STUDY tool and deliberately leave no trace: settings.json is
+% untouched, so the simulator and the plant still describe the car as built.
+% To make a change real, edit matlab/car/car_spec.m and run build_car.
+if nargin < 2, overrides = struct(); end
+overrides = ifssim_normalise_overrides(overrides);
+P = ifssim_apply_overrides(P, overrides);
+P.Overrides = overrides;
 
 % Derived once here so no subsystem re-derives them differently.
 P.Derived = struct();
@@ -361,6 +377,10 @@ P.Assumed.BatteryInitialSoC  = 0.9;
 % the chassis actually uses so there is one place to change it.
 P.Assumed.CoGHeightUsed = P.CoGHeight;
 
+% Assumed defaults are set above, so any override of one has to be re-applied
+% now -- before the block below derives anything from them.
+P = ifssim_apply_overrides(P, overrides);
+
 % --- suspension, derived from the declared stiffness ------------------
 % settings.json SuspensionDamping is a RATIO (zeta), not a coefficient:
 % c = 2*zeta*sqrt(k*m). Converting needs the corner sprung mass, so it is done here.
@@ -393,4 +413,42 @@ P.Derived.EbsTorquePerWheel = P.Assumed.EbsGripMultiple * P.TireMu * ...
 
 P.Derived.RegenTorqueAt10ms = P.MaxRegenPower / ...
     ((10 / P.WheelRadius) * P.GearRatio);   % Nm at the motor
+end
+
+% =======================================================================
+function ov = ifssim_normalise_overrides(ov)
+%IFSSIM_NORMALISE_OVERRIDES  Accept a struct or name/value pairs.
+if isempty(ov), ov = struct(); return; end
+if iscell(ov)
+    if mod(numel(ov),2) ~= 0
+        error('ifssim_params:badOverrides', ...
+              'overrides given as name/value pairs must come in pairs');
+    end
+    c = ov;  ov = struct();
+    for i = 1:2:numel(c), ov.(strrep(c{i},'.','_DOT_')) = c{i+1}; end
+end
+if ~isstruct(ov)
+    error('ifssim_params:badOverrides', ...
+          'overrides must be a struct or a cell of name/value pairs');
+end
+end
+
+% =======================================================================
+function P = ifssim_apply_overrides(P, ov)
+%IFSSIM_APPLY_OVERRIDES  Set P.a.b from an override named 'a.b' or 'a_DOT_b'.
+f = fieldnames(ov);
+for i = 1:numel(f)
+    key = strrep(f{i}, '_DOT_', '.');
+    parts = split(key, '.');
+    switch numel(parts)
+        case 1
+            P.(parts{1}) = ov.(f{i});
+        case 2
+            if ~isfield(P, parts{1}), P.(parts{1}) = struct(); end
+            P.(parts{1}).(parts{2}) = ov.(f{i});
+        otherwise
+            error('ifssim_params:badOverrideName', ...
+                  '"%s" is nested too deep; use Group.Name', key);
+    end
+end
 end

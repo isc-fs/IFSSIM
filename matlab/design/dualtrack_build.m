@@ -73,11 +73,27 @@ M.maxSteer  = P.MaxSteerAngle * pi/180;
 M.wx = [ M.a;      M.a;     -M.b;     -M.b];
 M.wy = [ M.tF/2;  -M.tF/2;   M.tR/2;  -M.tR/2];
 
-% ---- the tyre, from the plant's own parameter set ---------------------
-T = load(tyreMat);  T = T.ifssim_tyre;
-M.Fz0  = T.FNOMIN;
-M.PCY1 = T.PCY1;  M.PDY1 = T.PDY1;  M.PDY2 = T.PDY2;  M.PEY1 = T.PEY1;
-M.PKY1 = T.PKY1;  M.PKY2 = T.PKY2;  M.PKY4 = T.PKY4;
-M.mu   = T.PDY1;
+% ---- the tyre ---------------------------------------------------------
+% DERIVED from P, by exactly the formulas build_tyre_paramset uses to write
+% the plant's Magic Formula set. Not loaded from that file, and the difference
+% matters: the file is generated from the settings.json on disk, so a study
+% that overrides TireMu would have gone straight past it and reported that
+% changing the grip of the tyre changes nothing about the car.
+%
+% Deriving instead of loading does not weaken the guarantee that the two
+% models share a tyre -- it strengthens it. test_dualtrack asserts these come
+% out equal to the plant's file for the car as built, so the agreement is
+% CHECKED rather than assumed, and it is checked against the same file the
+% tyre block actually loads.
+M.Fz0  = P.Derived.NominalWheelLoad;
+M.PCY1 = P.Pacejka.LatC;
+M.PDY1 = P.TireMu;
+M.PDY2 = P.Assumed.TyreLoadSensitivity;
+M.PEY1 = P.Pacejka.LatE;
+M.PKY4 = 2;
+M.PKY2 = P.Assumed.TyreStiffnessPeakLoadRatio;
+M.PKY1 = -P.Derived.CorneringStiffness / ...
+         (M.Fz0 * sin(M.PKY4 * atan(1/M.PKY2)));
+M.mu   = M.PDY1;
 M.tyreSource = tyreMat;
 end

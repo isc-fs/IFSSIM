@@ -30,20 +30,38 @@ for v = speeds
     C.alphaF(end+1) = S.alphaF; C.alphaR(end+1) = S.alphaR;
 end
 
-% Refine the limit speed with a deterministic fine scan through the SAME test
-% the sweep uses, rather than bisecting on whether a solver converged. The
-% limit is physical -- full lock stops producing enough yaw rate to hold the
-% circle -- and testing it directly gives the same answer every run. Bisecting
-% on Newton convergence does not: it made the limit jitter between neighbouring
-% setups, so the skid-pad time moved non-monotonically while the understeer
-% gradient moved smoothly, which is the signature of a numerical artefact
-% rather than a property of the car.
-if ~isempty(C.v) && numel(speeds) > 1
-    step = speeds(2) - speeds(1);
-    for v = C.v(end) + (step/20 : step/20 : step)
-        if ~hold_circle(v, R, M), break; end
-        C.v(end) = v;
+% ---- the limit speed -------------------------------------------------
+% Found from a PHYSICAL criterion, not from whether a solver converged.
+%
+% The car can hold the circle at speed v if some steer angle produces the
+% required yaw rate v/R. Yaw rate is not monotonic in steer -- it rises to the
+% grip limit and falls away past it -- so the test is whether its MAXIMUM over
+% steer still reaches v/R. That maximum is a smooth, decreasing function of
+% speed, so bisecting on it is well posed.
+%
+% The previous version broke the sweep at the first speed where a root-find
+% failed, which is a knife edge: the failures are not monotonic in speed, so a
+% coarse sweep stepped over them and reported a higher limit than a fine one.
+% It was not converged -- halving the step moved the answer by up to 1 m/s,
+% and with it the skid-pad time, which is the number the team is meant to
+% check against a stopwatch.
+if ~isempty(C.v)
+    g  = @(v) max_yaw(v, M) - v/R;
+    lo = C.v(end);                       % holds
+    hi = lo;
+    for k = 1:40                         % walk up until it does not
+        hi = hi + 0.25;
+        if g(hi) < 0, break; end
     end
+    if g(hi) < 0
+        for k = 1:30
+            mid = 0.5*(lo+hi);
+            if g(mid) >= 0, lo = mid; else, hi = mid; end
+        end
+    end
+    C.v(end) = lo;
+    S = dualtrack_trim(lo, hold_lock(lo, R, M), M);
+    C.ay(end) = S.ay;
 end
 
 if numel(C.v) >= 3
@@ -64,7 +82,7 @@ function [ok, d, S] = hold_circle(v, R, M)
 ok = false;  d = NaN;  S = [];
 rt = v/R;
 f  = @(x) trimr(x, v, M) - rt;
-if f(M.maxSteer) < 0, return; end          % not enough lock, whatever else
+if f(M.maxSteer) < 0 && max_yaw(v, M) < rt, return; end
 try
     d = fzero(f, [0 M.maxSteer], optimset('TolX',1e-6,'Display','off'));
 catch
@@ -72,6 +90,42 @@ catch
 end
 S  = dualtrack_trim(v, d, M);
 ok = S.settled;
+end
+
+function d = hold_lock(v, R, M)
+%HOLD_LOCK  The steer angle that holds the circle, or the one that comes closest.
+d = NaN;
+try
+    d = fzero(@(x) trimr(x, v, M) - v/R, [0 M.maxSteer], ...
+              optimset('TolX',1e-6,'Display','off'));
+catch
+    [~, d] = max_yaw(v, M);
+end
+end
+
+function [rmax, dbest] = max_yaw(v, M)
+%MAX_YAW  The most yaw rate this car can produce at this speed, over all lock.
+%
+%   Scanned and then refined, deliberately not root-found: near the peak the
+%   curve is flat and a root-finder has nothing to bracket, while a scan just
+%   works. Unsettled points are excluded rather than trusted -- past the limit
+%   Newton can land on a spun equilibrium with a large yaw rate that the car
+%   cannot actually sustain.
+ds = linspace(1e-4, M.maxSteer, 40);
+rr = nan(size(ds));
+for i = 1:numel(ds)
+    S = dualtrack_trim(v, ds(i), M);
+    if S.settled, rr(i) = S.r; end
+end
+[rmax, i] = max(rr);
+if isempty(rmax) || all(isnan(rr)), rmax = -inf; dbest = NaN; return; end
+lo = ds(max(i-1,1));  hi = ds(min(i+1,numel(ds)));
+ds2 = linspace(lo, hi, 20);
+for i2 = 1:numel(ds2)
+    S = dualtrack_trim(v, ds2(i2), M);
+    if S.settled && S.r > rmax, rmax = S.r; dbest = ds2(i2); end
+end
+if ~exist('dbest','var'), dbest = ds(i); end
 end
 
 function r = trimr(d, v, M)

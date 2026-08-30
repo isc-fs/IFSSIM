@@ -71,10 +71,15 @@ af = mean(Yl2.alpha(i,1:2));  ar = mean(Yl2.alpha(i,3:4));
 ok = chk(ok,'front slip angle exceeds rear at the limit', af > ar, true, 0);
 fprintf('        at peak ay: front %.2f deg, rear %.2f deg\n', af*180/pi, ar*180/pi);
 
-%% 8. The design model and the plant share one tyre.
+%% 8. The design model and the plant have the SAME tyre.
+% Derived here, written there, from the same parameters -- so this asserts the
+% two derivations agree rather than assuming they do. If build_tyre_paramset
+% ever changes how a coefficient is formed, this fails instead of the two
+% models quietly drifting apart.
 T = load(M.tyreSource);  T = T.ifssim_tyre;
-ok = chk(ok,'tyre coefficients come from the plant''s own set', ...
-         [M.PCY1 M.PDY1 M.PDY2 M.PKY2], [T.PCY1 T.PDY1 T.PDY2 T.PKY2], 0);
+ok = chk(ok,'tyre matches the plant''s Magic Formula set', ...
+         [M.PCY1 M.PDY1 M.PDY2 M.PEY1 M.PKY1 M.PKY2 M.PKY4 M.Fz0], ...
+         [T.PCY1 T.PDY1 T.PDY2 T.PEY1 T.PKY1 T.PKY2 T.PKY4 T.FNOMIN], 1e-9);
 
 %% 9. Low speed, small steer: the model must agree with geometry.
 Yk = dualtrack_sim(t, 2*pi/180, 4, M);
