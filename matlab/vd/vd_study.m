@@ -15,7 +15,7 @@ function S = vd_study(varargin)
 %   a car whose numbers disagree with each other.
 %
 %   TO MAKE A CHANGE REAL, once you are happy with it:
-%     1. edit the number in matlab/car/car_spec.m, with a source for it
+%     1. edit the number in matlab/spec/car_spec.m, with a source for it
 %     2. run build_car   (writes settings.json, so the simulator agrees)
 %     3. run vd_report
 %

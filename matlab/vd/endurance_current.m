@@ -21,6 +21,7 @@ function R = endurance_current(verbose)
 
 if nargin < 1, verbose = true; end
 addpath(fileparts(mfilename('fullpath')));
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 C = car_spec(); PK = pack_from_cells(C);
 v_ = @(n) C.Fields.(strrep(n,'.','_')).value;
 m = v_('Mass'); g = 9.81; rho = 1.225;

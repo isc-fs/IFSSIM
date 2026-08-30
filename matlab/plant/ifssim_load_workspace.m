@@ -22,8 +22,8 @@ function P = ifssim_load_workspace()
 
 P = ifssim_params();
 % The accumulator is a cell part number and an arrangement, in
-% matlab/car/car_spec; everything the plant needs about it is derived.
-addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+% matlab/spec/car_spec; everything the plant needs about it is derived.
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 ifssim_workdir();   % keep Simulink's cache out of the repo
 PK = pack_from_cells(car_spec());
 assignin('base','IFSSIM_P', P);
@@ -85,7 +85,7 @@ flat = struct( ...
     'IFSSIM_Treg',  P.MaxRegenTorque, ...        % Nm at the motor, negative side
     'IFSSIM_Preg',  P.MaxRegenPower, ...         % W, cell input current limit
     ... % --- accumulator, derived from the cell and the arrangement ---
-    ... % See matlab/car/pack_from_cells. These come from the CELL PART NUMBER
+    ... % See matlab/spec/pack_from_cells. These come from the CELL PART NUMBER
     ... % and how many are arranged which way, so a different cell or a
     ... % different module count moves them without anyone editing a pack figure.
     ... % The MEASURED operating limit, not the sum of the cell ratings. Cells

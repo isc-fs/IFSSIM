@@ -6,7 +6,7 @@ You do not need to know how the simulator works to change the car. You need
 to know which number you want to change.
 
 ```matlab
-cd matlab/car
+cd matlab/spec
 build_car          % check the car, write settings.json
 build_car('plant') % ... and rebuild the Simulink plant
 build_car('all')   % ... and export the FMU the UE5 simulator loads

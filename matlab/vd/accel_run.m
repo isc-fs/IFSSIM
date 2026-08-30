@@ -37,6 +37,7 @@ if nargin < 2 || isempty(throttle), throttle = 1.0; end
 here  = fileparts(mfilename('fullpath'));
 plant = fullfile(here,'..','plant');
 addpath(plant); addpath(fullfile(plant,'models'));
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 P = ifssim_load_workspace();
 ifssim_plant_buses;
 

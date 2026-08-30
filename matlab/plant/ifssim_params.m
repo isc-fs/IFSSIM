@@ -24,7 +24,7 @@ function P = ifssim_params(overrides)
 %   "settings.json", which was never an answer to that question.
 
 here = fileparts(mfilename('fullpath'));
-addpath(fullfile(here, '..', 'car'));
+addpath(fullfile(here, '..', 'spec'));
 C = car_spec();
 
 % Field names the plant and the design model rely on. Listed so that deleting
@@ -80,7 +80,7 @@ if ~isempty(missing)
 end
 
 P.SpecName = C.Name;
-P.SpecPath = fullfile(here, '..', 'car', 'car_spec.m');
+P.SpecPath = fullfile(here, '..', 'spec', 'car_spec.m');
 
 % ---- study overrides --------------------------------------------------
 % An engineer asking "what if the CoG were 40 mm higher" should not have to
@@ -91,7 +91,7 @@ P.SpecPath = fullfile(here, '..', 'car', 'car_spec.m');
 % disagree with each other.
 %
 % They are a STUDY tool and deliberately leave no trace. To make a change
-% real, edit matlab/car/car_spec.m, where a number has to carry a source.
+% real, edit matlab/spec/car_spec.m, where a number has to carry a source.
 if nargin < 1, overrides = struct(); end
 overrides = ifssim_normalise_overrides(overrides);
 P = ifssim_apply_overrides(P, overrides);

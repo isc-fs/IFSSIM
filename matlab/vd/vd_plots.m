@@ -4,7 +4,7 @@ function figs = vd_plots(M, label, outdir)
 %   figs = VD_PLOTS(M) draws the five plots a suspension engineer reads, from
 %   the design model. Called with no arguments it uses the car as built.
 %
-%   Each figure is also written to matlab/design/figures as a PNG, so a run
+%   Each figure is also written to matlab/vd/figures as a PNG, so a run
 %   leaves something you can put in a report or a slide without screenshotting
 %   a MATLAB window.
 

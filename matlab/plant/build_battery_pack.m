@@ -25,7 +25,7 @@ function info = build_battery_pack(mdl, sysName, pos)
 
 if nargin < 3, pos = [300 400 460 520]; end
 P = ifssim_params();
-addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 K = pack_from_cells(car_spec());
 C = car_spec();
 cv = @(n) C.Fields.(strrep(n,'.','_')).value;

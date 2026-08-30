@@ -4,7 +4,7 @@ function ok = test_powertrain_physics()
 here = fileparts(mfilename('fullpath'));
 addpath(here); addpath(fullfile(here,'models'));
 P = ifssim_load_workspace();
-addpath(fullfile(fileparts(mfilename('fullpath')),'..','car'));
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 PK = pack_from_cells(car_spec());
 
 h = 'powertrain_test_harness';

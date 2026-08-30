@@ -24,6 +24,7 @@ function [cyc, T] = fs_track_cycle(verbose)
 
 if nargin < 1, verbose = true; end
 addpath(fileparts(mfilename('fullpath')));
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 C = car_spec(); PK = pack_from_cells(C);
 v = @(n) C.Fields.(strrep(n,'.','_')).value;
 

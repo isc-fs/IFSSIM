@@ -4,7 +4,7 @@ For the manual team. Open MATLAB, change a number, see what the car does.
 No ROS, no game engine, no Docker — just MATLAB.
 
 ```matlab
-cd matlab/design
+cd matlab/vd
 addpath(genpath(fullfile('..','plant')))
 
 vd_report        % the full characterisation, as tables
@@ -33,7 +33,7 @@ car whose numbers disagree with each other.
 
 ## Making a change real
 
-1. Edit the number in `matlab/car/car_spec.m`. **Every parameter needs a
+1. Edit the number in `matlab/spec/car_spec.m`. **Every parameter needs a
    source string** — the file refuses to build without one. Say where the
    number came from: a measurement, a drawing, a datasheet, or an assumption.
 2. `build_car` — checks the car, writes `settings.json`, so the simulator and

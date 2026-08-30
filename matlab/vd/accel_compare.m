@@ -20,12 +20,13 @@ here = fileparts(mfilename('fullpath'));
 
 R = accel_run(s_target);
 
-leg = fullfile(here,'..','MODEL_IFS_08','DYNAMIC_MOD','GeneralCalculations');
+leg = fullfile(here,'..','archive','MODEL_IFS_08','DYNAMIC_MOD','GeneralCalculations');
 if ~isfolder(leg)
     fprintf('\n(legacy model not present at %s -- plant only)\n', leg);
     return
 end
 addpath(fullfile(leg,'Data')); addpath(fullfile(leg,'Modelos'));
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 try
     car = assembleCar();
     L   = accelSimDistance(car, s_target);

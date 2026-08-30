@@ -19,6 +19,7 @@ if nargin < 1 || isempty(nLaps), nLaps = 1; end
 here  = fileparts(mfilename('fullpath'));
 plant = fullfile(here,'..','plant');
 addpath(plant); addpath(fullfile(plant,'models')); addpath(here);
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 P  = ifssim_load_workspace();
 PK = pack_from_cells(car_spec());
 ifssim_plant_buses;

@@ -6,11 +6,11 @@ function R = vd_report(M)
 %   asks for. It is meant to be run by somebody who does not know how any of
 %   the simulator works.
 %
-%       >> cd matlab/design
+%       >> cd matlab/vd
 %       >> vd_report
 %
 %   To try a setup change without committing to it, use vd_study. To make one
-%   real, edit the number in matlab/car/car_spec.m and run build_car.
+%   real, edit the number in matlab/spec/car_spec.m and run build_car.
 %
 %   Every number here comes from car_spec through ifssim_params. Nothing in
 %   MATLAB reads settings.json -- that file is an EXPORT for the UE5 bridge

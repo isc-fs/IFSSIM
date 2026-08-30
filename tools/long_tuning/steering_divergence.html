@@ -1,0 +1,124 @@
+<title>Steering divergence — hairpin bench replay</title>
+<style>
+  :root {
+    --bg:#f4f6f8; --panel:#ffffff; --ink:#12161c; --muted:#5a6672; --faint:#8a95a1;
+    --line:#dfe4ea; --grid:#eceff3; --accent:#0ca6c4;
+    --good:#1f9d55; --bad:#e03131; --ref:#e8850c;
+    --shade:rgba(12,166,196,.06);
+  }
+  @media (prefers-color-scheme:dark) {
+    :root {
+      --bg:#0d1117; --panel:#141a22; --ink:#e6edf3; --muted:#9aa7b4; --faint:#6b7885;
+      --line:#232c37; --grid:#1b222b; --accent:#38c6e0;
+      --good:#38d17a; --bad:#ff5c5c; --ref:#f5a742;
+      --shade:rgba(56,198,224,.08);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#0d1117; --panel:#141a22; --ink:#e6edf3; --muted:#9aa7b4; --faint:#6b7885;
+    --line:#232c37; --grid:#1b222b; --accent:#38c6e0;
+    --good:#38d17a; --bad:#ff5c5c; --ref:#f5a742; --shade:rgba(56,198,224,.08);
+  }
+  :root[data-theme="light"] {
+    --bg:#f4f6f8; --panel:#ffffff; --ink:#12161c; --muted:#5a6672; --faint:#8a95a1;
+    --line:#dfe4ea; --grid:#eceff3; --accent:#0ca6c4;
+    --good:#1f9d55; --bad:#e03131; --ref:#e8850c; --shade:rgba(12,166,196,.06);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 22px 56px; }
+  .eyebrow { font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+    letter-spacing:.14em; text-transform:uppercase; color:var(--accent); }
+  h1 { font-size:27px; font-weight:680; letter-spacing:-.01em; margin:12px 0 6px;
+    text-wrap:balance; }
+  .sub { color:var(--muted); max-width:64ch; margin:0 0 24px; }
+  .stats { display:flex; flex-wrap:wrap; gap:12px; margin:0 0 22px; }
+  .stat { flex:1 1 150px; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:13px 15px; }
+  .stat .k { font:600 11px/1 ui-monospace,monospace; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--faint); }
+  .stat .v { font:700 23px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace;
+    margin-top:7px; font-variant-numeric:tabular-nums; }
+  .stat .d { font-size:12.5px; color:var(--muted); margin-top:4px; }
+  .stat.good .v { color:var(--good); } .stat.bad .v { color:var(--bad); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:18px 18px 10px; }
+  .chart-wrap { overflow-x:auto; }
+  svg { display:block; width:100%; height:auto; min-width:640px; }
+  .grid { stroke:var(--grid); stroke-width:1; }
+  .ax { fill:var(--faint); font:500 11px ui-monospace,monospace;
+    font-variant-numeric:tabular-nums; }
+  .axttl { fill:var(--muted); font:600 11px ui-monospace,monospace;
+    letter-spacing:.06em; text-transform:uppercase; }
+  .lgd { display:flex; flex-wrap:wrap; gap:18px; padding:12px 4px 6px; }
+  .lgd span { display:inline-flex; align-items:center; gap:8px; font-size:13px;
+    color:var(--muted); }
+  .sw { width:20px; height:0; border-top-width:3px; border-top-style:solid; border-radius:2px; }
+  .read { margin-top:26px; display:grid; gap:14px; }
+  .read p { margin:0; max-width:70ch; }
+  .read b { color:var(--ink); }
+  .tag { font:600 12px ui-monospace,monospace; padding:2px 7px; border-radius:5px;
+    background:var(--shade); color:var(--accent); }
+  .foot { margin-top:28px; color:var(--faint); font:500 12px ui-monospace,monospace; }
+</style>
+
+<div class="wrap">
+  <div class="eyebrow">Bench replay · 9 m left hairpin · 12.2s driving window</div>
+  <h1>The stepper obeys the command. The wheels don&rsquo;t.</h1>
+  <p class="sub">Three steering channels from the uDV, one run. The commanded angle and the
+  stepper position stay locked together the whole corner — but the physical wheel angle from
+  the LWS sensor peels off and pins at the mechanical limit. The controller is not the problem.</p>
+
+  <div class="stats">
+    <div class="stat good"><div class="k">Stepper vs command</div>
+      <div class="v">3.7&deg;</div><div class="d">mean |motor &minus; target| — tracks faithfully</div></div>
+    <div class="stat bad"><div class="k">Physical vs command</div>
+      <div class="v">22.9&deg;</div><div class="d">mean |actual &minus; target| — decoupled</div></div>
+    <div class="stat bad"><div class="k">LWS saturates at</div>
+      <div class="v">+63.5&deg;</div><div class="d">pinned from ~t=12s to emergency</div></div>
+  </div>
+
+  <div class="card">
+    <div class="chart-wrap">
+    <svg viewBox="0 0 920 470" role="img" aria-label="Steering angle vs time: target, stepper, and physical LWS angle">
+      <rect x="93.0" y="28" width="774.5" height="398" fill="var(--shade)"/>
+      <line class="grid" x1="58.0" y1="28" x2="58.0" y2="426"/><line class="grid" x1="185.0" y1="28" x2="185.0" y2="426"/><line class="grid" x1="311.9" y1="28" x2="311.9" y2="426"/><line class="grid" x1="438.9" y1="28" x2="438.9" y2="426"/><line class="grid" x1="565.9" y1="28" x2="565.9" y2="426"/><line class="grid" x1="692.8" y1="28" x2="692.8" y2="426"/><line class="grid" x1="819.8" y1="28" x2="819.8" y2="426"/><line class="grid" x1="58" y1="392.8" x2="896" y2="392.8"/><line class="grid" x1="58" y1="309.9" x2="896" y2="309.9"/><line class="grid" x1="58" y1="227.0" x2="896" y2="227.0"/><line class="grid" x1="58" y1="144.1" x2="896" y2="144.1"/><line class="grid" x1="58" y1="61.2" x2="896" y2="61.2"/>
+      <line class="grid" x1="58" y1="227.0" x2="896" y2="227.0" style="stroke:var(--line)"/>
+      <line x1="58" y1="51.5" x2="896" y2="51.5"
+        stroke="var(--bad)" stroke-width="1" stroke-dasharray="3 4" opacity=".55"/>
+      <text class="ax" x="892" y="45.5" text-anchor="end" style="fill:var(--bad)">LWS limit +63.5&deg;</text>
+      <line x1="524.7" y1="28" x2="524.7" y2="426"
+        stroke="var(--bad)" stroke-width="1" stroke-dasharray="2 3" opacity=".5"/>
+      <text class="ax" x="529.7" y="41" style="fill:var(--bad)">runaway begins ~11s</text>
+      <line x1="867.5" y1="28" x2="867.5" y2="426" stroke="var(--muted)" stroke-width="1"/>
+      <text class="ax" x="862.5" y="41" text-anchor="end" style="fill:var(--muted)">EMERGENCY</text>
+      <polyline fill="none" stroke="var(--ref)" stroke-width="2.4" points="61.3,227.0 67.6,227.0 74.0,227.0 80.3,227.0 86.7,227.0 93.0,227.0 99.4,227.0 105.7,227.0 112.1,227.0 118.4,227.0 124.8,227.0 131.1,227.0 137.4,227.0 143.8,227.0 150.2,227.0 156.7,227.0 162.9,227.0 169.2,227.0 175.6,227.0 181.9,227.0 188.4,227.0 194.6,227.0 200.9,227.0 207.3,227.0 213.7,227.0 220.1,227.0 226.4,227.0 232.7,227.0 239.1,227.0 245.4,227.0 251.7,227.0 258.1,227.0 264.5,227.0 270.8,227.0 277.1,227.0 283.6,227.0 289.8,227.0 296.2,227.0 302.5,227.0 308.9,227.0 315.4,227.0 321.5,227.0 327.9,227.0 334.3,227.0 340.6,227.0 347.1,227.0 353.3,195.2 359.6,204.9 366.0,231.1 372.4,232.5 378.7,229.8 385.1,225.6 391.4,222.9 397.8,222.9 404.1,222.9 410.4,222.9 416.8,221.5 423.1,218.7 429.4,213.2 435.8,213.2 442.1,213.2 448.5,213.2 454.9,218.7 461.2,232.5 467.6,242.2 473.9,283.7 480.3,280.9 486.6,283.7 492.9,298.9 499.3,304.4 505.6,265.7 512.0,261.5 518.4,249.1 524.7,249.1 531.1,247.7 537.4,264.3 543.8,264.3 550.1,264.3 556.5,264.3 562.8,229.8 569.1,224.2 575.5,224.2 581.8,222.9 588.2,220.1 594.5,218.7 600.9,139.9 607.3,159.3 613.6,192.5 620.0,189.7 626.3,196.6 632.6,196.6 638.9,196.6 645.3,218.7 651.6,218.7 658.1,218.7 664.3,196.6 670.7,196.6 677.1,196.6 683.4,196.6 689.7,196.6 696.1,160.7 702.5,122.0 708.8,110.9 715.1,102.6 721.5,88.8 727.8,55.6 734.2,90.2 740.5,113.7 746.9,130.3 753.2,142.7 759.6,180.0 765.9,180.0 772.3,180.0 778.6,180.0 785.0,180.0 791.3,157.9 797.7,157.9 804.0,157.9 810.4,157.9 816.7,157.9 823.1,51.5 829.4,51.5 835.8,51.5 842.1,93.0 848.4,88.8 854.8,51.5 861.1,51.5 867.5,51.5 873.8,51.5 880.2,51.5 886.6,51.5 892.9,51.5"/>
+      <polyline fill="none" stroke="var(--good)" stroke-width="2" stroke-dasharray="6 3" points="61.3,227.0 67.6,227.0 74.0,227.0 80.3,227.0 86.7,227.0 93.0,227.0 99.4,227.0 105.7,227.0 112.1,227.0 118.4,227.0 124.8,227.0 131.1,227.0 137.4,227.0 143.8,227.0 150.2,227.0 156.7,227.0 162.9,227.0 169.2,227.0 175.6,227.0 181.9,227.0 188.4,227.0 194.6,227.0 200.9,227.0 207.3,227.0 213.7,227.0 220.1,227.0 226.4,227.0 232.7,227.0 239.1,227.0 245.4,227.0 251.7,227.0 258.1,227.0 264.5,227.0 270.8,227.0 277.1,227.0 283.6,227.0 289.8,227.0 296.2,227.0 302.5,227.0 308.9,227.0 315.4,227.0 321.5,227.0 327.9,227.0 334.3,227.0 340.6,227.0 347.1,227.0 353.3,227.0 359.6,211.8 366.0,225.6 372.4,232.5 378.7,233.9 385.1,225.6 391.4,227.0 397.8,222.9 404.1,222.9 410.4,222.9 416.8,224.2 423.1,225.6 429.4,227.0 435.8,231.1 442.1,232.5 448.5,233.9 454.9,233.9 461.2,236.7 467.6,242.2 473.9,251.9 480.3,271.2 486.6,283.7 492.9,286.4 499.3,301.6 505.6,301.6 512.0,285.0 518.4,262.9 524.7,249.1 531.1,249.1 537.4,250.5 543.8,246.3 550.1,243.6 556.5,242.2 562.8,231.1 569.1,236.7 575.5,224.2 581.8,222.9 588.2,220.1 594.5,218.7 600.9,218.7 607.3,202.1 613.6,185.5 620.0,195.2 626.3,199.4 632.6,202.1 638.9,204.9 645.3,215.9 651.6,213.2 658.1,210.4 664.3,199.4 670.7,202.1 677.1,204.9 683.4,209.0 689.7,199.4 696.1,200.7 702.5,166.2 708.8,130.3 715.1,108.2 721.5,90.2 727.8,94.3 734.2,84.7 740.5,102.6 746.9,123.4 753.2,142.7 759.6,144.1 765.9,157.9 772.3,159.3 778.6,157.9 785.0,157.9 791.3,157.9 797.7,159.3 804.0,162.0 810.4,164.8 816.7,167.6 823.1,171.7 829.4,144.1 835.8,98.5 842.1,79.1 848.4,86.0 854.8,91.6 861.1,72.2 867.5,62.5 873.8,62.5 880.2,62.5 886.6,62.5 892.9,62.5"/>
+      <polyline fill="none" stroke="var(--bad)" stroke-width="2.6" points="61.3,227.0 67.6,227.0 74.0,227.0 80.3,227.0 86.7,227.0 93.0,227.0 99.4,227.0 105.7,227.0 112.1,227.0 118.4,227.0 124.8,227.0 131.1,227.0 137.4,227.0 143.8,227.0 150.2,227.0 156.7,227.0 162.9,227.0 169.2,227.0 175.6,227.0 181.9,227.0 188.4,227.0 194.6,227.0 200.9,227.0 207.3,227.0 213.7,227.0 220.1,227.0 226.4,227.0 232.7,227.0 239.1,227.0 245.4,227.0 251.7,227.0 258.1,227.0 264.5,227.0 270.8,227.0 277.1,227.0 283.6,227.0 289.8,227.0 296.2,227.0 302.5,227.0 308.9,227.0 315.4,227.0 321.5,227.0 327.9,227.0 334.3,227.0 340.6,227.0 347.1,227.0 353.3,227.0 359.6,220.1 366.0,204.9 372.4,204.9 378.7,204.9 385.1,198.0 391.4,191.1 397.8,188.3 404.1,186.9 410.4,186.9 416.8,186.9 423.1,185.5 429.4,182.8 435.8,178.6 442.1,173.1 448.5,170.3 454.9,167.6 461.2,166.2 467.6,162.0 473.9,159.3 480.3,159.3 486.6,159.3 492.9,159.3 499.3,159.3 505.6,156.5 512.0,146.8 518.4,116.4 524.7,98.5 531.1,95.7 537.4,94.3 543.8,88.8 550.1,81.9 556.5,76.4 562.8,69.5 569.1,59.8 575.5,51.5 581.8,51.5 588.2,51.5 594.5,51.5 600.9,51.5 607.3,51.5 613.6,51.5 620.0,51.5 626.3,51.5 632.6,51.5 638.9,51.5 645.3,51.5 651.6,51.5 658.1,51.5 664.3,51.5 670.7,51.5 677.1,51.5 683.4,51.5 689.7,51.5 696.1,51.5 702.5,51.5 708.8,51.5 715.1,51.5 721.5,51.5 727.8,51.5 734.2,51.5 740.5,51.5 746.9,51.5 753.2,51.5 759.6,51.5 765.9,51.5 772.3,51.5 778.6,51.5 785.0,51.5 791.3,51.5 797.7,51.5 804.0,51.5 810.4,51.5 816.7,51.5 823.1,51.5 829.4,51.5 835.8,51.5 842.1,51.5 848.4,51.5 854.8,51.5 861.1,51.5 867.5,51.5 873.8,51.5 880.2,51.5 886.6,51.5 892.9,51.5"/>
+      <text class="ax" x="50" y="395.8" text-anchor="end">-60</text><text class="ax" x="50" y="312.9" text-anchor="end">-30</text><text class="ax" x="50" y="230.0" text-anchor="end">0</text><text class="ax" x="50" y="147.1" text-anchor="end">30</text><text class="ax" x="50" y="64.2" text-anchor="end">60</text><text class="ax" x="58.0" y="442" text-anchor="middle">4</text><text class="ax" x="185.0" y="442" text-anchor="middle">6</text><text class="ax" x="311.9" y="442" text-anchor="middle">8</text><text class="ax" x="438.9" y="442" text-anchor="middle">10</text><text class="ax" x="565.9" y="442" text-anchor="middle">12</text><text class="ax" x="692.8" y="442" text-anchor="middle">14</text><text class="ax" x="819.8" y="442" text-anchor="middle">16</text>
+      <text class="axttl" x="14" y="16">deg</text>
+      <text class="axttl" x="460" y="464" text-anchor="middle">time — seconds</text>
+    </svg>
+    </div>
+    <div class="lgd">
+      <span><i class="sw" style="border-color:var(--ref)"></i>target — commanded angle</span>
+      <span><i class="sw" style="border-color:var(--good);border-top-style:dashed"></i>motor — stepper position</span>
+      <span><i class="sw" style="border-color:var(--bad)"></i>actual — LWS physical angle</span>
+    </div>
+  </div>
+
+  <div class="read">
+    <p><b>Read it left to right.</b> Through the first seconds the <span class="tag">target</span> and
+    <span class="tag">motor</span> lines sit on top of each other — the stepper goes exactly where the
+    controller asks (mean error 3.7&deg;). Around <b>t&nbsp;&asymp;&nbsp;12&nbsp;s</b> the
+    <span class="tag">actual</span> line breaks upward on its own and slams into the LWS saturation rail,
+    staying there while the command swings &plusmn;30&deg; underneath it.</p>
+    <p><b>What it means.</b> The command chain and the stepper are healthy — so is the Stanley loop
+    (the steering command showed zero limit-cycle sign-flips). The fault is downstream of the stepper:
+    the <b>physical wheel angle is decoupled from the stepper count</b>. Either the LWS is mis-reading
+    (sensor) or the stepper slipped relative to the rack (mechanical). The bench discriminator is visual —
+    watch whether the front wheels are actually at full lock or at the small commanded angle.</p>
+  </div>
+  <div class="foot">bench_&hellip;hairpin&hellip;231526 &middot; /steering/feedback [actual, target, motor] &middot; dv_age 147 ms (heartbeat healthy) &middot; ended on ts_loss</div>
+</div>
