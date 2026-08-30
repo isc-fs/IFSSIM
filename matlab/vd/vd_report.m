@@ -1,4 +1,4 @@
-function R = vd_report(M)
+function R = vd_report(M, varargin)
 %VD_REPORT  Characterise the car. One command, no ROS, no engine, no Docker.
 %
 %   This is the vehicle-dynamics workbench: the classical manoeuvres, run on
@@ -134,7 +134,16 @@ fprintf('  NOTHING here has been checked against the real car. The tyre is a\n')
 fprintf('  fit to no data at all, and CoGHeight, Izz and the roll stiffnesses\n');
 fprintf('  are unmeasured. Treat these as what the CAR AS DESCRIBED would do,\n');
 fprintf('  not as what the car does.\n');
-fprintf('===================================================================\n\n');
+fprintf('===================================================================\n');
+
+% Figures, by default. They used to be a separate command that nobody ran,
+% which is the same as not having them: the point of a workbench is that the
+% picture arrives with the number. Pass 'notables' to skip them.
+if ~any(strcmpi(varargin,'nofigures'))
+    fprintf('\n  drawing figures...\n');
+    R.figures = vd_plots(M, 'as built');
+end
+fprintf('\n');
 
 end
 

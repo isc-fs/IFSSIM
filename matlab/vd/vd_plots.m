@@ -96,13 +96,14 @@ hold on; grid on;
 C = vd_constant_radius(9.125, M, 4:0.5:20);
 names = {'front outer','front inner','rear outer','rear inner'};
 idx   = [2 1 4 3];                        % right wheels are outer in a left turn
-Fz = zeros(numel(C.v),4);
-for i = 1:numel(C.v)
-    S = dualtrack_trim(C.v(i), C.delta(i), M);
+okc = logical(C.settled);
+Fz = zeros(nnz(okc),4);  vC = C.v(okc);  dC = C.delta(okc);
+for i = 1:numel(vC)
+    S = dualtrack_trim(vC(i), dC(i), M);
     Fz(i,:) = S.Fz;
 end
 for j = 1:4
-    plot(C.ay/9.81, Fz(:,idx(j)), 'LineWidth', 1.8, 'DisplayName', names{j});
+    plot(C.ay(okc)/9.81, Fz(:,idx(j)), 'LineWidth', 1.8, 'DisplayName', names{j});
 end
 xlabel('lateral acceleration  [g]'); ylabel('vertical load  [N]');
 title(sprintf('Corner loads on a 9.125 m circle — %s', label));
@@ -111,7 +112,63 @@ text(0.02, 0.06, 'an inner load reaching zero is a wheel lifting', ...
      'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
 savepng(figs.load, outdir, 'load_transfer');
 
+%% 6. Roll and wheel travel. The packaging question.
+% How far the body leans and how far each corner moves, against lateral g.
+% A suspension engineer needs this for bump and droop clearance, and it is the
+% first place a too-stiff or too-soft spring shows up as something physical
+% rather than as a number.
+%
+% Roll comes from the moment about the roll axis over the total roll
+% stiffness; travel from each corner's load change over its wheel rate. The
+% design model has no roll degree of freedom -- it does not need one, load
+% transfer is algebraic -- so both are derived here rather than simulated.
+% The plant DOES roll, and plant_study is where to check these against it.
+figs.roll = figure('Name','Roll and travel','Color','w');
+C = vd_constant_radius(9.125, M, 4:0.5:20);
+mf = M.m*M.wdF;  mr = M.m*(1-M.wdF);
+Kroll = M.KrF + M.KrR;
+hArm  = (mf*(M.h-M.hrcF) + mr*(M.h-M.hrcR))/M.m;   % effective arm above the roll axis
+rollDeg = (M.m*C.ay(logical(C.settled))*hArm/Kroll)*180/pi;
+kw = M.m*9.81/4 / 0.0;                              %#ok<NASGU>  placeholder, replaced below
+kwheel = wheelRate(M);
+% Only points with a real steady state. The limit point has none -- see the
+% note in vd_constant_radius -- and plotting its solve output draws the outer
+% and inner wheels swapping over, which is how this bug was found.
+ok = logical(C.settled);   % numeric 1/0 would index positions, not mask
+Fz = zeros(nnz(ok),4);  ayOk = C.ay(ok);  vOk = C.v(ok);  dOk = C.delta(ok);
+for i = 1:numel(vOk)
+    S = dualtrack_trim(vOk(i), dOk(i), M);
+    Fz(i,:) = S.Fz;
+end
+Fz0 = Fz(1,:);
+travel = (Fz - Fz0) / kwheel * 1000;                % mm, + is compression
+subplot(2,1,1);
+plot(C.ay(logical(C.settled))/9.81, rollDeg, 'LineWidth', 2); grid on;
+ylabel('roll  [deg]');
+title(sprintf('Roll and wheel travel on a 9.125 m circle — %s', label));
+yline(2.0,'r:','a typical FS car at 1.2 g','HandleVisibility','off');
+subplot(2,1,2);
+hold on; grid on;
+nm = {'front outer','front inner','rear outer','rear inner'};
+ix = [2 1 4 3];
+for j = 1:4
+    plot(ayOk/9.81, travel(:,ix(j)), 'LineWidth', 1.6, 'DisplayName', nm{j});
+end
+xlabel('lateral acceleration  [g]'); ylabel('wheel travel from static  [mm]');
+legend('Location','best');
+text(0.02, 0.06, 'check these against your bump and droop limits', ...
+     'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
+savepng(figs.roll, outdir, 'roll_and_travel');
+
 fprintf('  figures written to %s\n', outdir);
+end
+
+function k = wheelRate(M)
+%WHEELRATE  Per-corner spring rate implied by the roll stiffnesses and track.
+% The design model carries roll stiffness, not spring rate, so this recovers
+% the springs' share -- which is what actually moves a wheel.
+P = ifssim_params();
+k = P.Derived.WheelRateEach;
 end
 
 % -----------------------------------------------------------------------

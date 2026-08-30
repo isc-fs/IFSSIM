@@ -20,7 +20,8 @@ if nargin < 2 || isempty(M), M = dualtrack_build(); end
 if nargin < 3 || isempty(speeds), speeds = 4:1:20; end
 
 C = struct('R',R,'v',[],'delta',[],'ay',[],'beta',[], ...
-           'alphaF',[],'alphaR',[],'K',NaN,'ackermann',M.L/R,'v_max',NaN);
+           'alphaF',[],'alphaR',[],'settled',logical([]), ...
+           'K',NaN,'ackermann',M.L/R,'v_max',NaN);
 
 for v = speeds
     [okv, d, S] = hold_circle(v, R, M);
@@ -28,6 +29,7 @@ for v = speeds
     C.v(end+1)      = v;        C.delta(end+1)  = d;
     C.ay(end+1)     = S.ay;     C.beta(end+1)   = S.beta;
     C.alphaF(end+1) = S.alphaF; C.alphaR(end+1) = S.alphaR;
+    C.settled(end+1) = true;
 end
 
 % ---- the limit speed -------------------------------------------------
@@ -60,8 +62,17 @@ if ~isempty(C.v)
         end
     end
     C.v(end) = lo;
-    S = dualtrack_trim(lo, hold_lock(lo, R, M), M);
-    C.ay(end) = S.ay;
+    % At the limit there is NO steady state to solve for -- that is what makes
+    % it the limit. Asking dualtrack_trim for one there returns an unsettled,
+    % sign-flipped solution: r comes back NEGATIVE, the car notionally turning
+    % the other way, with the corner loads mirrored. The tables never showed
+    % it; the wheel-travel plot did, as outer and inner swapping over.
+    %
+    % So the limit point's lateral acceleration is taken from the DEFINITION of
+    % the manoeuvre rather than from a solve. Holding radius R at speed v is
+    % ay = v^2/R, exactly, by kinematics.
+    C.ay(end)     = C.v(end)^2 / R;
+    C.settled(end) = false;
 end
 
 if numel(C.v) >= 3
