@@ -130,6 +130,9 @@ steady state, it is a fixed 15.25 m radius, and it saturates the tyres.
 - [ ] Roll centres — `RollCenterFront/Rear` are still read by nothing. The
       geometric term needs the tyre lateral force back in the suspension pass,
       which is a feedback path the model does not have yet. ~17% of transfer.
-- [ ] A dual-track design model, separate from the reference plant
+- [x] A dual-track design model, separate from the reference plant
+      (`matlab/design/`), validated against the plant on a ramp steer:
+      99.4% / 94.4% / 91.4% at 6 / 9 / 12 m/s, mean 95.1%. For scale, the
+      thesis calls 96.7% on a ramp steer satisfactory — against a real car.
 - [ ] One fit number, against a vehicle, at speed
 - [ ] A tyre fitted to real data (TTC, or the tyres dept's 1.65 @ 1000 N)
