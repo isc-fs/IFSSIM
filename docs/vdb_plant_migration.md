@@ -70,6 +70,53 @@ The plant's contract, because the engine and the FMU depend on it:
   integrator states now, so the reset must reach *its* states. This is the
   single highest-risk item in the migration.
 
+## 3b. PROBE RESULT — the highest-risk item, resolved
+
+Run before anything else, as the plan said to. **The answer changes the plan:
+step 4 should not be done at all.**
+
+**`Vehicle Body 6DOF` cannot accept an arbitrary state injection.** It contains
+five integrators — `phi/theta/psi`, `p,q,r`, `ub,vb,wb`, `xe,ye,ze`, and one
+more — and every one is `InitialConditionSource = internal`,
+`ExternalReset = none`. There is no port and no parameter that writes state at
+run time; `Xe_o`, `eul_o`, `xbdot_o`, `p_o` are compile-time initial
+conditions, not a runtime reset.
+
+Two mechanisms exist today and they are not the same thing:
+
+| | what it does | who uses it |
+|---|---|---|
+| FMU `canGetAndSetFMUStateOverride` | snapshot and restore an OPAQUE state the FMU itself captured | determinism and replay |
+| **`Sync` bus** | write an ARBITRARY pose the platform chose | putting the car on the start gate |
+
+Only the second is at risk, and it is the one that matters operationally. It
+works today because our chassis owns its integrator inside a MATLAB Function
+block and the code overwrites its own state when `sync.enable` is set.
+
+**It is achievable by forking the block.** It is not P-coded — 868 blocks are
+visible under the mask — and all five integrators accept
+`InitialConditionSource='external'` and `ExternalReset='rising'`. But that
+means owning a modified copy of a MathWorks block, re-applying the
+modification at every MATLAB upgrade, and routing reset and IC signals down
+through several levels of nested subsystem.
+
+### The conclusion: take the suspension, keep the chassis
+
+The value of this migration — roll-centre migration, caster, scrub, anti-dive
+and anti-squat, a camber curve that is a curve — is **entirely in the
+suspension block**. `Vehicle Body 6DOF` is a 6-DOF rigid-body integrator, and
+ours already is one, working, with proven state injection. It buys nothing we
+do not have and it is the only step that threatens the reset contract.
+
+And the interfaces already line up: the DW block outputs `VehF` and `VehM`,
+3-vectors of force and moment on the body, which is exactly what our chassis
+takes today as `tyre_force` and `tyre_torque`. Steps 1-3 drop in against an
+unchanged chassis.
+
+**So: do steps 1, 2 and 3. Do not do step 4 or 5.** Revisit only if something
+later needs the VDB body specifically, and price the fork honestly when it
+does.
+
 ## 4. Order of work, with a gate on each step
 
 Each step ends with `ifssim_plant_check` green, all ten stages. No step
@@ -97,22 +144,25 @@ way the plant already breaks the wheel-speed loop, with one step of delay, and
 say so in the code. Gate: the ten stages, and the camber curve compared
 against `matlab/vd`'s.
 
-**Step 4 — `Vehicle Body 6DOF` replacing `IFSSIM_Chassis`.** Repack
+**Step 4 — NOT TO BE DONE.** See §3b: `Vehicle Body 6DOF` cannot take an
+arbitrary state injection, our chassis already does the same job, and this is
+the only step that risks the reset contract. Retained here only so the reason
+is on the record.
+
+~~**Step 4 — `Vehicle Body 6DOF` replacing `IFSSIM_Chassis`.**~~ Repack
 `Vb/pqr/DCM/Euler/Xe/Ve` into `IFSSIM_PoseBus`. Route aero and `Env` into
 `FExt`/`MExt`. Gate: the ten stages **and a state-reset test** — the FMU's
 `Sync` path must still restore an arbitrary pose exactly. Do not merge this
 step without that test.
 
-**Step 5 — FMU export and the engine.** Re-export, re-run the importer gates,
+**Step 5 — FMU export and the engine** (after step 3, not step 4). Re-export, re-run the importer gates,
 and A/B the shadow FMU against Chaos with `tools/fmu/ab_plant.py`.
 
 ## 5. Where this can go wrong
 
-- **State reset (step 4).** Highest risk. If `Vehicle Body 6DOF`'s states
-  cannot be set externally, the FMU reset contract breaks and the migration
-  stops at step 3. **Retire this risk first** — before step 1 — by testing
-  whether the block's states can be written. It is a day's work to find out
-  and it decides whether steps 4 and 5 exist at all.
+- ~~**State reset (step 4).**~~ **RESOLVED, see §3b.** The block's states
+  cannot be written at run time. The migration stops at step 3 by design, and
+  loses nothing by doing so.
 - **Algebraic loop (step 3).** Known shape, known fix, but the delay changes
   the transient. Quantify against the current plant rather than assuming.
 - **Wheel lift.** Our suspension clamps `Fz` at zero so a wheel can leave the
