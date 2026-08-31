@@ -76,7 +76,7 @@ C = par(C,'PitchStiffness', 155600.0,'N/m','UNKNOWN no source anywhere');
 % NOT "55.1%% front is mildly understeering", which this comment used to claim.
 % That is a non-sequitur: roll stiffness distribution alone never sets the SIGN
 % of the understeer gradient. The model built from these very numbers reports
-% K = -0.153 deg/g -- OVERSTEER -- and stays negative across the whole 40-70%%
+% K = -0.154 deg/g -- OVERSTEER -- and stays negative across the whole 40-70%%
 % sweep. WeightDistFront 0.438 puts 56.2%% of the mass on the rear, and with
 % load sensitivity the heavier axle gives up first. It takes past 70%% front to
 % approach neutral, so the bars cannot fix this on their own.
@@ -104,6 +104,15 @@ C = par(C,'Susp.MotionRatioFront', 0.70, '-','ASSUMED typical FS pushrod. Spring
 C = par(C,'Susp.MotionRatioRear',  0.70, '-','ASSUMED as front.');
 C = par(C,'Susp.SpringRateFront', 41192.0,'N/m','DERIVED to reproduce the wheel rate implied by HeaveStiffness at the motion ratio above (41.2 N/mm, a real FS spring). Replace with the spring actually fitted.');
 C = par(C,'Susp.SpringRateRear',  41192.0,'N/m','DERIVED as front.');
+
+% Anti-roll bar rates, DECLARED. They used to be back-derived as "declared axle
+% roll stiffness minus what the springs give", which inverted the causality
+% against the real car: on the car the springs and the bar are what you fit,
+% and the axle roll stiffness is the consequence. Back-derived, the bar
+% silently absorbed any spring change and the total never moved -- so a
+% front/rear spring split changed nothing the model computed.
+C = par(C,'Susp.ArbRateFront', 12467.0,'N*m/rad','DERIVED to reproduce the previously declared 27000 axle total at the current springs. Replace with the bar actually fitted.');
+C = par(C,'Susp.ArbRateRear',   7467.0,'N*m/rad','DERIVED as front, against 22000.');
 
 % Camber. Static is what the car sits at; gain is how much the OUTER wheel
 % recovers per degree of body roll -- a gain of 1.0 exactly cancels roll and

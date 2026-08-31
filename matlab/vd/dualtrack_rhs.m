@@ -82,19 +82,29 @@ for it = 1:3
     % takes back that fraction. sgn is +1 on the wheel that is OUTSIDE the
     % corner, which for a left turn (+ay) is the right-hand pair.
     sgn   = [-1; 1; -1; 1] * sign(ay + eps);
-    gam   = [M.camF; M.camF; M.camR; M.camR] + ...
-            sgn .* (1 - [M.cgainF; M.cgainF; M.cgainR; M.cgainR]) * abs(roll);
+    camS  = [M.camF; M.camF; M.camR; M.camR];
+    gam   = camS + sgn .* (1 - [M.cgainF; M.cgainF; M.cgainR; M.cgainR]) * abs(roll);
 
-    % Toe change with travel. Zero by design; a real number is a defect.
-    dtoe  = [M.bumpF; M.bumpF; M.bumpR; M.bumpR] .* ...
-            ([Fz(1)-FzF/2; Fz(2)-FzF/2; Fz(3)-FzR/2; Fz(4)-FzR/2] ./ ...
-             [M.kwF; M.kwF; M.kwR; M.kwR]);
+    % Toe change with travel -- ROLL STEER, which needs a per-side sign. Toe is
+    % measured inward-positive on each side, so the same toe number points the
+    % two wheels of an axle in OPPOSITE directions in the ground frame. Without
+    % the sign the two contributions cancel exactly (measured sum 8e-19 rad),
+    % the axle gets no net steer, and what is left is pigeon-toe scrub.
+    %
+    % Zero on both axles by design, so nothing printed today depends on it --
+    % but this is the one parameter here whose whole purpose is to be replaced
+    % by a string-pot measurement, and it would have handed that measurement
+    % back inverted.
+    travel = [Fz(1)-FzF/2; Fz(2)-FzF/2; Fz(3)-FzR/2; Fz(4)-FzR/2] ./ ...
+             [M.kwF; M.kwF; M.kwR; M.kwR];
+    toeSign = [1; -1; 1; -1];        % +y is LEFT, so toe-in is -steer on the left
+    dtoe  = toeSign .* [M.bumpF; M.bumpF; M.bumpR; M.bumpR] .* travel;
 
     for i = 1:4
         vxi = vx - r*M.wy(i);
         vyi = vy + r*M.wx(i);
         alpha(i) = dw(i) + dtoe(i) - atan2(vyi, max(vxi, 0.5));
-        Fy(i)    = mf_lateral(alpha(i), Fz(i), M, gam(i));
+        Fy(i)    = mf_lateral(alpha(i), Fz(i), M, gam(i), camS(i));
     end
     Fyb = Fy .* cos(dw);                     % Fx is zero here, see below
     ay  = sum(Fyb)/M.m;
@@ -116,7 +126,7 @@ d = struct('Fz',Fz,'alpha',alpha,'Fy',Fy,'ay',ay,'delta_wheel',dw, ...
            'dWlat',[dWf; dWr],'dWlon',dWlon,'downforce',Fl);
 end
 
-function Fy = mf_lateral(alpha, Fz, M, gam)
+function Fy = mf_lateral(alpha, Fz, M, gam, camStatic)
 %MF_LATERAL  Pure-slip Magic Formula, same coefficients as the plant's block.
 %
 %   gam is the inclination angle the tyre sees. Its cost is charged against
@@ -129,8 +139,13 @@ function Fy = mf_lateral(alpha, Fz, M, gam)
 if Fz <= 0, Fy = 0; return; end
 dfz = (Fz - M.Fz0)/M.Fz0;
 mu  = M.PDY1 + M.PDY2*dfz;                   % load sensitivity
-if nargin >= 4
-    camStatic = M.camF;                      % same magnitude both axles here
+if nargin >= 5
+    % Charged against THIS axle's static camber. It used to use the front's for
+    % all four wheels, and the comment claiming they were the same magnitude was
+    % simply false -- front is -1.5 deg, rear -1.0. That charged the rear pair
+    % 0.5 deg of penalty with the car standing still, charged the loaded rear
+    % outer 2.8x too much at the limit, destroyed left/right symmetry on the
+    % rear axle, and inverted the camber-gain sensitivity on the rear inner.
     mu = mu * (1 - M.camSens*abs(gam - camStatic)*180/pi);
 end
 D   = mu*Fz;

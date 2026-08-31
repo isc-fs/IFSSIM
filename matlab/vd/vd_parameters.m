@@ -31,6 +31,19 @@ SPEC = {
 'RollStiffnessFront' 'both'        'BALANCE. front bar rate = this minus the springs'
 'RollStiffnessRear'  'both'        'BALANCE. rear bar rate = this minus the springs'
 'SuspensionDamping'  'both'        'damper coefficient, transient response only'
+'Susp.SpringRateFront'  'design only' 'wheel rate front, as k*MR^2. NOT in the plant yet'
+'Susp.SpringRateRear'   'design only' 'wheel rate rear -- a front/rear split is now real'
+'Susp.MotionRatioFront' 'design only' 'wheel rate goes as the SQUARE of it'
+'Susp.MotionRatioRear'  'design only' 'as front'
+'Susp.ArbRateFront'     'design only' 'bar rate. axle roll stiffness = springs + this'
+'Susp.ArbRateRear'      'design only' 'as front. the RATIO of the two is the balance'
+'Susp.StaticCamberFront' 'design only' 'INERT for grip: cost is charged vs departure from it'
+'Susp.StaticCamberRear'  'design only' 'INERT for grip, same reason'
+'Susp.CamberGainFront'  'design only' 'how much roll the geometry takes back out of the tyre'
+'Susp.CamberGainRear'   'design only' 'as front'
+'Susp.BumpSteerFront'   'design only' 'roll steer per m of travel. ZERO by design'
+'Susp.BumpSteerRear'    'design only' 'as front'
+'Susp.CamberGripSensitivity' 'design only' 'the ONE part of camber that needs tyre data'
 'RollCenterFront'    'design only' 'geometric share of front transfer'
 'RollCenterRear'     'design only' 'geometric share of rear transfer'
 'PitchStiffness'     'NOTHING'     'nothing. declared, exported, read by no code'
@@ -70,10 +83,15 @@ fprintf('  tyre forces at the contact patch with the roll centre at ground\n');
 fprintf('  level, so all lateral transfer there is elastic. The design model\n');
 fprintf('  splits it geometric/elastic and gets ~11%% geometric at the front.\n');
 fprintf('  So the two models disagree on the SPLIT, never on the total.\n\n');
+fprintf('  STATIC CAMBER IS INERT FOR GRIP, on purpose. The camber penalty is\n');
+fprintf('  charged against DEPARTURE from static, because the static setting\n');
+fprintf('  was presumably chosen near the tyre''s optimum and no data says where\n');
+fprintf('  that optimum is. So these two move the camber CURVE and not the lap\n');
+fprintf('  time. Choosing static camber needs a tyre on a rig.\n\n');
 fprintf('  RollStiffnessFront/Rear have NO SOURCE, and their RATIO is the\n');
 fprintf('  car''s balance -- the single number the whole handling picture turns\n');
 fprintf('  on. Currently %.1f%% front.\n\n', ...
-        100*P.RollStiffnessFront/(P.RollStiffnessFront+P.RollStiffnessRear));
+        100*P.Derived.RollStiffnessFront/(P.Derived.RollStiffnessFront+P.Derived.RollStiffnessRear));
 fprintf('  CoGHeight is DISPUTED: %.3f here, 0.3441 in the VD department file,\n', P.CoGHeight);
 fprintf('  nobody has measured the IFS-08. Load transfer is LINEAR in it, so a\n');
 fprintf('  15%% error here is a 15%% error in every corner load on this page.\n');

@@ -54,8 +54,12 @@ M.wdF = P.WeightDistFront;
 % docs/vehicle_dynamics_alignment.md.
 M.hrcF = P.RollCenterFront;
 M.hrcR = P.RollCenterRear;
-M.KrF  = P.RollStiffnessFront;
-M.KrR  = P.RollStiffnessRear;
+% DERIVED from springs + bars, not the declared totals. Taking the declared
+% totals meant a spring change was absorbed by a back-derived bar and the roll
+% stiffness never moved -- so the camber curve, which is driven by roll, was
+% independent of the springs.
+M.KrF  = P.Derived.RollStiffnessFront;
+M.KrR  = P.Derived.RollStiffnessRear;
 
 M.rho  = P.Assumed.AirDensity;
 M.ClA  = P.ClA;

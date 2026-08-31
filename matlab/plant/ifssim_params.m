@@ -112,90 +112,95 @@ P.Derived.WheelRateFront = P.Susp.SpringRateFront * P.Susp.MotionRatioFront^2;
 P.Derived.WheelRateRear  = P.Susp.SpringRateRear  * P.Susp.MotionRatioRear^2;
 P.Derived.WheelRateEach   = (P.Derived.WheelRateFront + P.Derived.WheelRateRear)/2;
 
-% HeaveStiffness is the sum of the four, and it is EXPORTED to settings.json
-% for the engine, so it has to agree with the springs. Declared rather than
-% derived because settings.json needs a literal; guarded because two numbers
-% that must agree and are written in two places will not stay agreed.
-heaveFromSprings = 2*(P.Derived.WheelRateFront + P.Derived.WheelRateRear);
-if abs(heaveFromSprings - P.HeaveStiffness) > 0.005*P.HeaveStiffness
-    error('ifssim_params:springMismatch', ...
-          ['The springs and HeaveStiffness disagree.\n\n' ...
-           '  front %.0f N/m at MR %.2f -> %.0f N/m at the wheel\n' ...
-           '  rear  %.0f N/m at MR %.2f -> %.0f N/m at the wheel\n' ...
-           '  four corners            -> %.0f N/m\n' ...
-           '  HeaveStiffness declared -> %.0f N/m\n\n' ...
-           '  Set HeaveStiffness to %.0f in car_spec, or change the springs.\n' ...
-           '  Wheel rate goes as the SQUARE of motion ratio, so a 10%% pickup\n' ...
-           '  move is a 21%% wheel-rate change.'], ...
-          P.Susp.SpringRateFront, P.Susp.MotionRatioFront, P.Derived.WheelRateFront, ...
-          P.Susp.SpringRateRear,  P.Susp.MotionRatioRear,  P.Derived.WheelRateRear, ...
-          heaveFromSprings, P.HeaveStiffness, heaveFromSprings);
-end
+% HeaveStiffness and the two roll stiffnesses are EXPORTED to settings.json for
+% the engine, so car_spec still declares them -- but they are now consequences,
+% not inputs, and the spec's copies are reconciled rather than enforced.
+%
+% Enforcing them was a mistake that shipped: a guard threw on
+% vd_study('HeaveStiffness',...), on any motion-ratio study and on any spring
+% study -- which is every single-lever suspension study there is, including the
+% headline example in plant_study's own documentation and its no-args error
+% text. A study tool whose documented example aborts is worse than one that
+% cannot do the study.
+%
+% So: a study that moves the springs, the bars or the motion ratio gets the
+% consequences recomputed. Only a spec that contradicts ITSELF, with no
+% override in play, is an error worth stopping for.
+% ---- roll stiffness, DERIVED from what is bolted to the car -----------
+% springs + anti-roll bar, per axle. This direction matters: it is the one the
+% real car works in, and the old one -- declare a total, back-derive the bar --
+% meant the bar silently absorbed every spring change and the total never
+% moved. A front/rear spring split then changed nothing the model computed,
+% while the code claimed to have enabled exactly that.
+P.Derived.RollStiffFromSpringsFront = 0.5*P.Derived.WheelRateFront*P.TrackFront^2;
+P.Derived.RollStiffFromSpringsRear  = 0.5*P.Derived.WheelRateRear *P.TrackRear^2;
+P.Derived.ArbFront = P.Susp.ArbRateFront;
+P.Derived.ArbRear  = P.Susp.ArbRateRear;
+P.Derived.RollStiffnessFront = P.Derived.RollStiffFromSpringsFront + P.Derived.ArbFront;
+P.Derived.RollStiffnessRear  = P.Derived.RollStiffFromSpringsRear  + P.Derived.ArbRear;
+
 P.Derived.CoGFromFrontAxle = P.Wheelbase * (1 - P.WeightDistFront);    % m
 P.Derived.CoGOffsetFromMid = P.Wheelbase * (P.WeightDistFront - 0.5);  % m, -ve = rearward
 P.Derived.StaticLoadFront  = P.Mass * 9.81 * P.WeightDistFront / 2;    % N per wheel
 P.Derived.StaticLoadRear   = P.Mass * 9.81 * (1-P.WeightDistFront) / 2;
 
-% Slip stiffnesses, in the form a physically-parameterised tyre model wants.
-% NOT new information: they are the initial slope of the Magic Formula we
-% already fitted. For y = D*sin(C*atan(B*x - ...)), dy/dx at the origin is
-% D*C*B, and D is mu*Fz — so these are what our own curve already implies,
-% expressed as N/rad and N per unit slip ratio instead of as shape factors.
-% Derived rather than assumed on purpose: change the Pacejka fit and these
-% follow, so the two descriptions of the tyre cannot drift apart.
 % The tyre's reference load. NOT the car's static corner load, though it
-% equals it for the car as built -- see Tyre.NominalLoad in car_spec for why
-% the two were separated, and what tying them together silently cost.
-P.Derived.NominalWheelLoad  = P.Assumed.TyreNominalLoad;   % N
+% equals it for the car as built -- see Tyre.NominalLoad in car_spec.
+P.Derived.NominalWheelLoad   = P.Assumed.TyreNominalLoad;   % N
 P.Derived.CorneringStiffness = P.TireMu * P.Derived.NominalWheelLoad * ...
-                               P.Pacejka.LatC * P.Pacejka.LatB;   % N/rad
+                               P.Pacejka.LatC * P.Pacejka.LatB;
 P.Derived.LongSlipStiffness  = P.TireMu * P.Derived.NominalWheelLoad * ...
-                               P.Pacejka.LonC * P.Pacejka.LonB;   % N per unit slip
-P.Derived.PeakWheelTorque  = P.MotorMaxTorque * P.GearRatio * P.DrivetrainEfficiency;
-P.Derived.UnsprungPerCorner = 10.0;                    % kg, from the wheel classes  ASSUMPTION
+                               P.Pacejka.LonC * P.Pacejka.LonB;
+P.Derived.PeakWheelTorque    = P.MotorMaxTorque * P.GearRatio * P.DrivetrainEfficiency;
+
+P.Derived.UnsprungPerCorner = 10.0;                    % kg   ASSUMPTION
 P.Derived.SprungPerCorner   = (P.Mass - 4*P.Derived.UnsprungPerCorner)/4;
+
+P.Derived.HeaveStiffness = 2*(P.Derived.WheelRateFront + P.Derived.WheelRateRear);
+touched = false;
+fo = fieldnames(overrides);
+for i = 1:numel(fo)
+    k = strrep(fo{i}, '_DOT_', '.');
+    if startsWith(k,'Susp.') || any(strcmp(k, ...
+            {'HeaveStiffness','RollStiffnessFront','RollStiffnessRear','TrackFront','TrackRear'}))
+        touched = true;
+    end
+end
+if ~touched && abs(P.Derived.HeaveStiffness - P.HeaveStiffness) > 0.005*P.HeaveStiffness
+    error('ifssim_params:springMismatch', ...
+          ['car_spec contradicts itself: the springs and HeaveStiffness disagree,\n' ...
+           'and no override is in play to explain it.\n\n' ...
+           '  front %.0f N/m at MR %.2f -> %.0f N/m at the wheel\n' ...
+           '  rear  %.0f N/m at MR %.2f -> %.0f N/m at the wheel\n' ...
+           '  four corners            -> %.0f N/m\n' ...
+           '  HeaveStiffness declared -> %.0f N/m\n\n' ...
+           '  Set HeaveStiffness to %.0f. Wheel rate goes as the SQUARE of\n' ...
+           '  motion ratio, so a 10%% pickup move is a 21%% wheel-rate change.'], ...
+          P.Susp.SpringRateFront, P.Susp.MotionRatioFront, P.Derived.WheelRateFront, ...
+          P.Susp.SpringRateRear,  P.Susp.MotionRatioRear,  P.Derived.WheelRateRear, ...
+          P.Derived.HeaveStiffness, P.HeaveStiffness, P.Derived.HeaveStiffness);
+end
+% An override of HeaveStiffness itself is a request for a stiffness, not a
+% contradiction: scale both springs to deliver it and carry on.
+if touched && any(strcmp('HeaveStiffness', strrep(fo,'_DOT_','.')))
+    sc = P.HeaveStiffness / max(P.Derived.HeaveStiffness, eps);
+    P.Derived.WheelRateFront = P.Derived.WheelRateFront * sc;
+    P.Derived.WheelRateRear  = P.Derived.WheelRateRear  * sc;
+    P.Derived.WheelRateEach  = (P.Derived.WheelRateFront + P.Derived.WheelRateRear)/2;
+    P.Derived.RollStiffFromSpringsFront = 0.5*P.Derived.WheelRateFront*P.TrackFront^2;
+    P.Derived.RollStiffFromSpringsRear  = 0.5*P.Derived.WheelRateRear *P.TrackRear^2;
+    P.Derived.RollStiffnessFront = P.Derived.RollStiffFromSpringsFront + P.Derived.ArbFront;
+    P.Derived.RollStiffnessRear  = P.Derived.RollStiffFromSpringsRear  + P.Derived.ArbRear;
+    P.Derived.HeaveStiffness = 2*(P.Derived.WheelRateFront + P.Derived.WheelRateRear);
+end
+
 P.Derived.RideFreqHz        = sqrt(P.Derived.WheelRateEach / P.Derived.SprungPerCorner)/(2*pi);
 
-% ---- anti-roll bars ---------------------------------------------------
-% RollStiffnessFront/Rear are the TOTAL roll stiffness of each axle. The
-% springs already supply 0.5*k_wheel*track^2 of it; the bar is the remainder.
-%
-% Deriving it this way rather than declaring a bar rate is what keeps the
-% three suspension numbers honest. If somebody raises HeaveStiffness without
-% raising the roll stiffnesses, the springs eventually supply more roll
-% stiffness than the axle is declared to have, the bar rate goes negative,
-% and the guard below stops the build instead of quietly modelling a bar that
-% pushes the car over in corners. That is exactly the state this file was in:
-% HeaveStiffness 227600 needed a front bar of -13968 N*m/rad.
-P.Derived.RollStiffFromSpringsFront = 0.5*P.Derived.WheelRateFront*P.TrackFront^2;
-P.Derived.RollStiffFromSpringsRear  = 0.5*P.Derived.WheelRateRear *P.TrackRear^2;
-P.Derived.ArbFront = P.RollStiffnessFront - P.Derived.RollStiffFromSpringsFront;
-P.Derived.ArbRear  = P.RollStiffnessRear  - P.Derived.RollStiffFromSpringsRear;
-if P.Derived.ArbFront < 0 || P.Derived.ArbRear < 0
-    error('ifssim_params:impossibleRollStiffness', ...
-          ['These three numbers cannot all be true.\n\n' ...
-           '  HeaveStiffness %.0f N/m puts %.0f N/m under each corner, and springs\n' ...
-           '  at that rate on a %.3f/%.3f m track already supply %.0f/%.0f N*m/rad of\n' ...
-           '  roll stiffness front/rear -- but the axles are declared to have\n' ...
-           '  %.0f/%.0f. An anti-roll bar can only ADD, never subtract.\n\n' ...
-           '  Pick one:\n' ...
-           '    raise the bars    RollStiffnessFront >= %.0f, RollStiffnessRear >= %.0f\n' ...
-           '    soften the springs  HeaveStiffness <= %.0f N/m (ride %.2f Hz)\n\n' ...
-           '  Roll stiffness DISTRIBUTION is what sets the balance, so if you are\n' ...
-           '  changing springs to change balance, change the bars instead.'], ...
-          P.HeaveStiffness, P.Derived.WheelRateEach, P.TrackFront, P.TrackRear, ...
-          P.Derived.RollStiffFromSpringsFront, P.Derived.RollStiffFromSpringsRear, ...
-          P.RollStiffnessFront, P.RollStiffnessRear, ...
-          ceil(P.Derived.RollStiffFromSpringsFront), ceil(P.Derived.RollStiffFromSpringsRear), ...
-          floor(4*2*min(P.RollStiffnessFront/P.TrackFront^2, P.RollStiffnessRear/P.TrackRear^2)), ...
-          sqrt(2*min(P.RollStiffnessFront/P.TrackFront^2, P.RollStiffnessRear/P.TrackRear^2) ...
-               / P.Derived.SprungPerCorner)/(2*pi));
-end
 % The fraction of roll stiffness at the front. This one number is the car's
 % balance: raise it and the front axle takes more of the lateral transfer,
 % loses more grip to load sensitivity, and the car understeers.
-P.Derived.RollStiffnessFrontFraction = ...
-    P.RollStiffnessFront / (P.RollStiffnessFront + P.RollStiffnessRear);
+P.Derived.RollStiffnessFrontFraction = P.Derived.RollStiffnessFront / ...
+    (P.Derived.RollStiffnessFront + P.Derived.RollStiffnessRear);
 
 % Values the plant needs that settings.json does not carry. Separate from the
 % configured parameters on purpose, so what is guessed is visible at a glance.

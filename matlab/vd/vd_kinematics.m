@@ -69,11 +69,15 @@ fprintf('    camber gain 0 (wheel leans with the body)  skid pad %.3f s\n', wors
 fprintf('    camber gain 1 (wheel stays upright)        skid pad %.3f s\n', best);
 fprintf('    so the whole camber-gain design space is worth %.0f ms here.\n', 1000*(worst-best));
 if abs(worst-best) < 0.05
-    fprintf('\n    THAT IS ALMOST NOTHING, and the reason is the car only rolls\n');
-    fprintf('    %.2f deg at the limit. Camber gain earns its keep on a car that\n', roll(end));
-    fprintf('    rolls; this one is stiff enough that the wheels barely move.\n');
-    fprintf('    Soften it to a real ride frequency and re-run before concluding\n');
-    fprintf('    that the geometry does not matter.\n');
+    fprintf('\n    DO NOT QUOTE THAT NUMBER. Its magnitude rests on three things\n');
+    fprintf('    nobody has measured: CamberGripSensitivity (an assumed 1.5%%/deg\n');
+    fprintf('    where a real slick is 1-3), and both roll stiffnesses, which\n');
+    fprintf('    car_spec marks UNKNOWN. The honest span is more like 20-60 ms.\n');
+    fprintf('\n    QUOTE THE CONCLUSION INSTEAD, which survives all of that:\n');
+    fprintf('    the car rolls %.2f deg at the limit, and camber gain cannot be\n', roll(end));
+    fprintf('    worth much on a car that does not roll. Before spending a week\n');
+    fprintf('    on camber curves, go find out whether the roll stiffnesses are\n');
+    fprintf('    real -- they gate this and everything else on the balance page.\n');
 end
 K.camber_gain_worth = worst - best;
 

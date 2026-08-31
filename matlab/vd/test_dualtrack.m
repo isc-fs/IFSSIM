@@ -77,6 +77,36 @@ af = mean(Yl2.alpha(i,1:2));  ar = mean(Yl2.alpha(i,3:4));
 ok = chk(ok,'front slip angle exceeds rear at the limit', af > ar, true, 0);
 fprintf('        at peak ay: front %.2f deg, rear %.2f deg\n', af*180/pi, ar*180/pi);
 
+%% 7b. Camber is charged against the RIGHT axle's static setting.
+% This existed and was wrong: every wheel was scored against the FRONT static
+% camber, so the rear pair carried a 0.5 deg penalty with the car standing
+% still and 2.8x too much on the loaded outer tyre at the limit. Two checks,
+% because the first alone passes with a mis-ordered vector or a wrong sign.
+Y0 = dualtrack_sim(t, 0, 10, M);
+[~, d0] = dualtrack_rhs([Y0.vy(end); Y0.r(end)], [0; 10; 0], M);
+ok = chk(ok,'straight: every wheel sits at its own static camber', ...
+         max(abs(d0.camber(:) - [M.camF;M.camF;M.camR;M.camR])), 0, 1e-12);
+
+Yc = dualtrack_sim(t, 5*pi/180, 10, M);
+[~, dc] = dualtrack_rhs([Yc.vy(end); Yc.r(end)], [5*pi/180; 10; 0], M);
+depF = abs(dc.camber(1:2) - M.camF);   depR = abs(dc.camber(3:4) - M.camR);
+ok = chk(ok,'cornering: front pair departs symmetrically', diff(depF), 0, 1e-9);
+ok = chk(ok,'cornering: rear pair departs symmetrically',  diff(depR), 0, 1e-9);
+fprintf('        departure from static: front %.3f deg, rear %.3f deg\n', ...
+        depF(1)*180/pi, depR(1)*180/pi);
+
+%% 7c. Springs reach the roll stiffness, so a split changes the balance.
+% The claim this feature was sold on. It was false when roll stiffness came
+% from declared totals and a back-derived bar absorbed every spring change.
+Msplit = dualtrack_build(ifssim_params({'Susp.SpringRateFront',52000, ...
+                                        'Susp.SpringRateRear',31000}));
+fracBase  = M.KrF/(M.KrF+M.KrR);
+fracSplit = Msplit.KrF/(Msplit.KrF+Msplit.KrR);
+ok = chk(ok,'a front/rear spring split moves the roll stiffness split', ...
+         abs(fracSplit - fracBase) > 0.03, true, 0);
+fprintf('        roll stiffness front share: %.1f%% -> %.1f%%\n', ...
+        100*fracBase, 100*fracSplit);
+
 %% 8. The design model and the plant have the SAME tyre.
 % Derived here, written there, from the same parameters -- so this asserts the
 % two derivations agree rather than assuming they do. If build_tyre_paramset
