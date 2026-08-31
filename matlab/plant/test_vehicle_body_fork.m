@@ -21,7 +21,7 @@ h = 'vb_fork_harness';
 if bdIsLoaded(h), close_system(h,0); end
 new_system(h,'Model');
 set_param(h,'SolverType','Fixed-step','Solver','ode1','FixedStep','0.001', ...
-            'StartTime','0','StopTime','2.0','SaveFormat','Dataset');
+            'StartTime','0','StopTime','4.0','SaveFormat','Dataset');
 
 info = fork_vehicle_body(h, [h '/Body'], [300 100 460 300]);
 
@@ -48,8 +48,17 @@ TGT.euler = [0.10; -0.20;  1.30];
 TGT.pqr   = [0.30;  0.40; -0.50];
 TGT.vb    = [7.00; -1.50;  0.25];
 TGT.xe    = [123.0; -45.0;  6.0];
-add_block('simulink/Sources/Step',[h '/trig'],'Time','1.0','Before','0','After','1', ...
-          'Position',[60 60 130 76]);
+% A PULSE, not a step. The contract is level-held: while enable is high the
+% state must STAY at the injected pose, and when it goes low the body must
+% resume integrating. A step that stays high can only ever test half of that,
+% and an edge-triggered fork -- which is what this was first written against
+% -- passes the half it tests while being wrong.
+add_block('simulink/Sources/Pulse Generator',[h '/trig'], ...
+          ... % PulseWidth is a PERCENTAGE of the period, not seconds. Setting
+          ... % it to '2' gave a 0.2 s pulse, the body free-fell through most of
+          ... % the window, and the hold check failed for that and not the fork.
+          'PulseType','Time-based','Period','10','PulseWidth','20', ...
+          'PhaseDelay','1.0','Amplitude','1','Position',[60 60 130 76]);
 add_line(h,'trig/1','IFSSIM_SYNC_TRIG_goto/1','autorouting','on');
 src = {'IFSSIM_SYNC_EULER',TGT.euler; 'IFSSIM_SYNC_PQR',TGT.pqr
        'IFSSIM_SYNC_VB',   TGT.vb;    'IFSSIM_SYNC_XE', TGT.xe
@@ -91,12 +100,18 @@ ok = at(ok, r, 'log_pqr',   TGT.pqr,   'body rates',    tol);
 ok = at(ok, r, 'log_Vb',    TGT.vb,    'body velocity', tol);
 ok = at(ok, r, 'log_Xe',    TGT.xe,    'earth position',tol);
 
-% And it must keep integrating afterwards, not stay latched at the injected
-% value -- a reset that never releases is just as broken as one that never
-% fires, and it would pass every check above.
+% HELD while enable stays high. This is the half the edge-triggered version
+% could not test, and the half the platform actually depends on.
+held = held_during(r,'log_Xe', TGT.xe);
+fprintf('  [%s] %-24s max drift %.3e m while enable high\n', ...
+        tern(held < 1e-9,'ok  ','FAIL'), 'holds station', held);
+if held >= 1e-9, ok = false; end
+
+% RELEASES when enable goes low. A reset that never lets go is as broken as
+% one that never fires, and would pass every check above.
 moved = moved_after(r,'log_Xe');
-fprintf('  [%s] %-34s moved %.4f m in the 0.5 s after the reset\n', ...
-        tern(moved > 1e-6,'ok  ','FAIL'), 'releases and keeps integrating', moved);
+fprintf('  [%s] %-24s moved %.4f m in 0.3 s after release\n', ...
+        tern(moved > 1e-6,'ok  ','FAIL'), 'releases', moved);
 if moved <= 1e-6, ok = false; end
 
 close_system(h,0);
@@ -125,10 +140,19 @@ if ~pass
 end
 end
 
-function d = moved_after(r, nm)
+function d = held_during(r, nm, want)
+% enable is high from t = 1.0 to t = 3.0; sample well inside that window
 ts = r.get(nm); t = ts.Time; D = ts.Data;
-i = find(t >= 1.0 - 1e-12, 1, 'first');
-j = find(t >= 1.5, 1, 'first');
+k = (t >= 1.05) & (t <= 1.95);
+V = D(k,:);
+d = max(max(abs(V - want(:)')));
+end
+
+function d = moved_after(r, nm)
+% released at t = 3.0
+ts = r.get(nm); t = ts.Time; D = ts.Data;
+i = find(t >= 3.0, 1, 'first');
+j = find(t >= 3.3, 1, 'first');
 d = norm(squeeze(D(j,:)) - squeeze(D(i,:)));
 end
 

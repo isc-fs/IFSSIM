@@ -1,4 +1,4 @@
-function build_chassis(outdir)
+function build_chassis(outdir, useVDB)
 %BUILD_CHASSIS  Fill in IFSSIM_Chassis: 6-DOF rigid-body dynamics.
 %
 %   6-DOF rigid body. Everything else feeds it forces; this integrates them.
@@ -13,6 +13,7 @@ function build_chassis(outdir)
 if nargin < 1 || isempty(outdir)
     outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
 end
+if nargin < 2 || isempty(useVDB), useVDB = false; end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 
 P = ifssim_load_workspace();
@@ -57,6 +58,11 @@ add_block('simulink/Signal Routing/Bus Selector',[name '/Sync Select'], ...
           'Position',[140 y+120 150 y+230], ...
           'OutputSignals','enable,pos,quat,vel_body,omega_body');
 add_line(name,'Sync/1','Sync Select/1','autorouting','on');
+
+if useVDB
+    build_chassis_vdb(name, f, P);
+    return
+end
 
 %% ---- the update function ---------------------------------------------
 fcn = [name '/Rigid Body Update'];
@@ -308,3 +314,266 @@ c = sprintf('%s\n', ...
 "end");
 end
 
+% =========================================================================
+function build_chassis_vdb(name, f, P)
+%BUILD_CHASSIS_VDB  Step 4b: MathWorks' Vehicle Body 6DOF as the rigid body.
+%
+%   Same six inputs and the same IFSSIM_PoseBus out, so nothing downstream
+%   knows. What changes is who integrates: the forked Vehicle Body 6DOF
+%   instead of our own MATLAB Function.
+%
+%   Four things had to be measured first, and each would have failed
+%   quietly. See docs/vdb_step4b_body_semantics.md.
+%
+%   1. THE FRAME IS z-DOWN and gravity is applied INSIDE the block at a
+%      fixed 9.81. Our world is ENU with a configurable Env.gravity_z. Both
+%      are handled explicitly below; vdb_body_frame owns the conversion.
+%
+%   2. Acc.ax/ay/az IS NOT PROPER ACCELERATION and is not in m/s^2 -- it is
+%      kinematic acceleration in g. accel_proper is computed, not read.
+%
+%   3. THE BLOCK HAS ITS OWN AERODYNAMICS, Cd = 0.3 and Af = 2 by default,
+%      which would silently double our drag. Both are ZEROED here. Aero
+%      stays in IFSSIM_Aero where it is parameterised from the car and
+%      tested; the body block is a rigid body and nothing else.
+%
+%   4. ITS DEFAULTS ARE A PASSENGER CAR -- 2000 kg, Iveh diag(430,1900,2100),
+%      1.4/1.6 m axles, 1.9 m track. Every one is overwritten from car_spec
+%      below. This is the same failure the tyre paramset had, and it does
+%      not announce itself: it just understeers.
+
+set_param(name,'SolverType','Fixed-step','Solver','ode1','FixedStep','1/960');
+% ode1, NOT FixedStepDiscrete. The body block integrates continuously; a
+% discrete solver leaves its five integrators with no rate to run at.
+
+fork_vehicle_body(name, [name '/Body'], [420 60 580 260]);
+set_param([name '/Body'], ...
+    'm',    sprintf('%.10g', P.Mass), ...
+    'Iveh', sprintf('[%.10g 0 0; 0 %.10g 0; 0 0 %.10g]', ...
+                    P.Assumed.Ixx, P.Assumed.Iyy, P.Assumed.Izz), ...
+    'a',    sprintf('%.10g', P.Derived.aFront), ...
+    'b',    sprintf('%.10g', P.Derived.bRear), ...
+    'h',    sprintf('%.10g', P.CoGHeight), ...
+    'w',    sprintf('[%.10g %.10g]', P.TrackFront, P.TrackRear), ...
+    'Cd',   '0', ...        % see note 3 -- aero lives in IFSSIM_Aero
+    'Af',   '0', ...
+    'Xe_o', '[0 0 0]', 'xbdot_o','[0 0 0]', 'eul_o','[0 0 0]', 'p_o','[0 0 0]');
+
+% FSusp/MSusp stay zero: every force this chassis receives already arrives
+% summed at the body origin from tiresusp_post, so it goes in through
+% FExt/MExt as the migration plan specifies. Feeding the double-wishbone
+% block's per-wheel VehF/VehM into FSusp instead would let the BODY do the
+% moment arithmetic, which is a further step and not this one.
+for z = {'FSusp','MSusp'}
+    add_block('simulink/Sources/Constant',[name '/' z{1} '_zero'], ...
+              'Value','zeros(3,4)','Position',[330 60+40*(z{1}(1)=='M') 390 76+40*(z{1}(1)=='M')]);
+end
+add_block('simulink/Sources/Constant',[name '/Wind_zero'],'Value','[0;0;0]', ...
+          'Position',[330 150 390 166]);
+add_line(name,'FSusp_zero/1','Body/1','autorouting','on');
+add_line(name,'MSusp_zero/1','Body/2','autorouting','on');
+add_line(name,'Wind_zero/1','Body/5','autorouting','on');
+
+%% ---- inputs into the block's frame ------------------------------------
+IN = [name '/Body Inputs'];
+add_block('simulink/User-Defined Functions/MATLAB Function', IN, ...
+          'Position',[240 200 380 420]);
+S = sfroot;  ci = S.find('-isa','Stateflow.EMChart','Path',IN);
+ci.Script = body_inputs_code();
+set_chart_sizes(ci, struct('tyre_f',3,'tyre_t',3,'aero_f',3,'aero_t',3, ...
+    'gravity_z',1,'ext_force',3,'ext_torque',3, ...
+    'sync_en',1,'sync_pos',3,'sync_quat',4,'sync_velb',3,'sync_omega',3, ...
+    'FExt',3,'MExt',3,'trig',1,'ic_euler',3,'ic_pqr',3,'ic_vb',3,'ic_xe',3,'ic_acc',1));
+declare_params(ci, {'IFSSIM_Mass'});
+
+order = {'tyre_force','tyre_torque','aero_force','aero_torque'};
+for i = 1:4, add_line(name,[order{i} '/1'],sprintf('Body Inputs/%d',i),'autorouting','on'); end
+for i = 1:3, add_line(name,sprintf('Env Select/%d',i),sprintf('Body Inputs/%d',4+i),'autorouting','on'); end
+for i = 1:5, add_line(name,sprintf('Sync Select/%d',i),sprintf('Body Inputs/%d',7+i),'autorouting','on'); end
+add_line(name,'Body Inputs/1','Body/3','autorouting','on');   % FExt
+add_line(name,'Body Inputs/2','Body/4','autorouting','on');   % MExt
+gts = {'trig','IFSSIM_SYNC_TRIG'; 'ic_euler','IFSSIM_SYNC_EULER'; 'ic_pqr','IFSSIM_SYNC_PQR'
+       'ic_vb','IFSSIM_SYNC_VB'; 'ic_xe','IFSSIM_SYNC_XE'; 'ic_acc','IFSSIM_SYNC_ACC'};
+for k = 1:size(gts,1)
+    add_line(name,sprintf('Body Inputs/%d',2+k), ...
+             [matlab.lang.makeValidName(gts{k,2}) '_goto/1'],'autorouting','on');
+end
+
+%% ---- outputs back into IFSSIM_PoseBus ---------------------------------
+add_block('simulink/Signal Routing/Bus Selector',[name '/Body Info'], ...
+    'OutputSignals',['BdyFrm.Cg.AngAcc.pdot,BdyFrm.Cg.AngAcc.qdot,BdyFrm.Cg.AngAcc.rdot,' ...
+                     'BdyFrm.Cg.Acc.xddot,BdyFrm.Cg.Acc.yddot,BdyFrm.Cg.Acc.zddot'], ...
+    'Position',[620 60 630 200]);
+add_line(name,'Body/1','Body Info/1','autorouting','on');
+
+OUT = [name '/Pose Repack'];
+add_block('simulink/User-Defined Functions/MATLAB Function', OUT, ...
+          'Position',[700 60 840 360]);
+co = S.find('-isa','Stateflow.EMChart','Path',OUT);
+co.Script = pose_repack_code();
+set_chart_sizes(co, struct('Vb',3,'pqr',3,'eul',3,'Xe',3,'Ve',3, ...
+    'pdot',1,'qdot',1,'rdot',1,'xddot',1,'yddot',1,'zddot',1, ...
+    'position',3,'quat',4,'vel_world',3,'vel_body',3,'omega_body',3, ...
+    'alpha_body',3,'accel_proper',3,'attitude',3));
+
+bodyOut = {2,'Vb'; 3,'pqr'; 5,'eul'; 6,'Xe'; 7,'Ve'};
+for k = 1:size(bodyOut,1)
+    add_line(name,sprintf('Body/%d',bodyOut{k,1}),sprintf('Pose Repack/%d',k),'autorouting','on');
+end
+for k = 1:6
+    add_line(name,sprintf('Body Info/%d',k),sprintf('Pose Repack/%d',5+k),'autorouting','on');
+end
+add_block('simulink/Sinks/Terminator',[name '/DCM_unused'],'Position',[620 300 640 316]);
+add_line(name,'Body/4','DCM_unused/1','autorouting','on');
+
+add_block('simulink/Signal Routing/Bus Creator',[name '/Pose Bus'], ...
+          'Position',[880 60 890 340],'Inputs','8', ...
+          'OutDataTypeStr','Bus: IFSSIM_PoseBus','NonVirtualBus','on');
+add_block('simulink/Sinks/Out1',[name '/Pose'],'Position',[940 190 970 210], ...
+          'OutDataTypeStr','Bus: IFSSIM_PoseBus');
+for i = 1:8
+    add_line(name,sprintf('Pose Repack/%d',i),sprintf('Pose Bus/%d',i),'autorouting','on');
+end
+add_line(name,'Pose Bus/1','Pose/1','autorouting','on');
+
+save_system(name, f);
+fprintf('wrote %s  (VDB Vehicle Body 6DOF)\n', f);
+fprintf('  mass %.0f kg, inertia [%.0f %.0f %.0f] kg m^2, block aero DISABLED\n', ...
+        P.Mass, P.Assumed.Ixx, P.Assumed.Iyy, P.Assumed.Izz);
+close_system(name,0);
+end
+
+% -------------------------------------------------------------------------
+function set_chart_sizes(chart, sizes)
+d = chart.find('-isa','Stateflow.Data');
+for k = 1:numel(d)
+    if isfield(sizes, d(k).Name)
+        d(k).Props.Array.Size = num2str(sizes.(d(k).Name));
+    end
+end
+end
+
+function declare_params(chart, params)
+d = chart.find('-isa','Stateflow.Data');
+have = {d.Name};
+for k = 1:numel(params)
+    if any(strcmp(have, params{k})), continue; end
+    n = Stateflow.Data(chart);
+    n.Name = params{k};  n.Scope = 'Parameter';  n.Props.Array.Size = '1';
+end
+end
+
+% -------------------------------------------------------------------------
+function c = body_inputs_code()
+c = char(strjoin(string({
+"function [FExt, MExt, trig, ic_euler, ic_pqr, ic_vb, ic_xe, ic_acc] = ..."
+"         body_inputs(tyre_f, tyre_t, aero_f, aero_t, gravity_z, ext_force, ..."
+"                     ext_torque, sync_en, sync_pos, sync_quat, sync_velb, sync_omega)"
+"%#codegen"
+"% Everything this chassis is pushed with, gathered and put into the body"
+"% block's frame; plus the state injection, likewise converted."
+""
+"% ---- the applied wrench ----------------------------------------------"
+"% Summed in OUR frame first, because that is the frame every producer of"
+"% these signals works in, then converted once. Converting each term"
+"% separately would be four chances to get the same sign wrong."
+"F_ours = tyre_f + aero_f + ext_force;"
+"M_ours = tyre_t + aero_t + ext_torque;"
+""
+"% GRAVITY. The block applies 9.81 m/s^2 internally along its +z, which is"
+"% DOWN, and exposes no parameter for it. Env.gravity_z is ours and is"
+"% configurable, so what goes in here is only the DIFFERENCE. With the"
+"% default -9.81 this term is exactly zero and costs nothing; set lunar"
+"% gravity and the car gets lighter instead of being quietly ignored."
+"g_block = 9.81;"
+"g_extra = IFSSIM_Mass * (abs(gravity_z) - g_block);"
+""
+"FExt = [F_ours(1); -F_ours(2); -F_ours(3)] + [0; 0; g_extra];"
+"MExt = [M_ours(1); -M_ours(2); -M_ours(3)];"
+""
+"% ---- state injection --------------------------------------------------"
+"% The forked integrators reset on a RISING edge, so this passes the"
+"% platform's enable through unchanged and lets the edge do the work."
+"trig = sync_en;"
+""
+"% Quaternion -> Euler, then into the block's frame. Our quat is [w x y z],"
+"% body->world, ENU. The frames differ by 180 degrees about x, which for a"
+"% quaternion means negating the y and z parts of the vector -- and for the"
+"% Euler triple, negating pitch and yaw."
+"q = sync_quat;"
+"n = sqrt(q(1)*q(1) + q(2)*q(2) + q(3)*q(3) + q(4)*q(4));"
+"if n < 1e-9"
+"    q = [1; 0; 0; 0];"
+"else"
+"    q = q / n;"
+"end"
+"roll  = atan2(2*(q(1)*q(2) + q(3)*q(4)), 1 - 2*(q(2)*q(2) + q(3)*q(3)));"
+"sp    = 2*(q(1)*q(3) - q(4)*q(2));"
+"if sp >  1, sp =  1; end"
+"if sp < -1, sp = -1; end"
+"pitch = asin(sp);"
+"yaw   = atan2(2*(q(1)*q(4) + q(2)*q(3)), 1 - 2*(q(3)*q(3) + q(4)*q(4)));"
+"ic_euler = [roll; -pitch; -yaw];"
+""
+"ic_pqr = [sync_omega(1); -sync_omega(2); -sync_omega(3)];"
+"ic_vb  = [sync_velb(1);  -sync_velb(2);  -sync_velb(3)];"
+"ic_xe  = [sync_pos(1);   -sync_pos(2);   -sync_pos(3)];"
+""
+"% The SignalCollection accumulator is not a pose state -- it is a running"
+"% total the block keeps. Teleporting the car does not make its history"
+"% meaningful, so it is zeroed with the rest rather than left to carry"
+"% distance across a jump it never travelled."
+"ic_acc = 0;"
+"end"
+}), newline));
+end
+
+% -------------------------------------------------------------------------
+function c = pose_repack_code()
+c = char(strjoin(string({
+"function [position, quat, vel_world, vel_body, omega_body, alpha_body, ..."
+"          accel_proper, attitude] = ..."
+"         pose_repack(Vb, pqr, eul, Xe, Ve, pdot, qdot, rdot, xddot, yddot, zddot)"
+"%#codegen"
+"% The body block's outputs, back into IFSSIM_PoseBus. Frames converted by"
+"% negating y and z -- the block is x-forward/y-right/z-DOWN, ours is ENU."
+""
+"position   = [Xe(1);  -Xe(2);  -Xe(3)];"
+"vel_world  = [Ve(1);  -Ve(2);  -Ve(3)];"
+"vel_body   = [Vb(1);  -Vb(2);  -Vb(3)];"
+"omega_body = [pqr(1); -pqr(2); -pqr(3)];"
+"alpha_body = [pdot;   -qdot;   -rdot];"
+""
+"% Euler -> quaternion. Pitch and yaw are negated on the way out, the"
+"% mirror of what body_inputs does on the way in."
+"r2 = eul(1)/2;  p2 = -eul(2)/2;  y2 = -eul(3)/2;"
+"cr = cos(r2); sr = sin(r2); cp = cos(p2); sp = sin(p2); cy = cos(y2); sy = sin(y2);"
+"quat = [cr*cp*cy + sr*sp*sy;"
+"        sr*cp*cy - cr*sp*sy;"
+"        cr*sp*cy + sr*cp*sy;"
+"        cr*cp*sy - sr*sp*cy];"
+""
+"% PROPER ACCELERATION -- computed, never read off the block."
+"%"
+"% Acc.ax/ay/az looks like the field for this and is NOT: measured, it"
+"% reads 1.000 in free fall where an accelerometer reads zero, and 1.020"
+"% where xddot reads 10.000. It is KINEMATIC acceleration expressed in g."
+"% Wiring it through would publish an IMU 9.81 times too small and still"
+"% carrying gravity. This plant already has one IMU scaling bug of that"
+"% family; it does not need a second."
+"%"
+"% What an accelerometer reads is the kinematic acceleration MINUS gravity,"
+"% resolved in the body frame. In the block's z-down world gravity is"
+"% +9.81 along z, so its body-frame component is the third column of the"
+"% body->world rotation, which for the ZYX Euler set is:"
+"sp2 = sin(eul(2)); cp2 = cos(eul(2)); sr2 = sin(eul(1)); cr2 = cos(eul(1));"
+"g_body = 9.81 * [-sp2; sr2*cp2; cr2*cp2];"
+"a_blk  = [xddot; yddot; zddot] - g_body;"
+"accel_proper = [a_blk(1); -a_blk(2); -a_blk(3)];"
+""
+"% attitude is [roll, pitch, heave]. Heave is a HEIGHT, so it takes the"
+"% same z flip as position: the block counts down, we count up."
+"attitude = [eul(1); -eul(2); -Xe(3)];"
+"end"
+}), newline));
+end

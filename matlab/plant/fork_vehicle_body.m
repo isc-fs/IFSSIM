@@ -77,9 +77,22 @@ for k = 1:numel(ints)
         'Two integrators matched "%s"; the name match is not unique.', spec{row,1});
     matched(row) = true;
 
-    % External IC and a rising-edge reset. Port order then becomes
+    % External IC and a LEVEL reset. Port order then becomes
     % [1] derivative in, [2] reset, [3] initial condition.
-    set_param(p,'InitialConditionSource','external','ExternalReset','rising');
+    %
+    % LEVEL, not 'rising', and the difference is the contract. IFSSIM_Chassis
+    % overwrites its state on EVERY step for as long as sync_en > 0.5 -- the
+    % platform holds enable high while it positions the car, and expects the
+    % pose to stay put, not to be nudged once and then drift off under
+    % whatever forces happen to be applied. A rising-edge reset injects the
+    % pose and immediately lets go.
+    %
+    % This was forked as 'rising' first, and step 4a's gate passed it: that
+    % test asserted the state jumps and then keeps integrating, which is
+    % exactly what edge semantics do. It was testing the wrong contract. The
+    % A/B against the incumbent chassis in vdb_step4b_check is what caught
+    % it -- the teleported car fell 4.6 m while the real chassis held station.
+    set_param(p,'InitialConditionSource','external','ExternalReset','level');
 
     parent = get_param(p,'Parent');
     ip     = get_param(p,'Position');

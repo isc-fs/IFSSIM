@@ -274,6 +274,55 @@ per-state rather than a blanket.
 `Sync` path must still restore an arbitrary pose exactly. Do not merge this
 step without that test.
 
+### Step 4b — DONE, behind `build_chassis(outdir, useVDB)`, off by default
+
+Same six inputs, same `IFSSIM_PoseBus` out; what changes is who integrates.
+`vdb_step4b_check` drives both chassis identically:
+
+| case | \|dpos\| | \|dvel\| | \|dquat\| |
+|---|---|---|---|
+| free roll | 0 | 0 | 0 |
+| drive force +x | 0 | 0 | 0 |
+| lateral force +y | 0 | 0 | 0 |
+| yaw moment +z | 0 | 0 | 4.6e-08 |
+| combined + roll | 7.8e-04 | 3.7e-03 | 2.7e-04 |
+| teleport mid-run | 0 | 0 | 0 |
+
+Both teleport to exactly `[12, -7, 0.3]`. The ten stages pass on the default
+path (`PLANT OK`, 624 s).
+
+**Step 4a was forked against the wrong contract, and its own gate could not
+see it.** `IFSSIM_Chassis` overwrites its state on EVERY step while
+`sync_en > 0.5` -- the platform holds enable high while positioning the car.
+The fork used `ExternalReset='rising'`, which injects the pose once and
+immediately lets go. Step 4a's test asserted "jumps, then keeps integrating",
+which is exactly what edge semantics do, so it passed. **The A/B against the
+incumbent is what caught it**: the teleported car fell 4.6 m while the real
+chassis held station. The fork is now `'level'` and the 4a gate uses a pulse,
+so it tests both halves -- holds station to 0.000e+00, then releases.
+
+That is the argument for A/B-ing against the thing being replaced rather than
+against a specification: the specification is what was misread.
+
+**The one non-zero row was chased, not tolerated.** `alpha_body` agrees
+between the two to **2.2e-16** on every step, so the physics is identical,
+gyroscopic term included. What differs is how orientation is INTEGRATED: ours
+advances a quaternion by forward Euler and renormalises, the block advances
+Euler angles. Both first order, different truncation, and identical whenever
+the rotation is planar -- which is why yaw-only is exact and roll-plus-yaw is
+not. The tolerance is that truncation; the machine-precision `alpha`
+agreement is what guards the physics.
+
+**What was disabled deliberately:** the block's own aerodynamics, `Cd = 0.3`
+and `Af = 2`, which would have silently doubled our drag. Aero stays in
+`IFSSIM_Aero`, where it is parameterised from the car and tested. Its other
+passenger-car defaults -- 2000 kg, `Iveh` diag(430,1900,2100), 1.9 m track --
+are all overwritten from `car_spec`.
+
+**Still open:** the ten stages have only been run on the DEFAULT path. Running
+them with `useVDB` true needs the flag threaded through `ifssim_plant_build`,
+and that is what gates actually switching the default over.
+
 **Step 5 — FMU export and the engine** (after step 3, not step 4). Re-export, re-run the importer gates,
 and A/B the shadow FMU against Chaos with `tools/fmu/ab_plant.py`.
 
