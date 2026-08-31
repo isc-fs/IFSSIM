@@ -56,10 +56,52 @@ is identically zero however the wheel moves — an ideal suspension keeps the
 tyre upright. Anyone wiring this block up and seeing no camber has hit that
 switch, not a broken model.
 
-**Open**: at `WhlPz = 0` camber reads +0.158°, not the −1.5° the `Camber` mask
-parameter was set to. The rate is confirmed; the static offset is not yet
-explained and needs one more calibration before step 2 can claim to reproduce
-our camber curve.
+### The camber offset — resolved
+
+`Camber` **is** in radians, and the block reports camber in the OPPOSITE sign
+to the mask: a mask of −1.5° comes out as **+1.5°** on wheel 1, mirrored left
+to right. With `CamberHslp = 0` the output at `WhlPz = 0` is exactly +1.5000°.
+
+The residual offset comes from the gain being applied about an internal
+reference, not about `WhlPz = 0`. It moves linearly with `CamberHslp`:
+
+| `CamberHslp` | camber at `WhlPz = 0` [deg] |
+|---|---|
+| 0.00 | +1.5000 |
+| −0.20 | +1.1646 |
+| −0.40 | +0.8292 |
+| −0.80 | +0.1583 |
+| −1.00 | −0.1771 |
+
+1.677° per unit of `CamberHslp`, dead linear, which puts the internal
+reference **29.3 mm** from `WhlPz = 0`. So the full relationship is affine:
+
+```
+camber_out(WhlPz)  =  -Camber  +  CamberHslp * (WhlPz + 0.02927)
+```
+
+Affine means invertible: pick the static camber and the rate you want, solve
+for the two mask values. No fitting, no iteration.
+
+### Our camber gain is not the block's camber gain
+
+They are different parameterisations and must be converted, not copied.
+`Susp.CamberGainFront` is DIMENSIONLESS — the fraction of body roll the
+geometry takes back out of the tyre. `CamberHslp` is **radians of camber per
+metre of wheel travel**. For roll `phi`, the outer wheel travels `(t/2)*phi`,
+so:
+
+```
+CamberHslp = 2 * CamberGain / track
+```
+
+Our front gain of 0.80 on a 1.200 m track is `CamberHslp = 1.333 rad/m`.
+Copying 0.80 straight across would give a car with 60% of the camber recovery
+it was asked for, and nothing would flag it.
+
+**Also settled:** `VehP` z does not affect camber — held at 0, ±0.1 m, the
+output never moved. So `VehP` is not the ride-height reference the gain is
+applied about.
 
 ## The block does NOT clamp `Fz` at zero — this changes step 2
 
