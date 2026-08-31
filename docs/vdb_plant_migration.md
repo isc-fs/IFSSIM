@@ -455,6 +455,48 @@ balance, it is not a replacement for what is here.
 **Step 5 — FMU export and the engine** (after step 3, not step 4). Re-export, re-run the importer gates,
 and A/B the shadow FMU against Chaos with `tools/fmu/ab_plant.py`.
 
+### Step 5a — re-exported, all required gates pass
+
+The checked-in FMU was from before steps 2, 3, 4a and 4b. Re-exported from the
+default plant and put through `tools/fmu/inspect_fmu.py`:
+
+```
+FMI 3.0, Simulink R2025b, binaries ['aarch64-darwin'], sourceCode present
+internal step 0.001041666666666667, event mode true
+variables: 22 input, 22 output, 57 parameter
+  [PASS] Co-Simulation present
+  [PASS] canGetAndSetFMUState
+  [PASS] internal step divides 1/60   -- 16.000000 substeps
+  [PASS] binary for this host (Darwin/arm64)
+  [WARN] multi-instance declared
+```
+
+The WARN is pre-existing and honest: Simulink declares the FMU
+single-instance-per-process because its generated code is non-reentrant. The
+inspector's own note is the right one -- that is fine for IFSSIM **only if**
+sequential reload works, and that has to be PROVEN with
+instantiate/free/instantiate rather than assumed or waved away by overriding
+the flag. It has not been proven here.
+
+### Step 5b — BLOCKED on a simulator run, and deliberately not started
+
+`ab_plant.py` computes nothing itself. It parses the `FSDS Plant shadow:`
+lines the UE pawn emits once a second into
+
+```
+~/Library/Logs/Unreal Engine/IFSSIMEditor/IFSSIM.log
+```
+
+That file does not exist, and there is no fixture standing in for it. The A/B
+therefore needs a Play session in UE with the shadow FMU loaded, which is the
+operator's to start, not this work's.
+
+Worth keeping the tool's own framing when it does run: divergence there is
+**not a defect count**. The FMU reproduces the `settings.json` car; Chaos has
+three arcade assists, a snap-to-ground wheel model and a hidden aero model.
+The Chaos trace is a reference trajectory, not a target. The question it
+answers is whether the two are in the same regime and where they part company.
+
 ## 5. Where this can go wrong
 
 - ~~**State reset (step 4).**~~ **RESOLVED, see §3b.** The block's states
