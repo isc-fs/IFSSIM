@@ -88,10 +88,11 @@ set_sizes(cpre, struct( ...
   'pos',3,'quat',4,'velb',3,'omegab',3, ...
   'steer_in',4,'drive_t',4,'brake_t',4,'w_fb',4, ...
   'Fz',4,'Vxw',4,'Vyw',4,'AxlTrq',4,'steer_o',4, ...
-  'susp_travel',4,'in_contact',4,'muScale',[27 4]));
+  'susp_travel',4,'in_contact',4,'muScale',[27 4],'camber',4));
 add_params(cpre, {'IFSSIM_arbF','IFSSIM_arbR', ...
                   'IFSSIM_Ts','IFSSIM_Iw','IFSSIM_wreg','IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR','IFSSIM_Rw', ...
-                  'IFSSIM_kw','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
+                  'IFSSIM_kwF','IFSSIM_kwR','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
+                  'IFSSIM_camF','IFSSIM_camR','IFSSIM_cgainF','IFSSIM_cgainR', ...
                   'IFSSIM_mu','IFSSIM_Crr'});
 
 %% ---- the tyre ---------------------------------------------------------
@@ -136,7 +137,10 @@ nset = configure_tyre_block(ty, TP);
 % because the suspension model has no camber DOF; YawRate feeds turn-slip,
 % which needs a steer RATE we do not currently produce; Gnd is inert with the
 % vertical model off; pressure is set equal to nominal so its ratio is 1.
-konst = {'Camber','0'; 'YawRate','0'; 'Prs','IFSSIM_Ppres'; 'Gnd','0'};
+% Camber is no longer a constant: the suspension computes it. YawRate feeds
+% turn-slip, which needs a steer RATE we do not produce; Gnd is inert with
+% the vertical model off; pressure equals nominal so its ratio is 1.
+konst = {'YawRate','0'; 'Prs','IFSSIM_Ppres'; 'Gnd','0'};
 yk = 340;
 for i = 1:size(konst,1)
     add_block('simulink/Sources/Constant',[name '/' konst{i,1}], ...
@@ -216,7 +220,7 @@ add_line(name,'wheel omega (delay)/1',sprintf('%s/%d',PRE,nRoad+nPose+4),'autoro
 % block itself, because switching the brake model off deletes a port and
 % renumbers everything after it.
 pOut = struct('Fz',1,'Vxw',2,'Vyw',3,'AxlTrq',4,'steer_o',5, ...
-              'susp_travel',6,'in_contact',7,'muScale',8);
+              'susp_travel',6,'in_contact',7,'muScale',8,'camber',9);
 % NOTE THE ORDER: this block puts Fext at 7 and Gnd at 8, which is the
 % OPPOSITE of the Fiala block that used to sit here. Read off the block, not
 % carried over -- swapping those two silently feeds ground height in as
@@ -224,7 +228,7 @@ pOut = struct('Fz',1,'Vxw',2,'Vyw',3,'AxlTrq',4,'steer_o',5, ...
 add_line(name,sprintf('%s/%d',PRE,pOut.AxlTrq), [TY '/1'],'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Vxw),    [TY '/2'],'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Vyw),    [TY '/3'],'autorouting','on');
-add_line(name,'Camber/1',                       [TY '/4'],'autorouting','on');
+add_line(name,sprintf('%s/%d',PRE,pOut.camber), [TY '/4'],'autorouting','on');
 add_line(name,'YawRate/1',                      [TY '/5'],'autorouting','on');
 add_line(name,'Prs/1',                          [TY '/6'],'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Fz),     [TY '/7'],'autorouting','on');   % Fext
@@ -264,7 +268,8 @@ add_line(name,[TY '/8'],'Mz/1','autorouting','on');
 save_system(name,f);
 fprintf('wrote %s\n',f);
 fprintf('  MF 6.2 tyre: %d coefficients written, mu %.2f, Ca %.0f N/rad, Fz0 %.0f N\n', ...
-        nset, TP.PDY1, -TP.PKY1*TP.FNOMIN, TP.FNOMIN);
+        nset, TP.PDY1, ...
+        -TP.PKY1*TP.FNOMIN*sin(TP.PKY4*atan(1/TP.PKY2)), TP.FNOMIN);
 fprintf('  suspension: wheel rate %.0f N/m, damping %.0f N.s/m\n', ...
         P.Derived.WheelRateEach, P.Derived.SuspensionDampingCoeff);
 close_system(name,0);
@@ -292,7 +297,7 @@ end
 %% =======================================================================
 function c = pre_code()
 L = {
-"function [Fz, Vxw, Vyw, AxlTrq, steer_o, susp_travel, in_contact, muScale] = ..."
+"function [Fz, Vxw, Vyw, AxlTrq, steer_o, susp_travel, in_contact, muScale, camber] = ..."
 "         tiresusp_pre(road_valid, road_h, road_mu, road_res, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_fb)"
 "%#codegen"
 "% Suspension load and contact-patch kinematics for four corners, plus the"
@@ -316,6 +321,7 @@ L = {
 ""
 "Fz      = zeros(4,1);  Vxw     = zeros(4,1);  Vyw        = zeros(4,1);"
 "AxlTrq  = zeros(4,1);  steer_o = zeros(4,1);  susp_travel= zeros(4,1);"
+"camber  = zeros(4,1);"
 "in_contact = zeros(4,1);  muScale = ones(27,4);"
 ""
 "% ---- suspension deflection, all four corners at once ----------------"
@@ -353,12 +359,34 @@ L = {
 "arbR = IFSSIM_arbR * (delta(3) - delta(4)) / (IFSSIM_tR*IFSSIM_tR);"
 "arb  = [arbF; -arbF; arbR; -arbR];"
 ""
+"% ---- camber -----------------------------------------------------------"
+"% Inclination each tyre sees: its static setting, plus the share of body roll"
+"% the geometry does NOT take back out. Camber gain 1.0 keeps the wheel"
+"% upright through the corner; a real double wishbone falls short of that."
+"%"
+"% Roll comes from the quaternion the chassis already integrates, so this is"
+"% the roll the car ACTUALLY has -- not the algebraic estimate the design"
+"% model has to make. That is the one place the plant is now ahead of it."
+"%"
+"% It is wired to the tyre block's Camber input, which this model used to hold"
+"% at a constant zero. The tyre does not yet RESPOND to it: the camber"
+"% coefficients in the Magic Formula set are zeroed, because nobody has put"
+"% this tyre on a rig and inventing PDY3 would be inventing grip. The"
+"% kinematics are real and arrive at the tyre; the tyre's answer to them is"
+"% the part still waiting on data."
+"rollAng = atan2(2*(q(1)*q(2) + q(3)*q(4)), 1 - 2*(q(2)*q(2) + q(3)*q(3)));"
+"sgnOut  = [-1; 1; -1; 1];"
+"camber  = [IFSSIM_camF; IFSSIM_camF; IFSSIM_camR; IFSSIM_camR] + ..."
+"          sgnOut .* (1 - [IFSSIM_cgainF; IFSSIM_cgainF; IFSSIM_cgainR; IFSSIM_cgainR]) ..."
+"          * abs(rollAng) * sign(rollAng + eps);"
+""
 "for i = 1:4"
 "    r_b = [rx(i); ry(i); 0];"
 "    r_w = R * r_b;"
 "    p_w = pos + r_w;                      % corner position, world"
 ""
-"    Fz_i = Fz_static(i) + IFSSIM_kw * delta(i) + IFSSIM_cw * ddelta(i) + arb(i);"
+"    kw_i = IFSSIM_kwF; if i > 2, kw_i = IFSSIM_kwR; end"
+"    Fz_i = Fz_static(i) + kw_i * delta(i) + IFSSIM_cw * ddelta(i) + arb(i);"
 ""
 "    % A tyre cannot pull the road. Clamping here is what lets a wheel lift"
 "    % in a corner instead of generating negative grip."
