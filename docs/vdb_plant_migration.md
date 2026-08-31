@@ -100,7 +100,42 @@ means owning a modified copy of a MathWorks block, re-applying the
 modification at every MATLAB upgrade, and routing reset and IC signals down
 through several levels of nested subsystem.
 
-### The conclusion: take the suspension, keep the chassis
+### FORK PROBE — the chassis is takeable after all
+
+Decision taken to adopt the body block too, so the fork was tested rather than
+argued about. It works, and it is cheaper than the paragraph above implies:
+
+```
+  broke 1 nested library link
+  phi/theta/psi    now has 3 input ports (was 1)
+  p,q,r            now has 3 input ports (was 1)
+  ub,vb,wb         now has 3 input ports (was 1)
+  xe,ye,ze         now has 3 input ports (was 1)
+  Integrator       now has 3 input ports (was 1)
+  5/5 integrators now take an external IC and reset
+  COMPILES with the modified integrators
+```
+
+One link break, five integrators, and the block still compiles. The remaining
+work is routing the reset trigger and the four IC values from the block
+boundary down to depth 3-7 — bounded engineering, now proven possible.
+
+**And the maintenance objection mostly dissolves, because this plant is
+GENERATED.** Every `.slx` here is written by a `build_*.m` script, so the fork
+is not a modified block checked into the repo — it is a scripted
+transformation applied at build time, exactly as the probe applied it. It
+re-applies itself on every build. If a MATLAB upgrade moves the internals, the
+build FAILS LOUDLY at the `find_system` that no longer finds five integrators,
+rather than silently drifting. That is a better failure mode than a
+hand-maintained fork, and it is the argument that makes taking the chassis
+reasonable.
+
+What it still costs: the transformation is coupled to MathWorks' internal
+block structure, which is not a supported interface and can change without
+notice. Budget for it breaking at some upgrade, and keep the guard sharp
+enough that it breaks the build rather than the car.
+
+### Superseded: the earlier recommendation to keep our chassis
 
 The value of this migration — roll-centre migration, caster, scrub, anti-dive
 and anti-squat, a camber curve that is a curve — is **entirely in the
@@ -113,9 +148,9 @@ And the interfaces already line up: the DW block outputs `VehF` and `VehM`,
 takes today as `tyre_force` and `tyre_torque`. Steps 1-3 drop in against an
 unchanged chassis.
 
-**So: do steps 1, 2 and 3. Do not do step 4 or 5.** Revisit only if something
-later needs the VDB body specifically, and price the fork honestly when it
-does.
+~~**So: do steps 1, 2 and 3. Do not do step 4 or 5.**~~ Superseded by the fork
+probe above: all five steps are in. Step 4 gains a preliminary — build and
+verify the state-injection fork before wiring the body block into the plant.
 
 ## 4. Order of work, with a gate on each step
 
@@ -144,12 +179,14 @@ way the plant already breaks the wheel-speed loop, with one step of delay, and
 say so in the code. Gate: the ten stages, and the camber curve compared
 against `matlab/vd`'s.
 
-**Step 4 — NOT TO BE DONE.** See §3b: `Vehicle Body 6DOF` cannot take an
-arbitrary state injection, our chassis already does the same job, and this is
-the only step that risks the reset contract. Retained here only so the reason
-is on the record.
+**Step 4a — the state-injection fork, standalone.** A `fork_vehicle_body.m`
+that takes the library block, breaks the link, gives the five integrators an
+external IC and reset, and routes those to the subsystem boundary. Gate: a
+test that runs the forked body, injects an arbitrary pose mid-run, and asserts
+the state jumps to it exactly — the same contract `IFSSIM_Chassis` honours
+today. Do not proceed to 4b until that test is green.
 
-~~**Step 4 — `Vehicle Body 6DOF` replacing `IFSSIM_Chassis`.**~~ Repack
+**Step 4b — `Vehicle Body 6DOF` replacing `IFSSIM_Chassis`.** Repack
 `Vb/pqr/DCM/Euler/Xe/Ve` into `IFSSIM_PoseBus`. Route aero and `Env` into
 `FExt`/`MExt`. Gate: the ten stages **and a state-reset test** — the FMU's
 `Sync` path must still restore an arbitrary pose exactly. Do not merge this
