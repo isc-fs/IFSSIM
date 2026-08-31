@@ -113,6 +113,18 @@ C = par(C,'Susp.SpringRateRear',  41192.0,'N/m','DERIVED as front.');
 % front/rear spring split changed nothing the model computed.
 C = par(C,'Susp.ArbRateFront', 12467.0,'N*m/rad','DERIVED to reproduce the previously declared 27000 axle total at the current springs. Replace with the bar actually fitted.');
 C = par(C,'Susp.ArbRateRear',   7467.0,'N*m/rad','DERIVED as front, against 22000.');
+% Arm radius of the anti-roll bar: the lever from the bar's axis to the drop
+% link. It is only used by the VDB double-wishbone suspension, which models
+% the bar as a torsion spring on an arm rather than as a roll rate, so the
+% conversion needs a length: AntiSwayTrsK = ArbRate * R^2 / track^2.
+%
+% It is NOT a fitting constant. Because the arm sweeps, the bar softens as it
+% works -- measurably, by a factor that depends only on travel/R: about 2% at
+% the 31 mm of travel 3 deg of body roll produces on a 0.2 m arm. A shorter
+% arm is a more progressive bar, and that is real behaviour, so this number
+% has to come off the car rather than be chosen to make an A/B match.
+C = par(C,'Susp.ArbArmRadiusFront', 0.20,'m','ASSUMED typical FS anti-roll bar arm. MEASURE IT: it sets how progressive the bar is, not just its rate.');
+C = par(C,'Susp.ArbArmRadiusRear',  0.20,'m','ASSUMED as front.');
 
 % Camber. Static is what the car sits at; gain is how much the OUTER wheel
 % recovers per degree of body roll -- a gain of 1.0 exactly cancels roll and

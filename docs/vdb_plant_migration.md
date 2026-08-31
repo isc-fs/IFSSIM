@@ -173,6 +173,52 @@ Feed `VehF`/`VehM` into the existing `tyre_force`/`tyre_torque` outputs. The
 suspension changes; nothing downstream knows. Gate: the ten stages, plus A/B
 divergence in static loads, roll, and load transfer within a stated tolerance.
 
+### Step 2 — DONE, and the gate as written would have passed a severed wire
+
+Built behind `build_tiresuspension(outdir, overrides, useVDB)`, default off.
+The block takes `WhlPz = -delta` and `WhlVz = -ddelta` from our existing
+suspension pass; `WhlAng` row 1 replaces the closed-form camber into the
+tyre's `Camber` port. Its own `WhlF` is computed and terminated — taking it
+is step 3, and it still needs the `max(Fz, 0)` clamp step 1 found.
+
+**No algebraic loop**, and that was measured rather than assumed: a 1000 N
+`WhlFy` moved only `VehF`'s y row and reached neither `WhlF` nor `WhlAng`. No
+delay is needed here. Step 3 will need one; step 2 does not.
+
+Three things this step actually turned up, none of them anticipated:
+
+1. **The gate above is not a gate.** "A/B divergence in static loads, roll and
+   load transfer" cannot see camber at all — the Magic Formula camber terms are
+   zeroed for want of rig data, so camber changes no force by construction. The
+   first version of `vdb_step2_check` compared the wrench, reported exact
+   agreement on all six manoeuvres, and **passed a mutant** with the static
+   camber shifted 0.5° and the slope shifted 0.5 rad/m. The check now compares
+   the camber signal at the tyre input, logged by name at build time, and the
+   mutants are caught. A wrench comparison would never have caught any of them.
+
+2. **Both formulations had the mirroring inverted**, in opposite ways. In the
+   ISO tyre axis system y points left on *both* wheels, so static camber —
+   symmetric in space, tops leaning toward each other — reads with **opposite**
+   signs left to right, while body roll — the same tilt direction in space —
+   reads with the **same** sign and must stay outside the mirror. The closed
+   form did exactly the reverse of both. It changed no force, for the same
+   reason as above, and it would have changed every one of them the day rig
+   data arrives.
+
+3. **The step 1 camber formula was wrong in the sign and in the datum**, and
+   its own table said so. Corrected in `docs/vdb_step1_port_semantics.md`.
+
+The two now agree to **5.5e-4 deg** through roll, which is the small-angle
+residual and nothing else: the closed form is linear in roll, the block works
+off travel proportional to `sin(roll)`. Under heave they diverge on purpose —
+the block produces camber where the closed form has no term at all. That is
+the capability being bought, so `vdb_step2_check` reports its size rather than
+asserting on it.
+
+**Still unpinned:** the overall sign of gamma. Nothing in this plant can settle
+it while the camber coefficients are zero — there is no observable to check it
+against. It wants rig data, not an argument.
+
 **Step 3 — close the tyre loop.** `WhlF`→tyre `Fext`, `WhlAng`→tyre `Camber`,
 tyre `Fx`/`Fy`→`WhlFx`/`WhlFy`. This creates an algebraic loop; break it the
 way the plant already breaks the wheel-speed loop, with one step of delay, and

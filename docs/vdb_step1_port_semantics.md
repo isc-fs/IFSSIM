@@ -3,6 +3,28 @@
 Measured against the installed block, not read from documentation. Every
 number below was produced by sweeping an input and reading an output.
 
+## The port map — get this wrong and everything downstream is fiction
+
+Read off the Inport/Outport blocks inside the mask, not guessed:
+
+| # | Input | # | Output |
+|---|---|---|---|
+| 1 | `WhlPz` | 1 | `Info` (bus) |
+| 2 | `WhlRe` | 2 | `VehF` |
+| 3 | `WhlVz` | 3 | `VehM` |
+| 4 | `WhlFx` | 4 | `WhlF` |
+| 5 | `WhlFy` | 5 | `WhlV` |
+| 6 | `WhlM` | 6 | `WhlAng` |
+| 7 | `VehP` | | |
+| 8 | `VehV` | | |
+| 9 | `StrgAng` | | |
+
+**Output 1 is a bus, not `WhlF`.** It carries `Camber`, `Caster`, `Toe`,
+`Height`, `Power`, `Energy`, `dWhlX`, `dWhlY`, `VehF`, `VehM`, `WhlF`, `WhlV`,
+`WhlAng` — everything, in one signal. Wiring it somewhere expecting a force
+gives an "Unrecognized field name" at log time if you are lucky, and a bus
+where a 3×4 belongs if you are not. `WhlF` on its own is **output 4**.
+
 ## `WhlPz` — wheel vertical displacement, z-DOWN, zero at static
 
 ```
@@ -74,14 +96,33 @@ reference, not about `WhlPz = 0`. It moves linearly with `CamberHslp`:
 | −1.00 | −0.1771 |
 
 1.677° per unit of `CamberHslp`, dead linear, which puts the internal
-reference **29.3 mm** from `WhlPz = 0`. So the full relationship is affine:
+reference **29.3 mm** from `WhlPz = 0`.
 
-```
-camber_out(WhlPz)  =  -Camber  +  CamberHslp * (WhlPz + 0.02927)
-```
+> **Corrected in step 2, on two counts.** The formula first written here was
+>
+> ```
+> camber_out(WhlPz)  =  -Camber  +  CamberHslp * (WhlPz + 0.02927)
+> ```
+>
+> which contradicts the table directly above it: with `CamberHslp = -0.80` the
+> table's slope is **+0.80 rad/m**, not −0.80. And 29.3 mm is not a constant of
+> the block — it is `F0z/Kz`, this axle's static deflection, which is 0.0292 m
+> at the front but **0.0376 m at the rear**. A single shared value is wrong at
+> one end of the car by 0.5° of camber.
+>
+> The relationship, re-measured one wheel at a time and fitted across all four
+> (`sigma = [+1 -1 +1 -1]`):
+>
+> ```
+> gamma_i = sigma_i * [ -Camber + CamberHslp * (F0z/Kz - WhlPz_i) ]
+> ```
+>
+> This reproduces every row of every table on this page, and the map is
+> **diagonal** — moving one wheel changes only that wheel's camber. It looks
+> coupled at first glance only because the other three sit at a non-zero datum.
 
 Affine means invertible: pick the static camber and the rate you want, solve
-for the two mask values. No fitting, no iteration.
+for the two mask values. No fitting, no iteration. `vdb_camber_mask` does it.
 
 ### Our camber gain is not the block's camber gain
 
@@ -92,10 +133,20 @@ metre of wheel travel**. For roll `phi`, the outer wheel travels `(t/2)*phi`,
 so:
 
 ```
-CamberHslp = 2 * CamberGain / track
+CamberHslp = -2 * (1 - CamberGain) / track
 ```
 
-Our front gain of 0.80 on a 1.200 m track is `CamberHslp = 1.333 rad/m`.
+> **Also corrected in step 2.** This was first written as
+> `CamberHslp = 2 * CamberGain / track`, which is wrong in the sign and in the
+> factor, and it produced 2.4° of camber at 3° of roll where 0.6° was wanted.
+>
+> Two things drive the corrected form. Body roll reaches the block **through
+> the travel** — a roll `phi` puts `-(t/2)*phi` into `WhlPz` — so the block's
+> output is already road-relative and no separate roll term is added. And what
+> should be left standing after the geometry does its work is the part it does
+> **not** recover, `(1 - gain) * phi`, not the part it does.
+
+Our front gain of 0.80 on a 1.200 m track is `CamberHslp = -0.333 rad/m`.
 Copying 0.80 straight across would give a car with 60% of the camber recovery
 it was asked for, and nothing would flag it.
 
@@ -170,3 +221,39 @@ the right answer. `VehV` was held at zero throughout and never moved anything.
 | `WhlF` | → `max(Fz, 0)` → tyre `Fext`. The clamp is not optional |
 | `WhlAng(1,:)` | → tyre `Camber` |
 | `VehF`, `VehM` | per-wheel; keep `tiresusp_post` for the wrench |
+
+## The anti-roll bar — the block has one, and it is not our parameterisation
+
+`AntiSwayEnByAxl`, `AntiSwayR` (arm radius, m), `AntiSwayTrsK` (torsional
+stiffness, N·m/rad), `AntiSwayNtrlAng`. This matters for step 3: taking the
+block's `WhlF` without enabling it would silently delete our roll stiffness
+contribution and quietly rebalance the car.
+
+Measured, sweeping `K`, `R` and travel:
+
+```
+dFz_1  =  -(K / R^2) * (WhlPz_1 - WhlPz_2) * k(dz/R)
+```
+
+which lines up with our own `Karb * (delta_1 - delta_2) / t^2` — same sign,
+once you account for `WhlPz = -delta` — under
+
+```
+AntiSwayTrsK = Karb * R^2 / t^2      (for k -> 1)
+```
+
+`k` is a pure function of `dz/R`, and it is the arm geometry, not an error:
+
+| `dz/R` | 0.005 | 0.01 | 0.1 | 0.2 | 0.4 | 0.8 |
+|---|---|---|---|---|---|---|
+| `k` | 1.0000 | 0.9999 | 0.9917 | 0.9678 | 0.8832 | 0.6586 |
+
+So the block's bar **softens as it works**, where ours is dead linear. At a
+realistic 0.2 m arm and the 31 mm of travel that 3° of body roll produces,
+`dz/R = 0.16` and `k ≈ 0.98` — a 2% cut in the ARB term, about 0.9% of front
+roll stiffness. Small, real, and a behaviour change that has to be reported
+rather than absorbed silently, because roll stiffness sets the balance.
+
+**`AntiSwayR` is therefore a real vehicle parameter, not a fitting constant.**
+It belongs in `car_spec` with a source string like everything else, and it
+cannot be set to whatever makes the numbers match.

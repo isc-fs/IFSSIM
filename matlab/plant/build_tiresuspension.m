@@ -1,4 +1,8 @@
-function build_tiresuspension(outdir, overrides)
+function build_tiresuspension(outdir, overrides, useVDB)
+%   useVDB = true puts VDB's Independent Suspension - Double Wishbone into the
+%   model to produce the wheel kinematics, driven by our own suspension
+%   deflection. Step 2 of docs/vdb_plant_migration.md. Default false, so the
+%   shipped plant is untouched until the variant has been A/B'd against it.
 %BUILD_TIRESUSPENSION  Fill in IFSSIM_TireSuspension.
 %
 %   Every force that steers, accelerates or stops the car is generated here.
@@ -35,6 +39,7 @@ if nargin < 1 || isempty(outdir)
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 if nargin < 2, overrides = struct(); end
+if nargin < 3, useVDB = false; end
 P = ifssim_load_workspace(overrides);
 
 name = 'IFSSIM_TireSuspension';
@@ -88,7 +93,8 @@ set_sizes(cpre, struct( ...
   'pos',3,'quat',4,'velb',3,'omegab',3, ...
   'steer_in',4,'drive_t',4,'brake_t',4,'w_fb',4, ...
   'Fz',4,'Vxw',4,'Vyw',4,'AxlTrq',4,'steer_o',4, ...
-  'susp_travel',4,'in_contact',4,'muScale',[27 4],'camber',4));
+  'susp_travel',4,'in_contact',4,'muScale',[27 4],'camber',4, ...
+  'WhlPz',4,'WhlVz',4));
 add_params(cpre, {'IFSSIM_arbF','IFSSIM_arbR', ...
                   'IFSSIM_Ts','IFSSIM_Iw','IFSSIM_wreg','IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR','IFSSIM_Rw', ...
                   'IFSSIM_kwF','IFSSIM_kwR','IFSSIM_cw','IFSSIM_L0','IFSSIM_FzF','IFSSIM_FzR', ...
@@ -220,7 +226,8 @@ add_line(name,'wheel omega (delay)/1',sprintf('%s/%d',PRE,nRoad+nPose+4),'autoro
 % block itself, because switching the brake model off deletes a port and
 % renumbers everything after it.
 pOut = struct('Fz',1,'Vxw',2,'Vyw',3,'AxlTrq',4,'steer_o',5, ...
-              'susp_travel',6,'in_contact',7,'muScale',8,'camber',9);
+              'susp_travel',6,'in_contact',7,'muScale',8,'camber',9, ...
+              'WhlPz',10,'WhlVz',11);
 % NOTE THE ORDER: this block puts Fext at 7 and Gnd at 8, which is the
 % OPPOSITE of the Fiala block that used to sit here. Read off the block, not
 % carried over -- swapping those two silently feeds ground height in as
@@ -228,10 +235,179 @@ pOut = struct('Fz',1,'Vxw',2,'Vyw',3,'AxlTrq',4,'steer_o',5, ...
 add_line(name,sprintf('%s/%d',PRE,pOut.AxlTrq), [TY '/1'],'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Vxw),    [TY '/2'],'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Vyw),    [TY '/3'],'autorouting','on');
-add_line(name,sprintf('%s/%d',PRE,pOut.camber), [TY '/4'],'autorouting','on');
+if ~useVDB
+    add_line(name,sprintf('%s/%d',PRE,pOut.camber), [TY '/4'],'autorouting','on');
+    tag_camber_probe(name, TY);
+
+    % WhlPz and WhlVz exist for the VDB suspension block and nothing else, so
+    % in this configuration they are computed and go nowhere. They still have
+    % to be TERMINATED rather than left dangling: verify_plant_skeleton checks
+    % connectivity separately from compilation, precisely because a model with
+    % loose ports compiles perfectly well and is still wrong. Leaving them
+    % unconnected is what made the plant check fail, and the check was right.
+    for z = {'WhlPz','WhlVz'}
+        yy = 640 + 30*(strcmp(z{1},'WhlVz'));
+        add_block('simulink/Sinks/Terminator',[name '/unused_' z{1}], ...
+                  'Position',[470 yy 490 yy+16]);
+        add_line(name,sprintf('%s/%d',PRE,pOut.(z{1})),['unused_' z{1} '/1'], ...
+                 'autorouting','on');
+    end
+else
+    % ---- VDB Independent Suspension - Double Wishbone --------------------
+    % Step 2 of docs/vdb_plant_migration.md. It produces the wheel KINEMATICS
+    % -- camber here, and caster, toe and roll-centre migration once they are
+    % wired -- driven by the deflection our own suspension pass already
+    % computes. Its force output is NOT taken -- it is terminated below. The
+    % load path stays where the tests point until step 3 moves it, and moving
+    % it needs a max(Fz,0) clamp the block does not do.
+    %
+    % Steering is not fed either (StrgAng held at zero), so the steer-coupled
+    % slopes are all set to zero to match. Wiring real steer angle in is what
+    % turns on bump steer and caster change; it is not part of step 2.
+    %
+    % NO ALGEBRAIC LOOP, and that was measured rather than assumed: WhlFx and
+    % WhlFy do not reach WhlF or WhlAng at all. A 1000 N lateral force showed
+    % up only in VehF's y row and moved nothing else, so the tyre's forces do
+    % not have to come back round and no delay is needed.
+    load_system('vehdynlibsuspension');
+    DW = [name '/Suspension Kinematics'];
+    add_block('vehdynlibsuspension/Independent Suspension - Double Wishbone', ...
+              DW, 'Position',[300 470 430 610]);
+    [camF, hslpF] = vdb_camber_mask(P.Susp.StaticCamberFront, P.Susp.CamberGainFront, ...
+                        P.TrackFront, P.Derived.StaticLoadFront, P.Derived.WheelRateFront);
+    [camR, hslpR] = vdb_camber_mask(P.Susp.StaticCamberRear,  P.Susp.CamberGainRear, ...
+                        P.TrackRear,  P.Derived.StaticLoadRear,  P.Derived.WheelRateRear);
+    set_param(DW, ...
+        'NumAxl','2','NumWhlsByAxl','[2 2]','StrgEnByAxl','[1 0]', ...
+        'IdealSuspEn','off', ...      % ON zeroes every kinematics output
+        'Kz',  sprintf('[%.10g %.10g]', P.Derived.WheelRateFront, P.Derived.WheelRateRear), ...
+        'Cz',  sprintf('%.10g', P.Derived.SuspensionDampingCoeff), ...
+        'F0z', sprintf('[%.10g %.10g]', P.Derived.StaticLoadFront, P.Derived.StaticLoadRear), ...
+        'Camber',     sprintf('[%.10g %.10g]', camF, camR), ...
+        'CamberHslp', sprintf('[%.10g %.10g]', hslpF, hslpR), ...
+        'Toe','0','RollStrgSlp','0','ToeStrgSlp','0', ...
+        'Caster','0','CasterHslp','0','CasterStrgSlp','0','CamberStrgSlp','0', ...
+        ... % ---- the anti-roll bar ------------------------------------------
+        ... % Taking the block's WhlF without this would silently delete our roll
+        ... % stiffness and rebalance the car. The block models the bar as a
+        ... % torsion spring on a sweeping arm, not as a roll rate, so the
+        ... % conversion needs the arm length. Measured:
+        ... %     dFz_1 = -(K/R^2) * (WhlPz_1 - WhlPz_2) * k(dz/R)
+        ... % against our  Karb*(delta_1 - delta_2)/t^2,  so K = Karb*R^2/t^2.
+        ... %
+        ... % k is the arm sweeping and is NOT a fitting error: 0.98 at the 31 mm
+        ... % of travel 3 deg of roll gives on a 0.2 m arm, falling to 0.66 by
+        ... % dz/R = 0.8. The bar softens as it works where ours was dead linear.
+        ... % That is a real behaviour change and vdb_step3_check reports its size.
+        ... %
+        ... % NtrlAng MUST be zeroed -- it defaults to 0.5236 rad, which preloads
+        ... % the bar with 30 deg of twist it should not have.
+        'AntiSwayEnByAxl','[1 1]', ...
+        'AntiSwayNtrlAng','[0 0]', ...
+        'AntiSwayR',    sprintf('[%.10g %.10g]', P.Susp.ArbArmRadiusFront, P.Susp.ArbArmRadiusRear), ...
+        'AntiSwayTrsK', sprintf('[%.10g %.10g]', ...
+            P.Derived.ArbFront * P.Susp.ArbArmRadiusFront^2 / P.TrackFront^2, ...
+            P.Derived.ArbRear  * P.Susp.ArbArmRadiusRear^2  / P.TrackRear^2), ...
+        ... % Hmax is the block's travel limit. It defaults to 0.5 m, two
+        ... % hundred millimetres beyond anything this car does, so the block
+        ... % supplies NO bump stop at our settings. Neither did the closed form.
+        ... % Modelling one is a separate job, not a side effect of this step.
+        'Hmax','0.5');
+
+    % The inputs it does not get from us. VehP MUST be zero: fed our corner
+    % positions it turned -590.8/-758.1 N into +5464/+5297.
+    zc = {'dw_Re', sprintf('%.10g*ones(1,4)', P.WheelRadius), [150 470 210 490]
+          'dw_Fx', 'zeros(1,4)', [150 500 210 520]
+          'dw_Fy', 'zeros(1,4)', [150 530 210 550]
+          'dw_M',  'zeros(3,4)', [150 560 210 580]
+          'dw_VehP','zeros(3,4)',[150 590 210 610]
+          'dw_VehV','zeros(3,4)',[150 620 210 640]
+          'dw_Strg','zeros(1,2)',[150 650 210 670]};
+    for z = 1:size(zc,1)
+        add_block('simulink/Sources/Constant',[name '/' zc{z,1}], ...
+                  'Value',zc{z,2},'Position',zc{z,3});
+    end
+    % add_line wants names relative to the system, not full paths.
+    DWN = 'Suspension Kinematics';
+    add_line(name,sprintf('%s/%d',PRE,pOut.WhlPz), [DWN '/1'],'autorouting','on');
+    add_line(name,'dw_Re/1',                        [DWN '/2'],'autorouting','on');
+    add_line(name,sprintf('%s/%d',PRE,pOut.WhlVz), [DWN '/3'],'autorouting','on');
+    add_line(name,'dw_Fx/1',  [DWN '/4'],'autorouting','on');
+    add_line(name,'dw_Fy/1',  [DWN '/5'],'autorouting','on');
+    add_line(name,'dw_M/1',   [DWN '/6'],'autorouting','on');
+    add_line(name,'dw_VehP/1',[DWN '/7'],'autorouting','on');
+    add_line(name,'dw_VehV/1',[DWN '/8'],'autorouting','on');
+    add_line(name,'dw_Strg/1',[DWN '/9'],'autorouting','on');
+
+    % WhlAng is [3 x 4]; row 1 is camber, in radians, mirrored left to right.
+    add_block('simulink/Signal Routing/Selector',[name '/dw_camber'], ...
+              'NumberOfDimensions','2','IndexOptions','Index vector (dialog),Index vector (dialog)', ...
+              'Indices','1,[1 2 3 4]','InputPortWidth','[3 4]','Position',[470 540 510 570]);
+    add_block('simulink/Math Operations/Reshape',[name '/dw_cam4'], ...
+              'OutputDimensionality','Customize','OutputDimensions','[4 1]', ...
+              'Position',[540 540 570 570]);
+    add_line(name,[DWN '/6'],'dw_camber/1','autorouting','on');
+    add_line(name,'dw_camber/1','dw_cam4/1','autorouting','on');
+    add_line(name,'dw_cam4/1',  [TY '/4'],'autorouting','on');
+    tag_camber_probe(name, TY);
+
+    % ---- step 3: the block's WhlF becomes the tyre's vertical load --------
+    % WhlF is [3 x 4] on output 4; row 3 is vertical, positive up.
+    %
+    % Two things the block does not do and must be done here:
+    %
+    %   CLAMP. It returns -3446 N at 0.20 m of droop -- a tyre pulling the car
+    %   down onto the road. A suspension model with no ground contact in it
+    %   cannot know the wheel has left the road, so this is a wiring
+    %   requirement, not a defect in the block.
+    %
+    %   CONTACT. Whether there is ground under the wheel at all is ours: it
+    %   needs road validity and the platform's plane-fit residual, neither of
+    %   which the block can see. in_contact already carries that, and it also
+    %   folds in our own Fz > 0 test -- so at the margin the gate is decided by
+    %   our force and the magnitude by the block's. They can only disagree
+    %   where both are within the ARB nonlinearity of zero, and the clamp
+    %   covers that.
+    add_block('simulink/Signal Routing/Selector',[name '/dw_fz_row'], ...
+              'NumberOfDimensions','2','IndexOptions','Index vector (dialog),Index vector (dialog)', ...
+              'Indices','3,[1 2 3 4]','InputPortWidth','[3 4]','Position',[470 380 510 410]);
+    add_block('simulink/Math Operations/Reshape',[name '/dw_fz4'], ...
+              'OutputDimensionality','Customize','OutputDimensions','[4 1]', ...
+              'Position',[540 380 570 410]);
+    add_block('simulink/Discontinuities/Saturation',[name '/dw_fz_clamp'], ...
+              'UpperLimit','inf','LowerLimit','0','Position',[600 380 630 410]);
+    add_block('simulink/Math Operations/Product',[name '/dw_fz_gate'], ...
+              'Inputs','2','Multiplication','Element-wise(.*)','Position',[660 380 690 410]);
+    add_line(name,[DWN '/4'],'dw_fz_row/1','autorouting','on');
+    add_line(name,'dw_fz_row/1','dw_fz4/1','autorouting','on');
+    add_line(name,'dw_fz4/1','dw_fz_clamp/1','autorouting','on');
+    add_line(name,'dw_fz_clamp/1','dw_fz_gate/1','autorouting','on');
+    add_line(name,sprintf('%s/%d',PRE,pOut.in_contact),'dw_fz_gate/2','autorouting','on');
+    add_line(name,'dw_fz_gate/1',[TY '/7'],'autorouting','on');    % Fext
+    tag_probe(name,'dw_fz_gate',1,'fz_block');
+
+    % Our own Fz is KEPT and logged, not deleted. It is what vdb_step3_check
+    % compares the block against, in the same run rather than across two
+    % builds, and it is what in_contact is still decided on.
+    add_block('simulink/Sinks/Terminator',[name '/dw_fz_ref'],'Position',[470 330 490 346]);
+    add_line(name,sprintf('%s/%d',PRE,pOut.Fz),'dw_fz_ref/1','autorouting','on');
+    tag_probe(name,PRE,pOut.Fz,'fz_ours');
+
+    % Info, VehF, VehM and WhlV stay terminated. VehF/VehM are the block's own
+    % wrench on the body; taking those is a chassis decision, coupled to step
+    % 4, and feeding tyre Fx/Fy into WhlFx/WhlFy buys NOTHING until then --
+    % measured: they reach VehF only, never WhlF or WhlAng.
+    for z = [1 2 3 5]
+        add_block('simulink/Sinks/Terminator',[name '/dwT' num2str(z)], ...
+                  'Position',[470 460+22*z 490 476+22*z]);
+        add_line(name,sprintf('%s/%d',DWN,z),['dwT' num2str(z) '/1'],'autorouting','on');
+    end
+end
 add_line(name,'YawRate/1',                      [TY '/5'],'autorouting','on');
 add_line(name,'Prs/1',                          [TY '/6'],'autorouting','on');
-add_line(name,sprintf('%s/%d',PRE,pOut.Fz),     [TY '/7'],'autorouting','on');   % Fext
+if ~useVDB
+    add_line(name,sprintf('%s/%d',PRE,pOut.Fz), [TY '/7'],'autorouting','on');   % Fext
+end   % the VDB build drives Fext from the suspension block's own WhlF
 add_line(name,'Gnd/1',                          [TY '/8'],'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.muScale),[TY '/9'],'autorouting','on');
 
@@ -297,7 +473,7 @@ end
 %% =======================================================================
 function c = pre_code()
 L = {
-"function [Fz, Vxw, Vyw, AxlTrq, steer_o, susp_travel, in_contact, muScale, camber] = ..."
+"function [Fz, Vxw, Vyw, AxlTrq, steer_o, susp_travel, in_contact, muScale, camber, WhlPz, WhlVz] = ..."
 "         tiresusp_pre(road_valid, road_h, road_mu, road_res, pos, quat, velb, omegab, steer_in, drive_t, brake_t, w_fb)"
 "%#codegen"
 "% Suspension load and contact-patch kinematics for four corners, plus the"
@@ -322,6 +498,12 @@ L = {
 "Fz      = zeros(4,1);  Vxw     = zeros(4,1);  Vyw        = zeros(4,1);"
 "AxlTrq  = zeros(4,1);  steer_o = zeros(4,1);  susp_travel= zeros(4,1);"
 "camber  = zeros(4,1);"
+"% What the VDB suspension block wants, if it is in the model: displacement"
+"% from the static ride position in a z-DOWN frame, so positive is droop and"
+"% our compression-positive delta is its negative. Measured, see"
+"% docs/vdb_step1_port_semantics.md -- feeding it a ride height instead of a"
+"% displacement is what made the first attempt return 2568 N a wheel."
+"WhlPz   = zeros(4,1);  WhlVz = zeros(4,1);"
 "in_contact = zeros(4,1);  muScale = ones(27,4);"
 ""
 "% ---- suspension deflection, all four corners at once ----------------"
@@ -374,11 +556,31 @@ L = {
 "% this tyre on a rig and inventing PDY3 would be inventing grip. The"
 "% kinematics are real and arrive at the tyre; the tyre's answer to them is"
 "% the part still waiting on data."
+"%"
+"% The two terms mirror DIFFERENTLY, and getting that backwards is the easy"
+"% mistake. In the ISO tyre axis system y points left on BOTH wheels, so:"
+"%"
+"%   static camber is symmetric in space -- the tops lean toward each other --"
+"%   and therefore reads with OPPOSITE sign on the two sides (sgnOut);"
+"%"
+"%   roll tilts both wheels the SAME way in space, so it reads with the SAME"
+"%   sign on both, and must stay OUTSIDE the mirror."
+"%"
+"% This used to apply the static setting uniformly to all four and mirror the"
+"% roll term -- exactly inverted, on both counts. It changed no force, because"
+"% the camber coefficients are zeroed, and it would have changed every one of"
+"% them the day rig data arrives. The structure here is not argued from the"
+"% convention: it is what the VDB double-wishbone block measurably does"
+"% (see vdb_camber_mask), and the two now agree to 3e-10 deg."
+"%"
+"% The OVERALL SIGN of gamma is still unpinned. Nothing in this plant can"
+"% settle it while the Magic Formula camber terms are zero -- there is no"
+"% observable to check it against. It wants fixing against rig data, not"
+"% against an argument."
 "rollAng = atan2(2*(q(1)*q(2) + q(3)*q(4)), 1 - 2*(q(2)*q(2) + q(3)*q(3)));"
 "sgnOut  = [-1; 1; -1; 1];"
-"camber  = [IFSSIM_camF; IFSSIM_camF; IFSSIM_camR; IFSSIM_camR] + ..."
-"          sgnOut .* (1 - [IFSSIM_cgainF; IFSSIM_cgainF; IFSSIM_cgainR; IFSSIM_cgainR]) ..."
-"          * abs(rollAng) * sign(rollAng + eps);"
+"camber  = sgnOut .* [IFSSIM_camF; IFSSIM_camF; IFSSIM_camR; IFSSIM_camR] + ..."
+"          (1 - [IFSSIM_cgainF; IFSSIM_cgainF; IFSSIM_cgainR; IFSSIM_cgainR]) * rollAng;"
 ""
 "for i = 1:4"
 "    r_b = [rx(i); ry(i); 0];"
@@ -471,6 +673,7 @@ L = {
 ""
 "    Fz(i)=Fz_i; Vxw(i)=vx; Vyw(i)=vy; steer_o(i)=d;"
 "    susp_travel(i)=delta(i); in_contact(i)=double(contact);"
+"    WhlPz(i) = -delta(i);  WhlVz(i) = -ddelta(i);"
 "end"
 "end"
 ""
@@ -556,4 +759,35 @@ L = {
 "end"
 };
 c = char(strjoin(string(L), newline));
+end
+
+% -------------------------------------------------------------------------
+function tag_camber_probe(name, TY)
+%TAG_CAMBER_PROBE  Log whatever reaches the tyre's Camber input.
+%
+%   The camber coefficients in the Magic Formula set are zeroed (no rig
+%   data), so camber changes NO force -- which means no wrench comparison
+%   can tell a correct camber path from a severed one. vdb_step2_check
+%   found exactly that: it passed a mutant. The signal itself is therefore
+%   the only honest observable, so it is named and logged here.
+lh = get_param([name '/' TY],'LineHandles');
+set_param(lh.Inport(4),'Name','camber_at_tyre');
+% Logging lives on the SOURCE PORT, not on the line -- lines carry only the
+% name. Setting it on the line fails with "no parameter named DataLogging".
+set_param(get_param(lh.Inport(4),'SrcPortHandle'), ...
+          'DataLogging','on','DataLoggingNameMode','SignalName');
+set_param(name,'SignalLogging','on','SignalLoggingName','tsLog');
+end
+
+% -------------------------------------------------------------------------
+function tag_probe(name, blk, port, signame)
+%TAG_PROBE  Name and log one output port, so a check can read it by name.
+%
+%   Same reason as tag_camber_probe: the quantity being verified has to be
+%   observable. Logging both the block's force and ours in the SAME run beats
+%   comparing across two builds -- there is no second build to drift.
+ph = get_param([name '/' blk],'PortHandles');
+set_param(ph.Outport(port),'DataLogging','on', ...
+          'DataLoggingNameMode','Custom','DataLoggingName',signame);
+set_param(name,'SignalLogging','on','SignalLoggingName','tsLog');
 end
