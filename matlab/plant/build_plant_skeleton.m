@@ -1,4 +1,4 @@
-function build_plant_skeleton(outdir)
+function build_plant_skeleton(outdir, useVDB)
 %BUILD_PLANT_SKELETON  Generate the IFSSIM plant model skeleton.
 %
 %   Output goes to matlab/plant/models — NOT 'generated'. The skeleton is
@@ -35,7 +35,15 @@ fprintf('  parameters from %s (%s)\n', P.SpecPath, P.SpecName);
 % Fixed step chosen to match the FMU internal rate the platform requires: the
 % first 60-divisible rate at which the EMRAX current-loop time constant is
 % actually representable. See docs/fmu_plant_migration.md.
-STEP = '0.0010416666666666671';   % 1/960 plus 2 ulp -- yes, really; see below
+if nargin < 2 || isempty(useVDB), useVDB = false; end
+STEP = ifssim_step(useVDB);       % 1/960 plus 2 ulp by default -- see below
+% ifssim_step owns this value because it DEPENDS ON THE VARIANT. What Simulink
+% matches is the negotiated fundamental sample time, which the plant derives
+% from its contents -- and the VDB chassis is continuous where ours is
+% discrete, so the two variants converge on different values. Pinning one
+% literal here left the plant DECLARING ...671 while NEGOTIATING ...667, and
+% every harness that read the declared value off the model inherited the
+% mismatch rather than avoiding it.
 % This is NOT the double nearest 1/960. That is ...667; this is two units in
 % the last place above it, and the difference is deliberate.
 %

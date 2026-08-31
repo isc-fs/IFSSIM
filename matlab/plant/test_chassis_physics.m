@@ -12,8 +12,14 @@ P = ifssim_load_workspace();
 h = 'chassis_test_harness';
 if bdIsLoaded(h), close_system(h,0); end
 new_system(h,'Model');
-set_param(h,'SolverType','Fixed-step','Solver','FixedStepDiscrete', ...
-            'FixedStep','1/960','StartTime','0','StopTime','1.0', ...
+% ode1, not FixedStepDiscrete. A discrete solver cannot simulate a model
+% containing continuous states, and whether IFSSIM_Chassis has any depends on
+% which variant was built -- the VDB Vehicle Body 6DOF integrates
+% continuously. ode1 is forward Euler at the same fixed step, so anything
+% already discrete steps exactly as it did before; this widens what the
+% harness can run rather than changing how it runs it.
+set_param(h,'SolverType','Fixed-step','Solver','ode1', ...
+            'FixedStep',chassis_step(),'StartTime','0','StopTime','1.0', ...
             'SaveFormat','Dataset','SignalLogging','on');
 
 add_block('simulink/Ports & Subsystems/Model',[h '/Chassis'], ...
@@ -155,4 +161,16 @@ end
 
 function s = ternary(c,a,b)
 if c, s=a; else, s=b; end
+end
+
+function s = chassis_step()
+%CHASSIS_STEP  Whatever step IFSSIM_Chassis was actually built with.
+%
+%   Read off the model rather than assumed, because the two variants use
+%   different steps and this harness has no way of knowing which one was
+%   built. Hardcoding either makes the test pass for one variant and fail
+%   for the other with a message about sample times that points nowhere near
+%   the harness.
+load_system('IFSSIM_Chassis');
+s = get_param('IFSSIM_Chassis','FixedStep');
 end

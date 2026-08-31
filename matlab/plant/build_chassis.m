@@ -342,9 +342,16 @@ function build_chassis_vdb(name, f, P)
 %      below. This is the same failure the tyre paramset had, and it does
 %      not announce itself: it just understeers.
 
-set_param(name,'SolverType','Fixed-step','Solver','ode1','FixedStep','1/960');
+set_param(name,'SolverType','Fixed-step','Solver','ode1','FixedStep',ifssim_step(true));
 % ode1, NOT FixedStepDiscrete. The body block integrates continuously; a
 % discrete solver leaves its five integrators with no rate to run at.
+%
+% The step comes from ifssim_step(true), which is the VARIANT's step and not
+% the default one. They are different doubles -- 2 ulp apart -- and which one
+% makes the build work depends on what the plant negotiates, which in turn
+% depends on whether the chassis is continuous. Hand-writing either literal
+% here is how four of the ten stages broke; ifssim_step owns the choice and
+% explains it.
 
 fork_vehicle_body(name, [name '/Body'], [420 60 580 260]);
 set_param([name '/Body'], ...

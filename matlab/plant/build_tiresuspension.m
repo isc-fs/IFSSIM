@@ -57,7 +57,7 @@ new_system(name,'Model');
 % The step must be BIT-IDENTICAL to the parent plant's; see the long note on
 % STEP in build_plant_skeleton.m for why it is 2 ulp off 1/960.
 set_param(name,'SolverType','Fixed-step','Solver','ode1', ...
-               'FixedStep','0.0010416666666666671','StartTime','0','StopTime','inf');
+               'FixedStep',ifssim_step(useVDB),'StartTime','0','StopTime','inf');
 
 %% ---- inputs -----------------------------------------------------------
 add_block('simulink/Sources/In1',[name '/Road'],'Position',[30 40 60 60], ...
@@ -350,6 +350,14 @@ else
     add_line(name,'dw_camber/1','dw_cam4/1','autorouting','on');
     add_line(name,'dw_cam4/1',  [TY '/4'],'autorouting','on');
     tag_camber_probe(name, TY);
+
+    % Our closed-form camber is now unused -- the block supplies it. Terminate
+    % it rather than leave it dangling. This is the exact mirror of the
+    % WhlPz/WhlVz dangle on the other branch: the model compiles either way,
+    % and verify_plant_skeleton's connectivity check is what catches it.
+    add_block('simulink/Sinks/Terminator',[name '/unused_camber'], ...
+              'Position',[470 700 490 716]);
+    add_line(name,sprintf('%s/%d',PRE,pOut.camber),'unused_camber/1','autorouting','on');
 
     % ---- step 3: the block's WhlF becomes the tyre's vertical load --------
     % WhlF is [3 x 4] on output 4; row 3 is vertical, positive up.

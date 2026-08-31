@@ -15,7 +15,7 @@ h = 'brakes_test_harness';
 if bdIsLoaded(h), close_system(h,0); end
 new_system(h,'Model');
 set_param(h,'SolverType','Fixed-step','Solver','ode1', ...
-            'FixedStep','1/960','StartTime','0','StopTime','0.05','SaveFormat','Dataset');
+            'FixedStep',plant_step(),'StartTime','0','StopTime','0.05','SaveFormat','Dataset');
 add_block('simulink/Ports & Subsystems/Model',[h '/BR'], ...
           'ModelNameDialog','IFSSIM_Brakes.slx','Position',[240 60 380 140]);
 add_block('simulink/Sources/Constant',[h '/CMD'],'Value','CMD_B', ...
@@ -43,7 +43,7 @@ d = 'brakes_stop_harness';
 if bdIsLoaded(d), close_system(d,0); end
 new_system(d,'Model');
 set_param(d,'SolverType','Fixed-step','Solver','ode1', ...
-            'FixedStep','1/960','StartTime','0','StopTime','9','SaveFormat','Dataset');
+            'FixedStep',plant_step(),'StartTime','0','StopTime','9','SaveFormat','Dataset');
 add_block('simulink/Ports & Subsystems/Model',[d '/Car'], ...
           'ModelNameDialog','IFSSIM_Plant.slx','Position',[260 60 420 220]);
 assignin('base','ROAD_B', roadFlat(P)); assignin('base','ENV_B', envFlat());
@@ -181,3 +181,31 @@ end
 if ~pass, ok=false; end
 end
 function s = ternary(c,a,b), if c, s=a; else, s=b; end, end
+
+function s = plant_step()
+%PLANT_STEP  The step IFSSIM_Plant actually NEGOTIATES, to full precision.
+%
+%   Not its declared FixedStep. Those are different numbers and that is the
+%   whole difficulty: with every model declaring '1/960', the plant negotiates
+%   0.0010416666666666667 while a harness declaring that same string
+%   negotiates ...671. Simulink compares the NEGOTIATED rates, so a harness
+%   that copies the declared string inherits the mismatch instead of avoiding
+%   it -- which is what the first version of this function did.
+%
+%   Simulink.BlockDiagram.getSampleTimes is the API that reports them.
+%   CompiledSampleTime is a BLOCK parameter and errors on a model.
+load_system('IFSSIM_Plant');
+ts = Simulink.BlockDiagram.getSampleTimes('IFSSIM_Plant');
+p = [];
+for k = 1:numel(ts)
+    v = ts(k).Value;
+    if numel(v) >= 1 && isfinite(v(1)) && v(1) > 0
+        p(end+1) = v(1); %#ok<AGROW>
+    end
+end
+if isempty(p)
+    s = get_param('IFSSIM_Plant','FixedStep');   % nothing discrete to match
+else
+    s = sprintf('%.17g', min(p));
+end
+end

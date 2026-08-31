@@ -373,8 +373,55 @@ What it needs, and none of it is speculative:
    protecting, and what the continuous chassis has now undone from the other
    side.
 
-Until those are fixed, `useVDB` is a working body and suspension inside a
-plant that cannot be run end to end.
+### Where it got to: 8 of 10, and the last two are bookkeeping
+
+After fixing the causes above, the VDB variant reaches:
+
+```
+  [ok  ] parameters load        [ok  ] powertrain physics
+  [ok  ] build                  [ok  ] aero physics
+  [ok  ] all models compile     [FAIL] brake physics
+  [ok  ] chassis physics        [FAIL] whole-car drive
+  [ok  ] tyre/suspension physics
+  [ok  ] steering physics
+```
+
+**Every physics stage passes.** The two failures are one cause, and it is not
+vehicle behaviour: the test harness and `IFSSIM_Plant` negotiate fixed steps
+2 ulp apart -- `...671` against `...667` -- and Simulink requires them to match
+to the bit because the referenced model is a hybrid of discrete and continuous
+components.
+
+What was fixed on the way, all of it real and kept:
+
+- `test_chassis_physics` hardcoded `FixedStepDiscrete`, which cannot simulate
+  continuous states. A bug independent of this migration.
+- The step literal is variant-dependent and now lives in `ifssim_step()`
+  instead of being hand-copied. `build_plant_skeleton` never received the
+  flag, so the plant DECLARED one value while NEGOTIATING another.
+- The closed-form camber output dangled in the VDB branch -- the mirror of the
+  `WhlPz`/`WhlVz` dangle on the default branch. Caught by the same
+  connectivity check.
+
+**What did not work, so the next attempt does not repeat it:**
+
+1. Making every model declare the same literal. They already do -- all three
+   declare `'1/960'` -- and the plant still negotiates `...667` while a
+   harness declaring that same string negotiates `...671`. **Declared and
+   negotiated are different numbers**, and only the negotiated one is
+   compared.
+2. Having the harness read the plant's declared `FixedStep`. It faithfully
+   inherits the mismatch rather than avoiding it.
+3. `get_param(mdl,'CompiledSampleTime')`. That is a BLOCK parameter and errors
+   on a model. `Simulink.BlockDiagram.getSampleTimes` is the model-level API,
+   and reading the negotiated period from it is where this was left.
+
+The honest summary is that this is ULP roulette against Simulink's rate
+negotiation, and it was stopped deliberately rather than solved. The physics
+is done; the bookkeeping is not.
+
+**The default path is unaffected and green** (`PLANT OK`, 702 s) with all of
+the above in place.
 
 ### Aero — DEFERRED, and not for scheduling reasons
 

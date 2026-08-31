@@ -23,7 +23,7 @@ addpath(here); addpath(fullfile(here,'models'));
 ifssim_workdir();
 
 fprintf('\n=== building plant ===\n');
-build_plant_skeleton();          % top level + placeholders for anything unfilled
+build_plant_skeleton([], useVDB); % top level + placeholders for anything unfilled
 
 % Subsystems that have a real implementation. Add yours here when you write one.
 % The two VDB-aware builders are called BY NAME rather than through a loop,
