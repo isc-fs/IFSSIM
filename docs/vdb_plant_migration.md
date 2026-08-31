@@ -232,6 +232,42 @@ test that runs the forked body, injects an arbitrary pose mid-run, and asserts
 the state jumps to it exactly — the same contract `IFSSIM_Chassis` honours
 today. Do not proceed to 4b until that test is green.
 
+### Step 4a — DONE, the fork honours the contract
+
+`fork_vehicle_body.m` drops the block in, breaks the outer and nested library
+links, and converts all five integrators to an external IC with a rising-edge
+reset. `test_vehicle_body_fork` drives the body with a real force, injects a
+pose unrelated to its trajectory at t = 1 s, and gets **exact** landings:
+
+| state | error | when |
+|---|---|---|
+| Euler angles | 0.000e+00 | t = 1.0000 |
+| body rates | 0.000e+00 | t = 1.0000 |
+| body velocity | 0.000e+00 | t = 1.0000 |
+| earth position | 0.000e+00 | t = 1.0000 |
+
+and it keeps integrating afterwards (4.04 m in the next 0.5 s), because a
+reset that never releases would pass every assertion above and still be
+broken.
+
+**Routing turned out much cheaper than "depth 3-7 of nested subsystem".**
+Global `Goto`/`From` carries the trigger and the four ICs: the `From` sits
+beside the integrator, the `Goto` at the model's top level, and **nothing in
+between is touched**. No ports are added to MathWorks' subsystems, which is
+both less work now and less to redo at an upgrade.
+
+**The first run of the gate reported four failures that were not there.** It
+sampled one step past the trigger, by which time the body had integrated away
+from the injected value -- 7 m/s times 1 ms is the 0.007 m it was "failing"
+by. The state had jumped perfectly and the probe was late. The assertion now
+states the contract instead of trusting an index: within one step of the
+trigger the state must equal the injected value exactly, and the search
+reports which step it landed on, so a late or gradual reset stays visible.
+
+Mutation-tested: wiring one integrator's reset to a constant zero is caught
+(6.4 m on earth position) while the other three still pass, so the gate is
+per-state rather than a blanket.
+
 **Step 4b — `Vehicle Body 6DOF` replacing `IFSSIM_Chassis`.** Repack
 `Vb/pqr/DCM/Euler/Xe/Ve` into `IFSSIM_PoseBus`. Route aero and `Env` into
 `FExt`/`MExt`. Gate: the ten stages **and a state-reset test** — the FMU's
