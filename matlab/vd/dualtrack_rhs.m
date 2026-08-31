@@ -71,11 +71,30 @@ for it = 1:3
     Fz = [FzF/2 - dWf; FzF/2 + dWf; FzR/2 - dWr; FzR/2 + dWr];
     Fz = max(Fz, 0);                         % a lifted wheel carries nothing
 
+    % ---- suspension kinematics ---------------------------------------
+    % Body roll, from the moment about the roll axis over the total roll
+    % stiffness. This model has no roll DOF and does not need one -- load
+    % transfer is algebraic -- but the ANGLE is what drives camber.
+    roll = M.m*ay*((mf*(M.h-M.hrcF) + mr*(M.h-M.hrcR))/M.m) / (M.KrF + M.KrR);
+
+    % Inclination each tyre actually sees. Without camber gain a wheel leans
+    % with the body, so the outer one loses its static negative camber; gain
+    % takes back that fraction. sgn is +1 on the wheel that is OUTSIDE the
+    % corner, which for a left turn (+ay) is the right-hand pair.
+    sgn   = [-1; 1; -1; 1] * sign(ay + eps);
+    gam   = [M.camF; M.camF; M.camR; M.camR] + ...
+            sgn .* (1 - [M.cgainF; M.cgainF; M.cgainR; M.cgainR]) * abs(roll);
+
+    % Toe change with travel. Zero by design; a real number is a defect.
+    dtoe  = [M.bumpF; M.bumpF; M.bumpR; M.bumpR] .* ...
+            ([Fz(1)-FzF/2; Fz(2)-FzF/2; Fz(3)-FzR/2; Fz(4)-FzR/2] ./ ...
+             [M.kwF; M.kwF; M.kwR; M.kwR]);
+
     for i = 1:4
         vxi = vx - r*M.wy(i);
         vyi = vy + r*M.wx(i);
-        alpha(i) = dw(i) - atan2(vyi, max(vxi, 0.5));
-        Fy(i)    = mf_lateral(alpha(i), Fz(i), M);
+        alpha(i) = dw(i) + dtoe(i) - atan2(vyi, max(vxi, 0.5));
+        Fy(i)    = mf_lateral(alpha(i), Fz(i), M, gam(i));
     end
     Fyb = Fy .* cos(dw);                     % Fx is zero here, see below
     ay  = sum(Fyb)/M.m;
@@ -93,14 +112,27 @@ xdot(1) = sum(Fyb)/M.m - r*vx;               % vy_dot
 xdot(2) = sum(M.wx .* Fyb)/M.Izz;            % r_dot
 
 d = struct('Fz',Fz,'alpha',alpha,'Fy',Fy,'ay',ay,'delta_wheel',dw, ...
+           'camber',gam,'roll',roll,'toe',dtoe, ...
            'dWlat',[dWf; dWr],'dWlon',dWlon,'downforce',Fl);
 end
 
-function Fy = mf_lateral(alpha, Fz, M)
+function Fy = mf_lateral(alpha, Fz, M, gam)
 %MF_LATERAL  Pure-slip Magic Formula, same coefficients as the plant's block.
+%
+%   gam is the inclination angle the tyre sees. Its cost is charged against
+%   the DEPARTURE FROM STATIC CAMBER, not against upright -- because the
+%   static setting was presumably chosen near the tyre's optimum, and we have
+%   no data saying where that optimum is. So this answers "what does the
+%   geometry cost you as the wheel moves away from where you set it", which is
+%   a statement about the geometry, and declines to answer "what is the right
+%   static camber", which needs a tyre on a rig.
 if Fz <= 0, Fy = 0; return; end
 dfz = (Fz - M.Fz0)/M.Fz0;
 mu  = M.PDY1 + M.PDY2*dfz;                   % load sensitivity
+if nargin >= 4
+    camStatic = M.camF;                      % same magnitude both axles here
+    mu = mu * (1 - M.camSens*abs(gam - camStatic)*180/pi);
+end
 D   = mu*Fz;
 if D <= 0, Fy = 0; return; end
 C   = M.PCY1;

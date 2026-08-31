@@ -39,6 +39,7 @@ REQUIRED = {'Mass','Wheelbase','TrackFront','TrackRear','CoGHeight','WeightDistF
 
 P = struct();  P.Source = struct();
 P.Pacejka = struct();  P.Cell = struct();  P.Pack = struct();  P.Assumed = struct();
+P.Susp = struct();
 
 for i = 1:numel(C.Order)
     f    = C.Fields.(C.Order{i});
@@ -63,7 +64,7 @@ for i = 1:numel(C.Order)
             % There is one copy now, so there is nothing to drift.
             P.Assumed.(['Tyre' key]) = f.value;
             P.Source.(['Tyre_' key]) = f.source;
-        case {'Cell','Pack'}
+        case {'Cell','Pack','Susp'}
             P.(grp).(key) = f.value;
             P.Source.([grp '_' key]) = f.source;
         otherwise
@@ -104,7 +105,32 @@ P.Overrides = overrides;
 % Derived once here so no subsystem re-derives them differently.
 P.Derived = struct();
 P.Derived.MaxSteerAngleRad = deg2rad(P.MaxSteerAngle);
-P.Derived.WheelRateEach    = P.HeaveStiffness / 4;                     % N/m per corner
+% Wheel rate per corner, from the SPRING and the MOTION RATIO -- which is what
+% a suspension designer specifies and can buy. wheel rate = k_spring * MR^2.
+% Front and rear are separate, so the car can carry a spring split.
+P.Derived.WheelRateFront = P.Susp.SpringRateFront * P.Susp.MotionRatioFront^2;
+P.Derived.WheelRateRear  = P.Susp.SpringRateRear  * P.Susp.MotionRatioRear^2;
+P.Derived.WheelRateEach   = (P.Derived.WheelRateFront + P.Derived.WheelRateRear)/2;
+
+% HeaveStiffness is the sum of the four, and it is EXPORTED to settings.json
+% for the engine, so it has to agree with the springs. Declared rather than
+% derived because settings.json needs a literal; guarded because two numbers
+% that must agree and are written in two places will not stay agreed.
+heaveFromSprings = 2*(P.Derived.WheelRateFront + P.Derived.WheelRateRear);
+if abs(heaveFromSprings - P.HeaveStiffness) > 0.005*P.HeaveStiffness
+    error('ifssim_params:springMismatch', ...
+          ['The springs and HeaveStiffness disagree.\n\n' ...
+           '  front %.0f N/m at MR %.2f -> %.0f N/m at the wheel\n' ...
+           '  rear  %.0f N/m at MR %.2f -> %.0f N/m at the wheel\n' ...
+           '  four corners            -> %.0f N/m\n' ...
+           '  HeaveStiffness declared -> %.0f N/m\n\n' ...
+           '  Set HeaveStiffness to %.0f in car_spec, or change the springs.\n' ...
+           '  Wheel rate goes as the SQUARE of motion ratio, so a 10%% pickup\n' ...
+           '  move is a 21%% wheel-rate change.'], ...
+          P.Susp.SpringRateFront, P.Susp.MotionRatioFront, P.Derived.WheelRateFront, ...
+          P.Susp.SpringRateRear,  P.Susp.MotionRatioRear,  P.Derived.WheelRateRear, ...
+          heaveFromSprings, P.HeaveStiffness, heaveFromSprings);
+end
 P.Derived.CoGFromFrontAxle = P.Wheelbase * (1 - P.WeightDistFront);    % m
 P.Derived.CoGOffsetFromMid = P.Wheelbase * (P.WeightDistFront - 0.5);  % m, -ve = rearward
 P.Derived.StaticLoadFront  = P.Mass * 9.81 * P.WeightDistFront / 2;    % N per wheel
@@ -141,8 +167,8 @@ P.Derived.RideFreqHz        = sqrt(P.Derived.WheelRateEach / P.Derived.SprungPer
 % and the guard below stops the build instead of quietly modelling a bar that
 % pushes the car over in corners. That is exactly the state this file was in:
 % HeaveStiffness 227600 needed a front bar of -13968 N*m/rad.
-P.Derived.RollStiffFromSpringsFront = 0.5*P.Derived.WheelRateEach*P.TrackFront^2;
-P.Derived.RollStiffFromSpringsRear  = 0.5*P.Derived.WheelRateEach*P.TrackRear^2;
+P.Derived.RollStiffFromSpringsFront = 0.5*P.Derived.WheelRateFront*P.TrackFront^2;
+P.Derived.RollStiffFromSpringsRear  = 0.5*P.Derived.WheelRateRear *P.TrackRear^2;
 P.Derived.ArbFront = P.RollStiffnessFront - P.Derived.RollStiffFromSpringsFront;
 P.Derived.ArbRear  = P.RollStiffnessRear  - P.Derived.RollStiffFromSpringsRear;
 if P.Derived.ArbFront < 0 || P.Derived.ArbRear < 0

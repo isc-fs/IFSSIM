@@ -86,6 +86,45 @@ C = par(C,'RollCenterFront', 0.040, 'm','ASSUMED Susp_Geometry has the hardpoint
 C = par(C,'RollCenterRear',  0.060, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
 C = par(C,'SuspensionDamping',1.5,  '-','ASSUMED damping ratio, never measured');
 
+% ---- suspension kinematics -------------------------------------------
+% The rates a suspension designer actually specifies, as distinct from the
+% wheel rates and roll stiffnesses the vehicle model consumes. This is the
+% concept-level representation: not a hardpoint solver, but the derivatives a
+% hardpoint solver would produce, which are what gets swept early.
+%
+% MOTION RATIO is spring travel per wheel travel, so wheel rate = k_spring *
+% MR^2. It is a geometry lever on wheel rate: move the pushrod pickup and the
+% same spring gives a different car. Springs are also the thing you can
+% actually buy, in the rates they are sold in.
+%
+% Front and rear are separate throughout. The model could not express a
+% front/rear spring split at all before this -- all four corners took
+% HeaveStiffness/4 -- and a spring split is a primary setup lever.
+C = par(C,'Susp.MotionRatioFront', 0.70, '-','ASSUMED typical FS pushrod. Spring travel per wheel travel; wheel rate goes as the SQUARE of it.');
+C = par(C,'Susp.MotionRatioRear',  0.70, '-','ASSUMED as front.');
+C = par(C,'Susp.SpringRateFront', 41192.0,'N/m','DERIVED to reproduce the wheel rate implied by HeaveStiffness at the motion ratio above (41.2 N/mm, a real FS spring). Replace with the spring actually fitted.');
+C = par(C,'Susp.SpringRateRear',  41192.0,'N/m','DERIVED as front.');
+
+% Camber. Static is what the car sits at; gain is how much the OUTER wheel
+% recovers per degree of body roll -- a gain of 1.0 exactly cancels roll and
+% keeps the tyre upright, which is what the geometry is trying to do.
+C = par(C,'Susp.StaticCamberFront', -1.5,'deg','ASSUMED typical FS front. Negative = top of the wheel inboard.');
+C = par(C,'Susp.StaticCamberRear',  -1.0,'deg','ASSUMED typical FS rear, less than front.');
+C = par(C,'Susp.CamberGainFront',    0.80,'-','ASSUMED deg of camber recovered per deg of body roll. 1.0 would exactly cancel roll; real double wishbones fall short.');
+C = par(C,'Susp.CamberGainRear',     0.60,'-','ASSUMED as front, lower.');
+
+% Bump steer: toe change with wheel travel. Zero is the design target, so a
+% non-zero number here is a defect you are trying to quantify. ZEROED rather
+% than assumed, for the same reason the unmeasured tyre coefficients are.
+C = par(C,'Susp.BumpSteerFront',     0.0,'deg/m','ZEROED design target is zero; a real number should come from a hardpoint solver or a string-pot measurement.');
+C = par(C,'Susp.BumpSteerRear',      0.0,'deg/m','ZEROED as front.');
+
+% What a degree of inclination costs the tyre. The kinematics above are
+% GEOMETRY and are as trustworthy as the hardpoints; this is the only part of
+% the camber story that needs tyre data, and we have none. Stated as one
+% number so the sensitivity can be shown and swept rather than hidden.
+C = par(C,'Susp.CamberGripSensitivity', 0.015,'1/deg','ASSUMED peak mu falls about 1.5 percent per degree of inclination away from upright. A real slick is 1-3 percent per degree. NOTHING here is measured.');
+
 %% ---- steering --------------------------------------------------------
 % Settled, 2026-08. Four sources disagreed about maximum lock (#462): 28 deg
 % invented in FSDSWheelFront, 22.4 the tyre's peak-grip slip angle, 19.25 from

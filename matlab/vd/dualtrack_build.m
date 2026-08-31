@@ -67,6 +67,21 @@ M.aeroF= P.AeroBalanceFront;
 % vd_parameters claim CdA reached it. If the wing trade needs costing, that is
 % fs_track_cycle's job, not this one's.
 
+% ---- suspension kinematics -------------------------------------------
+% Rates, not hardpoints. Camber gain is how much of body roll the geometry
+% takes back out of the tyre; a gain of 1 keeps the wheel upright through the
+% corner. Bump steer is toe per metre of travel and is a defect, so it is zero
+% by design. See car_spec's Susp group.
+M.camF   = P.Susp.StaticCamberFront * pi/180;
+M.camR   = P.Susp.StaticCamberRear  * pi/180;
+M.cgainF = P.Susp.CamberGainFront;
+M.cgainR = P.Susp.CamberGainRear;
+M.bumpF  = P.Susp.BumpSteerFront * pi/180;
+M.bumpR  = P.Susp.BumpSteerRear  * pi/180;
+M.camSens= P.Susp.CamberGripSensitivity;
+M.kwF    = P.Derived.WheelRateFront;
+M.kwR    = P.Derived.WheelRateRear;
+
 M.ackermann = P.Assumed.AckermannFraction;
 M.maxSteer  = P.MaxSteerAngle * pi/180;
 

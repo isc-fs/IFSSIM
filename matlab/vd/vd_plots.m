@@ -191,6 +191,38 @@ text(0.02, 0.05, ['the gap below the axis is regen-only braking;' newline ...
      'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
 savepng(figs.gg, outdir, 'gg_envelope');
 
+%% 8. The camber curve. The suspension designer's picture.
+% What inclination each tyre actually sees as the car builds lateral g, and
+% how far it has moved from the static setting. Flat lines are a geometry that
+% keeps the tyre where you put it; diverging lines are roll the geometry is
+% not taking back out.
+figs.camber = figure('Name','Camber','Color','w');
+Ck = vd_constant_radius(9.125, M, 4:0.5:20);
+okk = logical(Ck.settled);
+vk = Ck.v(okk); dk = Ck.delta(okk); ayk = Ck.ay(okk);
+cam = zeros(numel(vk),4);
+for i = 1:numel(vk)
+    S = dualtrack_trim(vk(i), dk(i), M);
+    [~, dd] = dualtrack_rhs([S.vy; S.r], [dk(i); vk(i); 0], M);
+    cam(i,:) = dd.camber*180/pi;
+end
+hold on; grid on;
+nmk = {'front inner','front outer','rear inner','rear outer'};
+sty = {'--','-','--','-'};
+cl  = [lines(2); lines(2)];
+for j = 1:4
+    plot(ayk/9.81, cam(:,j), sty{j}, 'LineWidth', 1.8, ...
+         'Color', cl(1+floor((j-1)/2),:), 'DisplayName', nmk{j});
+end
+yline(0,'k:','upright','HandleVisibility','off');
+xlabel('lateral acceleration  [g]'); ylabel('inclination angle  [deg]');
+title(sprintf('Camber through a 9.125 m corner — %s', label));
+legend('Location','best');
+text(0.02, 0.06, ['solid = outer wheel, dashed = inner' newline ...
+                  'the OUTER one is the one carrying the load'], ...
+     'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
+savepng(figs.camber, outdir, 'camber');
+
 fprintf('  figures written to %s\n', outdir);
 end
 
