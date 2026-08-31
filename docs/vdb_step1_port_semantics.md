@@ -120,9 +120,53 @@ the wheel has left the road. It is a wiring requirement, and it would have
 been found by `plant_ab`'s wheel-lift manoeuvre after the fact — better to
 know now.
 
-## Not yet established
+## `VehF` is PER-WHEEL, not a body wrench — this shapes step 2
 
-`VehP` and `VehV` are [3 × 4] and did not affect `WhlF` in any sweep here, all
-of which held them at zero. They presumably feed the geometry and the
-`VehF`/`VehM` wrench. Step 2 needs them pinned down before the body-force path
-can be trusted.
+`VehF` and `VehM` are both **[3 × 4]**: a force and a moment per wheel, being
+what that corner applies to the body. With `WhlFy = 1000 N` and `VehP = 0`:
+
+```
+x:       0       0       0       0
+y:    1000    1000    1000    1000     <- WhlFy passes straight through
+z:  -590.8  -590.8  -758.1  -758.1     <- the suspension load, z-down
+```
+
+Those z values are exactly our static corner loads, with the sign the z-down
+convention requires.
+
+**So the block does not hand back an assembled body wrench.** Somebody still
+has to sum four per-wheel forces about their moment arms — which is precisely
+what `tiresusp_post` already does, correctly, including the contact-patch arm
+that took a whole commit to get right. Step 2 keeps it.
+
+That is a simplification, not a disappointment: it means step 2 replaces the
+suspension FORCE and KINEMATICS calculation and leaves the wrench assembly
+alone, so the fix that gave the car load transfer at all is not re-litigated.
+
+**`VehP` must be left at ZERO.** Its name suggests corner positions; feeding
+it ours turned the correct −590.8/−758.1 into +5464/+5297. Whatever frame it
+is in, it is not the body frame our geometry is written in, and zero produces
+the right answer. `VehV` was held at zero throughout and never moved anything.
+
+## Summary — everything step 2 needs
+
+| input | what to feed it |
+|---|---|
+| `WhlPz` | `-delta`, our existing suspension deflection (compression positive) |
+| `WhlVz` | `-ddelta` |
+| `WhlFx`, `WhlFy` | tyre forces, one step delayed to break the algebraic loop |
+| `WhlRe` | wheel radius |
+| `WhlM`, `VehP`, `VehV` | zeros [3 × 4] |
+| `StrgAng` | [front rear] road-wheel angle |
+
+| mask | value |
+|---|---|
+| `IdealSuspEn` | `'off'` — or camber is identically zero |
+| `Kz`, `F0z` | row vectors `[front rear]` |
+| `Camber`, `CamberHslp` | by inversion of the affine law above; `CamberHslp = 2*gain/track` |
+
+| output | use |
+|---|---|
+| `WhlF` | → `max(Fz, 0)` → tyre `Fext`. The clamp is not optional |
+| `WhlAng(1,:)` | → tyre `Camber` |
+| `VehF`, `VehM` | per-wheel; keep `tiresusp_post` for the wrench |
