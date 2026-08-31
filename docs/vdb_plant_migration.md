@@ -319,9 +319,91 @@ and `Af = 2`, which would have silently doubled our drag. Aero stays in
 passenger-car defaults -- 2000 kg, `Iveh` diag(430,1900,2100), 1.9 m track --
 are all overwritten from `car_spec`.
 
-**Still open:** the ten stages have only been run on the DEFAULT path. Running
-them with `useVDB` true needs the flag threaded through `ifssim_plant_build`,
-and that is what gates actually switching the default over.
+### The ten stages with `useVDB` — RUN, and they FAIL
+
+`useVDB` is now threaded through `ifssim_plant_build` and
+`ifssim_plant_check(verbose, useVDB)`. Running the gate the plan actually
+asks for:
+
+```
+variant     VDB (Double Wishbone suspension, Vehicle Body 6DOF)
+  [ok  ] parameters load        [ok  ] steering physics
+  [ok  ] build                  [ok  ] powertrain physics
+  [FAIL] all models compile     [ok  ] aero physics
+  [FAIL] chassis physics        [FAIL] brake physics
+  [ok  ] tyre/suspension        [FAIL] whole-car drive
+PLANT HAS FAILURES   (548 s)
+```
+
+**So step 4b is NOT complete.** Its own A/B passes and the body is right; the
+plant around it does not yet run. Four failures, one root cause, and it is a
+trap this repo already documented in `build_tiresuspension.m`:
+
+```
+Fixed-step size of parent model 'IFSSIM_Plant' and model
+'IFSSIM_TireSuspension' must match because the referenced model contains a
+hybrid of discrete and continuous components. The parent uses
+0.0010416666666666667, the referenced model 0.0010416666666666671.
+```
+
+Those differ in the last bit of the double. The existing comment on the
+`Memory` block explains exactly this: once a referenced model is a hybrid of
+discrete and continuous components, Simulink stops being lenient and demands
+the two step sizes agree to the last bit — and they never do, because both
+are *negotiated* fundamental sample times rather than anything parsed from a
+literal.
+
+Making the chassis continuous (`ode1`, which the body block's five
+integrators require) is what tipped the plant into that regime. The third
+failure is a variant of the same thing: `test_chassis_physics` hardcodes
+`FixedStepDiscrete` in its harness, which cannot simulate a chassis that now
+has continuous states.
+
+**This is why the flag is off by default, and the default path stays green**
+(`PLANT OK`, 624 s, verified separately).
+
+What it needs, and none of it is speculative:
+
+1. `test_chassis_physics` must pick its solver from what the chassis actually
+   is, rather than hardcoding a discrete one.
+2. The parent and referenced models must be made to agree on step size to the
+   bit. Either every model takes one identical literal, or
+   `IFSSIM_TireSuspension` is kept strictly non-hybrid so the question never
+   arises — which is what the `Memory`-not-`Unit-Delay` choice was already
+   protecting, and what the continuous chassis has now undone from the other
+   side.
+
+Until those are fixed, `useVDB` is a working body and suspension inside a
+plant that cannot be run end to end.
+
+### Aero — DEFERRED, and not for scheduling reasons
+
+The obvious next candidate after the body is aero, since `Vehicle Body 6DOF`
+already carries `Cd` and `Af`. It was looked at and deliberately not taken.
+
+The block's aero is **drag only** -- one coefficient and a frontal area. Our
+`IFSSIM_Aero` models:
+
+- drag along the velocity vector, `CdA`;
+- **downforce** `ClA`, split front to rear by an aero balance `abal`;
+- the pitch couple, from application points at `aF` and `-bR`;
+- the drag moment about the CoP height above the CoG;
+- downforce applied **normal to the floor**, not along world -Z, so a rolled
+  car does not get its downforce pointing 5 degrees wrong exactly when it is
+  cornering hard and downforce matters most.
+
+None of that survives the swap. For a Formula Student car with wings,
+downforce and aero balance are the aero department's primary levers, and the
+whole point of this plant is to let each department study its own parameters.
+Taking the block here would trade a model built for this car against a
+generic drag term.
+
+So the block's aero stays **disabled** (`Cd = 0`, `Af = 0`) and ours stays.
+Revisiting is worthwhile only if the Vehicle Dynamics Blockset ships a
+DEDICATED aero block carrying downforce and balance -- that library has not
+been enumerated yet, and this note should not be read as saying it does not.
+The test is simple: if a candidate block cannot express `ClA` and a front/rear
+balance, it is not a replacement for what is here.
 
 **Step 5 — FMU export and the engine** (after step 3, not step 4). Re-export, re-run the importer gates,
 and A/B the shadow FMU against Chaos with `tools/fmu/ab_plant.py`.

@@ -1,8 +1,11 @@
-function ok = ifssim_plant_check(verbose)
+function ok = ifssim_plant_check(verbose, useVDB)
 %IFSSIM_PLANT_CHECK  The one command. Build everything, compile it, test it.
 %
-%   ifssim_plant_check        summary only
-%   ifssim_plant_check(true)  show every individual assertion
+%   ifssim_plant_check              summary only
+%   ifssim_plant_check(true)        show every individual assertion
+%   ifssim_plant_check(false, true) run the same ten stages against the VDB
+%                                   variants -- MathWorks' Double Wishbone
+%                                   suspension and Vehicle Body 6DOF
 %
 %   Run it before you commit and after you pull. It answers the only question
 %   that matters day to day: is the plant still right?
@@ -10,7 +13,8 @@ function ok = ifssim_plant_check(verbose)
 %   If something fails and you are not sure whether you broke it, `git stash`
 %   and run it again. Two minutes of certainty beats an afternoon of doubt.
 
-if nargin < 1, verbose = false; end
+if nargin < 1 || isempty(verbose), verbose = false; end
+if nargin < 2 || isempty(useVDB),  useVDB  = false; end
 here = fileparts(mfilename('fullpath'));
 addpath(here); addpath(fullfile(here,'models'));
 
@@ -18,6 +22,9 @@ t0 = tic;
 results = {};   % name, ok
 
 fprintf('\n================ IFSSIM PLANT CHECK ================\n');
+if useVDB
+    fprintf('variant     VDB (Double Wishbone suspension, Vehicle Body 6DOF)\n');
+end
 
 % 1. Parameters -------------------------------------------------------
 try
@@ -33,7 +40,7 @@ end
 
 % 2. Build and compile ------------------------------------------------
 try
-    run_quiet(@ifssim_plant_build, verbose);
+    run_quiet(@() ifssim_plant_build(useVDB), verbose);
     results(end+1,:) = {'build', true};
 catch ME
     fprintf('\nbuild FAILED: %s\n', ME.message);
