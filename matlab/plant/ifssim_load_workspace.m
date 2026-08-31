@@ -81,6 +81,7 @@ flat = struct( ...
     'IFSSIM_eta',   P.DrivetrainEfficiency, ...
     'IFSSIM_Tmax',  P.MotorMaxTorque, ...        % Nm at the motor
     'IFSSIM_Pmax',  P.MotorMaxPower, ...         % W
+    'IFSSIM_wregen', P.Assumed.RegenFadeSpeed, ...  % rad/s at the MOTOR
     'IFSSIM_Treg',  P.MaxRegenTorque, ...        % Nm at the motor, negative side
     'IFSSIM_Preg',  P.MaxRegenPower, ...         % W, cell input current limit
     ... % --- accumulator, derived from the cell and the arrangement ---

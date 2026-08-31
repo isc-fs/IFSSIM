@@ -80,7 +80,11 @@ ok = check(ok,'steer right: moves right (-y)',  A.y(end) < 0, true);
 
 %% 4. Regen slows the car down. It is the only service brake this car has.
 cmd(0,1,0); r = sim(h); A = trace_(r);
-ok = check(ok,'regen from rest does not drive the car', A.vx(end) <= 0.05, true);
+% ONE-SIDED ASSERTIONS MISS HALF THE FAILURES. This read `vx <= 0.05`, which
+% is true of -9.94 m/s, so it passed while the car reversed 17.8 m in 3 s
+% under a regen command from a standstill. abs().
+ok = check(ok,'regen from rest does not drive the car, either way', ...
+           abs(A.vx(end)) <= 0.05, true);
 
 close_system(h,0);
 fprintf('\n%s\n', ternary(ok,'whole-car drive PASS.','WHOLE-CAR DRIVE FAILED.'));

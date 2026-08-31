@@ -246,6 +246,13 @@ P.Assumed.SlipRegularisationSpeed = 1.0;   % m/s
 % instead of a limit cycle.
 P.Assumed.WheelSpeedRegularisation = 2.0;   % rad/s
 
+% Motor speed over which regen torque fades in. Regen OPPOSES motion; it does
+% not create it, and a stationary wheel has no back-EMF and no kinetic energy
+% to recover. Without this the plant reversed 17.8 m in 3 s on a regen command
+% from a standstill. 5 rad/s at the motor is about 0.12 m/s at the road, so
+% the fade is invisible above walking pace and decisive at rest.
+P.Assumed.RegenFadeSpeed = 5.0;   % rad/s at the motor   ASSUMPTION
+
 % RELAXATION LENGTH. Slip is a STATE, not an algebraic quantity: a tyre needs
 % to roll a certain distance before its carcass has deformed enough to build
 % the force. dkappa/dt = (|vx|/sigma) * (kappa_steady - kappa).

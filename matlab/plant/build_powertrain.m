@@ -57,7 +57,7 @@ end
 % places is how they come to disagree. Ipk is what the pack can pass, derived
 % from the cell and the arrangement.
 params = {'IFSSIM_Ts','IFSSIM_gr','IFSSIM_eta','IFSSIM_Tmax','IFSSIM_Pmax', ...
-          'IFSSIM_Treg','IFSSIM_Preg','IFSSIM_Ipk'};
+          'IFSSIM_Treg','IFSSIM_Preg','IFSSIM_Ipk','IFSSIM_wregen'};
 existing = {data.Name};
 for k = 1:numel(params)
     if any(strcmp(existing,params{k})), continue; end
@@ -170,7 +170,19 @@ L = {
 "% command loses a channel silently. Summing is what the real inverter does."
 "th = max(0, min(1, throttle));"
 "rg = max(0, min(1, regen));"
-"T_cmd = th*IFSSIM_Tmax - rg*IFSSIM_Treg;"
+"% REGEN OPPOSES MOTION; it does not create it. Written as a plain"
+"% -rg*Treg, a regen command at rest is just reverse drive: the A/B harness"
+"% caught the car reversing 17.8 m in 3 s at 9.9 m/s with regen 1.0 from a"
+"% standstill, wheels turning backwards at -48.6 rad/s. There is no back-EMF"
+"% from a stationary wheel and no kinetic energy to recover, so the torque"
+"% must fade with speed."
+"%"
+"% tanh, not sign, and for the reason the tyre block gives for the same"
+"% choice: sign() chatters about zero every step at 1/960 s. This also means"
+"% regen RESISTS motion but cannot HOLD a stopped car, which is correct -- it"
+"% is a motor, not a parking brake, and this car has no service brake to"
+"% stand in for one."
+"T_cmd = th*IFSSIM_Tmax - rg*IFSSIM_Treg*tanh(w_motor/IFSSIM_wregen);"
 ""
 "% --- envelope --------------------------------------------------------"
 "wa = max(abs(w_motor), 1e-3);"

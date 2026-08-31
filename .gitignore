@@ -138,3 +138,7 @@ matlab/vd/figures/
 # material, not ours to redistribute, and 36 MB of it. Read it in place; the
 # findings that matter are written up in docs/vehicle_dynamics_alignment.md.
 docs/Vehicle Dynamics/
+
+# A/B reference traces — regenerate with plant_ab('capture'); they are a
+# local baseline for a migration, not source.
+matlab/plant/reference/
