@@ -39,8 +39,9 @@ SPEC = {
 'WheelWidth'         'both'        'tyre contact width'
 'TireMu'             'both'        'grip level, cornering stiffness'
 'Tyre.LoadSensitivity' 'both'      'what load transfer COSTS in grip. pairs with balance'
+'Tyre.NominalLoad'   'both'        'the load the tyre data belongs to. NOT the car''s corner load'
 'Tyre.StiffnessPeakLoadRatio' 'both' 'how cornering stiffness varies with load'
-'RollingResistance'  'both'        'drag, lap energy'
+'RollingResistance'  'plant only'  'drag and lap energy; the design model prescribes speed'
 };
 
 fprintf('\n================ SUSPENSION & VEHICLE DYNAMICS ================\n');

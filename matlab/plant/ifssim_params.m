@@ -94,6 +94,10 @@ P.SpecPath = fullfile(here, '..', 'spec', 'car_spec.m');
 % real, edit matlab/spec/car_spec.m, where a number has to carry a source.
 if nargin < 1, overrides = struct(); end
 overrides = ifssim_normalise_overrides(overrides);
+% Snapshot the legitimate names BEFORE any override is applied. The first pass
+% creates whatever it is given, so checking after it would find the typo it
+% just invented and pass it.
+VALID = ifssim_valid_names(P);
 P = ifssim_apply_overrides(P, overrides);
 P.Overrides = overrides;
 
@@ -310,8 +314,30 @@ P.Assumed.BatteryInitialSoC  = 0.9;
 P.Assumed.CoGHeightUsed = P.CoGHeight;
 
 % Assumed defaults are set above, so any override of one has to be re-applied
-% now -- before the block below derives anything from them.
-P = ifssim_apply_overrides(P, overrides);
+% now -- before the block below derives anything from them. This is also the
+% first point at which a name can be CHECKED, because Assumed now exists.
+% Assumed's legitimate names, MINUS anything the first pass invented. Pass one
+% creates whatever it is handed, so a misspelled Assumed.* override would
+% otherwise appear in this snapshot and validate itself.
+invented = {};
+fo = fieldnames(overrides);
+for i = 1:numel(fo)
+    k = strrep(fo{i}, '_DOT_', '.');
+    pp = split(k,'.');
+    if numel(pp) == 2 && any(strcmp(pp{1},{'Tyre','Assumed'}))
+        invented{end+1} = ['Tyre' pp{2}]; %#ok<AGROW>
+        invented{end+1} = pp{2};           %#ok<AGROW>
+    end
+end
+Acl = P.Assumed;
+fa = fieldnames(Acl);
+for i = 1:numel(fa)
+    if any(strcmp(fa{i}, invented)) && ~isAssumedDefault(fa{i})
+        Acl = rmfield(Acl, fa{i});
+    end
+end
+VALID = [VALID, ifssim_valid_names(struct('Assumed', Acl))];
+P = ifssim_apply_overrides(P, overrides, VALID);
 
 % --- suspension, derived from the declared stiffness ------------------
 % settings.json SuspensionDamping is a RATIO (zeta), not a coefficient:
@@ -366,16 +392,36 @@ end
 end
 
 % =======================================================================
-function P = ifssim_apply_overrides(P, ov)
+function P = ifssim_apply_overrides(P, ov, valid)
 %IFSSIM_APPLY_OVERRIDES  Set P.a.b from an override named 'a.b' or 'a_DOT_b'.
+%
+%   Tyre.X is accepted and resolves to Assumed.TyreX, which is where car_spec's
+%   Tyre group lands. Both names appear in the docs and in car_spec, and a
+%   study that silently wrote a dead field because the user typed the name the
+%   documentation gave them is worse than no study.
+%
+%   validate=true checks the field EXISTS. It can only be done on the second
+%   apply pass: the first runs before the Assumed block has been built, so
+%   Assumed.Izz would not exist yet and every legitimate override of one would
+%   be rejected.
+if nargin < 3, valid = {}; end
 f = fieldnames(ov);
 for i = 1:numel(f)
     key = strrep(f{i}, '_DOT_', '.');
     parts = split(key, '.');
+    if numel(parts) == 2 && strcmp(parts{1}, 'Tyre')
+        parts = {'Assumed', ['Tyre' parts{2}]};     % the documented alias
+    end
     switch numel(parts)
         case 1
+            if ~isempty(valid) && ~any(strcmp(parts{1}, valid))
+                suggest(valid, key);
+            end
             P.(parts{1}) = ov.(f{i});
         case 2
+            if ~isempty(valid) && ~any(strcmp([parts{1} '.' parts{2}], valid))
+                suggest(valid, key);
+            end
             if ~isfield(P, parts{1}), P.(parts{1}) = struct(); end
             P.(parts{1}).(parts{2}) = ov.(f{i});
         otherwise
@@ -383,4 +429,78 @@ for i = 1:numel(f)
                   '"%s" is nested too deep; use Group.Name', key);
     end
 end
+end
+
+function suggest(valid, key)
+%SUGGEST  Refuse an override that names nothing, and say what was meant.
+tgt  = lower(strrep(key,'.',''));
+pool = unique(valid(:), 'stable');
+pool = pool(~startsWith(pool, 'Source.'));   % provenance mirrors, not knobs
+d = cellfun(@(c) namedist(lower(strrep(c,'.','')), tgt), pool);
+[~, i] = sort(d);
+near = strjoin(pool(i(1:min(5,numel(i))))', ', ');
+error('ifssim_params:unknownOverride', ...
+      ['"%s" is not a parameter. Nothing would have changed, and the study\n' ...
+       'would have returned a table of zeroes that looked like an answer.\n\n' ...
+       '  did you mean: %s\n\n' ...
+       '  vd_parameters        lists what the VD department owns\n' ...
+       '  ifssim_params_report lists everything, with its source'], key, near);
+end
+
+% =======================================================================
+function n = ifssim_valid_names(P)
+%IFSSIM_VALID_NAMES  Every name an override may legitimately address.
+n = {};
+f = fieldnames(P);
+for i = 1:numel(f)
+    v = P.(f{i});
+    if isstruct(v)
+        g = fieldnames(v);
+        for j = 1:numel(g), n{end+1} = [f{i} '.' g{j}]; end %#ok<AGROW>
+        % car_spec's Tyre group lands under Assumed as TyreX; accept both.
+        if strcmp(f{i},'Assumed')
+            for j = 1:numel(g)
+                if startsWith(g{j},'Tyre')
+                    n{end+1} = ['Tyre.' extractAfter(g{j},'Tyre')]; %#ok<AGROW>
+                end
+            end
+        end
+    else
+        n{end+1} = f{i}; %#ok<AGROW>
+    end
+end
+end
+
+% =======================================================================
+function d = namedist(a, b)
+%NAMEDIST  Cheap edit-distance-ish score, good enough to rank suggestions.
+la = numel(a); lb = numel(b);
+D = zeros(la+1, lb+1);
+D(:,1) = (0:la)';  D(1,:) = 0:lb;
+for i = 1:la
+    for j = 1:lb
+        D(i+1,j+1) = min([D(i,j+1)+1, D(i+1,j)+1, D(i,j)+(a(i)~=b(j))]);
+    end
+end
+d = D(end,end);
+end
+
+% =======================================================================
+function tf = isAssumedDefault(name)
+%ISASSUMEDDEFAULT  Is this a field the Assumed block itself declares?
+%
+%   Listed rather than discovered, because the whole point is to tell a real
+%   Assumed parameter apart from one an override invented a moment ago, and
+%   both are sitting in the same struct by the time we look.
+persistent L
+if isempty(L)
+    L = {'Ixx','Iyy','Izz','YawRadiusOfGyration','InertiaSource','WheelInertia', ...
+         'SlipRegularisationSpeed','WheelSpeedRegularisation','RelaxLengthLong', ...
+         'RelaxLengthLat','SlideFrictionRatio','TyrePressure','TyreRimWidth', ...
+         'TyreMass','TyreNominalLoad','TyreLoadSensitivity', ...
+         'TyreStiffnessPeakLoadRatio','TyreRefVelocity','AirDensity', ...
+         'CoPHeightAboveCoG','EbsGripMultiple','EbsFillTau','AckermannFraction', ...
+         'SteerRateLimit','SteerLagTau','BatteryInitialSoC','CoGHeightUsed'};
+end
+tf = any(strcmp(name, L));
 end

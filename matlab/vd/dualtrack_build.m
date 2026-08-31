@@ -59,9 +59,13 @@ M.KrR  = P.RollStiffnessRear;
 
 M.rho  = P.Assumed.AirDensity;
 M.ClA  = P.ClA;
-M.CdA  = P.CdA;
 M.aeroF= P.AeroBalanceFront;
-M.Crr  = P.RollingResistance;
+% CdA and RollingResistance are deliberately ABSENT. This model prescribes
+% speed rather than integrating it, so drag and rolling resistance change
+% nothing it computes. They were carried here as unread struct fields, which
+% made the model look like it charged for drag when it does not -- and made
+% vd_parameters claim CdA reached it. If the wing trade needs costing, that is
+% fs_track_cycle's job, not this one's.
 
 M.ackermann = P.Assumed.AckermannFraction;
 M.maxSteer  = P.MaxSteerAngle * pi/180;

@@ -24,6 +24,11 @@ function R = vd_report(M, varargin)
 %     TireMu                                  -> the whole grip level
 %     Assumed.Izz (ifssim_params)             -> transient response only
 
+% vd_report('nofigures') is the natural way to type it, so accept the flag in
+% the first slot rather than binding it to M and failing three lines later.
+if nargin >= 1 && (ischar(M) || isstring(M))
+    varargin = [{char(M)}, varargin];  M = [];
+end
 if nargin < 1 || isempty(M)
     here = fileparts(mfilename('fullpath'));
     addpath(here); addpath(fullfile(here,'..','plant'));
@@ -41,13 +46,29 @@ fprintf('  roll stiffness %.0f/%.0f N.m/rad (%.1f%% front), roll centres %.0f/%.
         M.KrF, M.KrR, 100*M.KrF/(M.KrF+M.KrR), 1000*M.hrcF, 1000*M.hrcR);
 fprintf('  tyre mu %.2f, load sensitivity %.2f\n', M.mu, M.PDY2);
 
+%% ---- steering lock, a hardware constraint ---------------------------
+% Printed before the handling numbers because it BOUNDS them, and because it
+% is the one line on this page that does not depend on the tyre fit. Rack
+% travel and upright stops are decided from it.
+[Rmin, ackR, lockLoss] = vd_min_radius(M);
+fprintf('\n---- STEERING LOCK -----------------------------------------------\n');
+fprintf('  max road-wheel angle   %.1f deg\n', M.maxSteer*180/pi);
+fprintf('  Ackermann radius       %.2f m   (geometry alone, no slip)\n', ackR);
+fprintf('  tightest circle held   %.2f m\n', Rmin);
+if isfinite(lockLoss) && lockLoss > 0.02
+    fprintf('  a %.1f m corner makes %.0f%% less lateral than an open one --\n', ...
+            max(Rmin*1.05,5.0), 100*lockLoss);
+    fprintf('  that is LOCK running out, not grip. It is a rack and upright\n');
+    fprintf('  decision, and no amount of setup recovers it.\n');
+end
+
 %% ---- steady state: the understeer gradient --------------------------
 fprintf('\n---- CONSTANT RADIUS ---------------------------------------------\n');
 fprintf('  Steering needed to hold a circle, against lateral acceleration.\n');
 fprintf('  delta = L/R + K*ay/g;  K > 0 is understeer.\n\n');
 fprintf('    R        Ackermann    K (deg/g)     v_max      ay_max   balance\n');
 R.radius = struct('R',{},'K',{},'v_max',{},'ay_max',{});
-for Rr = [9.125 15 25]
+for Rr = [5 7.5 9.125 15 25]
     C = vd_constant_radius(Rr, M, 4:0.5:22);
     if isempty(C.v), continue; end
     bal = 'understeer';

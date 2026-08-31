@@ -160,6 +160,37 @@ text(0.02, 0.06, 'check these against your bump and droop limits', ...
      'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
 savepng(figs.roll, outdir, 'roll_and_travel');
 
+%% 7. The g-g envelope. What the car can do, not what it does once.
+% The standard concept-comparison picture. Two boundaries: what the tyres
+% could deliver, and what this car can actually reach with two driven wheels,
+% a torque limit, an 80 kW cap and no modulated service brake. The gap between
+% them is performance that is available and not being used.
+figs.gg = figure('Name','g-g','Color','w');
+hold on; grid on; axis equal;
+cols = lines(3); k = 0;
+for v = [8 12 16]
+    k = k + 1;
+    G = vd_gg(M, v);
+    % Drop the points past the longitudinal limit, where ay collapses to zero:
+    % plotted, they draw a spike down the ay = 0 axis that looks like part of
+    % the envelope and is not.
+    kt = G.ay_tyre > 0.01;  kc = G.ay_car > 0.01;
+    plot([ G.ay_tyre(kt) -fliplr(G.ay_tyre(kt))], [G.ax(kt) fliplr(G.ax(kt))], ':', ...
+         'Color', cols(k,:), 'LineWidth', 1.2, 'HandleVisibility','off');
+    plot([ G.ay_car(kc)  -fliplr(G.ay_car(kc)) ], [G.ax(kc) fliplr(G.ax(kc))], '-', ...
+         'Color', cols(k,:), 'LineWidth', 2, 'DisplayName', sprintf('%d m/s', v));
+end
+xlabel('lateral acceleration  [g]'); ylabel('longitudinal acceleration  [g]');
+title(sprintf('g-g envelope — %s', label));
+legend('Location','best');
+yline(0,'k-','HandleVisibility','off'); xline(0,'k-','HandleVisibility','off');
+text(0.02, 0.97, 'solid = this car    dotted = what the tyres could do', ...
+     'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
+text(0.02, 0.05, ['the gap below the axis is regen-only braking;' newline ...
+                  'the gap above it is two driven wheels and the torque limit'], ...
+     'Units','normalized','FontSize',8,'Color',[.4 .4 .4]);
+savepng(figs.gg, outdir, 'gg_envelope');
+
 fprintf('  figures written to %s\n', outdir);
 end
 

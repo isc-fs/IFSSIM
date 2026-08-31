@@ -43,6 +43,30 @@ These are the parameters you own, in `matlab/spec/car_spec.m`:
 | `SuspensionDamping` | damping ratio, not a coefficient |
 | `CoGHeight`, `WeightDistFront`, `TrackFront`/`Rear`, `Wheelbase` | shared with chassis — talk to them first |
 
+### Three things worth knowing before you trust a number
+
+**The tyre is now an object, not a consequence of the car.** `Tyre.NominalLoad`
+is the load the tyre's data belongs to. It used to be derived as `Mass*g/4`,
+which meant the tyre re-normalised itself to whatever car it was on and **mass
+cancelled exactly out of every answer** — 200, 275 and 400 kg all returned the
+same skid pad time to four decimals. If the tyres department gives you "1.65 at
+1000 N", that is now expressible: `vd_study('TireMu',1.65,'Tyre.NominalLoad',1000)`.
+
+**Override names are checked.** A typo used to write a dead field and return a
+table of zeroes that looked like an answer. Now it refuses and suggests:
+
+```
+"CogHeight" is not a parameter. Nothing would have changed, and the study
+would have returned a table of zeroes that looked like an answer.
+  did you mean: CoGHeight, ...
+```
+
+**Steering lock bounds everything else.** The car cannot hold a 4.50 m radius
+at any speed, and at 5.0 m it makes 11% less lateral than it does on an open
+corner — that is lock running out, not grip. It is a rack-travel and
+upright-stop decision and no setup change recovers it. It is also the only
+number on the page that does not depend on the unvalidated tyre fit.
+
 ### Trying something
 
 ```matlab
@@ -122,7 +146,10 @@ and `plant_study` says so.
 
 | | |
 |---|---|
-| `vd_report` | understeer gradient, skid pad lap time, limit grip, transient response, and what the anti-roll bar does |
+| `vd_report` | steering-lock limits, understeer gradient, skid pad lap time, limit grip, transient response, and what the anti-roll bar does — **with figures** |
+| `vd_parameters` | every parameter you own, its provenance, and **where it actually reaches** |
+| `vd_gg(M, v)` | the g-g envelope: what the tyres could do vs what this car can use |
+| `vd_min_radius` | tightest circle the car can hold, and what lock costs |
 | `vd_plots` | understeer curves, tyre curves, the balance sweep, step response, corner loads |
 | `vd_study` | any of the above, before and after a change |
 | `vd_constant_radius(R)` | one circle, in detail |
