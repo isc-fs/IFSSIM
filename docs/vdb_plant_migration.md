@@ -476,7 +476,35 @@ single-instance-per-process because its generated code is non-reentrant. The
 inspector's own note is the right one -- that is fine for IFSSIM **only if**
 sequential reload works, and that has to be PROVEN with
 instantiate/free/instantiate rather than assumed or waved away by overriding
-the flag. It has not been proven here.
+the flag.
+
+**Now proven.** `tools/fmu/reload_probe/run.sh` dlopens the FMU exactly as
+`FSDSFmi3.cpp` does and runs three full cycles -- instantiate, initialise,
+60 `fmi3DoStep` calls, free -- in a single process:
+
+```
+  [ok  ] cycle 1: instantiate, init, 60 steps, free
+  [ok  ] cycle 2: instantiate, init, 60 steps, free
+  [ok  ] cycle 3: instantiate, init, 60 steps, free
+  Sequential reload WORKS: 3 full cycles in one process.
+```
+
+Three cycles and not one, deliberately: a single instantiate/free proves
+nothing about state left behind, and the failure being looked for shows up on
+the SECOND instantiate, after the first instance's statics have been touched.
+Stepping matters for the same reason -- instantiating is the cheap half; it is
+`fmi3DoStep` that touches the generated code's statics.
+
+The probe was checked against a negative control (a wrong instantiation
+token), which it correctly fails. That first attempt also exposed a flaw in
+the probe's own reporting: a cycle-1 failure was being announced as a reload
+defect, when it means the FMU never came up at all and says nothing about
+reentrancy. It now distinguishes the two, because a tool that misdiagnoses its
+own negative control will misdiagnose a real one.
+
+So the constraint is real but not binding: **the FMU cannot host two cars at
+once, and does not need to. It can be dropped and reloaded in one session,
+which is what the platform actually does.**
 
 ### Step 5b — BLOCKED on a simulator run, and deliberately not started
 
