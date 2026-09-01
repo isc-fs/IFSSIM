@@ -373,52 +373,60 @@ What it needs, and none of it is speculative:
    protecting, and what the continuous chassis has now undone from the other
    side.
 
-### Where it got to: 8 of 10, and the last two are bookkeeping
-
-After fixing the causes above, the VDB variant reaches:
+### RESOLVED: 10 of 10 on both variants
 
 ```
-  [ok  ] parameters load        [ok  ] powertrain physics
-  [ok  ] build                  [ok  ] aero physics
-  [ok  ] all models compile     [FAIL] brake physics
-  [ok  ] chassis physics        [FAIL] whole-car drive
-  [ok  ] tyre/suspension physics
-  [ok  ] steering physics
+VDB      PLANT OK  (607 s)        default  PLANT OK  (563 s)
 ```
 
-**Every physics stage passes.** The two failures are one cause, and it is not
-vehicle behaviour: the test harness and `IFSSIM_Plant` negotiate fixed steps
-2 ulp apart -- `...671` against `...667` -- and Simulink requires them to match
-to the bit because the referenced model is a hybrid of discrete and continuous
-components.
+The two stages that failed were `brake physics` and `whole-car drive`. Neither
+ever reached any vehicle dynamics: both build a harness that references
+`IFSSIM_Plant` as a Model block, and the harness and the plant end up with
+fixed steps 2 ulp apart -- `0.0010416666666666671` against `...667` --
+which Simulink rejects because the referenced model mixes discrete and
+continuous components.
 
-What was fixed on the way, all of it real and kept:
+**The value is not something the parent can influence.** That was established
+by elimination, and the list is worth keeping because every entry is an
+attempt that looks obviously right:
 
-- `test_chassis_physics` hardcoded `FixedStepDiscrete`, which cannot simulate
-  continuous states. A bug independent of this migration.
-- The step literal is variant-dependent and now lives in `ifssim_step()`
-  instead of being hand-copied. `build_plant_skeleton` never received the
-  flag, so the plant DECLARED one value while NEGOTIATING another.
-- The closed-form camber output dangled in the VDB branch -- the mirror of the
-  `WhlPz`/`WhlVz` dangle on the default branch. Caught by the same
-  connectivity check.
+| tried | result |
+|---|---|
+| declaring `1/960` | parent reads `...671` |
+| declaring `0.0010416666666666667` | parent reads `...671` |
+| declaring `0.0010416666666666671` | parent reads `...671` |
+| declaring the 19-digit exact value | parent reads `...671` |
+| declaring `1/480/2`, `0.0104166666666666671/10` | parent reads `...671` |
+| declaring `auto` | parent reads `...671` |
+| variable-step parent (`ode45`, `ode23t`, `VariableStepDiscrete`) | rejected outright |
+| `SimulationMode` `Normal` / `Accelerator` | both clash |
+| harness reading the plant's DECLARED `FixedStep` | inherits the mismatch |
+| harness reading the plant's NEGOTIATED rate | same |
+| putting every model on one shared literal | plant then fails to compile |
 
-**What did not work, so the next attempt does not repeat it:**
+Declared and negotiated are different numbers, and only the negotiated one is
+compared -- which is also what the old note in `build_plant_skeleton.m` was
+describing when it pinned a literal "2 ulp off 1/960" without a mechanism.
 
-1. Making every model declare the same literal. They already do -- all three
-   declare `'1/960'` -- and the plant still negotiates `...667` while a
-   harness declaring that same string negotiates `...671`. **Declared and
-   negotiated are different numbers**, and only the negotiated one is
-   compared.
-2. Having the harness read the plant's declared `FixedStep`. It faithfully
-   inherits the mismatch rather than avoiding it.
-3. `get_param(mdl,'CompiledSampleTime')`. That is a BLOCK parameter and errors
-   on a model. `Simulink.BlockDiagram.getSampleTimes` is the model-level API,
-   and reading the negotiated period from it is where this was left.
+**The fix is to stop having a parent.** `plant_direct_sim` drives
+`IFSSIM_Plant` through `Simulink.SimulationInput` with root-inport data, so no
+parent/child negotiation exists to disagree about. It is not VDB-specific:
+both variants use it and both are green.
 
-The honest summary is that this is ULP roulette against Simulink's rate
-negotiation, and it was stopped deliberately rather than solved. The physics
-is done; the bookkeeping is not.
+Two things it turned up on the way:
+
+- **The plant has FOUR root inports and the old harnesses wired three.**
+  Simulink grounded `Sync` silently. Driving directly requires all four, so
+  that input is now explicit rather than defaulted.
+- **A four-wheel vector and four time samples are indistinguishable by size.**
+  The first version of the input builder guessed, and fed `road.valid` -- four
+  wheels -- in as a four-sample trajectory. Trajectory interpretation is now
+  confined to the command bus, whose leaves are all width 1. A cleverer
+  heuristic would have worked until the next run with four samples.
+
+`test_brakes_physics`'s first harness references `IFSSIM_Brakes`, which is not
+a hybrid, so the rule never applied there; it keeps a plain literal instead of
+compiling the whole plant to read a number it does not need.
 
 **The default path is unaffected and green** (`PLANT OK`, 702 s) with all of
 the above in place.
