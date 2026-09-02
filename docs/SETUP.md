@@ -55,10 +55,18 @@ mid-session.
 ```bash
 git clone https://github.com/isc-fs/IFSSIM.git
 cd IFSSIM
+git fetch origin dev
+git checkout dev             # NOT optional — see below
 git lfs install              # one-time per machine; safe to repeat
 git lfs pull                 # ~500 MB of binary assets (cones, materials, …)
 git submodule update --init --recursive
 ```
+
+`git checkout dev` is **not optional**. The repository's default branch
+is `main`, an intentionally empty placeholder holding one README — so a
+plain `git clone` leaves you with no source, no `docs/`, and no build
+scripts. Everything lives on `dev`. If `ls` shows only `README.md`, you
+skipped this line.
 
 The `git submodule update --init --recursive` is **not optional** —
 there are two submodules and skipping it breaks the build:

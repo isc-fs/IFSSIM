@@ -27,6 +27,13 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Setup docs told new contributors to clone into an empty branch.**
+  The repository's default branch is `main` — an intentionally empty
+  placeholder holding one README — so the documented `git clone` left
+  people with no source tree, and the first build step failed with "no
+  such file or directory" and no hint as to why. `docs/SETUP.md` and
+  `docs/BUILD_FROM_SOURCE.md` now `git fetch origin dev && git checkout
+  dev` after cloning, and both spell out the `ls` check that catches it.
 - **`package_mac.sh` now honours `UE_ROOT`.** It hardcoded
   `/Users/Shared/Epic Games/UE_5.7`, so the override that
   `docs/SETUP.md` documented — and that `package_windows.sh` (`UE_ROOT`)
