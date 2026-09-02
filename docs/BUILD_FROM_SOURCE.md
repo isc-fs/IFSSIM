@@ -77,7 +77,19 @@ Then, in a terminal:
 ```bash
 git clone https://github.com/isc-fs/IFSSIM.git
 cd IFSSIM
+git fetch origin dev
+git checkout dev
 ```
+
+> ### Those last two lines are not optional
+> The repository's default branch is `main`, which is an intentionally
+> empty placeholder — it holds a single README and nothing else. All the
+> code, including the build script below, lives on `dev`. Clone without
+> checking out `dev` and step 3 fails with "no such file or directory".
+>
+> Check you got it: `ls` should show `Content`, `Plugins`, `docs` and
+> `tools`. If all you see is `README.md`, you are still on `main` — run
+> `git checkout dev`.
 
 > Don't worry about `git lfs` or `git submodule` — the build script
 > checks both and fixes them for you.
