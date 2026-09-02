@@ -12,6 +12,28 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **One-command build from source** — `tools/build_sim.sh` (plus
+  `tools/build_sim.ps1`, a PowerShell bootstrap for Windows machines
+  with no Git yet). Detects the platform, checks disk space, verifies
+  git / git-lfs / Xcode / Visual Studio / Unreal, installs what it
+  safely can via brew / winget / apt, repairs unfetched LFS assets and
+  uninitialised submodules, then runs the right `package_*.sh`. Reads
+  the required engine version from `IFSSIM.uproject` rather than
+  hardcoding it. `--check` runs the preflight and changes nothing.
+  Written for contributors who have never used Unreal; the guide is
+  `docs/BUILD_FROM_SOURCE.md`.
+
+### Fixed
+
+- **`package_mac.sh` now honours `UE_ROOT`.** It hardcoded
+  `/Users/Shared/Epic Games/UE_5.7`, so the override that
+  `docs/SETUP.md` documented — and that `package_windows.sh` (`UE_ROOT`)
+  and `package_linux.sh` (`UE5_ROOT`) both already supported — silently
+  did nothing on macOS. A missing engine now fails with a clear message
+  instead of a bare "No such file or directory".
+
 ## [0.2.0] — 2026-08-26
 
 **The vehicle dynamics left Chaos.** This release is dominated by one
