@@ -123,6 +123,12 @@ That's it; skip to step 3.
 
 ### Option B — build from source
 
+> **New to this?** `./tools/build_sim.sh` does everything in this
+> section for you — checks prerequisites, installs what it can, repairs
+> LFS and submodules, then builds. See
+> [BUILD_FROM_SOURCE.md](BUILD_FROM_SOURCE.md). The manual steps below
+> are the same thing, by hand.
+
 You'll need UE 5.7 installed (see prerequisites). From the repo root:
 
 ```bash

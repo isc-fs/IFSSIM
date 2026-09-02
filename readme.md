@@ -36,6 +36,11 @@ time setup. Windows and macOS in parallel. Covers prereqs, clone,
 sim build (or pre-built download), Docker stack, first session in
 Mission Control, troubleshooting.
 
+→ **[`docs/BUILD_FROM_SOURCE.md`](docs/BUILD_FROM_SOURCE.md)** — no
+prebuilt binary for your platform, or new to all of this? One command
+(`./tools/build_sim.sh`) checks your machine, installs what it can, and
+builds the sim. Written for people who have never used Unreal.
+
 Once you've finished SETUP, **[`docs/OPERATING.md`](docs/OPERATING.md)**
 is the daily-ops reference: recording MCAP bags, refreshing the bridge
 after a source edit, switching tracks, common-failure fixes.
