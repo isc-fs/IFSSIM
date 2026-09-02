@@ -68,15 +68,20 @@ for c = 1:size(cases,1)
 end
 
 % The teleport is asserted absolutely, not just A/B: both could be wrong the
-% same way and a comparison would not notice.
-tgt = [12.0; -7.0; P.CoGHeight];
+% same way and a comparison would not notice. POSITION AND ORIENTATION both --
+% asserting position alone is what let the frame conversion go unexercised.
+tgt  = [12.0; -7.0; P.CoGHeight];
+yaw  = 40*pi/180;
+qtgt = [cos(yaw/2); 0; 0; sin(yaw/2)];
 for v = 1:2
-    got = R{v}(6).position;
-    d = norm(got - tgt);
+    got = R{v}(6).position;  gq = R{v}(6).quat;
+    d  = norm(got - tgt);
+    dq = min(norm(gq - qtgt), norm(gq + qtgt));     % q and -q are one rotation
     nm = 'ours'; if v == 2, nm = 'VDB '; end
-    fprintf('  [%s] %s teleport landed at %s\n', tern(d < 1e-6,'ok  ','FAIL'), ...
-            nm, mat2str(round(got',4)));
-    if d >= 1e-6, ok = false; end
+    fprintf('  [%s] %s teleport position %s\n', tern(d  < 1e-6,'ok  ','FAIL'), nm, mat2str(round(got',4)));
+    fprintf('  [%s] %s teleport heading  %s (want %s)\n', tern(dq < 1e-6,'ok  ','FAIL'), nm, ...
+            mat2str(round(gq',4)), mat2str(round(qtgt',4)));
+    if d >= 1e-6 || dq >= 1e-6, ok = false; end
 end
 
 fprintf('\n  %s\n', tern(ok, ...
@@ -133,8 +138,24 @@ for c = 1:size(cases,1)
     sync.pos = [0;0;P.CoGHeight]; sync.quat = [1;0;0;0];
     sync.vel_body = [0;0;0]; sync.omega_body = [0;0;0];
     if cases{c,4}
-        sync.enable = 1;                       % held high: the rising edge is at t=0+
+        sync.enable = 1;                       % held high: the state is latched
         sync.pos = [12.0; -7.0; P.CoGHeight];
+        % A NON-IDENTITY ORIENTATION AND A NON-ZERO RATE, deliberately.
+        %
+        % Injecting position only made this row vacuous: the quaternion->Euler
+        % conversion and the pitch/yaw/rate sign flips in body_inputs were run
+        % exclusively on their own fixed point, where every sign convention --
+        % including no conversion at all -- gives the same answer. The |dquat|
+        % column was identically zero for that reason and not because the
+        % frames agree.
+        %
+        % 40 deg of yaw and a real body rate make those negations observable,
+        % and the legacy chassis passes the injected quaternion through
+        % unconverted, so any sign error shows up as A/B divergence here.
+        yaw = 40*pi/180;
+        sync.quat       = [cos(yaw/2); 0; 0; sin(yaw/2)];
+        sync.omega_body = [0.15; -0.20; 0.35];
+        sync.vel_body   = [3.0; 0.5; 0.0];
     end
     assignin('base','SYNC_S',sync);
     r = sim(h);

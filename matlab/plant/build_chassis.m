@@ -363,8 +363,17 @@ set_param([name '/Body'], ...
     'h',    sprintf('%.10g', P.CoGHeight), ...
     'w',    sprintf('[%.10g %.10g]', P.TrackFront, P.TrackRear), ...
     'Cd',   '0', ...        % see note 3 -- aero lives in IFSSIM_Aero
-    'Af',   '0', ...
-    'Xe_o', '[0 0 0]', 'xbdot_o','[0 0 0]', 'eul_o','[0 0 0]', 'p_o','[0 0 0]');
+    'Af',   '0');
+% Xe_o / xbdot_o / eul_o / p_o are NOT set here, and writing them would be
+% worse than useless. fork_vehicle_body has just put every integrator on
+% InitialConditionSource='external', at which point Simulink ignores the
+% dialog initial condition entirely -- so those four values would read as
+% configuration that determines the starting state while determining nothing.
+%
+% The initial state comes from the external IC ports, i.e. from the Sync bus
+% via body_inputs, on the first step. That means the platform's sync.pos is
+% the car's starting pose whether or not sync.enable is set, so it must carry
+% a sensible ride height rather than zeros.
 
 % FSusp/MSusp stay zero: every force this chassis receives already arrives
 % summed at the body origin from tiresusp_post, so it goes in through
@@ -389,7 +398,7 @@ S = sfroot;  ci = S.find('-isa','Stateflow.EMChart','Path',IN);
 ci.Script = body_inputs_code();
 set_chart_sizes(ci, struct('tyre_f',3,'tyre_t',3,'aero_f',3,'aero_t',3, ...
     'gravity_z',1,'ext_force',3,'ext_torque',3, ...
-    'sync_en',1,'sync_pos',3,'sync_quat',4,'sync_velb',3,'sync_omega',3, ...
+    'sync_en',1,'sync_pos',3,'sync_quat',4,'sync_velb',3,'sync_omega',3,'dcm',[3 3], ...
     'FExt',3,'MExt',3,'trig',1,'ic_euler',3,'ic_pqr',3,'ic_vb',3,'ic_xe',3,'ic_acc',1));
 declare_params(ci, {'IFSSIM_Mass'});
 
@@ -418,6 +427,7 @@ add_block('simulink/User-Defined Functions/MATLAB Function', OUT, ...
           'Position',[700 60 840 360]);
 co = S.find('-isa','Stateflow.EMChart','Path',OUT);
 co.Script = pose_repack_code();
+declare_params(co, {'IFSSIM_CoGH'});   % heave is measured from ride height
 set_chart_sizes(co, struct('Vb',3,'pqr',3,'eul',3,'Xe',3,'Ve',3, ...
     'pdot',1,'qdot',1,'rdot',1,'xddot',1,'yddot',1,'zddot',1, ...
     'position',3,'quat',4,'vel_world',3,'vel_body',3,'omega_body',3, ...
@@ -430,8 +440,14 @@ end
 for k = 1:6
     add_line(name,sprintf('Body Info/%d',k),sprintf('Pose Repack/%d',5+k),'autorouting','on');
 end
-add_block('simulink/Sinks/Terminator',[name '/DCM_unused'],'Position',[620 300 640 316]);
-add_line(name,'Body/4','DCM_unused/1','autorouting','on');
+% The body's DCM, one step late, so the world-frame external wrench can be
+% rotated into the body frame. MEMORY, not Unit Delay: a Unit Delay declares a
+% discrete rate and would make this model a hybrid, which is the trap the
+% tyre/suspension model already documents at length.
+add_block('simulink/Discrete/Memory',[name '/DCM (delay)'], ...
+          'Position',[620 300 690 330],'InitialCondition','eye(3)');
+add_line(name,'Body/4','DCM (delay)/1','autorouting','on');
+add_line(name,'DCM (delay)/1',sprintf('Body Inputs/%d',13),'autorouting','on');
 
 add_block('simulink/Signal Routing/Bus Creator',[name '/Pose Bus'], ...
           'Position',[880 60 890 340],'Inputs','8', ...
@@ -475,28 +491,50 @@ function c = body_inputs_code()
 c = char(strjoin(string({
 "function [FExt, MExt, trig, ic_euler, ic_pqr, ic_vb, ic_xe, ic_acc] = ..."
 "         body_inputs(tyre_f, tyre_t, aero_f, aero_t, gravity_z, ext_force, ..."
-"                     ext_torque, sync_en, sync_pos, sync_quat, sync_velb, sync_omega)"
+"                     ext_torque, sync_en, sync_pos, sync_quat, sync_velb, sync_omega, dcm)"
 "%#codegen"
 "% Everything this chassis is pushed with, gathered and put into the body"
 "% block's frame; plus the state injection, likewise converted."
 ""
 "% ---- the applied wrench ----------------------------------------------"
-"% Summed in OUR frame first, because that is the frame every producer of"
-"% these signals works in, then converted once. Converting each term"
-"% separately would be four chances to get the same sign wrong."
-"F_ours = tyre_f + aero_f + ext_force;"
-"M_ours = tyre_t + aero_t + ext_torque;"
+"% THESE TERMS ARE NOT ALL IN THE SAME FRAME, and treating them as if they"
+"% were is the bug this replaced. tyre_f and aero_f are OUR BODY frame."
+"% ext_force is OUR WORLD frame -- IFSSIM_EnvBus says so, and it is where"
+"% the platform's collision solver works. The incumbent chassis rotates it,"
+"% R' * ext_force; the first version of this function simply added it, which"
+"% applies a world-frame contact force along whatever direction the car"
+"% happens to be pointing. A car hit from the side while facing north gets"
+"% shoved along its own axis instead."
+"%"
+"% So each term is converted from the frame it is actually in:"
+"%   body terms      one y/z flip into the block's body frame;"
+"%   world terms     the same flip into the block's WORLD frame, then dcm,"
+"%                   which was MEASURED to be world->body (a pure 30 deg yaw"
+"%                   reproduces Rz(psi)' to 1.7e-12, not Rz(psi))."
+"%"
+"% dcm arrives one step late, through a Memory block. That matches the"
+"% incumbent, which rotates by R built from LAST step's quaternion, and it"
+"% is what keeps this out of an algebraic loop."
+"F_body = [tyre_f(1) + aero_f(1); -(tyre_f(2) + aero_f(2)); -(tyre_f(3) + aero_f(3))];"
+"M_body = [tyre_t(1) + aero_t(1); -(tyre_t(2) + aero_t(2)); -(tyre_t(3) + aero_t(3))];"
+"F_ext_blk = dcm * [ext_force(1);  -ext_force(2);  -ext_force(3)];"
+"M_ext_blk = dcm * [ext_torque(1); -ext_torque(2); -ext_torque(3)];"
 ""
 "% GRAVITY. The block applies 9.81 m/s^2 internally along its +z, which is"
 "% DOWN, and exposes no parameter for it. Env.gravity_z is ours and is"
 "% configurable, so what goes in here is only the DIFFERENCE. With the"
 "% default -9.81 this term is exactly zero and costs nothing; set lunar"
 "% gravity and the car gets lighter instead of being quietly ignored."
+"% abs() would DISCARD THE SIGN of a signed input. gravity_z is negative in"
+"% our ENU world (down), so the magnitude is -gravity_z; taking abs() happens"
+"% to agree for the usual case and silently ignores the sign for any other,"
+"% which is the same one-sided-comparison mistake as reading vx <= 0.05 on a"
+"% signed speed."
 "g_block = 9.81;"
-"g_extra = IFSSIM_Mass * (abs(gravity_z) - g_block);"
+"g_extra = IFSSIM_Mass * ((-gravity_z) - g_block);"
 ""
-"FExt = [F_ours(1); -F_ours(2); -F_ours(3)] + [0; 0; g_extra];"
-"MExt = [M_ours(1); -M_ours(2); -M_ours(3)];"
+"FExt = F_body + F_ext_blk + [0; 0; g_extra];"
+"MExt = M_body + M_ext_blk;"
 ""
 "% ---- state injection --------------------------------------------------"
 "% The forked integrators reset on a RISING edge, so this passes the"
@@ -578,9 +616,13 @@ c = char(strjoin(string({
 "a_blk  = [xddot; yddot; zddot] - g_body;"
 "accel_proper = [a_blk(1); -a_blk(2); -a_blk(3)];"
 ""
-"% attitude is [roll, pitch, heave]. Heave is a HEIGHT, so it takes the"
-"% same z flip as position: the block counts down, we count up."
-"attitude = [eul(1); -eul(2); -Xe(3)];"
+"% attitude is [roll, pitch, heave]. Heave takes the same z flip as position"
+"% -- the block counts down, we count up -- AND the same DATUM: it is height"
+"% above the static CoG height, so 0 means sitting at ride height rather than"
+"% at the world origin. The incumbent subtracts IFSSIM_CoGH (see the note on"
+"% attitude in chassis_code); dropping it here made attitude(3) bit-identical"
+"% to position(3), which is what gave it away."
+"attitude = [eul(1); -eul(2); -Xe(3) - IFSSIM_CoGH];"
 "end"
 }), newline));
 end

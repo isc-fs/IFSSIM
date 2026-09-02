@@ -69,8 +69,15 @@ int main(int argc, char** argv) {
 
     int ok = 1, failed_cycle = 0;
     for (int cycle = 1; cycle <= 3; cycle++) {
+        /* Argument order is visible, loggingOn, eventModeUsed, earlyReturnAllowed.
+         * eventModeUsed MUST be false to match FSDSFmi3.cpp:138, whose own
+         * comment is the reason: "the FMU may advertise hasEventMode, but
+         * opting in changes the calling protocol and is not something to
+         * enable by accident". This probe passed true, so it was proving
+         * reload for a protocol the platform does not use -- the right answer
+         * about the wrong thing. */
         fmi3Instance c = inst("probe", token, NULL,
-                              false, false, true, false,
+                              false, false, false, false,
                               NULL, 0, NULL, on_log, NULL);
         if (!c) {
             printf("  [FAIL] cycle %d: fmi3InstantiateCoSimulation returned NULL\n", cycle);

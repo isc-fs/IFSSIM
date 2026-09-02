@@ -565,3 +565,61 @@ answers is whether the two are in the same regime and where they part company.
 What it does **not** buy: any of it becomes real grip only when the tyre has
 camber coefficients, and nobody has put this tyre on a rig. The kinematics
 would be exact and their consequence still assumed.
+
+## Bug hunt over the migration, and what it found
+
+Seven adversarial lenses over the ~1800 changed lines, each finding then put to
+two independent verifiers -- one trying to refute the claim against the code,
+one judging whether it mattered at all. 21 candidates, 7 survived both.
+
+Fixed here:
+
+**`ext_force` and `ext_torque` were applied unrotated.** `IFSSIM_EnvBus`
+declares them WORLD frame and the incumbent chassis rotates them, `R' *
+ext_force`. The VDB path added them to the body-frame tyre and aero terms and
+flipped the sum once. A world-frame contact force was therefore applied along
+whatever direction the car happened to be pointing -- a car struck from the
+side while facing north was shoved along its own axis. Two lenses found this
+independently.
+
+The rotation needs the body's attitude, which `body_inputs` does not have, and
+that is why it was got wrong. The fix takes the block's DCM -- output port 4,
+which was being terminated -- back through a `Memory` block. The convention was
+MEASURED, not assumed: a pure 30 deg yaw reproduces `Rz(psi)'` to 1.7e-12
+against 1.0 for `Rz(psi)`, so **the DCM is world->body** and a world vector
+becomes body via `dcm * v`. Each term is now converted from the frame it is
+actually in, which is what the incumbent's own comment asks for: *"Everything
+to the body frame first, then one sum. Mixing frames in a force accumulator is
+the classic way to get a plausible-but-wrong plant."*
+
+**`attitude(3)` reported absolute height, not heave.** The incumbent measures
+heave from the static CoG height; the repack emitted `-Xe(3)`, making
+`attitude(3)` bit-identical to `position(3)` forever.
+
+**`abs(gravity_z)` discarded the sign** of a signed input -- the same mistake
+as the `vx <= 0.05` assertion that once passed at -9.94 m/s.
+
+**`Xe_o`/`xbdot_o`/`eul_o`/`p_o` were written after the fork made them dead.**
+With `InitialConditionSource='external'` Simulink ignores the dialog initial
+condition, so those four read as configuration that determines the starting
+state while determining nothing. The real initial state comes from the Sync
+bus, which means `sync.pos` is the car's starting pose whether or not
+`sync.enable` is set.
+
+**The reload probe tested the wrong protocol.** It passed `eventModeUsed=true`
+where `FSDSFmi3.cpp` passes false, whose own comment says opting in *"changes
+the calling protocol and is not something to enable by accident"*. Corrected;
+it still passes, so the conclusion stands but now about the right thing.
+
+**The teleport fixture was vacuous.** Every sync struct in the repo used
+`quat=[1;0;0;0]` and `omega=[0;0;0]` -- the fixed point of the very transform
+under test -- so the `|dquat|` column read zero because nothing was ever
+rotated, and any sign convention passed. It now injects 40 deg of yaw and real
+body rates, and both chassis land on the heading exactly.
+
+**STILL UNGUARDED, and worth saying plainly:** `ext_force` is zero in every
+test in the repo. That is why the missing rotation survived. The ten stages
+passing does NOT exercise the fix committed here -- it is correct by the
+measured convention and by inspection, and it has no gate. A non-zero
+`ext_force` case is the outstanding follow-up, and until it exists this is
+exactly the situation the hunt was launched to find.
