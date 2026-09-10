@@ -2211,10 +2211,10 @@ void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 	const FFSDSSettings& S = FFSDSSettings::Get();
 	const float Mu = S.RoadDefaultMu;
 
-	USkeletalMeshComponent* Mesh = GetMesh();
+	USkeletalMeshComponent* MeshComp = GetMesh();
 	UFSDSWheeledVehicleMovementComponent* VM = VehicleMovement;
 	const UWorld* W = GetWorld();
-	if (!Mesh || !VM || !W)
+	if (!MeshComp || !VM || !W)
 	{
 		// No answer is better than a confident z=0: a flat-road stub passes
 		// every test that exists today and is wrong on the first ramp.
@@ -2227,7 +2227,7 @@ void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 	for (int32 i = 0; i < N; i++)
 	{
 		const FName Bone = VM->WheelSetups[i].BoneName;
-		FVector WheelCentre = Mesh->GetBoneLocation(Bone, EBoneSpaces::WorldSpace);
+		FVector WheelCentre = MeshComp->GetBoneLocation(Bone, EBoneSpaces::WorldSpace);
 		if (WheelCentre.IsNearlyZero())
 		{
 			// Bone missing from this skeleton — say so rather than probing the
@@ -2235,7 +2235,7 @@ void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
 			In.bRoadValid[i] = false;
 			continue;
 		}
-		WheelCentre += Mesh->GetComponentTransform()
+		WheelCentre += MeshComp->GetComponentTransform()
 			.TransformVectorNoScale(VM->WheelSetups[i].AdditionalOffset);
 
 		double HitZ = 0.0, HitN[3] = {0,0,1}, Residual = kRoadResidualNotFitted;
