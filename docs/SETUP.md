@@ -199,6 +199,19 @@ The sim binds:
 
 ## 4. Bring up the Docker stack
 
+> **Windows — two one-time requirements, or this step silently half-works:**
+>
+> 1. **Enable Docker Desktop host networking** — Settings → Resources →
+>    Network → tick **"Enable host networking"** → Apply & restart.
+>    `dv_pipeline_stack` and `mission_control_backend` run with
+>    `network_mode: host`; on Docker Desktop for Windows those bind inside
+>    the Linux VM and are otherwise unreachable from Windows, so Mission
+>    Control's API returns **502** on every call and the sim can't stream
+>    sensors/LiDAR to the bridge.
+> 2. **Run `docker compose` from Git Bash, not PowerShell.** The compose
+>    file uses `${PWD}` to hand the sim the tracks path; PowerShell leaves
+>    it blank and track loading silently breaks.
+
 From the repo root:
 
 ```bash
@@ -410,6 +423,14 @@ docker compose up -d --force-recreate mission_control_backend
 Backend can't reach the bridge's RPC port. Same root cause as the
 bridge-connection-failed loop above — make sure the sim is running
 on port 41451.
+
+### Mission Control loads but every API call returns 502 (Windows)
+
+Docker Desktop **host networking is off**. The host-networked
+`mission_control_backend` isn't reachable from the frontend / Windows.
+Enable it (Settings → Resources → Network → "Enable host networking" →
+Apply & restart), then `docker compose up -d --force-recreate`. See
+[§4](#4-bring-up-the-docker-stack).
 
 ---
 
