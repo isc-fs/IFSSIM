@@ -4,6 +4,13 @@ name: Close linked issues on merge to dev
 # into the repository's default branch. Our workflow merges feat/fix PRs into
 # `dev` instead, so this workflow reproduces the behaviour by parsing the PR
 # body for the standard closing keywords and closing each referenced issue.
+#
+# It ALSO closes the branch-tracking issue that branch-issue.yml opens when a
+# feat/** or fix/** branch is created. That issue's title is deterministically
+# `[<branch-name>]`, so the merge event already carries everything needed to
+# find it — no `Closes #N` discipline required. Relying on the keyword alone
+# orphaned 23 tracking issues between 2026-05 and 2026-09, because the closing
+# keyword is easy to forget and nothing fails when it is missing.
 
 on:
   pull_request:
@@ -83,4 +90,63 @@ jobs:
               } catch (err) {
                 console.log(`Could not close #${n}: ${err.message}`);
               }
+            }
+
+      - name: Close the branch-tracking issue for this PR's head branch
+        uses: actions/github-script@v7
+        env:
+          HEAD_REF:  ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const headRef = process.env.HEAD_REF || '';
+            const prNum   = parseInt(process.env.PR_NUMBER, 10);
+
+            /* Only feat/** and fix/** branches get a tracking issue — see
+               branch-issue.yml. Anything else (release/, docs/, chore/…)
+               has nothing to close. */
+            if (!/^(feat|fix)\//.test(headRef)) {
+              console.log(`Head ref '${headRef}' is not a feat/fix branch, nothing to close.`);
+              return;
+            }
+
+            /* branch-issue.yml titles the issue `[<branch>] ` — exact prefix,
+               so match on startsWith rather than a regex. Branch names contain
+               '/' and '-' and would otherwise need escaping. */
+            const prefix = `[${headRef}]`;
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+
+            const matches = issues.filter(
+              i => !i.pull_request && i.title.startsWith(prefix)
+            );
+
+            if (matches.length === 0) {
+              console.log(`No open tracking issue titled '${prefix}…' found.`);
+              return;
+            }
+
+            /* The automation has historically opened duplicates for the same
+               branch (e.g. #557 and #558 for feat/500-sim-benchmark), so close
+               every match rather than assuming there is exactly one. */
+            for (const issue of matches) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: issue.number,
+                body:  `Branch \`${headRef}\` merged via #${prNum} — closing this tracking issue automatically.`,
+              });
+              console.log(`Closed tracking issue #${issue.number}.`);
             }
