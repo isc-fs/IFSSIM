@@ -5,7 +5,7 @@
   "ClockSpeed": 1.0,
   "_comment_plant": "Which implementation of IFSDSPlant stands behind the car. 'chaos' = Chaos observes the car it is already integrating (the only validated reference). 'shadow' = Chaos still DRIVES and the FMU is stepped alongside it with identical inputs, with divergence logged once a second; behaviour is unchanged by construction because nothing downstream reads the shadow. 'fmu' = the FMU is the plant, but the pawn is still Chaos-integrated, so the sensors describe a different car from the one on screen — bring-up only until the Phase 6 kinematic swap. See docs/fmu_plant_migration.md.",
   "Plant": {
-    "Type": "shadow",
+    "Type": "chaos",
     "FmuPath": "matlab/plant/fmu/IFSSIM_Plant.fmu",
     "RoadProbeUpM": 0.6,
     "RoadProbeDownM": 1.2,
@@ -81,7 +81,7 @@
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
           "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond is the datasheet rate; the LiDAR stream is UDP-only since #322 (TCP and UDS senders retired — pre-#321 they existed to bypass macOS Docker Desktop's ~7 MB/s TCP loopback cap). The chunked, sender-paced UDP path holds ~7-8 Hz at the full datasheet rate; the remaining gap to nominal 10 Hz is in the DDS layer (1.4 MB BEST_EFFORT messages fragment-loss between publisher and subscriber) — tracked as a follow-up. Sensor packs only emit *hits*, so the wire rate is roughly 65 % of attempted rays (e.g. 1.14 M pts/s of valid range returns at 1.74 M attempted).",
-          "NumberOfChannels": 116, "PointsPerSecond": 1740000,
+          "NumberOfChannels": 116, "PointsPerSecond": 300000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
@@ -91,8 +91,8 @@
           "X": 0.0, "Y": 0, "Z": 1.10,
           "RangeNoiseStd": 0.03,
           "DropoutRate": 0.01,
-          "_comment_lidarpath": "GPU path (#223). Production default. Three-stage pipeline: depth render at the LiDAR's spherical scan envelope (CaptureScene), async GPU→CPU readback ring, and the FSDSLidarDecode.usf compute pass that turns depth texels into LiDAR-frame xyz hits. Output is the same flat-float point cloud the CPU path emits — switch to 'cpu' only for parity testing or a Chaos LineTrace reference run.",
-          "LidarPath": "gpu",
+          "_comment_lidarpath": "CPU path — ParallelFor + LineTraceSingleByChannel against Chaos. The GPU path (#223) is retained as an option and remains the default on ARM Macs, where unified memory + async GPU→CPU readback is cheap; on Windows/x86 the discrete-GPU readback stall + PCIe bus transfer dominate and the CPU LineTrace loop is more predictable. PointsPerSecond dropped to 300k so the ParallelFor scan fits well under a single core budget (~50-60 % of 1 core at 300 k pts/s on a mid-range Ryzen).",
+          "LidarPath": "cpu",
           "_comment_perchannelmaxrange": "Per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle = -12.4°, 115 = highest = +5.9°). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams: 60 m bottom rings, 198 m centre, 90 m top. The array below is derived from the datasheet (App. A.1.2 Sorted by Ring IDs) and linearly remapped [60-198 m] → [25-30 m] so it fits under the sim's MaxRange=30 m perf budget while preserving the relative shape. Regenerate with `python3 tools/gen_per_channel_range.py --pretty`. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this.",
           "PerChannelMaxRangeM": [
             25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,
