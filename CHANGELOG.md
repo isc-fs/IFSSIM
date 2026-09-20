@@ -14,40 +14,40 @@ shipping pipeline, documentation.
 
 ## [1.0.0] — 2026-09-20
 
-**Driverless-team-safe defaults, and a two-branch policy that keeps
-the FMU migration from blocking autonomy work.** 0.2.0 introduced
-`Plant.Type` and the Simulink-authored FMU; live testing during 1.0.0
-preparation surfaced that `Plant.Type: shadow` (documented as
-"behaviour-neutral") in fact leaks enough state downstream to break
-cone_slam mid-drive — [#606](https://github.com/isc-fs/IFSSIM/issues/606).
-The long-term plan is still for the FMU to become the plant, but that
-work now happens on a dedicated `dev-manual` branch so the driverless
-team can develop against a plant that stays out of their way.
+Live testing during 1.0.0 preparation surfaced that `Plant.Type:
+shadow` (documented as behaviour-neutral) in fact leaks enough state
+downstream to break `cone_slam` mid-drive
+— [#606](https://github.com/isc-fs/IFSSIM/issues/606). Defaults on
+this branch flip to pure Chaos plant + CPU LiDAR so a stock checkout
+runs a full trackdrive without a codepath workaround. FMU / Simulink
+plant integration continues on `dev-manual` and merges back to `dev`
+once the shadow-neutrality contract is honoured.
 
 ### Changed
 
-- **Default `Plant.Type` is now `chaos`.** `settings.json` shipped with
-  `shadow` since 0.2.0; that flag makes Chaos still drive the pawn but
-  steps the FMU alongside it, and until [#606](https://github.com/isc-fs/IFSSIM/issues/606)
-  is resolved the shadow-step disturbs downstream odometry enough to
-  stall cone_slam. `chaos` mode disables the shadow entirely and matches
-  the pre-0.2.0 behaviour. FMU / shadow work continues on the
-  `dev-manual` branch, which keeps `Plant.Type: shadow` (or `fmu`) as
-  its default. Merge to `dev` only once the shadow-neutrality invariant
-  is restored.
-- **Default LiDAR path is now `cpu` at 300 k points/s** (was `gpu` at
-  1.74 M pts/s, the Hesai ATX_S01 datasheet rate). The GPU path was
-  tuned against ARM Mac unified memory + async GPU→CPU readback; on
-  Windows/x86 the discrete-GPU readback stall + PCIe transfer dominate
-  and the CPU `ParallelFor` + Chaos `LineTraceSingleByChannel` loop is
-  more predictable. 300 k pts/s is 116 ch × 10 Hz × ~258 H-steps →
-  0.47° H-resolution, still fine for cone detection at ≤30 m. Bump PPS
-  back up on beefier x86 boxes or benchmark against real-car captures;
-  flip `LidarPath` back to `gpu` on ARM.
-- **`ProjectVersion` — 0.2.0 → 1.0.0.** First release where an operator
-  can run a full trackdrive from a stock checkout without a codepath
-  workaround. 1.0 does NOT mean "FMU migration done"; that is the
-  arc from `dev-manual` to a future 2.0.
+- **Default `Plant.Type` is now `chaos`.** `settings.json` shipped
+  with `shadow` since 0.2.0; that flag makes Chaos still drive the
+  pawn but steps the FMU alongside it, and until
+  [#606](https://github.com/isc-fs/IFSSIM/issues/606) is resolved
+  the shadow-step disturbs downstream odometry enough to stall
+  cone_slam. `chaos` mode disables the shadow entirely and matches
+  the pre-0.2.0 behaviour. `dev-manual` keeps `Plant.Type: shadow`
+  (or `fmu`) as its default; merges to `dev` gate on the
+  shadow-neutrality invariant being restored.
+- **Default LiDAR path is now `cpu` at 300 k points/s** (was `gpu`
+  at 1.74 M pts/s, the Hesai ATX_S01 datasheet rate). The GPU path
+  was tuned against ARM Mac unified memory + async GPU→CPU readback;
+  on Windows/x86 the discrete-GPU readback stall + PCIe transfer
+  dominate and the CPU `ParallelFor` + Chaos
+  `LineTraceSingleByChannel` loop is more predictable. 300 k pts/s
+  is 116 ch × 10 Hz × ~258 H-steps → 0.47° H-resolution, still fine
+  for cone detection at ≤30 m. Bump PPS back up on beefier x86
+  boxes or benchmark against real-car captures; flip `LidarPath`
+  back to `gpu` on ARM.
+- **`ProjectVersion` — 0.2.0 → 1.0.0.** First release where a
+  stock checkout runs a full trackdrive without a codepath
+  workaround. 1.0 does not mean the FMU migration is done — that
+  is the arc from `dev-manual` to a future 2.0.
 
 ### Added
 
