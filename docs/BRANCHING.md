@@ -21,7 +21,7 @@ deliberately, in one piece, when the plant is proven — not continuously.
 
 | rule | `dev` | `dev-manual` | `main` |
 |---|---|---|---|
-| pull request required | yes, **1 approval** | no — direct commits | yes, 1 approval |
+| pull request required | yes, **0 approvals** | no — direct commits | yes, 1 approval |
 | stale approvals dismissed on new commits | yes | — | yes |
 | required status check | `CI summary` | none | none |
 | branch must be up to date before merge | yes | — | no |
@@ -31,7 +31,16 @@ deliberately, in one piece, when the plant is proven — not continuously.
 | deletion | **blocked** | **blocked** | **blocked** |
 | rules apply to admins | yes | no | yes |
 
-Two of those deserve their reasons written down.
+Three of those deserve their reasons written down.
+
+**`dev` requires a PR but zero approvals.** Not because review is unwanted —
+because GitHub refuses to let anyone approve their own pull request, so a
+required approval deadlocks a solo maintainer completely: the PR cannot be
+approved by its author and cannot be merged without an approval. Requiring the
+PR and the status check still buys the things that catch mistakes — CI runs,
+the diff is reviewable, the branch must be up to date, and nothing lands by
+direct push. Raise this to 1 the moment a second reviewer is reliably
+available; the rule is one API call.
 
 **`dev-manual` allows direct commits on purpose.** The plant work lands as a
 long series of small commits against a model that is being measured, rebuilt
