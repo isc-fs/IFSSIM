@@ -1,4 +1,9 @@
 #include "RPC/FSDSRpcServer.h"
+#include "FMI/FSDSFmuPackage.h"
+#include "FMI/FSDSFmi3.h"
+#include "Plant/FSDSFmuPlant.h"
+#include "EmraxMotor.h"
+#include "FSDSRandom.h"
 #include "RPC/FSDSUdpBroadcaster.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
@@ -16,6 +21,35 @@
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
+#include "Test/FSDSTestTerrain.h"
+
+/**
+ * Tell the vehicle's plant(s) that the car has been teleported.
+ *
+ * Moving the mesh is INVISIBLE to a plant that integrates its own state. Without
+ * this the FMU keeps driving from wherever it had got to while the rest of the
+ * sim starts a fresh mission. Measured before this existed: a 59.5 m step in the
+ * shadow divergence, with the car standing still.
+ *
+ * Every path that repositions the vehicle must call this — loadTrack, reset and
+ * simSetVehiclePose all do. A helper rather than three copies precisely because
+ * the fourth caller is the one that will forget.
+ *
+ * Converts UE (left-handed, centimetres) to the contract (SI, ENU, y LEFT) here,
+ * on the platform side of the boundary, matching FFSDSChaosPlant::Reset.
+ */
+static void NotifyPlantsOfTeleport(AFSDSVehiclePawn* Pawn, const FVector& PosUe, const FQuat& RotUe)
+{
+	if (!Pawn) return;
+	// Mesh height, plain. ResetPlants resolves the road beneath the pose and
+	// places the CoG one ride height above it, so the offset belongs there
+	// and not here — applying it at both ends is how the car ended up
+	// dropped from a clearance-padded spawn.
+	const double PosContract[3] = { PosUe.X * 0.01, -PosUe.Y * 0.01, PosUe.Z * 0.01 };
+	const double QuatContract[4] = { RotUe.W, -RotUe.X, RotUe.Y, -RotUe.Z };
+	Pawn->ResetPlants(PosContract, QuatContract);
+}
+
 
 namespace
 {
@@ -662,6 +696,323 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			QuatENU.W, QuatENU.X, QuatENU.Y, QuatENU.Z);
 	}
 
+	else if (Method == TEXT("getPlantState"))
+	{
+		// The live plant snapshot, in contract units (SI, ISO 8855, ENU) rather
+		// than UE's left-handed centimetres. This is what sensors and the bridge
+		// should migrate to reading.
+		if (!IsValid(VehiclePawn))
+		{
+			return TEXT("{\"ok\":false,\"error\":\"no vehicle pawn\"}");
+		}
+		const FFSDSPlantOutput& S = VehiclePawn->GetPlantState();
+		return FString::Printf(
+			TEXT("{\"ok\":%s,\"plant\":\"%s\",\"status\":%d,")
+			TEXT("\"position\":[%.6f,%.6f,%.6f],\"quat\":[%.6f,%.6f,%.6f,%.6f],")
+			TEXT("\"velWorld\":[%.6f,%.6f,%.6f],\"velBody\":[%.6f,%.6f,%.6f],")
+			TEXT("\"omegaBody\":[%.6f,%.6f,%.6f],\"accelProper\":[%.6f,%.6f,%.6f],")
+			TEXT("\"attitude\":[%.6f,%.6f,%.6f],")
+			TEXT("\"wheelFz\":[%.1f,%.1f,%.1f,%.1f],")
+			TEXT("\"wheelSteer\":[%.5f,%.5f,%.5f,%.5f],")
+			TEXT("\"inContact\":[%d,%d,%d,%d]}"),
+			S.bPlantOk ? TEXT("true") : TEXT("false"),
+			*VehiclePawn->GetPlantName(), S.PlantStatus,
+			S.Position[0], S.Position[1], S.Position[2],
+			S.Quat[0], S.Quat[1], S.Quat[2], S.Quat[3],
+			S.VelWorld[0], S.VelWorld[1], S.VelWorld[2],
+			S.VelBody[0], S.VelBody[1], S.VelBody[2],
+			S.OmegaBody[0], S.OmegaBody[1], S.OmegaBody[2],
+			S.AccelProper[0], S.AccelProper[1], S.AccelProper[2],
+			S.Attitude[0], S.Attitude[1], S.Attitude[2],
+			S.WheelFz[0], S.WheelFz[1], S.WheelFz[2], S.WheelFz[3],
+			S.WheelSteer[0], S.WheelSteer[1], S.WheelSteer[2], S.WheelSteer[3],
+			S.bWheelInContact[0]?1:0, S.bWheelInContact[1]?1:0,
+			S.bWheelInContact[2]?1:0, S.bWheelInContact[3]?1:0);
+	}
+	else if (Method.StartsWith(TEXT("plantDrive")))
+	{
+		// plantDrive <path-to.fmu> [seconds] [throttle] [steer]
+		//
+		// Drives an FMU through IFSDSPlant exactly as the simulator would: flat
+		// road under all four wheels, gravity, constant commands, stepped at
+		// 1/60 s. Reports the resulting trajectory.
+		//
+		// The point is CROSS-CHECKING. The same model driven the same way in
+		// MATLAB produces a known answer; if this path produces a different one
+		// then the FMU export, the value-reference resolution or the interface
+		// is wrong — and every one of those failures type-checks perfectly,
+		// because every signal on this boundary is a double.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "), true);
+		if (Parts.Num() < 2)
+		{
+			return TEXT("{\"error\":\"usage: plantDrive <path-to.fmu> [seconds] [throttle] [steer]\"}");
+		}
+		const double Seconds  = (Parts.Num() >= 3) ? FCString::Atod(*Parts[2]) : 2.0;
+		const double Throttle = (Parts.Num() >= 4) ? FCString::Atod(*Parts[3]) : 0.5;
+		const double Steer    = (Parts.Num() >= 5) ? FCString::Atod(*Parts[4]) : 0.0;
+
+		FFSDSFmuPlant Plant(Parts[1]);
+		if (!Plant.Initialise())
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"init\",\"error\":\"%s\"}"),
+				*Plant.GetLastError().ReplaceCharWithEscapedChar());
+		}
+
+		FFSDSPlantInput In;
+		In.Throttle  = Throttle;
+		In.SteerNorm = Steer;
+		In.GravityZ  = -9.81;
+		In.DeltaTime = 1.0 / 60.0;
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++)
+		{
+			In.bRoadValid[i] = true;
+			In.RoadHeight[i] = 0.0;
+			In.RoadMu[i]     = 1.4;
+			In.RoadNormal[i][0] = 0.0; In.RoadNormal[i][1] = 0.0; In.RoadNormal[i][2] = 1.0;
+		}
+
+		FFSDSPlantOutput Out;
+		const int32 Steps = FMath::Max(1, FMath::RoundToInt(Seconds * 60.0));
+		for (int32 i = 0; i < Steps; i++)
+		{
+			In.SimTime = i / 60.0;
+			Plant.PreStep(In);
+			Plant.PostStep(Out);
+			if (!Out.bPlantOk)
+			{
+				return FString::Printf(
+					TEXT("{\"ok\":false,\"stage\":\"step\",\"atStep\":%d,\"error\":\"%s\"}"),
+					i, *Plant.GetLastError().ReplaceCharWithEscapedChar());
+			}
+		}
+
+		return FString::Printf(
+			TEXT("{\"ok\":true,\"plant\":\"%s\",\"steps\":%d,\"seconds\":%.6g,")
+			TEXT("\"throttle\":%.6g,\"steer\":%.6g,")
+			TEXT("\"x\":%.6f,\"y\":%.6f,\"z\":%.6f,")
+			TEXT("\"vx\":%.6f,\"vy\":%.6f,\"yawRate\":%.6f,")
+			TEXT("\"wheelOmega\":[%.4f,%.4f,%.4f,%.4f],")
+			TEXT("\"fz\":[%.1f,%.1f,%.1f,%.1f],")
+			TEXT("\"slipRatio\":[%.5f,%.5f,%.5f,%.5f],")
+			TEXT("\"motorRpm\":%.2f,\"battSoc\":%.9f}"),
+			*Plant.GetName(), Steps, Seconds, Throttle, Steer,
+			Out.Position[0], Out.Position[1], Out.Position[2],
+			Out.VelBody[0], Out.VelBody[1], Out.OmegaBody[2],
+			Out.WheelOmega[0], Out.WheelOmega[1], Out.WheelOmega[2], Out.WheelOmega[3],
+			Out.WheelFz[0], Out.WheelFz[1], Out.WheelFz[2], Out.WheelFz[3],
+			Out.WheelSlipRatio[0], Out.WheelSlipRatio[1], Out.WheelSlipRatio[2], Out.WheelSlipRatio[3],
+			Out.MotorRpm, Out.BattSoc);
+	}
+	else if (Method.StartsWith(TEXT("fmuSelfTest")))
+	{
+		// fmuSelfTest <path-to.fmu> [inputVR] [outputVR]
+		//
+		// Loads an FMU, steps it, and — the part that matters — proves the
+		// state save/restore primitive actually reproduces.
+		//
+		// Everything the deterministic-reset design rests on is that
+		// GetFMUState/SetFMUState round-trips exactly. A test that only checked
+		// "does it load and step" would pass on an FMU whose state restore is
+		// silently a no-op, which is precisely the failure that would poison
+		// every A/B comparison built on top of it later.
+		//
+		// So the test is: snapshot, run N steps, record the output, restore,
+		// run the SAME N steps, and require the second answer to be BITWISE
+		// identical. Not close. Identical.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "), true);
+		if (Parts.Num() < 2)
+		{
+			return TEXT("{\"error\":\"usage: fmuSelfTest <path-to.fmu> [inVR] [outVR]\"}");
+		}
+		const FString FmuPath = Parts[1];
+		const uint32 InVR  = (Parts.Num() >= 3) ? (uint32)FCString::Atoi(*Parts[2]) : 0u;
+		const uint32 OutVR = (Parts.Num() >= 4) ? (uint32)FCString::Atoi(*Parts[3]) : 1u;
+
+		FFSDSFmuPackage Package;
+		if (!Package.Open(FmuPath))
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"open\",\"error\":\"%s\"}"),
+				*Package.GetError().ReplaceCharWithEscapedChar());
+		}
+
+		const FString Lib = Package.GetBinaryPathForHost();
+		if (Lib.IsEmpty())
+		{
+			return TEXT("{\"ok\":false,\"stage\":\"binary\",\"error\":\"no binary for this host\"}");
+		}
+
+		FFSDSFmi3Instance Fmu;
+		if (!Fmu.Load(Lib))
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"load\",\"error\":\"%s\"}"),
+				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+		}
+
+		const FString ResourcePath = FPaths::Combine(Package.GetExtractedDir(), TEXT("resources"));
+		if (!Fmu.Instantiate(TEXT("ifssim_selftest"),
+		                     Package.GetInfo().InstantiationToken, ResourcePath))
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"instantiate\",\"error\":\"%s\"}"),
+				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+		}
+
+		const double H = 1.0 / 60.0;   // the platform communication step
+		if (!Fmu.EnterInitializationMode(0.0, 10.0) || !Fmu.ExitInitializationMode())
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"init\",\"error\":\"%s\"}"),
+				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+		}
+
+		double T = 0.0;
+		Fmu.SetFloat64(InVR, 1.0);          // unit input, so the output integrates visibly
+		if (!Fmu.DoStep(T, H))
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"step\",\"error\":\"%s\"}"),
+				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+		}
+		T += H;
+		double YAfterFirst = 0.0;
+		Fmu.GetFloat64(OutVR, YAfterFirst);
+
+		// --- the state round-trip ---
+		bool bStateSupported = Package.GetInfo().bCanGetAndSetState;
+		bool bStateMatched = false;
+		double YRunA = 0.0, YRunB = 0.0;
+		void* Snapshot = nullptr;
+		FString StateNote;
+
+		if (bStateSupported && Fmu.GetState(Snapshot) && Snapshot)
+		{
+			const double TSnapshot = T;
+			const int32 N = 10;
+
+			for (int32 i = 0; i < N; i++) { Fmu.SetFloat64(InVR, 1.0); Fmu.DoStep(T, H); T += H; }
+			Fmu.GetFloat64(OutVR, YRunA);
+
+			// Restore BOTH the FMU state and our own clock. Rewinding one
+			// without the other reruns a different interval and the comparison
+			// would be meaningless.
+			if (Fmu.SetState(Snapshot))
+			{
+				T = TSnapshot;
+				for (int32 i = 0; i < N; i++) { Fmu.SetFloat64(InVR, 1.0); Fmu.DoStep(T, H); T += H; }
+				Fmu.GetFloat64(OutVR, YRunB);
+
+				// Bitwise, not near-equal. A tolerance here would accept an
+				// FMU that restores approximately, which is not restoring.
+				bStateMatched = (FMath::IsNaN(YRunA) == FMath::IsNaN(YRunB)) &&
+				                (*reinterpret_cast<const uint64*>(&YRunA) ==
+				                 *reinterpret_cast<const uint64*>(&YRunB));
+				StateNote = bStateMatched
+					? TEXT("bitwise identical across restore")
+					: TEXT("DIVERGED after restore — state save/restore does not reproduce");
+			}
+			else
+			{
+				StateNote = TEXT("SetFMUState failed");
+			}
+			Fmu.FreeState(Snapshot);
+		}
+		else
+		{
+			StateNote = bStateSupported ? TEXT("GetFMUState failed")
+			                            : TEXT("FMU does not advertise state save/restore");
+		}
+
+		Fmu.Terminate();
+		Fmu.FreeInstance();
+
+		const bool bOk = bStateSupported && bStateMatched;
+		return FString::Printf(
+			TEXT("{\"ok\":%s,\"fmiVersionReported\":\"%s\",\"library\":\"%s\",")
+			TEXT("\"stepSize\":%.9g,\"yAfterFirstStep\":%.17g,")
+			TEXT("\"yRunA\":%.17g,\"yRunB\":%.17g,\"stateRoundTrip\":%s,\"stateNote\":\"%s\"}"),
+			bOk ? TEXT("true") : TEXT("false"),
+			*Fmu.GetVersion(),
+			*FPaths::GetCleanFilename(Lib),
+			H, YAfterFirst, YRunA, YRunB,
+			bStateMatched ? TEXT("true") : TEXT("false"),
+			*StateNote);
+	}
+	else if (Method.StartsWith(TEXT("inspectFmu")))
+	{
+		// inspectFmu <path-to.fmu>
+		//
+		// Opens an FMU, extracts it, and checks it against the gates in
+		// docs/fmu_plant_migration.md — the same checks tools/fmu/
+		// inspect_fmu.py runs offline, so the two must agree. This is the
+		// in-engine one, which additionally proves the .fmu can be read by the
+		// code that will actually have to load it: the offline tool uses
+		// Python's zipfile, and agreeing with it says nothing about whether
+		// our own ZIP reader and XML parse work on this file.
+		//
+		// No FMI runtime is invoked. Nothing is instantiated, nothing steps.
+		// This answers "could we run this?", not "does it run?".
+		// Parse the whole REQUEST, not Method: the dispatcher above already
+		// split Method off as the first word, so Method never contains the
+		// argument. Every other multi-argument command here parses Request —
+		// this one did not, and reported "usage:" for a perfectly good path.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "), true);
+		if (Parts.Num() < 2)
+		{
+			return TEXT("{\"error\":\"usage: inspectFmu <path-to.fmu>\"}");
+		}
+
+		// Re-join the tail so paths containing spaces survive.
+		FString FmuPath;
+		for (int32 i = 1; i < Parts.Num(); i++)
+		{
+			if (i > 1) FmuPath += TEXT(" ");
+			FmuPath += Parts[i];
+		}
+
+		FFSDSFmuPackage Package;
+		if (!Package.Open(FmuPath))
+		{
+			return FString::Printf(TEXT("{\"ok\":false,\"error\":\"%s\"}"),
+				*Package.GetError().ReplaceCharWithEscapedChar());
+		}
+
+		// The platform's communication step. Fixed 60 Hz — see
+		// Config/DefaultEngine.ini and the determinism posture log.
+		const double CommStep = 1.0 / 60.0;
+		const bool bPassed = Package.LogGateResults(CommStep);
+		const FFSDSFmuInfo& I = Package.GetInfo();
+
+		FString GatesJson;
+		for (const FFSDSFmuGate& G : Package.CheckGates(CommStep))
+		{
+			if (!GatesJson.IsEmpty()) GatesJson += TEXT(",");
+			GatesJson += FString::Printf(
+				TEXT("{\"name\":\"%s\",\"passed\":%s,\"required\":%s,\"detail\":\"%s\"}"),
+				*G.Name, G.bPassed ? TEXT("true") : TEXT("false"),
+				G.bRequired ? TEXT("true") : TEXT("false"),
+				*G.Detail.ReplaceCharWithEscapedChar());
+		}
+
+		return FString::Printf(
+			TEXT("{\"ok\":%s,\"fmiVersion\":\"%s\",\"modelName\":\"%s\",")
+			TEXT("\"modelIdentifier\":\"%s\",\"tool\":\"%s\",\"token\":\"%s\",")
+			TEXT("\"stateAttr\":\"%s\",\"canGetAndSetState\":%s,")
+			TEXT("\"fixedInternalStepSize\":%g,\"binaries\":[%s],")
+			TEXT("\"hostBinary\":\"%s\",\"sourceCode\":%s,\"resources\":%s,")
+			TEXT("\"inputs\":%d,\"outputs\":%d,\"parameters\":%d,\"gates\":[%s]}"),
+			bPassed ? TEXT("true") : TEXT("false"),
+			I.Version == EFSDSFmiVersion::FMI3 ? TEXT("3.0")
+				: I.Version == EFSDSFmiVersion::FMI2 ? TEXT("2.0") : TEXT("unknown"),
+			*I.ModelName, *I.ModelIdentifier, *I.GenerationTool, *I.InstantiationToken,
+			*I.StateAttributeFound,
+			I.bCanGetAndSetState ? TEXT("true") : TEXT("false"),
+			I.FixedInternalStepSize,
+			*FString::Printf(TEXT("\"%s\""), *FString::Join(I.BinaryPlatforms, TEXT("\",\""))),
+			*Package.GetBinaryPathForHost().ReplaceCharWithEscapedChar(),
+			I.bHasSourceCode ? TEXT("true") : TEXT("false"),
+			I.bHasResources ? TEXT("true") : TEXT("false"),
+			I.NumInputs, I.NumOutputs, I.NumParameters, *GatesJson);
+	}
 	else if (Method.StartsWith(TEXT("getTireLoads")))
 	{
 		// Parse:  getTireLoads truth
@@ -839,9 +1190,106 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	else if (Method == TEXT("reset"))
 	{
 		// Destructive level reload (OpenLevel) crashed the editor; removed in fix/12.
-		// Clients should use simSetVehiclePose instead for a soft reset.
-		UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: 'reset' is no longer supported; use simSetVehiclePose"));
-		return TEXT("{\"error\":\"reset removed; use simSetVehiclePose\"}");
+		// Clients should use resetScenario (soft reset) instead.
+		UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: 'reset' is no longer supported; use resetScenario"));
+		return TEXT("{\"error\":\"reset removed; use resetScenario\"}");
+	}
+
+	else if (Method.StartsWith(TEXT("resetScenario")))
+	{
+		// Soft scenario reset for repeat runs: restore the sim to the state a
+		// fresh run would start from, WITHOUT reloading the level (OpenLevel
+		// is what crashed the editor and got 'reset' removed).
+		//
+		// The point of this call is repeatability. A repeat is only a repeat if
+		// every piece of carried-over state is restored — it is easy to reset
+		// the visible things (pose, cones) and silently leave the invisible
+		// ones (RNG position, IMU bias drift, rotor speed), which produces a
+		// run that looks like a repeat and is not one.
+		//
+		// Optional argument: resetScenario [seed]. Passing a seed makes this
+		// the primitive a batch runner sweeps over for N-seed repeats.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		const bool bHasSeed = (Parts.Num() >= 2);
+		const int32 NewSeed = bHasSeed ? FCString::Atoi(*Parts[1]) : 0;
+
+		FString Result;
+		FEvent* Done = FPlatformProcess::GetSynchEventFromPool(false);
+
+		AsyncTask(ENamedThreads::GameThread, [this, bHasSeed, NewSeed, &Result, Done]()
+		{
+			int32 NumCones = 0;
+
+			// 1. Re-seed. Bumps the RNG generation, which makes every cached
+			//    sensor stream re-seed on next use and clears IMU bias drift.
+			FSDSRandom::SetScenarioSeed(bHasSeed ? NewSeed : FSDSRandom::GetScenarioSeed());
+
+			// 2. Referee counters (DOO / out-of-course / laps / times).
+			//
+			// ResetForRepeatRun, NOT ResetState. ResetState wipes the cone
+			// registry, the cone list and the finish line — fine for
+			// loadTrack, which respawns cones immediately afterwards, but
+			// resetScenario respawns nothing. Using it here left the referee
+			// permanently blind: DOO, off-course and lap detection all dead,
+			// so every run after the first silently scored 0 / 0 / 0. Any A/B
+			// campaign built on resetScenario was comparing empty scorecards.
+			if (Referee) Referee->ResetForRepeatRun();
+
+			// 3. Vehicle: back to the start gate with velocities zeroed, and
+			//    powertrain state cleared. EBS stays as-is deliberately — in
+			//    the real FS-DV flow the RES Go signal owns that transition
+			//    (T 14.8.4), and loadTrack made the same choice.
+			if (IsValid(VehiclePawn))
+			{
+				if (World)
+				{
+					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+					{
+						FVector StartLoc; FQuat StartRot;
+						if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
+						{
+							VehiclePawn->SetActorLocationAndRotation(
+								StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
+						}
+						NumCones = It->SpawnedCones.Num();
+						break;
+					}
+				}
+
+				// Zero the physics body. Chaos keeps its own velocities on the
+				// body instance, so teleporting the actor alone leaves the car
+				// carrying the previous run's momentum into the new one.
+				if (USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh())
+				{
+					if (Mesh->IsSimulatingPhysics())
+					{
+						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+					}
+				}
+
+				// Rotor speed is integrated state; without this the repeat
+				// starts with the previous run's motor spinning.
+				if (VehiclePawn->Motor) VehiclePawn->Motor->Reset();
+			}
+
+			Result = FString::Printf(
+				TEXT("{\"ok\":true,\"seed\":%d,\"generation\":%u,\"cones\":%d}"),
+				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration(), NumCones);
+
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS RPC: resetScenario — seed %d (generation %u), referee cleared, "
+					 "vehicle at start gate, velocities and rotor zeroed"),
+				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration());
+
+			Done->Trigger();
+		});
+
+		Done->Wait();
+		FPlatformProcess::ReturnSynchEventToPool(Done);
+		return Result;
 	}
 
 	// === Object APIs ===
@@ -1014,6 +1462,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (VehiclePawn->VehicleMovement)
 				{
 					VehiclePawn->VehicleMovement->ResetVehicleState();
+
+					// ResetVehicleState destroys and recreates the physics
+					// state, which re-runs CreateVehicle() and rebuilds every
+					// physics wheel from the CLASS DEFAULT OBJECT — silently
+					// discarding everything settings.json pushed to the solver.
+					// Re-apply and re-verify, or the rest of the session runs a
+					// different car than the one that was configured.
+					VehiclePawn->ApplyWheelSettingsToSolver();
 				}
 				// Restore the saved heading — ResetVehicleState wipes it to
 				// identity. Apply to both the actor and the physics body so
@@ -1024,6 +1480,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					Mesh->BodyInstance.SetBodyTransform(RestoredXform, ETeleportType::TeleportPhysics);
 				}
 				VehiclePawn->SetActorRotation(HeadingToRestore, ETeleportType::TeleportPhysics);
+
+				NotifyPlantsOfTeleport(VehiclePawn, VehiclePawn->GetActorLocation(), HeadingToRestore);
+
 				// No velocity kick. The previous 5 cm/s body-forward push was
 				// a workaround for Chaos pinning at the (v=0, ω=0) degenerate
 				// state. It was firing during the SLAM's INIT_CALIBRATING
@@ -1039,6 +1498,127 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			}
 		});
 		return TEXT("true");
+	}
+
+	else if (Method == TEXT("validateRoadProbe"))
+	{
+		// Build deliberately non-flat ground and check the probe against the
+		// analytic surface. Every lap so far ran on dead-flat terrain, where a
+		// working probe and a stub returning zero produce identical logs — so
+		// "4/4 valid on every sample" was never evidence of anything.
+		//
+		// The crown is the load-bearing case. Its two faces have normals with
+		// OPPOSITE y components, so a probe using the axial rule (-x,y,-z)
+		// instead of the polar rule (x,-y,z) reports the camber backwards. On
+		// flat ground the two rules agree exactly, because y is zero.
+		//
+		// EVERYTHING HERE RUNS ON THE GAME THREAD. Actor iteration, spawning
+		// and line traces all assert IsInGameThread(), and RPC handlers do
+		// not run there — calling them directly took the editor down with a
+		// SIGSEGV rather than returning an error.
+		if (!VehiclePawn) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			UWorld* ProbeWorld = VehiclePawn ? VehiclePawn->GetWorld() : nullptr;
+			if (!ProbeWorld) return TEXT("{\"ok\":false,\"error\":\"no world\"}");
+
+			AFSDSTestTerrain* Terrain = nullptr;
+			for (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It; ++It) { Terrain = *It; break; }
+			if (!Terrain)
+			{
+				Terrain = ProbeWorld->SpawnActor<AFSDSTestTerrain>(AFSDSTestTerrain::StaticClass());
+				if (!Terrain) return TEXT("{\"ok\":false,\"error\":\"spawn failed\"}");
+				Terrain->Build();
+			}
+
+			int32 Checked = 0, Missed = 0, BadHeight = 0, BadNormal = 0, BadResidual = 0;
+			double WorstHeight = 0.0, WorstNormal = 0.0, WorstPlanarRes = 0.0;
+			FString WorstWhere;
+			// Per-patch detail. A single pass/fail cannot tell "the probe is
+			// wrong" from "the test's geometry is wrong", and I wrote both.
+			FString Detail;
+
+			for (const FFSDSTestPatch& P : Terrain->GetPatches())
+			{
+				// Sample inside the patch, away from the edges — an edge
+				// sample would be testing the slab's extent, not the probe.
+				for (int32 ix = -1; ix <= 1; ix++)
+				for (int32 iy = -1; iy <= 1; iy++)
+				{
+					const double X = P.CentreX + ix * P.HalfLenX * 0.5;
+					const double Y = P.CentreY + iy * P.HalfLenY * 0.5;
+					const double TrueZ = P.HeightAt(X, Y);
+
+					// Contract -> UE for the trace start: y negates, m to cm.
+					const FVector StartCm(X * 100.0, -Y * 100.0, (TrueZ + 0.3) * 100.0);
+
+					double GotZ = 0.0, GotN[3] = {0,0,1};
+					double GotRes = AFSDSVehiclePawn::kRoadResidualNotFitted;
+					Checked++;
+					if (!VehiclePawn->ProbeRoadPatch(StartCm, GotZ, GotN, GotRes)) { Missed++; continue; }
+
+					// Every patch here is planar, so a working fit must report
+					// a residual near zero. A fit that silently failed would
+					// return the not-fitted sentinel, which this also catches.
+					if (!(GotRes >= 0.0 && GotRes < 0.005)) BadResidual++;
+					if (GotRes > WorstPlanarRes) WorstPlanarRes = GotRes;
+
+					const double dZ = FMath::Abs(GotZ - TrueZ);
+					const double dN = FMath::Sqrt(
+						FMath::Square(GotN[0] - P.Normal[0]) +
+						FMath::Square(GotN[1] - P.Normal[1]) +
+						FMath::Square(GotN[2] - P.Normal[2]));
+
+					if (dZ > WorstHeight) { WorstHeight = dZ; WorstWhere = P.Name; }
+					if (dN > WorstNormal) WorstNormal = dN;
+					if (dZ > 0.01) BadHeight++;      // 1 cm
+					if (dN > 0.02) BadNormal++;      // ~1.1 deg
+
+					if (ix == 0 && iy == 0)
+					{
+						Detail += FString::Printf(
+							TEXT("%s{\"patch\":\"%s\",\"x\":%.2f,\"y\":%.2f,")
+							TEXT("\"trueZ\":%.4f,\"gotZ\":%.4f,")
+							TEXT("\"trueN\":[%.3f,%.3f,%.3f],\"gotN\":[%.3f,%.3f,%.3f]}"),
+							Detail.IsEmpty() ? TEXT("") : TEXT(","),
+							*P.Name, X, Y, TrueZ, GotZ,
+							P.Normal[0], P.Normal[1], P.Normal[2],
+							GotN[0], GotN[1], GotN[2]);
+					}
+				}
+			}
+
+			// The seam. A residual that is always ~0 would pass every check
+			// above while carrying no information at all, so the test has to
+			// include ground that no plane describes and confirm the number
+			// actually rises.
+			double SeamRes = AFSDSVehiclePawn::kRoadResidualNotFitted;
+			double SeamZ = 0.0, SeamN[3] = {0,0,1};
+			bool bSeamProbed = false;
+			{
+				const FVector SeamStart(100.0 * 100.0, 0.0, 0.45 * 100.0);
+				bSeamProbed = VehiclePawn->ProbeRoadPatch(SeamStart, SeamZ, SeamN, SeamRes);
+			}
+			// 0.15 m step across an 8 cm span: the fit cannot absorb that, so
+			// anything below a centimetre means the residual is not measuring.
+			const bool bSeamOk = bSeamProbed && SeamRes > 0.01;
+
+			const bool bOk = (Missed == 0 && BadHeight == 0 && BadNormal == 0
+			                  && BadResidual == 0 && bSeamOk);
+			return FString::Printf(
+				TEXT("{\"ok\":%s,\"checked\":%d,\"missed\":%d,\"badHeight\":%d,")
+				TEXT("\"badNormal\":%d,\"worstHeightM\":%.4f,\"worstNormal\":%.4f,")
+				TEXT("\"worstPatch\":\"%s\",\"badResidual\":%d,")
+				TEXT("\"worstPlanarResidualM\":%.5f,\"seamOk\":%s,\"seamResidualM\":%.5f,")
+				TEXT("\"centres\":[%s]}"),
+				bOk ? TEXT("true") : TEXT("false"),
+				Checked, Missed, BadHeight, BadNormal,
+				WorstHeight, WorstNormal, *WorstWhere,
+				BadResidual, WorstPlanarRes,
+				bSeamOk ? TEXT("true") : TEXT("false"), SeamRes, *Detail);
+		}, 20.0, FString(TEXT("{\"ok\":false,\"error\":\"game-thread timeout\"}")),
+		   TEXT("validateRoadProbe"));
 	}
 
 	// === New Sensors ===
@@ -1275,6 +1855,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
 						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 					}
+					NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 					// Chaos vehicles store *wheel* angular velocity in the
 					// vehicle simulation core (FWheeledVehicleSimulation), not
 					// in the rigid-body's angular velocity. Zeroing the body
@@ -1296,6 +1877,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					if (VehiclePawn->VehicleMovement)
 					{
 						VehiclePawn->VehicleMovement->ResetVehicleState();
+
+					// ResetVehicleState destroys and recreates the physics
+					// state, which re-runs CreateVehicle() and rebuilds every
+					// physics wheel from the CLASS DEFAULT OBJECT — silently
+					// discarding everything settings.json pushed to the solver.
+					// Re-apply and re-verify, or the rest of the session runs a
+					// different car than the one that was configured.
+					VehiclePawn->ApplyWheelSettingsToSolver();
 					}
 					bAligned = true;
 				LastStartGateLoc_UE = StartLoc;
@@ -1503,7 +2092,7 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// remains the production sensor path. (LiDAR-over-TCP was
 		// retired in #322; sensors still ride the TCP push because the
 		// ~40 KB/s rate isn't bandwidth-bound.)
-		const FVector WorldVel = VehiclePawn->GetVelocity() * 0.01f;
+		const FVector WorldVel = VehiclePawn->GetVehicleVelocityUe() * 0.01f;
 		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
 		Frame.GtVelBodyX =  BodyVel.X;
 		Frame.GtVelBodyY = -BodyVel.Y;
@@ -1515,9 +2104,9 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		// them directly to read off the bias/noise the filter has to bound.
 		if (UPrimitiveComponent* RootPrim =
 				Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
-			RootPrim && RootPrim->IsSimulatingPhysics())
+			RootPrim && VehiclePawn->IsVehicleMotionLive())
 		{
-			const FVector WorldAngVel = RootPrim->GetPhysicsAngularVelocityInRadians();
+			const FVector WorldAngVel = VehiclePawn->GetVehicleAngularVelocityUe();
 			const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
 			// UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
 			// Angular velocity is an axial vector; under the Y-reflection

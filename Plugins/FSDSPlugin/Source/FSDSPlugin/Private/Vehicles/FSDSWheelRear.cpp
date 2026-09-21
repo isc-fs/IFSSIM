@@ -36,6 +36,12 @@ UFSDSWheelRear::UFSDSWheelRear()
 	SuspensionMaxDrop = 3.5f;
 	SuspensionDampingRatio = 1.5f;
 
+	// Wheel rate: 300 lb/in = 52538 N/m -> property 525.4 (the property is
+	// scaled x100 into N/m; see FSDSWheelFront.cpp for the full unit
+	// derivation and the cross-check against HeaveStiffness). Previously
+	// unset, so Chaos used its 250 default = 25 kN/m.
+	SpringRate = 525.4f;
+
 	// Use the actual per-wheel vertical load (Fz) for grip calculation
 	// instead of Chaos's default 50/50 blend with the resting load.
 	// Chaos's ChaosWheeledVehicleMovementComponent.cpp:653 does:

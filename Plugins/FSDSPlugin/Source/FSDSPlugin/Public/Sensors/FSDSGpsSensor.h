@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "Components/ActorComponent.h"
 #include "FSDSGpsSensor.generated.h"
 
@@ -53,4 +54,15 @@ private:
 
 	// Approximate conversion: 1 degree latitude ~ 111320 meters
 	static constexpr double MetersPerDegreeLat = 111320.0;
+
+	// Deterministic noise source. Lazily seeded from the scenario seed on first
+	// use (the seed is set after component construction). Each sensor has its
+	// own stream so sensors cannot perturb each other's sequences.
+	// See FSDSRandom.h.
+	FRandomStream NoiseStream;
+	// Generation this stream was seeded for. A scenario reset bumps the
+	// generation, which forces a re-seed so a repeat run genuinely restarts
+	// the sequence instead of continuing the previous one.
+	uint32 NoiseStreamGeneration = 0;
+	FRandomStream& Noise();
 };

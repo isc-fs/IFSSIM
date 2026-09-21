@@ -1,4 +1,5 @@
 #include "Sensors/FSDSLidarSensor.h"
+#include "FSDSRandom.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
 #include "Async/Async.h"
@@ -340,12 +341,12 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			// share global state across threads — for sim noise the racy
 			// reads are acceptable (every consumer just sees jitter on
 			// jitter), and UE5's FMath PRNG won't crash.
-			if (DropoutRate > 0.f && FMath::FRand() < DropoutRate)
+			if (DropoutRate > 0.f && Noise().GetFraction() < DropoutRate)
 				continue;
 
 			float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
 			if (RangeNoiseStd > 0.f)
-				Dist += RangeNoiseStd * RandStandardNormal();
+				Dist += RangeNoiseStd * RandStandardNormal(Noise());
 
 			// Re-cull after noise — a +noise sample can push Dist past
 			// the channel's max range. Match the GPU path which checks
@@ -1088,11 +1089,25 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.MaxRangeCm         = MaxRange;
 	U.RangeNoiseStdCm    = RangeNoiseStd;
 	U.DropoutRate        = DropoutRate;
-	// Re-seed each scan from the current cycle counter so dropouts and
-	// range-noise patterns aren't deterministic across the lifetime of
-	// the simulation (matches the CPU path's FMath::FRand-driven
-	// randomness in spirit).
-	U.RNGSeed            = (uint32)FPlatformTime::Cycles();
+	// Per-scan seed derived from the scenario seed plus a scan counter, so
+	// dropouts and range noise still vary scan to scan but the whole sequence
+	// replays identically for a given seed. Previously this was
+	// FPlatformTime::Cycles(), which made every scan unreproducible and was
+	// the single largest source of run-to-run divergence in perception.
+	//
+	// The counter must restart when the scenario does. It used to run
+	// monotonically from editor start, so the seed for scan N of a run depended
+	// on how many scans the whole SESSION had done — meaning a repeat of the
+	// same scenario drew completely different GPU dropouts and range noise, and
+	// the seeding above bought nothing for the GPU path. The CPU path already
+	// re-seeds on generation change; this is the same rule.
+	const uint32 GpuGen = FSDSRandom::GetGeneration();
+	if (GpuScanCounterGeneration != GpuGen)
+	{
+		GpuScanCounter = 0;
+		GpuScanCounterGeneration = GpuGen;
+	}
+	U.RNGSeed            = FSDSRandom::MakeSeed(TEXT("Lidar.gpu"), ++GpuScanCounter);
 	// SensorOffset is stored in cm; shader takes metres.
 	U.SensorOffsetXm     = SensorOffset.X / 100.f;
 	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
@@ -1383,4 +1398,18 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 			TEXT("FSDS LiDAR GPU: readback #%d, %d hits, latency=%.2f ms"),
 			GPUReadbackCount, HitCount, GPUReadbackLastLatencyMs);
 	}
+}
+
+FRandomStream& UFSDSLidarSensor::Noise()
+{
+	// Re-seed on generation change, not just once: a scenario reset must
+	// restart the sequence, otherwise run 2 continues run 1 from wherever it
+	// happened to stop. Generation 0 means the seed has not been set yet.
+	const uint32 Gen = FSDSRandom::GetGeneration();
+	if (NoiseStreamGeneration != Gen)
+	{
+		NoiseStream = FSDSRandom::MakeStream(TEXT("Lidar.noise"));
+		NoiseStreamGeneration = Gen;
+	}
+	return NoiseStream;
 }

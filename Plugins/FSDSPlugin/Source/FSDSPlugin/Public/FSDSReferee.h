@@ -156,6 +156,25 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "FSDS Referee")
 	void ResetState();
 
+	/**
+	 * Reset for a REPEAT RUN on the same track.
+	 *
+	 * ResetState() wipes the cone registry, which is correct for loadTrack
+	 * (cones are destroyed and respawned immediately afterwards, and
+	 * RegisterConeActor repopulates it) but catastrophic for resetScenario,
+	 * which respawns nothing. After a resetScenario the referee was left with
+	 * an empty ConeOriginalPositions, an empty State.Cones and
+	 * bFinishLineValid == false — so DOO, off-course and lap detection were all
+	 * permanently dead, and every run after the first scored 0/0/0 in silence.
+	 *
+	 * This clears the counters while KEEPING the registry, the cone list and
+	 * the finish line, and restores every cone to its settled pose. The
+	 * restoration is not cosmetic: clearing HitCones without moving the cones
+	 * back would make every previously-struck cone re-trip the displacement
+	 * test on the first tick of the next run.
+	 */
+	void ResetForRepeatRun();
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -198,6 +217,14 @@ private:
 	 */
 	UPROPERTY()
 	TMap<AActor*, FVector> ConeOriginalPositions;
+
+	// Full settled pose of each registered cone, captured alongside
+	// ConeOriginalPositions. Scoring only needs the location (DOO is a
+	// displacement test), but a repeat run has to put a knocked-over cone back
+	// UPRIGHT, not merely back in the right place — a tipped cone has a
+	// completely different LiDAR signature, and cone perception is the thing
+	// these repeat runs exist to compare.
+	TMap<AActor*, FTransform> ConeOriginalTransforms;
 
 	UPROPERTY()
 	TSet<AActor*> HitCones; // Already counted cones (avoid double-counting)

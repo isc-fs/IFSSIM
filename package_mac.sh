@@ -20,6 +20,18 @@ if [ -z "$PROJECT_VERSION" ]; then
     exit 1
 fi
 
+# Engine location. Defaults to the standard Epic Games Launcher install
+# path; override with UE_ROOT if the engine lives elsewhere. Matches the
+# knob package_windows.sh (UE_ROOT) and package_linux.sh (UE5_ROOT)
+# already expose, and the one docs/SETUP.md documents.
+UE_ROOT="${UE_ROOT:-/Users/Shared/Epic Games/UE_5.7}"
+RUN_UAT="$UE_ROOT/Engine/Build/BatchFiles/RunUAT.sh"
+if [ ! -f "$RUN_UAT" ]; then
+    echo "ERROR: RunUAT.sh not found at $RUN_UAT" >&2
+    echo "Set UE_ROOT=/path/to/UE_5.7 if the engine is installed elsewhere." >&2
+    exit 1
+fi
+
 echo "=== IFSSIM Mac post-build (v$PROJECT_VERSION) ==="
 
 # 1. BuildCookRun
@@ -30,7 +42,7 @@ echo "=== IFSSIM Mac post-build (v$PROJECT_VERSION) ==="
 # expecting IoStore to fully replace it; got 200 MB of loose
 # .uexp/.uasset/.ubulk files instead (worse). Both flags stay.
 echo "[1/3] Building..."
-"/Users/Shared/Epic Games/UE_5.7/Engine/Build/BatchFiles/RunUAT.sh" \
+"$RUN_UAT" \
   BuildCookRun \
   -project="$SCRIPT_DIR/IFSSIM.uproject" \
   -platform=Mac \

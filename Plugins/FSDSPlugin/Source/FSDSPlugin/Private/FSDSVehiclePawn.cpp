@@ -1,19 +1,35 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
+#include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
+#include "Plant/FSDSChaosPlant.h"
+#include "Plant/FSDSFmuPlant.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/PhysicsSettings.h"   // determinism posture log (Stage 0)
 #include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
 
-AFSDSVehiclePawn::AFSDSVehiclePawn()
+// Substitute our movement component for the stock Chaos one. The movement
+// component is a default subobject created by AWheeledVehiclePawn, so this
+// constructor is the only place its class can be changed.
+//
+// The subclass exists solely to reach VehicleSimulationPT (protected) so wheel
+// configuration can be pushed to the solver AFTER CreateVehicle() has already
+// built the physics wheels from the class default object. See
+// FSDSWheeledVehicleMovementComponent.h for why that is necessary.
+AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UFSDSWheeledVehicleMovementComponent>(
+		AWheeledVehiclePawn::VehicleMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
 
 	// Get the Chaos vehicle movement component
-	VehicleMovement = CastChecked<UChaosWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
+	VehicleMovement = CastChecked<UFSDSWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
 
 	// Try to load the Formula Student skeletal mesh
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> CarMesh(
@@ -77,6 +93,11 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	// Configure Chaos vehicle physics only if skeleton is valid
 	if (bChaosVehicleActive)
 	{
+		// MUST run before SetupVehicleMovement(): everything settings.json
+		// contributes that has no per-field runtime setter has to be in the
+		// wheel CLASS DEFAULT OBJECT before Chaos reads it in CreateVehicle().
+		ApplyTireModelToWheelCDOs();
+
 		SetupVehicleMovement();
 	}
 	else if (VehicleMovement)
@@ -120,6 +141,148 @@ AFSDSVehiclePawn::AFSDSVehiclePawn()
 	MagnetometerSensor = CreateDefaultSubobject<UFSDSMagnetometerSensor>(TEXT("MagnetometerSensor"));
 }
 
+void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
+{
+	// WHY THIS IS A SEPARATE, RE-RUNNABLE FUNCTION
+	// --------------------------------------------
+	// UChaosVehicleMovementComponent::ResetVehicleState() (engine :1787) calls
+	// OnDestroyPhysicsState() followed by OnCreatePhysicsState(), which re-runs
+	// CreateVehicle() — and CreateVehicle builds the physics wheels from the
+	// wheel CLASS DEFAULT OBJECT all over again.
+	//
+	// So every reset silently reverts the solver to CDO values, discarding
+	// everything settings.json contributed through the runtime push. Nothing
+	// re-applied it and nothing verified it, so the car quietly reverted to a
+	// different car mid-session with no log line anywhere.
+	//
+	// That matters more than it sounds: RPC handlers call ResetVehicleState()
+	// on simSetVehiclePose and on loadTrack, and tools/scenario_runner/
+	// run_scenario.py issues load_track before EVERY run of a seed sweep. A
+	// benchmark campaign could therefore have been measuring the CDO car on
+	// every run after the first.
+	//
+	// The CDO-routed values (SpringRate, and the Pacejka curve written by
+	// ApplyTireModelToWheelCDOs) survive a rebuild by construction, because the
+	// CDO is exactly what the rebuild reads. It is the runtime-pushed fields
+	// that need re-applying.
+	if (!VehicleMovement) return;
+
+	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!Vehicle) return;
+	const FFSDSVehiclePhysics& P = Vehicle->Physics;
+
+	float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
+	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
+	{
+		UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
+		if (!W) continue;
+		// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
+		const bool bIsRear = (i == 2 || i == 3);
+		if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
+
+		// Make settings.json authoritative for wheel geometry. These were
+		// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
+		// WheelRadius=20cm, :15 MaxSteerAngle=28deg) while the parsed
+		// P.WheelRadius / P.MaxSteerAngle had NO consumer anywhere — the
+		// settings values were decoration.
+		//
+		// NOTE: assigning these alone is a NO-OP, because Chaos already
+		// built its physics wheels from the class default object. It only
+		// takes effect because ApplyAllWheelConfigsToPhysics() below pushes
+		// the result to the solver. The two changes are only correct
+		// together.
+		W->WheelRadius = P.WheelRadius * 100.f;   // settings [m] -> wheel [cm]
+		if (!bIsRear) W->MaxSteerAngle = P.MaxSteerAngle;  // rears stay 0
+
+		// Pacejka Magic Formula — bake lateral and longitudinal slip curves
+		// into each wheel, replacing the flat FrictionForceMultiplier model.
+		FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+	}
+
+	// Everything above wrote to the game-thread UChaosVehicleWheel objects.
+	// Chaos built its physics wheels from the wheel class's CLASS DEFAULT
+	// OBJECT back in CreateVehicle() (engine :1412), so on its own none of
+	// it reaches the solver — which is why TireMu, the Pacejka bake and
+	// MaxBrakeTorque have behaved as decoration.
+	//
+	// Push the configuration through, then read the solver back and shout
+	// if it disagrees. The verify step is the point: the failure mode is
+	// silent, and a car that is not the car you configured invalidates
+	// every measurement taken from it.
+	// bFullReinit=false: InitializeWheel/InitializeSuspension re-seed solver
+	// state on a live vehicle and launched the car on first test. The
+	// per-field setters below are sufficient for everything settings.json
+	// actually drives; the Pacejka curve still comes from the wheel CDO.
+	VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
+	VehicleMovement->VerifyAllWheelConfigsApplied();
+
+	// Verification above only covers fields this project actually sets.
+	// The complement — what it never set, and therefore inherited from
+	// Chaos — is invisible by construction: you cannot grep for a value
+	// that is never written. Print it, so the car nobody configured is at
+	// least a car somebody has read.
+	if (bLogInherited)
+	{
+		VehicleMovement->LogInheritedWheelDefaults();
+	}
+}
+
+void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
+{
+	// WHY THIS EXISTS
+	// ---------------
+	// The Pacejka curve is the one piece of settings.json that CANNOT be
+	// delivered by the runtime push added alongside the wheel-config work.
+	// Chaos exposes SetWheelSlipGraphMultiplier — a scalar on the curve — but
+	// no setter for the curve itself, and the only other route
+	// (InitializeWheel/InitializeSuspension) re-seeds solver state on a live
+	// vehicle, which previously launched the car into the air on spawn.
+	//
+	// So the curve has to be in the wheel CLASS DEFAULT OBJECT before
+	// CreateVehicle() bakes it (ChaosWheeledVehicleMovementComponent.cpp:1412
+	// reads WheelSetups[i].WheelClass.GetDefaultObject(), from
+	// OnCreatePhysicsState, i.e. at component registration — before BeginPlay).
+	//
+	// BeginPlay was too late. It baked Pacejka onto the per-instance
+	// UChaosVehicleWheel objects, which the solver never reads, so every tire
+	// coefficient in settings.json has been decoration: the car has been
+	// driving on the wheel classes' flat FrictionForceMultiplier this whole
+	// time, no matter what Pacejka block was configured.
+	//
+	// AutoLoad() is normally called from BeginPlay, which is also too late for
+	// this, so pull it forward. It is idempotent — BeginPlay's call re-parses
+	// and both see the same file.
+	FFSDSSettings::Get().AutoLoad();
+	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!Vehicle)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: no vehicle settings at CDO time — wheels keep class-default tire model"));
+		return;
+	}
+	const FFSDSVehiclePhysics& P = Vehicle->Physics;
+
+	// Mutating a native class's CDO is safe here: native CDOs are not
+	// serialised to disk, and this runs on every pawn construction, so an
+	// edited settings.json takes effect on the next PIE session rather than
+	// sticking until an editor restart.
+	UChaosVehicleWheel* CDOs[] = {
+		UFSDSWheelFront::StaticClass()->GetDefaultObject<UFSDSWheelFront>(),
+		UFSDSWheelRear::StaticClass()->GetDefaultObject<UFSDSWheelRear>()
+	};
+
+	for (UChaosVehicleWheel* CDO : CDOs)
+	{
+		if (!CDO) continue;
+		FSDSPacejka::BakeToWheel(CDO, P.Pacejka, P.TireMu);
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")
+		TEXT("lat B=%.2f C=%.2f E=%.2f, peak mu=%.2f. settings.json tire model is now live."),
+		P.Pacejka.LatB, P.Pacejka.LatC, P.Pacejka.LatE, P.TireMu);
+}
+
 void AFSDSVehiclePawn::SetupVehicleMovement()
 {
 	if (!VehicleMovement) return;
@@ -130,7 +293,9 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// Torque at wheel = motor_torque * gear_ratio * efficiency
 	// (Local constants were hardcoded but unused; the settings path
 	//  overrides both below. Member GearRatio is shadowed by settings
-	//  in ApplyPhysicsSettings.)
+	//  in SetupSensorsFromSettings, which is where the settings.json
+	//  overrides are applied. There is no ApplyPhysicsSettings() in this
+	//  class — that name appears only in stale comments.)
 
 	// Chaos engine setup. We own the powertrain via UEmraxMotor and
 	// override per-wheel drive torque each tick via SetDriveTorque
@@ -181,12 +346,115 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// --- Differential (RWD) ---
 	VehicleMovement->DifferentialSetup.DifferentialType = EVehicleDifferential::RearWheelDrive;
 
+	// --- Steering geometry ---
+	//
+	// SteeringType was never set, so it inherited the Chaos default
+	// AngleRatio with AngleRatio = 0.7. That gives the OUTSIDE wheel the full
+	// MaxSteeringAngle and the INSIDE wheel only 70% of it (see
+	// SteeringSystem.h GetSteeringAngle) — i.e. REVERSE Ackermann. Real
+	// Ackermann steers the inside wheel MORE, not less. Nobody chose this; it
+	// is simply what the engine defaults to.
+	//
+	// The consequence matters for us: the effective single-track (bicycle)
+	// angle is roughly the average of the two wheels, ~0.85x MaxSteerAngle, so
+	// the road-wheel angle the autonomy asks for was silently ~15% short of
+	// what it got. The pipeline models a kinematic BICYCLE, so SingleAngle is
+	// the honest choice — both wheels take the commanded angle and
+	// max_steer_deg means exactly what the controller assumes it means.
+	//
+	// Ackermann is the physically-correct upgrade for a real car, but it needs
+	// the IFS-08's actual steering geometry, which is not measured yet. Better
+	// to model no geometry than the wrong geometry.
+	VehicleMovement->SteeringSetup.SteeringType = ESteeringType::SingleAngle;
+
 	// --- Steering curve (speed-dependent) ---
+	//
+	// FLATTENED to 1.0 at all speeds, for two reasons.
+	//
+	// 1. Unit bug: these keys were authored in km/h (see the old comments) but
+	//    Chaos evaluates the curve in MPH — SteeringSystem.h's
+	//    GetSteeringFromVelocity(float VelocityMPH). So every breakpoint sat at
+	//    the wrong speed, and the taper never applied where it was meant to.
+	// 2. More importantly, a speed-dependent steering taper is a driving aid,
+	//    not vehicle physics. The real IFS-08 has none: the actuator commands a
+	//    road-wheel angle and gets it, regardless of speed. Neither the
+	//    controller nor the EKF models such a taper, so keeping one makes the
+	//    sim disagree with both the car and the autonomy's own model.
+	//
+	// Flat keys make the unit bug moot and make steering authority speed
+	// independent, which is what everything downstream already assumes.
 	FRichCurve* SteeringCurve = VehicleMovement->SteeringSetup.SteeringCurve.GetRichCurve();
 	SteeringCurve->Reset();
-	SteeringCurve->AddKey(0.f, 1.0f);    // Full lock at standstill
-	SteeringCurve->AddKey(60.f, 0.8f);   // 80% at 60 km/h
-	SteeringCurve->AddKey(120.f, 0.6f);  // 60% at 120 km/h
+	SteeringCurve->AddKey(0.f, 1.0f);
+	SteeringCurve->AddKey(200.f, 1.0f);   // flat: no speed-dependent taper
+
+	// --- Control input conditioning: DISABLE Chaos's arcade driver aids ---
+	//
+	// Chaos conditions every control input twice before the solver sees it:
+	// a rate limiter (FVehicleInputRateConfig::InterpInputValue, applied in
+	// UpdateState at ChaosVehicleMovementComponent.cpp:1218-1224) and then a
+	// response curve (CalcControlFunction, applied when the async input is
+	// built at :1765-1769).
+	//
+	// The engine defaults (:626-636) were NEVER overridden in this project, so
+	// both have been live on every run ever recorded here:
+	//
+	//   SteeringInputRate  RiseRate 2.5  FallRate 5   curve SQUARED
+	//   ThrottleInputRate  RiseRate 6    FallRate 10  curve linear
+	//   BrakeInputRate     RiseRate 6    FallRate 10  curve linear
+	//   HandbrakeInputRate RiseRate 12   FallRate 12  (EBS!)
+	//
+	// The squared steering curve is the serious one. CalcControlFunction with
+	// EInputFunctionType::SquaredFunction returns sign(x)*x^2, so the road-wheel
+	// angle the solver applied was
+	//
+	//     MaxSteerAngle * sign(s) * s^2
+	//
+	// i.e. a 0.5 command produced 0.25 of full lock — the autonomy has been
+	// getting roughly HALF the steering it asked for in the mid-range, on top of
+	// a rate limit that needs 1/2.5 = 0.4 s to reach full lock. For scale: the
+	// reverse-Ackermann defect fixed in 96e0e4e was worth ~15%.
+	//
+	// This is also a candidate mechanism for the Stanley limit cycle in this
+	// repo's history: squaring drives small corrections toward zero, so the
+	// controller winds up until it saturates at +/-1 — where x^2 == x and the
+	// loop gain abruptly jumps back to unity. That is a textbook recipe for
+	// bang-bang, and it would look exactly like a badly tuned gain.
+	//
+	// These are driver aids for gamepads. A Formula Student DV car has no such
+	// conditioning between the autonomy's command and the rack, and neither the
+	// controller nor the EKF models any. Rate is set to 1000/s, which at 60 Hz
+	// permits 16.67 units of change per tick against a total input range of 2.0
+	// — effectively instantaneous, without special-casing the interpolator.
+	//
+	// The REAL steering actuator does have a finite slew rate, and the real EBS
+	// has a finite pneumatic fill time. Both belong in the plant as authored,
+	// documented parameters (see docs/fmu_plant_migration.md), not as an
+	// unchosen engine default. Better no lag than the wrong lag.
+	constexpr float kInstantInputRate = 1000.f;   // units/s; >= 2.0 * 60 Hz
+	VehicleMovement->SteeringInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->SteeringInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->SteeringInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	VehicleMovement->ThrottleInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->ThrottleInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->ThrottleInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	VehicleMovement->BrakeInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->BrakeInputRate.FallRate = kInstantInputRate;
+	VehicleMovement->BrakeInputRate.InputCurveFunction = EInputFunctionType::LinearFunction;
+
+	// EBS is routed through the Chaos handbrake channel. RiseRate 12 meant the
+	// emergency brake took 1/12 s = 83 ms to reach full commanded torque — a
+	// modelled actuation lag on the safety system that nobody chose and that
+	// silently flattered every EBS stopping-distance figure.
+	VehicleMovement->HandbrakeInputRate.RiseRate = kInstantInputRate;
+	VehicleMovement->HandbrakeInputRate.FallRate = kInstantInputRate;
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: control input conditioning disabled — steering curve linear ")
+		TEXT("(was SQUARED), all input rate limits removed (steering was 2.5/s, EBS 12/s). ")
+		TEXT("Commanded steering now reaches the solver unmodified."));
 
 	// --- Wheels ---
 	VehicleMovement->WheelSetups.SetNum(4);
@@ -207,18 +475,101 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->WheelSetups[3].BoneName = FName("WheelRR");
 	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
 
+	// === Chaos's OWN aerodynamics — turned OFF ===
+	//
+	// UChaosVehicleSimulation::UpdateSimulation calls ApplyAerodynamics()
+	// unconditionally on every physics step (engine :199, :283). It uses the
+	// component's DragCoefficient / DownforceCoefficient / DragArea, which this
+	// project never set, so the engine defaults have been live on every run:
+	//
+	//     DragCoefficient      0.3
+	//     DownforceCoefficient 0.3
+	//     DragArea             ChassisWidth x ChassisHeight = 1.80 x 1.40 = 2.52 m^2
+	//
+	// AFSDSVehiclePawn::ApplyAeroForces() already applies the IFS-08's real
+	// aero map from settings.json (CdA, ClA, AeroBalanceFront) every Tick. So
+	// the car has been carrying TWO aerodynamic models at once:
+	//
+	//     drag       1.84x intended   (+46 N at 10 m/s)
+	//     downforce  1.42x intended   (+46 N at 10 m/s)
+	//
+	// (CORRECTED. These were first written as 1.80x / 1.25x, computed from the
+	// C++ struct defaults CdA=0.95 / ClA=3.0 instead of from settings.json,
+	// which actually declares CdA=0.9 / ClA=1.8. Reading a header instead of
+	// the config file is the exact failure the parameter bridge in
+	// matlab/plant/ifssim_params.m exists to prevent, and it caught this.)
+	//
+	// and in disagreeing frames — Chaos transforms its force by the vehicle
+	// world transform (body-local), while ApplyAeroForces pushes downforce
+	// along world -Z and drag along the inverse velocity vector.
+	//
+	// Zero the Chaos side so exactly one aero model exists. This must be set
+	// here, in the constructor path, because the sim reads it during
+	// CreateVehicle. "The platform applies zero aerodynamic force of its own"
+	// is now an invariant, and it is what makes the aero map in settings.json
+	// mean what it says.
+	//
+	// FOLLOW-UP, deliberately not changed here: ApplyAeroForces applies
+	// downforce along WORLD -Z. Real downforce acts normal to the car's floor,
+	// so at roll/pitch angles the body-frame convention Chaos used is the more
+	// correct one. Fixing that changes handling and needs a validation lap, so
+	// it belongs with the plant work, not in a hygiene pass.
+	VehicleMovement->DragCoefficient = 0.f;
+	VehicleMovement->DownforceCoefficient = 0.f;
+
 	// === IFS-08 Mass & Inertia ===
-	// Total mass: 290 kg (car 210 + driver 80)
-	// Wheelbase: 1627 mm, weight dist front: 43.8%
-	// CoG at 713mm from front axle = 813.5mm - 713mm = 100.5mm behind mesh center
-	// CoG height: 344mm from ground
-	VehicleMovement->Mass = 290.f;
+	//
+	// Mass now comes from settings.json. It used to be a hardcoded 290 kg
+	// ("car 210 + driver 80") while settings.json declared 275 — and the
+	// settings value was assigned in SetupSensorsFromSettings() from BeginPlay,
+	// which is FAR too late: Chaos reads this->Mass in UpdateMassProperties,
+	// reached from SetupVehicleMass during physics-state creation. The BeginPlay
+	// write only takes effect if something later triggers a mass recalculation,
+	// and nothing does. So the car has been running at 290 kg regardless of
+	// settings.json — a 5.5% error that presents as a tire or powertrain
+	// modelling discrepancy.
+	//
+	// This is reachable now only because ApplyTireModelToWheelCDOs() pulled
+	// AutoLoad() forward into the constructor path.
+	//
+	// NOTE FOR THE TEAM: 290 included an 80 kg driver. This car is driverless.
+	// 275 is what settings.json declares and what the parametric load-transfer
+	// model already assumes, so the two now agree — but the real IFS-08 DV mass
+	// is a team number, and settings.json is where to change it.
+	const FFSDSVehicleSettings* MassVehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	const float ConfiguredMass = MassVehicle ? MassVehicle->Physics.Mass : 275.f;
+	const float ConfiguredWheelbase = MassVehicle ? MassVehicle->Physics.Wheelbase : 1.627f;
+	const float ConfiguredWeightDistFront = MassVehicle ? MassVehicle->Physics.WeightDistFront : 0.438f;
+
+	VehicleMovement->Mass = ConfiguredMass;
 	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
-	// CoG offset: negative X = rearward (43.8% front means rear-biased)
-	// Mesh center is roughly at wheelbase/2 = 813mm from front
-	// CoG at 713mm from front → 100mm behind center → -10cm in UE X
-	VehicleMovement->CenterOfMassOverride = FVector(-10.f, 0.f, 0.f);
+
+	// CoG offset along X, derived rather than hardcoded. Front axle load
+	// fraction Wf = b/L (b = CoG-to-rear-axle distance), so measured from the
+	// mesh centre at L/2 the CoG sits at L*(Wf - 0.5) — negative is rearward.
+	// At Wf=0.438, L=1.627 m that is -10.1 cm, which is what the old hardcoded
+	// -10.f cm meant; deriving it removes another duplicated constant and makes
+	// it track settings.json.
+	const float CoGOffsetXCm = ConfiguredWheelbase * (ConfiguredWeightDistFront - 0.5f) * 100.f;
+	VehicleMovement->CenterOfMassOverride = FVector(CoGOffsetXCm, 0.f, 0.f);
 	VehicleMovement->bEnableCenterOfMassOverride = true;
+
+	// KNOWN GAP, not fixed here: only the X component of the CoG is overridden.
+	// CoG HEIGHT comes from whatever the physics asset computes, while
+	// settings.json declares CoGHeight = 0.3 m (NOT the 0.344 C++ default —
+	// the file overrides it) and ComputeTireLoadsParametric
+	// uses that number for longitudinal load transfer. That is the same
+	// two-models-disagree pattern as the 2.3x spring-rate divergence. Setting
+	// the Z component changes ride height and load transfer together, so it
+	// needs a validation lap and belongs with the plant work.
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: mass %.1f kg from settings.json (was a hardcoded 290 that ")
+		TEXT("settings could not override), CoG X offset %.1f cm derived from ")
+		TEXT("wheelbase %.3f m and front weight distribution %.1f%%. CoG HEIGHT is ")
+		TEXT("still whatever the physics asset computes, NOT the declared %.3f m."),
+		ConfiguredMass, CoGOffsetXCm, ConfiguredWheelbase,
+		ConfiguredWeightDistFront * 100.f,
+		MassVehicle ? MassVehicle->Physics.CoGHeight : 0.344f);
 
 	// Disable Chaos's vehicle-specific aggressive sleep. Chaos's
 	// ProcessSleeping() (ChaosVehicleMovementComponent.cpp:1252) puts
@@ -452,17 +803,186 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		// MaxRegenPower/ω_motor. Front wheels keep MaxBrakeTorque=0
 		// from the class default — no hydraulic service brake on the
 		// real car.
-		float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
-		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
-		{
-			UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
-			if (!W) continue;
-			// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
-			if (i == 2 || i == 3) W->MaxBrakeTorque = RearPerWheelMax;
+		// Extracted so it can be re-run after a physics rebuild. See
+		// ApplyWheelSettingsToSolver() for why that is necessary.
+		ApplyWheelSettingsToSolver(/*bLogInherited=*/true);
 
-			// Pacejka Magic Formula — bake lateral and longitudinal slip curves
-			// into each wheel, replacing the flat FrictionForceMultiplier model.
-			FSDSPacejka::BakeToWheel(W, P.Pacejka, P.TireMu);
+		// Stand up the plant behind the interface. Chaos today: this is an
+		// OBSERVER of the vehicle the engine is already integrating, so nothing
+		// about how the car drives changes. The seam going in first is what
+		// makes a later FMU swap attributable — any difference is then the
+		// plant, not the refactor.
+		const FFSDSSettings& PlantCfg = FFSDSSettings::Get();
+		const bool bWantFmu    = (PlantCfg.PlantType == TEXT("fmu"));
+		const bool bWantShadow = (PlantCfg.PlantType == TEXT("shadow"));
+
+		FString FmuPath = PlantCfg.PlantFmuPath;
+		if ((bWantFmu || bWantShadow) && !FmuPath.IsEmpty() && FPaths::IsRelative(FmuPath))
+		{
+			FmuPath = FPaths::Combine(FPaths::ProjectDir(), FmuPath);
+		}
+
+		// Build the FMU first when one is wanted, so that a failure falls back
+		// to Chaos LOUDLY instead of leaving the car with no plant at all.
+		TUniquePtr<IFSDSPlant> FmuPlant;
+		if (bWantFmu || bWantShadow)
+		{
+			if (FmuPath.IsEmpty())
+			{
+				UE_LOG(LogTemp, Error,
+					TEXT("FSDS: Plant.Type='%s' but Plant.FmuPath is empty — falling back to chaos"),
+					*PlantCfg.PlantType);
+			}
+			else if (!FPaths::FileExists(FmuPath))
+			{
+				UE_LOG(LogTemp, Error,
+					TEXT("FSDS: Plant.Type='%s' but no FMU at '%s' — falling back to chaos"),
+					*PlantCfg.PlantType, *FmuPath);
+			}
+			else
+			{
+				TUniquePtr<FFSDSFmuPlant> Candidate = MakeUnique<FFSDSFmuPlant>(FmuPath);
+				if (Candidate->Initialise())
+				{
+					FmuPlant = MoveTemp(Candidate);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Error,
+						TEXT("FSDS: FMU plant failed to initialise (%s) — falling back to chaos"),
+						*Candidate->GetLastError());
+				}
+			}
+		}
+
+		if (bWantFmu && FmuPlant.IsValid())
+		{
+			// THE FMU DRIVES THE CAR. Chaos is stood down and the mesh becomes
+			// a kinematic target written from the plant's pose each tick.
+			//
+			// Standing Chaos down is the point, not a side effect. Leaving it
+			// integrating would give two answers for where the car is, and the
+			// mesh would fight the plant every frame.
+			Plant = MoveTemp(FmuPlant);
+			bFmuDrivesPawn = true;
+
+			// Chaos is stood down completely. It was previously kept alive
+			// purely so its animation node would draw the wheels — which put
+			// two simulators in one picture: a chassis from the plant and
+			// wheels from Chaos. The wheels are plant state, so the plant
+			// draws them now (CreatePlantWheels below) and nothing is left
+			// for Chaos to do.
+			if (VehicleMovement) VehicleMovement->Deactivate();
+			if (USkeletalMeshComponent* M = GetMesh())
+			{
+				// Kinematic, not simulated. The body still collides — cones are
+				// what it has to push — but nothing integrates it any more.
+				M->SetSimulatePhysics(false);
+
+				// Say what the mesh can actually still collide with. Turning
+				// simulation off does not, by itself, keep a body in the
+				// physics scene as a collidable kinematic one — and a car that
+				// silently stops colliding drives THROUGH the cones while
+				// every telemetry channel reports a healthy lap.
+				UE_LOG(LogTemp, Warning,
+					TEXT("FSDS: kinematic mesh — collision=%d objectType=%d "
+					     "queryOnly=%s physicsState=%s bodies=%d"),
+					(int32)M->GetCollisionEnabled(),
+					(int32)M->GetCollisionObjectType(),
+					M->GetCollisionEnabled() == ECollisionEnabled::QueryOnly ? TEXT("YES") : TEXT("no"),
+					M->HasValidPhysicsState() ? TEXT("valid") : TEXT("NONE"),
+					M->Bodies.Num());
+			}
+
+			// Place the plant where the pawn already is. The FMU starts at its
+			// OWN initial condition, so without this the car teleports to the
+			// plant's origin the moment the first pose is written. ResetPlants
+			// does it properly: snapshot for the internal state, injection for
+			// the pose.
+			const FVector  P0 = GetActorLocation();
+			const FQuat    Q0 = GetActorQuat();
+			// Chaos has the car sitting correctly right now. Remember that
+			// height so the plant's datum can be aligned to it on the first
+			// step, rather than the car jumping to the plant's CoG height.
+			PawnZAtSwapCm = P0.Z;
+			// Mesh height, plain. ResetPlants resolves the road beneath and
+			// places the CoG at rest height, so adding the offset here would
+			// apply it twice.
+			const double PosC[3] = { P0.X * 0.01, -P0.Y * 0.01, P0.Z * 0.01 };
+			const double QuatC[4] = { Q0.W, -Q0.X, Q0.Y, -Q0.Z };
+			ResetPlants(PosC, QuatC);
+
+			CreatePlantWheels();
+
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: THE FMU IS DRIVING. Chaos is deactivated and the mesh is a ")
+				TEXT("kinematic target from the plant. Wheel visuals no longer animate, "
+				     "and cone contact does not yet feed back into the plant."));
+		}
+		else
+		{
+			Plant = MakeUnique<FFSDSChaosPlant>(this);
+			if (bWantShadow && FmuPlant.IsValid())
+			{
+				ShadowPlant = MoveTemp(FmuPlant);
+			}
+		}
+
+		// Only the Chaos plant still needs initialising here. An FMU candidate
+		// was already initialised above, before being adopted — calling it
+		// again asks the FMU to instantiate a SECOND time in the process, and
+		// Simulink's codegen is not reentrant, so that is a SIGSEGV rather
+		// than a failure. Harmless for Chaos, which is idempotent, which is
+		// exactly why it survived until an FMU was put behind the same call.
+		const bool bAlreadyInitialised = bFmuDrivesPawn;
+		if (!bAlreadyInitialised && !Plant->Initialise())
+		{
+			UE_LOG(LogTemp, Error, TEXT("FSDS: plant failed to initialise — %s"),
+				*Plant->GetName());
+			Plant.Reset();
+		}
+		else if (Plant.IsValid())
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: plant '%s' active. GetPlantState() now carries pose, wheels ")
+				TEXT("and powertrain in SI / ISO 8855 / ENU."), *Plant->GetName());
+		}
+		if (ShadowPlant.IsValid())
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: shadow plant '%s' stepping alongside Chaos. It drives ")
+				TEXT("nothing — divergence is logged once a second."),
+				*ShadowPlant->GetName());
+		}
+
+		// Seed all stochastic sources for this run. Must happen before any
+		// sensor draws noise or any cone is spawned; BeginPlay is the earliest
+		// point where settings.json has been parsed.
+		FSDSRandom::SetScenarioSeed(FFSDSSettings::Get().ScenarioSeed);
+
+		// Determinism posture, logged on every run.
+		//
+		// A validation platform has to state, in its own output, whether the run
+		// it just produced is reproducible. With bUseFixedFrameRate the engine
+		// advances by exactly 1/FixedFrameRate per tick and physics steps with it
+		// (substepping is off), so the trajectory no longer depends on how fast
+		// the machine rendered. Without it, results are machine- and load-
+		// dependent and should not be compared against anything.
+		const bool bFixedStep = GEngine && GEngine->bUseFixedFrameRate;
+		const float FixedHz   = GEngine ? GEngine->FixedFrameRate : 0.f;
+		const float MaxPhysDt = UPhysicsSettings::Get() ? UPhysicsSettings::Get()->MaxPhysicsDeltaTime : 0.f;
+		if (bFixedStep)
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: timestep DETERMINISTIC — fixed %.1f Hz (dt=%.5f s), MaxPhysicsDeltaTime=%.5f s"),
+				FixedHz, (FixedHz > 0.f ? 1.f / FixedHz : 0.f), MaxPhysDt);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: timestep VARIABLE — physics advances by the measured frame delta. ")
+				TEXT("This run is machine- and load-dependent and is NOT comparable with others. ")
+				TEXT("Set bUseFixedFrameRate=True in Config/DefaultEngine.ini."));
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("FSDS: Physics from settings — %.0fkg %s, motor %.0fNm/%.0fW, regen %.0fNm/%.0fW, mu=%.2f"),
@@ -493,8 +1013,7 @@ void AFSDSVehiclePawn::BeginPlay()
 
 
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
-	// from here on: ApplyPhysicsSettings() neutered Chaos's EngineSetup
-	// (MaxTorque=0, EngineIdleRPM=0) and Tick below feeds per-wheel
+	// from here on. Tick below feeds per-wheel
 	// drive torque from this object. Default FEmraxMotorParams matches
 	// the EMRAX 228 MV / LC datasheet; we forward the regen caps from
 	// settings.json so a user override (e.g. a bigger battery raising
@@ -590,12 +1109,228 @@ void AFSDSVehiclePawn::BeginPlay()
 		bChaosVehicleActive ? TEXT("YES") : TEXT("NO - fallback mode"));
 }
 
+void AFSDSVehiclePawn::ReportContactImpulse(const FVector& ImpulseUe, const FVector& PointUe)
+{
+	// Newton's third law: the impulse recorded on the cone is the impulse the
+	// car delivered, so the car receives its negative.
+	//
+	// UE force units are kg*cm/s^2, so an impulse in kg*cm/s becomes N*s by
+	// dividing by 100. Contract is ENU with +y LEFT, and both an impulse and a
+	// position are POLAR, so both take (x, -y, z).
+	const FVector J(-ImpulseUe.X * 0.01, ImpulseUe.Y * 0.01, -ImpulseUe.Z * 0.01);
+	const FVector P( PointUe.X * 0.01,  -PointUe.Y * 0.01,    PointUe.Z * 0.01);
+
+	// Moment about the BODY ORIGIN, taken here while the arm is known. Handing
+	// the plant a force and a point and letting it work out the moment would
+	// mean agreeing on which origin the point is measured from, and that is
+	// exactly the kind of shared assumption this boundary exists to remove.
+	const FVector Origin(PlantState.Position[0], PlantState.Position[1], PlantState.Position[2]);
+	PendingContactImpulse += J;
+	PendingContactMoment  += FVector::CrossProduct(P - Origin, J);
+	PendingContactPoint    = P;
+	PendingContactCount++;
+}
+
+void AFSDSVehiclePawn::EndPlay(const EEndPlayReason::Type Reason)
+{
+	// Order matters: shadow first, then the plant, so that in shadow mode the
+	// FMU is gone before anything else can ask for one.
+	if (ShadowPlant.IsValid())
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: releasing shadow plant '%s'"), *ShadowPlant->GetName());
+		ShadowPlant.Reset();
+	}
+	if (Plant.IsValid())
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: releasing plant '%s'"), *Plant->GetName());
+		Plant.Reset();
+	}
+	Super::EndPlay(Reason);
+}
+
+bool AFSDSVehiclePawn::IsVehicleMotionLive() const
+{
+	if (bFmuDrivesPawn) return PlantState.bPlantOk;
+	const USkeletalMeshComponent* M = GetMesh();
+	return M && M->IsSimulatingPhysics();
+}
+
+FVector AFSDSVehiclePawn::GetVehicleVelocityUe() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		// Contract world ENU (m/s, +y LEFT) -> UE world (cm/s, +y RIGHT).
+		// Velocity is a POLAR vector, so y negates.
+		return FVector( PlantState.VelWorld[0] * 100.0,
+		               -PlantState.VelWorld[1] * 100.0,
+		                PlantState.VelWorld[2] * 100.0);
+	}
+	return GetVelocity();
+}
+
+FVector AFSDSVehiclePawn::GetVehicleAngularVelocityUe() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		// Body-frame contract -> UE body: angular velocity is AXIAL, so the
+		// rule is (-x, y, -z), not the polar (x, -y, z) used for velocity.
+		// Getting this wrong flips the yaw rate's sign, which reads as a car
+		// that steers the wrong way rather than as an obvious bug.
+		const FVector OmegaBodyUe(-PlantState.OmegaBody[0],
+		                           PlantState.OmegaBody[1],
+		                          -PlantState.OmegaBody[2]);
+		return GetActorQuat().RotateVector(OmegaBodyUe);
+	}
+	return GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+}
+
+double AFSDSVehiclePawn::PlantMeshZOffsetM()
+{
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const double CoGH = S.GetDefaultVehicle() ? S.GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+	return CoGH - S.MeshOriginHeightM;
+}
+
+void AFSDSVehiclePawn::ResetPlants(const double Position[3], const double Quat[4])
+{
+	// PLACE THE PLANT AT ITS SETTLED HEIGHT, NOT AT THE CALLER'S z.
+	//
+	// The platform pads its spawn height for clearance — loadTrack drops the
+	// car onto the start gate from slightly above so it cannot spawn inside
+	// geometry. Chaos absorbs that: it falls a few centimetres and settles.
+	// The plant does not. It is handed the padded height as its CoG, starts
+	// there, and FALLS.
+	//
+	// That fall lands inside the EKF's 3 s stationary calibration window, so
+	// the filter measures the drop as sensor bias: accel_bias z = -12.4 m/s^2
+	// and gyro_bias y = -0.53 rad/s were recorded, after which SLAM never
+	// produced a pose and the watchdog stopped the car. The car never even
+	// began the lap.
+	//
+	// So ask the road where it is and put the CoG exactly one ride height
+	// above it. Nothing to settle, nothing to calibrate away.
+	double Placed[3] = { Position[0], Position[1], Position[2] };
+	{
+		const FFSDSSettings& S = FFSDSSettings::Get();
+		const double CoGH = S.GetDefaultVehicle()
+			? S.GetDefaultVehicle()->Physics.CoGHeight : 0.30;
+		// Probe from above the requested point; contract -> UE, y negates.
+		const FVector ProbeStart(Position[0] * 100.0, -Position[1] * 100.0,
+		                         Position[2] * 100.0 + 50.0);
+		double RoadM = 0.0, Nrm[3] = {0,0,1};
+		if (ProbeRoadAt(ProbeStart, RoadM, Nrm))
+		{
+			Placed[2] = RoadM + CoGH;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: plant placed at rest height — road %.3f m + CoG %.3f m = %.3f m "
+				     "(caller asked for %.3f m, a %.3f m drop avoided)"),
+				RoadM, CoGH, Placed[2], Position[2] + CoGH,
+				(Position[2] + CoGH) - Placed[2]);
+		}
+		else
+		{
+			// No road under the requested pose: keep the caller's height and
+			// say so, rather than silently placing the car at zero.
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: no road under the reset pose (%.2f, %.2f) — using the "
+				     "caller's height %.3f m; expect a settle transient"),
+				Position[0], Position[1], Position[2]);
+		}
+	}
+
+	if (Plant.IsValid())       Plant->Reset(Placed, Quat);
+	if (ShadowPlant.IsValid()) ShadowPlant->Reset(Placed, Quat);
+
+	// Drop the divergence baseline too. The pawn re-latches on a detected
+	// teleport anyway, but doing it here as well means an explicit reset does
+	// not have to be inferred from a position jump — and a reset that lands
+	// the car within the jump threshold would otherwise go unnoticed.
+	bShadowOriginSet = false;
+	ShadowWorstPosErrM = 0.0;
+	ShadowWorstYawErrDeg = 0.0;
+	ShadowSumPosErrM = 0.0;
+	ShadowSteps = 0;
+}
+
+FString AFSDSVehiclePawn::GetPlantName() const
+{
+	return Plant.IsValid() ? Plant->GetName() : TEXT("<none>");
+}
+
 void AFSDSVehiclePawn::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// --- refresh the plant snapshot -------------------------------------
+	// Once per tick, in one place, in contract units. Everything downstream
+	// should read PlantState rather than re-deriving pose and velocity from
+	// the pawn — that re-derivation is where the frame and sign errors live.
+	if (Plant.IsValid())
+	{
+		FFSDSPlantInput PlantIn;
+		PlantIn.Throttle   = CurrentControls.Throttle;
+		PlantIn.Regen      = CurrentControls.Regen;
+		PlantIn.SteerNorm  = CurrentControls.Steering;
+		PlantIn.bEbsLatched = bEbsLatched;
+		PlantIn.DeltaTime  = DeltaTime;
+		PlantIn.SimTime    = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+		PlantIn.GravityZ   = GetWorld() ? GetWorld()->GetGravityZ() * 0.01 : -9.81;
+
+		// Terrain under each wheel. Chaos ignores this — it does its own
+		// ground query — so filling it costs four traces and changes nothing
+		// today. The FMU cannot work without it, and building it here means
+		// the probe is exercised on every run long before anything depends
+		// on it being right.
+		ProbeRoad(PlantIn);
+
+		// Contact since the last step, as a force over this step. Cleared
+		// immediately: an impulse re-applied on a later step is a force that
+		// scales with frame rate, which looks like a physics bug and is an
+		// accounting one.
+		if (PendingContactCount > 0)
+		{
+			const double InvDt = 1.0 / FMath::Max((double)DeltaTime, 1e-6);
+			PlantIn.ExtForce[0]  = PendingContactImpulse.X * InvDt;
+			PlantIn.ExtForce[1]  = PendingContactImpulse.Y * InvDt;
+			PlantIn.ExtForce[2]  = PendingContactImpulse.Z * InvDt;
+			PlantIn.ExtTorque[0] = PendingContactMoment.X * InvDt;
+			PlantIn.ExtTorque[1] = PendingContactMoment.Y * InvDt;
+			PlantIn.ExtTorque[2] = PendingContactMoment.Z * InvDt;
+			PlantIn.ExtPoint[0]  = PendingContactPoint.X;
+			PlantIn.ExtPoint[1]  = PendingContactPoint.Y;
+			PlantIn.ExtPoint[2]  = PendingContactPoint.Z;
+
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: contact — %d impulse(s), |J|=%.2f N.s -> %.0f N over %.4f s "
+				     "(that is %.1f g on %.0f kg)"),
+				PendingContactCount, PendingContactImpulse.Size(),
+				PendingContactImpulse.Size() * InvDt, DeltaTime,
+				(PendingContactImpulse.Size() * InvDt) / (FFSDSSettings::Get().GetDefaultVehicle()
+					? FFSDSSettings::Get().GetDefaultVehicle()->Physics.Mass * 9.81 : 2698.0),
+				FFSDSSettings::Get().GetDefaultVehicle()
+					? FFSDSSettings::Get().GetDefaultVehicle()->Physics.Mass : 275.0);
+
+			PendingContactImpulse = FVector::ZeroVector;
+			PendingContactMoment  = FVector::ZeroVector;
+			PendingContactCount   = 0;
+		}
+
+		Plant->PreStep(PlantIn);
+		Plant->PostStep(PlantState);
+
+		// Same inputs, same step, read by nothing.
+		StepShadowPlant(PlantIn);
+
+		// The plant has produced this step's pose; put the car there.
+		if (bFmuDrivesPawn)
+		{
+			DrivePawnFromPlant();
+			PoseWheelsFromPlant(DeltaTime);
+		}
+	}
+
 	// Acceleration tracking
-	FVector CurrentVelocity = GetVelocity();
+	FVector CurrentVelocity = GetVehicleVelocityUe();
 	if (DeltaTime > 0.f)
 	{
 		CurrentAcceleration = (CurrentVelocity - PreviousVelocity) / DeltaTime;
@@ -636,7 +1371,10 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetTargetGear(1, true);
 
 		// --- EMRAX 228 drive-torque override ----------------------
-		// We bypass Chaos's engine entirely (MaxTorque was zeroed in
+		// We bypass Chaos's engine entirely (NOT by zeroing MaxTorque —
+		// see SetupVehicleMovement, which deliberately leaves it at the
+		// full 643 N.m peak-at-wheel; the bypass is that Tick passes
+		// throttle=0 to Chaos and injects torque per wheel instead, in
 		// SetupVehicleMovement) and compute the shaft torque from
 		// our motor model. The motor's RPM tracks actual wheel speed
 		// × gear ratio so a parked car reads zero RPM (vs Chaos's
@@ -649,12 +1387,42 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			// single-quadrant regen — refuses braking torque on a
 			// backward-rotating wheel, which would otherwise drive the
 			// chassis further in reverse.
-			const float VFwdMs = FVector::DotProduct(
-				GetVelocity(), GetActorForwardVector()) * 0.01f;
-			// Wheel angular velocity assuming no slip, then geared
-			// up to motor rotor speed. WheelRadius / GearRatio are
-			// captured from settings in ApplyPhysicsSettings.
-			const float WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			// WHERE THIS NUMBER COMES FROM DECIDES WHETHER THE CAR CAN
+			// DRIVE ITSELF. It becomes SensorFrame.rpm -> /motor_rpm, which
+			// is the odometry filter's only wheel-speed input.
+			//
+			// GetVelocity() is the ACTOR's velocity, and when the FMU drives,
+			// the actor is teleported each tick rather than moved by a
+			// movement component — so it reads ~zero. The pipeline then sees a
+			// stationary car while the IMU reports acceleration, the EKF
+			// diverges, SLAM's data association collapses (every cone reads as
+			// new), and the car drives straight off the track. Observed
+			// exactly that: DOO 1, OC 1, zero laps.
+			// Forward speed, from the plant when it is driving. Used both for
+			// the fallback wheel-speed derivation and the EMRAX trace below.
+			const float VFwdMs = (bFmuDrivesPawn && PlantState.bPlantOk)
+				? (float)PlantState.VelBody[0]
+				: FVector::DotProduct(GetVehicleVelocityUe(), GetActorForwardVector()) * 0.01f;
+
+			float WheelOmega;
+			if (bFmuDrivesPawn && PlantState.bPlantOk)
+			{
+				// The DRIVEN wheels' actual speed, which is what a real motor
+				// encoder is geared to. Using the plant's own omega rather
+				// than a no-slip guess means wheelspin and lock-up reach the
+				// pipeline — the signal Chaos structurally cannot produce,
+				// because it snaps wheel speed to ground speed.
+				WheelOmega = 0.5f * (float)(PlantState.WheelOmega[FSDS_RL]
+				                          + PlantState.WheelOmega[FSDS_RR]);
+			}
+			else
+			{
+				// Chaos path, unchanged. Its plant reports WheelOmega as zero
+				// by design — it has no independent wheel state — so the
+				// no-slip derivation from body velocity is the only honest
+				// option there.
+				WheelOmega = VFwdMs / FMath::Max(WheelRadius, 0.01f);
+			}
 			const float MotorOmega = WheelOmega * GearRatio;
 			const float MotorRpm = MotorOmega * (60.f / (2.f * PI));
 			Motor->SetMechRpm(MotorRpm);
@@ -730,7 +1498,7 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	USkeletalMeshComponent* VehicleMesh = GetMesh();
 	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
 
-	FVector Velocity = GetVelocity(); // cm/s
+	FVector Velocity = GetVehicleVelocityUe(); // cm/s
 	float SpeedMs = Velocity.Size() / 100.f; // m/s
 
 	if (SpeedMs < 1.0f) return; // No aero below 1 m/s
@@ -748,11 +1516,22 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	// Apply drag at CoG
 	VehicleMesh->AddForce(DragForce, NAME_None, false);
 
-	// Apply downforce split front/rear at approximate axle positions
-	// Wheelbase ~1627mm in UE X. Front axle at +813mm from center, rear at -813mm
+	// Apply downforce split front/rear at the axle positions.
+	//
+	// BUG FIXED: this used to be a literal 813.f labelled "cm", while the
+	// comment above it said "+813mm from center". UE local space IS cm, so the
+	// downforce was applied at +/-8.13 m fore and aft instead of +/-0.813 m —
+	// a moment arm 10x too long, and therefore an aero pitch couple 10x too
+	// large. Only the couple was wrong; total downforce was unaffected, which
+	// is why it never showed up as an obviously broken ride height.
+	//
+	// Derived from the vehicle's Wheelbase rather than re-hardcoded, so it
+	// tracks settings.json and removes one more copy of a constant this
+	// codebase already has too many versions of.
 	FTransform ActorTransform = GetActorTransform();
-	FVector FrontAxleLocal(813.f, 0.f, 0.f); // cm, local space
-	FVector RearAxleLocal(-813.f, 0.f, 0.f);
+	const float HalfWheelbaseCm = 0.5f * Wheelbase * 100.f;   // m -> cm
+	FVector FrontAxleLocal(HalfWheelbaseCm, 0.f, 0.f);
+	FVector RearAxleLocal(-HalfWheelbaseCm, 0.f, 0.f);
 	FVector FrontAxleWorld = ActorTransform.TransformPosition(FrontAxleLocal);
 	FVector RearAxleWorld = ActorTransform.TransformPosition(RearAxleLocal);
 
@@ -850,11 +1629,11 @@ AFSDSVehiclePawn::FCarState AFSDSVehiclePawn::GetCarState() const
 {
 	FCarState State;
 
-	State.Speed = GetVelocity().Size() / 100.f;
+	State.Speed = GetVehicleVelocityUe().Size() / 100.f;
 	State.Position = GetActorLocation();
 	State.Orientation = GetActorQuat();
-	State.LinearVelocity = GetVelocity();
-	State.AngularVelocity = GetMesh() ? GetMesh()->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+	State.LinearVelocity = GetVehicleVelocityUe();
+	State.AngularVelocity = GetVehicleAngularVelocityUe();
 	State.LinearAcceleration = CurrentAcceleration;
 	State.bHandbrake = CurrentControls.bHandbrake;
 
@@ -993,10 +1772,689 @@ AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
 	// matching the parametric path. The ratio across all four wheels
 	// stays correct either way (cm units factor out), but the absolute
 	// numbers only line up with the parametric Fz once converted.
+	// When the FMU drives, Chaos is deactivated and every GetWheelState()
+	// returns zero — so this reported a car carrying no load at all. The
+	// plant publishes the real per-wheel normal force, already in Newtons,
+	// and it is a genuine state rather than a spring-force readback.
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		Out.FL = (float)PlantState.WheelFz[FSDS_FL];
+		Out.FR = (float)PlantState.WheelFz[FSDS_FR];
+		Out.RL = (float)PlantState.WheelFz[FSDS_RL];
+		Out.RR = (float)PlantState.WheelFz[FSDS_RR];
+		return Out;
+	}
+
 	constexpr float CmToM = 0.01f;
 	Out.FL = VehicleMovement->GetWheelState(0).SpringForce * CmToM;
 	Out.FR = VehicleMovement->GetWheelState(1).SpringForce * CmToM;
 	Out.RL = VehicleMovement->GetWheelState(2).SpringForce * CmToM;
 	Out.RR = VehicleMovement->GetWheelState(3).SpringForce * CmToM;
 	return Out;
+}
+
+// ---------------------------------------------------------------------------
+// Road probe — the platform's answer to "what is under each wheel?"
+//
+// Only the platform owns terrain, so this is the one place that answers it.
+// Three choices worth stating, because each has a cheaper wrong version:
+//
+// 1. Traces from the wheel BONES, not from FWheelStatus::ContactPoint. Chaos's
+//    contact results are exactly what Phase 6 deletes; a probe built on them
+//    would need rewriting at the moment it becomes load-bearing.
+//
+// 2. Straight DOWN in world Z, not along the vehicle's up axis. The road's
+//    height is a property of the world, and a rolled car must not tilt its own
+//    idea of where the ground is.
+//
+// 3. WorldStatic only, so the cones — which simulate, and are therefore
+//    PhysicsBody — cannot be mistaken for road. This forfeits exact
+//    comparability with Chaos's own channel trace, which the migration doc
+//    states plainly rather than discovering later.
+// ---------------------------------------------------------------------------
+bool AFSDSVehiclePawn::ProbeRoadAt(const FVector& StartCm, double& OutHeightM,
+                                   double OutNormal[3]) const
+{
+	const UWorld* W = GetWorld();
+	if (!W) return false;
+
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSRoadProbe), /*bTraceComplex=*/true, this);
+	FCollisionObjectQueryParams ObjParams;
+	ObjParams.AddObjectTypesToQuery(ECC_WorldStatic);
+
+	const FVector Start(StartCm.X, StartCm.Y, StartCm.Z + S.RoadProbeUpM   * 100.0);
+	const FVector End  (StartCm.X, StartCm.Y, StartCm.Z - S.RoadProbeDownM * 100.0);
+
+	FHitResult Hit;
+	if (!W->LineTraceSingleByObjectType(Hit, Start, End, ObjParams, Params)) return false;
+
+	OutHeightM = Hit.ImpactPoint.Z * 0.01;
+	// UE is left-handed with +Y right; the contract is ENU with +Y left. A
+	// normal is a POLAR vector, so this is (x, -y, z). The axial rule would
+	// silently invert the road on every slope — and agree perfectly on flat
+	// ground, which is why this needs a cambered surface to test at all.
+	OutNormal[0] =  Hit.ImpactNormal.X;
+	OutNormal[1] = -Hit.ImpactNormal.Y;
+	OutNormal[2] =  Hit.ImpactNormal.Z;
+	return true;
+}
+
+bool AFSDSVehiclePawn::ProbeRoadPatch(const FVector& CentreCm, double& OutHeightM,
+                                      double OutNormal[3], double& OutResidualM) const
+{
+	// Five rays: the centre plus a cross at the contact-patch span. A single
+	// ray reports the height of one point and has NOTHING to say about whether
+	// that point represents the ground the tyre sits on — at a kerb edge it is
+	// confidently wrong, and reports a residual of zero while being so.
+	//
+	// The offsets are world-axis-aligned rather than rotated into the wheel's
+	// frame. A least-squares plane fit does not care how the samples are
+	// oriented, only that they span two dimensions, so rotating them would add
+	// a steer-angle dependency for no gain.
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const double SpanCm = FMath::Max(0.01f, S.RoadProbeSpanM) * 100.0;
+
+	const FVector Offsets[5] = {
+		FVector(0, 0, 0),
+		FVector( SpanCm, 0, 0), FVector(-SpanCm, 0, 0),
+		FVector(0,  SpanCm, 0), FVector(0, -SpanCm, 0),
+	};
+
+	FVector Hits[5];
+	int32 NumHits = 0;
+	bool bCentreHit = false;
+	double CentreNormal[3] = {0,0,1};
+	double CentreHeight = 0.0;
+
+	for (int32 i = 0; i < 5; i++)
+	{
+		double H = 0.0, N[3] = {0,0,1};
+		const FVector P = CentreCm + Offsets[i];
+		if (!ProbeRoadAt(P, H, N)) continue;
+		Hits[NumHits++] = FVector(P.X, P.Y, H * 100.0);
+		if (i == 0)
+		{
+			bCentreHit = true;
+			CentreHeight = H;
+			for (int32 k = 0; k < 3; k++) CentreNormal[k] = N[k];
+		}
+	}
+
+	// Validity still follows the CENTRE ray alone. Requiring three hits would
+	// be defensible but it is a behaviour change — a wheel at a track edge
+	// would go from "in contact" to "no road", zeroing Fz — and that belongs
+	// in its own change with its own lap, not smuggled in with a fit.
+	if (!bCentreHit) return false;
+
+	OutHeightM = CentreHeight;
+	for (int32 k = 0; k < 3; k++) OutNormal[k] = CentreNormal[k];
+	OutResidualM = kRoadResidualNotFitted;
+	if (NumHits < 3) return true;
+
+	// Least squares z = a*x + b*y + c, solved about the centroid so the normal
+	// equations stay well-conditioned. Fitting in raw world coordinates puts
+	// x ~ 1e4 cm against a 8 cm span, and the 3x3 loses its significant digits
+	// to the offset.
+	FVector Mean(0, 0, 0);
+	for (int32 i = 0; i < NumHits; i++) Mean += Hits[i];
+	Mean /= (double)NumHits;
+
+	double Sxx=0, Sxy=0, Syy=0, Sxz=0, Syz=0;
+	for (int32 i = 0; i < NumHits; i++)
+	{
+		const double dx = Hits[i].X - Mean.X;
+		const double dy = Hits[i].Y - Mean.Y;
+		const double dz = Hits[i].Z - Mean.Z;
+		Sxx += dx*dx; Sxy += dx*dy; Syy += dy*dy;
+		Sxz += dx*dz; Syz += dy*dz;
+	}
+	const double Det = Sxx*Syy - Sxy*Sxy;
+	if (FMath::Abs(Det) < 1e-9) return true;   // samples collinear: no plane
+
+	const double A = ( Syy*Sxz - Sxy*Syz) / Det;   // dz/dx
+	const double B = (-Sxy*Sxz + Sxx*Syz) / Det;   // dz/dy
+
+	double SumSq = 0.0;
+	for (int32 i = 0; i < NumHits; i++)
+	{
+		const double Pred = Mean.Z + A*(Hits[i].X - Mean.X) + B*(Hits[i].Y - Mean.Y);
+		SumSq += FMath::Square(Hits[i].Z - Pred);
+	}
+	// Perpendicular distance, not vertical: on a slope the vertical gap
+	// overstates how far the point is off the plane, by 1/cos(tilt).
+	const double InvSlopeNorm = 1.0 / FMath::Sqrt(A*A + B*B + 1.0);
+	OutResidualM = FMath::Sqrt(SumSq / (double)NumHits) * InvSlopeNorm * 0.01;
+
+	// Plane height at the centre, which is the point the wheel is actually at.
+	OutHeightM = (Mean.Z + A*(CentreCm.X - Mean.X) + B*(CentreCm.Y - Mean.Y)) * 0.01;
+
+	// Normal of z = a*x + b*y + c is (-a, -b, 1) in UE; then the POLAR flip to
+	// the contract frame, same rule as the single-ray path.
+	FVector NUe(-A, -B, 1.0);
+	NUe.Normalize();
+	OutNormal[0] =  NUe.X;
+	OutNormal[1] = -NUe.Y;
+	OutNormal[2] =  NUe.Z;
+	return true;
+}
+
+void AFSDSVehiclePawn::DrivePawnFromPlant()
+{
+	if (!PlantState.bPlantOk) return;   // never fly the car on a failed step
+
+	USkeletalMeshComponent* M = GetMesh();
+	if (!M) return;
+
+	// Contract (SI, ENU, +y LEFT) -> UE (cm, left-handed, +y RIGHT). Position
+	// is POLAR so y negates; the quaternion takes the same handedness flip the
+	// Chaos adapter uses in reverse. One conversion, one place.
+	// THE PLANT'S z IS THE CoG, NOT THE MESH ORIGIN. build_chassis initialises
+	// pos to [0;0;IFSSIM_CoGH], so a resting car reports z = CoGHeight = 0.300
+	// m while the mesh origin sits near the road. Writing the plant's z
+	// straight onto the mesh floats the car by most of a CoG height — which is
+	// exactly what it did, and what no telemetry channel showed, because the
+	// plant was reporting its own datum perfectly correctly the whole time.
+	//
+	// Taken from the model's own parameter rather than measured off a settled
+	// car: settings.json owns CoGHeight, build_chassis seeds the state from
+	// it, and this is the third reader of the same number instead of a fourth
+	// independent guess.
+	//
+	// The mesh origin does NOT sit on the road plane — under Chaos it rested
+	// 0.029 m above it. Treating it as zero buried the car by exactly that,
+	// which is why MeshOriginHeightM exists: it is a property of the art
+	// asset, measured, and named rather than folded silently into the CoG.
+	if (!bZDatumCaptured)
+	{
+		PlantToMeshZCm = -PlantMeshZOffsetM() * 100.0;
+		bZDatumCaptured = true;
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: plant/mesh vertical offset %.3f m — shifting the mesh down %.1f cm"),
+			PlantMeshZOffsetM(), -PlantToMeshZCm);
+	}
+
+	const FVector Loc(PlantState.Position[0] * 100.0,
+	                 -PlantState.Position[1] * 100.0,
+	                  PlantState.Position[2] * 100.0 + PlantToMeshZCm);
+	const FQuat Rot(-PlantState.Quat[1], PlantState.Quat[2],
+	                -PlantState.Quat[3],  PlantState.Quat[0]);
+
+	const FVector PrevLoc = GetActorLocation();
+
+	// THE PLANT OWNS THE POSE; A QUERY ANSWERS WHETHER ANYTHING IS IN THE WAY.
+	// Those are two jobs and conflating them broke both.
+	//
+	// Moving with bSweep=true stops the move at the first blocking hit, and
+	// the first blocking hit is always the ground — so the car came to rest on
+	// its collision shape instead of the plant's ride height and visibly flew.
+	// Filtering the hit afterwards does not help: by then the move has already
+	// been truncated.
+	//
+	// So the move is unswept, exactly as the migration doc says, and a
+	// SEPARATE shape query along the same path reports obstacles. The plant is
+	// never overruled; it is told.
+	SetActorLocationAndRotation(Loc, Rot, /*bSweep=*/false, nullptr, ETeleportType::None);
+	M->BodyInstance.SetBodyTransform(GetActorTransform(), ETeleportType::None);
+
+	const FVector Delta = Loc - PrevLoc;
+	if (Delta.SizeSquared() < 1.0) return;   // sub-cm move: nothing to sweep
+
+	// A box roughly the size of the car, swept along this step's motion.
+	// Cheaper and more forgiving than the full skeletal collision, and the
+	// question being asked is only "is something solid in the way".
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSBodySweep), /*bTraceComplex=*/false, this);
+	FHitResult Hit;
+	const FCollisionShape Body = FCollisionShape::MakeBox(FVector(80.f, 60.f, 40.f));
+	const bool bHit = GetWorld()->SweepSingleByChannel(
+		Hit, PrevLoc, Loc, Rot, ECC_Vehicle, Body, Params);
+
+	// Ignore the ground. The plant already carries the car vertically, through
+	// the suspension and the road probe, so reporting the floor as a contact
+	// bills the same support twice — measured at 1406 hits and up to 1.3 g of
+	// phantom force in a single run, all of it the car resting on the road.
+	//
+	// The test is the normal, not the actor: "is this surface holding the car
+	// up, or is it in the car's way?". A barrier, a wall and a cone all
+	// present a roughly horizontal normal; road, ramp and kerb do not. That
+	// keeps working on the 8 deg ramp, where an actor-name test would not.
+	if (!bHit || FMath::Abs(Hit.ImpactNormal.Z) > 0.7f) return;
+
+	// The impulse the car had to shed: its momentum INTO the surface. Only the
+	// normal component — the tangential part is the car sliding along a
+	// barrier, which it is entitled to do.
+	const FVector VelWorld(PlantState.VelWorld[0], -PlantState.VelWorld[1], PlantState.VelWorld[2]);
+	const double VIntoSurface = FVector::DotProduct(VelWorld, Hit.ImpactNormal);
+	if (VIntoSurface >= 0.0) return;
+
+	const double MassKg = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics.Mass : 275.0;
+	// In UE units so ReportContactImpulse's own conversion applies once. Sign:
+	// this is the impulse ON THE OTHER BODY, which is INTO the surface.
+	const FVector ImpulseUe = -Hit.ImpactNormal * (MassKg * -VIntoSurface) * 100.0;
+	ReportContactImpulse(ImpulseUe, Hit.ImpactPoint);
+
+	// And push what we hit. The plant receiving a reaction is only half of
+	// Newton's third law — without this the car is slowed by a cone that never
+	// moves, so the referee, which scores DOO by displacement, never sees it.
+	// A kinematic body does not drive dynamics through the solver, so the
+	// equal and opposite has to be applied by hand. Same impulse, opposite
+	// sign, same point: the two halves cannot drift apart because they are
+	// computed once.
+	if (UPrimitiveComponent* HitComp = Hit.GetComponent())
+	{
+		if (HitComp->IsSimulatingPhysics())
+		{
+			HitComp->AddImpulseAtLocation(-ImpulseUe, Hit.ImpactPoint);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FSDS: struck '%s' at %.1f m/s into the surface%s"),
+		*GetNameSafe(Hit.GetActor()), -VIntoSurface,
+		(Hit.GetComponent() && Hit.GetComponent()->IsSimulatingPhysics())
+			? TEXT(" (pushed it)") : TEXT(" (static, nothing to push)"));
+}
+
+void AFSDSVehiclePawn::CreatePlantWheels()
+{
+	USkeletalMeshComponent* M = GetMesh();
+	if (!M || !VehicleMovement) return;
+
+	// A cylinder, not the art asset's wheel. Extracting a bone's mesh at
+	// runtime is not something the engine offers, and the point here is that
+	// the wheel is WHERE and HOW FAST the plant says — a correct cylinder
+	// beats a pretty wheel in the wrong place. Swapping in the real mesh later
+	// is a one-line change.
+	UStaticMesh* Cyl = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	if (!Cyl)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS: no cylinder mesh — wheels will not be drawn"));
+		return;
+	}
+
+	const FFSDSVehiclePhysics& P = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics : FFSDSVehiclePhysics();
+	// Engine cylinder is 100 cm across and 100 cm tall with its axis on Z.
+	const double DiaScale   = (P.WheelRadius * 2.0);
+	const double WidthScale = P.WheelWidth;
+
+	PlantWheels.Reset();
+	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VehicleMovement->WheelSetups.Num());
+	for (int32 i = 0; i < N; i++)
+	{
+		UStaticMeshComponent* W = NewObject<UStaticMeshComponent>(this);
+		W->SetStaticMesh(Cyl);
+		W->SetupAttachment(GetRootComponent());
+		W->RegisterComponent();
+		W->SetMobility(EComponentMobility::Movable);
+		// Visual only. The car's collision is the chassis body, and the plant
+		// resolves the wheels against the road itself through the probe —
+		// giving these collision would have them fight it.
+		W->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		W->SetRelativeScale3D(FVector(DiaScale, DiaScale, WidthScale));
+		W->SetCastShadow(true);
+
+		// A dark rubber-ish material. The engine cylinder ships with a bright
+		// default that reads as white plastic, which makes a correctly placed
+		// wheel look like a mistake — and these are the one part of the car
+		// placed from the REAL measured geometry rather than from the art
+		// asset. Worth not making them look like the error.
+		if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(
+				nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")))
+		{
+			if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Base, this))
+			{
+				// The parameter name varies by engine version; setting one
+				// that does not exist is a no-op rather than an error, so both
+				// are attempted and the wheel draws either way.
+				const FLinearColor Rubber(0.035f, 0.035f, 0.04f);
+				MID->SetVectorParameterValue(TEXT("Color"), Rubber);
+				MID->SetVectorParameterValue(TEXT("BaseColor"), Rubber);
+				W->SetMaterial(0, MID);
+			}
+		}
+		PlantWheels.Add(W);
+
+		// Hide the skeletal wheel so there are not two of each. HideBoneByName
+		// is on USkinnedMeshComponent and needs no animation asset, which is
+		// what makes this whole approach possible from C++.
+		M->HideBoneByName(VehicleMovement->WheelSetups[i].BoneName, PBO_None);
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: %d wheels now drawn from the plant (%.0f mm diameter, %.0f mm wide); "
+		     "skeletal wheels hidden"),
+		PlantWheels.Num(), P.WheelRadius * 2000.0, P.WheelWidth * 1000.0);
+}
+
+void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
+{
+	if (PlantWheels.Num() == 0 || !PlantState.bPlantOk) return;
+
+	const FFSDSVehiclePhysics& P = FFSDSSettings::Get().GetDefaultVehicle()
+		? FFSDSSettings::Get().GetDefaultVehicle()->Physics : FFSDSVehiclePhysics();
+
+	// Wheel centres from the SAME geometry the plant uses, not read back off
+	// the skeleton. The bind pose is only where the artist left the wheels;
+	// the plant is the authority on where they are now.
+	const double aF = P.Wheelbase * (1.0 - P.WeightDistFront);   // CoG -> front axle
+	const double bR = P.Wheelbase * P.WeightDistFront;           // CoG -> rear axle
+	// Mesh origin sits on the road plane, so a wheel centre is one radius up.
+	const double RestZCm = P.WheelRadius * 100.0;
+
+	// Contract is +y LEFT, UE is +y RIGHT: every lateral offset negates.
+	const double Geo[FSDS_NUM_WHEELS][2] = {
+		{  aF * 100.0, -P.TrackFront * 50.0 },   // FL
+		{  aF * 100.0,  P.TrackFront * 50.0 },   // FR
+		{ -bR * 100.0, -P.TrackRear  * 50.0 },   // RL
+		{ -bR * 100.0,  P.TrackRear  * 50.0 },   // RR
+	};
+
+	for (int32 i = 0; i < PlantWheels.Num(); i++)
+	{
+		UStaticMeshComponent* W = PlantWheels[i];
+		if (!W) continue;
+
+		// Suspension travel moves the wheel relative to the body. Positive
+		// travel is compression, which lifts the wheel INTO the arch, so the
+		// body sits lower relative to it — the wheel's own height above the
+		// road does not change, the chassis does. The chassis already carries
+		// that, so this is the residual: how far the wheel is from its static
+		// position in body coordinates.
+		const double TravelCm = PlantState.WheelSuspTravel[i] * 100.0;
+
+		// Spin from the plant's OMEGA. This is the signal Chaos structurally
+		// could not provide — it snaps wheel speed to ground speed, so its
+		// wheels roll even under lock-up. These stop when the plant says so.
+		WheelSpinRad[i] = FMath::Fmod(WheelSpinRad[i] + PlantState.WheelOmega[i] * DeltaTime,
+		                              2.0 * PI);
+
+		// Contract yaw is +left, UE yaw is +right.
+		const FQuat Steer(FVector::UpVector, -PlantState.WheelSteer[i]);
+		// Spin about the axle, which is the vehicle's lateral axis.
+		const FQuat Spin(FVector::RightVector, WheelSpinRad[i]);
+		// The engine cylinder stands on its end; lay it on its side so its
+		// axis becomes the axle.
+		const FQuat Align(FVector::ForwardVector, HALF_PI);
+
+		W->SetRelativeLocation(FVector(Geo[i][0], Geo[i][1], RestZCm - TravelCm));
+		W->SetRelativeRotation((Steer * Spin * Align).Rotator());
+	}
+
+	// Report the gap between tyre and road once a second. This is the number
+	// that mattered and that nothing reported: every visual defect in this
+	// work was caught by eye while telemetry called the run healthy, because
+	// the plant's own frame is self-consistent and says nothing about where
+	// the car looks like it is.
+	USkeletalMeshComponent* M = GetMesh();
+	if (!M) return;
+	WheelReportAccum += DeltaTime;
+	if (WheelReportAccum < 1.0) return;
+	WheelReportAccum = 0.0;
+
+	FString Report;
+	for (int32 i = 0; i < PlantWheels.Num(); i++)
+	{
+		if (!PlantWheels[i]) continue;
+		const FVector C = PlantWheels[i]->GetComponentLocation();
+		double RoadM = 0.0; double Nrm[3] = {0,0,1};
+		const bool bRoad = ProbeRoadAt(C, RoadM, Nrm);
+		const double GapCm = bRoad ? (C.Z - P.WheelRadius * 100.0) - RoadM * 100.0 : NAN;
+		Report += FString::Printf(TEXT("  w%d gap=%+.1fcm om=%.1f"),
+			i, GapCm, PlantState.WheelOmega[i]);
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS wheels:%s"), *Report);
+}
+
+void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const
+{
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	const float Mu = S.RoadDefaultMu;
+
+	USkeletalMeshComponent* MeshComp = GetMesh();
+	UFSDSWheeledVehicleMovementComponent* VM = VehicleMovement;
+	const UWorld* W = GetWorld();
+	if (!MeshComp || !VM || !W)
+	{
+		// No answer is better than a confident z=0: a flat-road stub passes
+		// every test that exists today and is wrong on the first ramp.
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++) In.bRoadValid[i] = false;
+		return;
+	}
+
+	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VM->WheelSetups.Num());
+
+	for (int32 i = 0; i < N; i++)
+	{
+		const FName Bone = VM->WheelSetups[i].BoneName;
+		FVector WheelCentre = MeshComp->GetBoneLocation(Bone, EBoneSpaces::WorldSpace);
+		if (WheelCentre.IsNearlyZero())
+		{
+			// Bone missing from this skeleton — say so rather than probing the
+			// world origin, which would return the ground under the map centre.
+			In.bRoadValid[i] = false;
+			continue;
+		}
+		WheelCentre += MeshComp->GetComponentTransform()
+			.TransformVectorNoScale(VM->WheelSetups[i].AdditionalOffset);
+
+		double HitZ = 0.0, HitN[3] = {0,0,1}, Residual = kRoadResidualNotFitted;
+		if (ProbeRoadPatch(WheelCentre, HitZ, HitN, Residual))
+		{
+			In.bRoadValid[i] = true;
+			In.RoadHeight[i] = HitZ;
+			for (int32 k = 0; k < 3; k++) In.RoadNormal[i][k] = HitN[k];
+			In.RoadResidual[i] = Residual;
+			In.RoadMu[i]       = Mu;
+		}
+		else
+		{
+			In.bRoadValid[i] = false;
+			In.RoadMu[i]     = Mu;
+		}
+	}
+	for (int32 i = N; i < FSDS_NUM_WHEELS; i++) In.bRoadValid[i] = false;
+}
+
+// ---------------------------------------------------------------------------
+// Shadow plant — the FMU integrating alongside Chaos, driving nothing.
+//
+// Behaviour-neutral by construction: nothing downstream reads ShadowState, so
+// this cannot change how the car drives. What it produces is the parity number
+// the migration doc requires before the kinematic swap.
+//
+// Divergence is expected and is not a bug. The FMU reproduces the settings.json
+// car; Chaos reproduces three arcade assists, a snap-to-ground wheel model and
+// a hidden aero model. The Chaos trace is a reference trajectory, not a target.
+// ---------------------------------------------------------------------------
+void AFSDSVehiclePawn::StepShadowPlant(const FFSDSPlantInput& In)
+{
+	if (!ShadowPlant.IsValid()) return;
+
+	// Force the shadow into the reference's state before stepping it. This is
+	// what makes the comparison mean something: both plants then answer the
+	// same question — given THIS state and THESE inputs, what happens next? —
+	// instead of the shadow answering "where do I end up if nobody is steering
+	// me", which is a question about the experiment.
+	// PLANAR STATES ONLY. Injecting the full state looked obviously right and
+	// is not: the two plants do not share a vertical convention, and this
+	// suspension is 56,900 N/m per corner. Chaos's body-origin height differs
+	// from the FMU's ride-height reference by a few centimetres, and a 0.1 m
+	// error is 9.4x static wheel load — which inflates Fmax = mu*Fz and lets
+	// lateral force reach ~13 g. Measured: acc_err of 70-136 m/s2, almost all
+	// lateral, while /imu showed Chaos itself perfectly clean at 1.6 m/s2.
+	//
+	// So the FMU keeps its own z, roll, pitch and the whole vertical stack,
+	// and takes x, y, yaw and the planar velocities from the reference. Those
+	// are the states the two genuinely share and the ones path-following
+	// parity is about. It is also the honest boundary: Chaos cannot report
+	// wheel omega or slip at all, so a "full state" sync was never full.
+	FFSDSPlantInput SyncedIn = In;
+	if (FFSDSSettings::Get().bShadowSync && PlantState.bPlantOk
+	    && ShadowState.bPlantOk && ShadowSteps > 0)
+	{
+		SyncedIn.bSyncState = true;
+
+		// x,y from the reference; z stays the shadow's own.
+		SyncedIn.SyncPosition[0] = PlantState.Position[0];
+		SyncedIn.SyncPosition[1] = PlantState.Position[1];
+		SyncedIn.SyncPosition[2] = ShadowState.Position[2];
+
+		// Planar velocity from the reference; vertical stays the shadow's.
+		SyncedIn.SyncVelBody[0] = PlantState.VelBody[0];
+		SyncedIn.SyncVelBody[1] = PlantState.VelBody[1];
+		SyncedIn.SyncVelBody[2] = ShadowState.VelBody[2];
+
+		// Yaw rate from the reference; roll and pitch rates stay the shadow's.
+		SyncedIn.SyncOmegaBody[0] = ShadowState.OmegaBody[0];
+		SyncedIn.SyncOmegaBody[1] = ShadowState.OmegaBody[1];
+		SyncedIn.SyncOmegaBody[2] = PlantState.OmegaBody[2];
+
+		// Reference YAW, shadow's own roll and pitch. Recomposed rather than
+		// blended: a quaternion lerp between two attitudes would quietly
+		// change roll and pitch too, which is the whole thing being avoided.
+		auto YawOf = [](const double Q[4])
+		{
+			return FMath::Atan2(2.0 * (Q[0]*Q[3] + Q[1]*Q[2]),
+			                    1.0 - 2.0 * (Q[2]*Q[2] + Q[3]*Q[3]));
+		};
+		const FQuat SQ(ShadowState.Quat[1], ShadowState.Quat[2],
+		               ShadowState.Quat[3], ShadowState.Quat[0]);
+		FRotator SR = SQ.Rotator();
+		SR.Yaw = FMath::RadiansToDegrees(YawOf(PlantState.Quat));
+		const FQuat Recomposed = SR.Quaternion();
+		SyncedIn.SyncQuat[0] = Recomposed.W;
+		SyncedIn.SyncQuat[1] = Recomposed.X;
+		SyncedIn.SyncQuat[2] = Recomposed.Y;
+		SyncedIn.SyncQuat[3] = Recomposed.Z;
+	}
+
+	ShadowPlant->PreStep(SyncedIn);
+	ShadowPlant->PostStep(ShadowState);
+
+	if (!ShadowState.bPlantOk)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS Plant: shadow '%s' failed at step %lld — dropping it. "
+			     "Chaos is unaffected."), *ShadowPlant->GetName(), ShadowSteps);
+		ShadowPlant.Reset();
+		return;
+	}
+
+	ShadowSteps++;
+
+	// Compare only what BOTH plants actually have. Chaos cannot report wheel
+	// omega, Fx/Fy or slip ratio at all (it snaps wheel speed to ground speed),
+	// so those are not divergence — they are absence, and averaging them in
+	// would manufacture a number that means nothing.
+	const double YawS = FMath::Atan2(
+		2.0 * (ShadowState.Quat[0]*ShadowState.Quat[3] + ShadowState.Quat[1]*ShadowState.Quat[2]),
+		1.0 - 2.0 * (ShadowState.Quat[2]*ShadowState.Quat[2] + ShadowState.Quat[3]*ShadowState.Quat[3]));
+	const double YawC = FMath::Atan2(
+		2.0 * (PlantState.Quat[0]*PlantState.Quat[3] + PlantState.Quat[1]*PlantState.Quat[2]),
+		1.0 - 2.0 * (PlantState.Quat[2]*PlantState.Quat[2] + PlantState.Quat[3]*PlantState.Quat[3]));
+	// A RESET teleports the reference car to the start gate. The FMU cannot
+	// follow — its pose is internal state with no input to write, so
+	// FFSDSFmuPlant::Reset() honestly refuses rather than silently doing
+	// nothing useful. Left alone, that injects a one-step jump (59.5 m was
+	// measured) which then dominates every subsequent number and makes the
+	// position metric describe the teleport instead of the plant.
+	//
+	// So: detect the teleport and restart the comparison. 1 m in a single
+	// tick is 60 m/s at 60 Hz — not something this car does. Divergence is
+	// then honestly "since the last reset", and the count is logged so a run
+	// full of hidden resets cannot pass for a clean one.
+	if (bShadowOriginSet)
+	{
+		const double Jx = PlantState.Position[0] - ShadowPrevChaosPos[0];
+		const double Jy = PlantState.Position[1] - ShadowPrevChaosPos[1];
+		const double Jz = PlantState.Position[2] - ShadowPrevChaosPos[2];
+		if ((Jx*Jx + Jy*Jy + Jz*Jz) > 1.0)
+		{
+			bShadowOriginSet = false;
+			ShadowRelatches++;
+			ShadowWorstPosErrM = 0.0;
+			ShadowWorstYawErrDeg = 0.0;
+			ShadowSumPosErrM = 0.0;
+			ShadowSteps = 0;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS Plant shadow: reference teleported %.1f m at t=%.1f "
+				     "(reset #%d) — restarting the comparison from here"),
+				FMath::Sqrt(Jx*Jx + Jy*Jy + Jz*Jz), In.SimTime, ShadowRelatches);
+		}
+	}
+	for (int32 i = 0; i < 3; i++) ShadowPrevChaosPos[i] = PlantState.Position[i];
+
+	// Latch both origins on the first good step, then compare like with like.
+	if (!bShadowOriginSet)
+	{
+		for (int32 i = 0; i < 3; i++)
+		{
+			ShadowOriginFmu[i]   = ShadowState.Position[i];
+			ShadowOriginChaos[i] = PlantState.Position[i];
+		}
+		ShadowYaw0Fmu   = YawS;
+		ShadowYaw0Chaos = YawC;
+		bShadowOriginSet = true;
+	}
+
+	const double Dx = (ShadowState.Position[0] - ShadowOriginFmu[0])
+	                - (PlantState.Position[0]  - ShadowOriginChaos[0]);
+	const double Dy = (ShadowState.Position[1] - ShadowOriginFmu[1])
+	                - (PlantState.Position[1]  - ShadowOriginChaos[1]);
+	const double Dz = (ShadowState.Position[2] - ShadowOriginFmu[2])
+	                - (PlantState.Position[2]  - ShadowOriginChaos[2]);
+	const double PosErr = FMath::Sqrt(Dx*Dx + Dy*Dy + Dz*Dz);
+
+	double YawErr = FMath::RadiansToDegrees(FMath::UnwindRadians(
+		(YawS - ShadowYaw0Fmu) - (YawC - ShadowYaw0Chaos)));
+	YawErr = FMath::Abs(YawErr);
+
+	ShadowSumPosErrM += PosErr;
+	ShadowWorstPosErrM   = FMath::Max(ShadowWorstPosErrM, PosErr);
+	ShadowWorstYawErrDeg = FMath::Max(ShadowWorstYawErrDeg, YawErr);
+
+	// Once a second, not once a tick: at 60 Hz a per-tick line is 10k lines a
+	// lap and the signal is in the trend, not the sample.
+	if (In.SimTime >= ShadowNextLogTime)
+	{
+		ShadowNextLogTime = In.SimTime + 1.0;
+		// Road-probe health belongs on this line, not inferred from the car
+		// not having fallen through the world. A probe that silently starts
+		// missing on a ramp looks identical to one that works, right up until
+		// the suspension loads are wrong.
+		int32 NValid = 0, NNotFitted = 0;
+		double ResMin = 1e9, ResMax = -1e9;
+		for (int32 i = 0; i < FSDS_NUM_WHEELS; i++)
+		{
+			if (In.bRoadValid[i]) NValid++;
+			const double R = In.RoadResidual[i];
+			if (R < 0.0) { NNotFitted++; continue; }   // sentinel, not a value
+			ResMin = FMath::Min(ResMin, R);
+			ResMax = FMath::Max(ResMax, R);
+		}
+		if (NNotFitted == FSDS_NUM_WHEELS) { ResMin = 0.0; ResMax = 0.0; }
+
+		// With sync on, position error is ~0 by construction and says nothing.
+		// The parity signal is the RESPONSE: same state, same inputs, so any
+		// difference in acceleration is the plants genuinely disagreeing about
+		// the physics rather than about where the car is.
+		const double Ax = ShadowState.AccelProper[0] - PlantState.AccelProper[0];
+		const double Ay = ShadowState.AccelProper[1] - PlantState.AccelProper[1];
+		const double AccErr = FMath::Sqrt(Ax*Ax + Ay*Ay);
+		const double YawRateErr = FMath::RadiansToDegrees(
+			ShadowState.OmegaBody[2] - PlantState.OmegaBody[2]);
+
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS Plant shadow: t=%.1f pos_err=%.3f m (worst %.3f, mean %.3f) "
+			     "yaw_err=%.2f deg (worst %.2f) | chaos v=%.2f fmu v=%.2f m/s "
+			     "| road %d/4 valid, z=%.3f m, res %.4f-%.4f m, nofit %d | synced=%d "
+			     "acc_err=%.3f m/s2 (ax %+.3f ay %+.3f) yawrate_err=%.2f deg/s"),
+			In.SimTime, PosErr, ShadowWorstPosErrM,
+			ShadowSumPosErrM / FMath::Max((int64)1, ShadowSteps),
+			YawErr, ShadowWorstYawErrDeg,
+			PlantState.VelBody[0], ShadowState.VelBody[0],
+			NValid, In.RoadHeight[FSDS_FL], ResMin, ResMax, NNotFitted,
+			SyncedIn.bSyncState ? 1 : 0, AccErr, Ax, Ay, YawRateErr);
+	}
 }

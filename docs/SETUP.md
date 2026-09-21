@@ -55,10 +55,18 @@ mid-session.
 ```bash
 git clone https://github.com/isc-fs/IFSSIM.git
 cd IFSSIM
+git fetch origin dev
+git checkout dev             # NOT optional — see below
 git lfs install              # one-time per machine; safe to repeat
 git lfs pull                 # ~500 MB of binary assets (cones, materials, …)
 git submodule update --init --recursive
 ```
+
+`git checkout dev` is **not optional**. The repository's default branch
+is `main`, an intentionally empty placeholder holding one README — so a
+plain `git clone` leaves you with no source, no `docs/`, and no build
+scripts. Everything lives on `dev`. If `ls` shows only `README.md`, you
+skipped this line.
 
 The `git submodule update --init --recursive` is **not optional** —
 there are two submodules and skipping it breaks the build:
@@ -123,6 +131,12 @@ That's it; skip to step 3.
 
 ### Option B — build from source
 
+> **New to this?** `./tools/build_sim.sh` does everything in this
+> section for you — checks prerequisites, installs what it can, repairs
+> LFS and submodules, then builds. See
+> [BUILD_FROM_SOURCE.md](BUILD_FROM_SOURCE.md). The manual steps below
+> are the same thing, by hand.
+
 You'll need UE 5.7 installed (see prerequisites). From the repo root:
 
 ```bash
@@ -185,12 +199,45 @@ The sim binds:
 
 ## 4. Bring up the Docker stack
 
+> **Windows — two one-time requirements, or this step silently half-works:**
+>
+> 1. **Enable Docker Desktop host networking** — Settings → Resources →
+>    Network → tick **"Enable host networking"** → Apply & restart.
+>    `dv_pipeline_stack` and `mission_control_backend` run with
+>    `network_mode: host`; on Docker Desktop for Windows those bind inside
+>    the Linux VM and are otherwise unreachable from Windows, so Mission
+>    Control's API returns **502** on every call and the sim can't stream
+>    sensors/LiDAR to the bridge.
+> 2. **Run `docker compose` from Git Bash, not PowerShell.** The compose
+>    file uses `${PWD}` to hand the sim the tracks path; PowerShell leaves
+>    it blank and track loading silently breaks.
+
 From the repo root:
 
 ```bash
 docker compose build              # ~5-10 min cold, seconds after
 docker compose up -d              # starts all 4 containers
 ```
+
+### Faster: pull the pipeline image instead of building it
+
+`docker compose build` compiles the ROS workspace and installs gtsam, numba
+and the FaSTTUBe planner. CI publishes that image on every merge to `dev`, so
+unless you are editing `ros2/src/` or `pipeline/` you can skip the build
+entirely:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.pull.yml pull
+docker compose -f docker-compose.yml -f docker-compose.pull.yml up -d
+```
+
+Pin an exact build with `PIPELINE_IMAGE_TAG` (`dev`, `latest`, or an immutable
+`sha-<short>` — use a `sha-` tag when two machines must run provably identical
+stacks).
+
+**If you ARE editing bridge or pipeline code, do not use the override.**
+`tools/refresh-bridge.sh` rebuilds from your working tree, and a pulled image
+would silently mask your changes.
 
 After ~10 s, `docker compose ps` should show all four `Up (healthy)`:
 
@@ -376,6 +423,14 @@ docker compose up -d --force-recreate mission_control_backend
 Backend can't reach the bridge's RPC port. Same root cause as the
 bridge-connection-failed loop above — make sure the sim is running
 on port 41451.
+
+### Mission Control loads but every API call returns 502 (Windows)
+
+Docker Desktop **host networking is off**. The host-networked
+`mission_control_backend` isn't reachable from the frontend / Windows.
+Enable it (Settings → Resources → Network → "Enable host networking" →
+Apply & restart), then `docker compose up -d --force-recreate`. See
+[§4](#4-bring-up-the-docker-stack).
 
 ---
 

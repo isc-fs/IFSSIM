@@ -117,3 +117,9 @@ dist/
 
 # Compiled odometry_filter pybind module (rebuild: tools/sim_benchmark/build_native_filter.sh)
 tools/sim_benchmark/_native/
+
+# Simulink build cache and codegen scratch. Regenerated on every build; tracking
+# them means every plant check shows a dirty tree.
+*.slxc
+slprj/
+matlab/**/slprj/

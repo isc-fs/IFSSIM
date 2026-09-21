@@ -1,4 +1,6 @@
 #include "FSDSConeSpawner.h"
+#include "FSDSVehiclePawn.h"
+#include "FSDSRandom.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -7,6 +9,39 @@
 #include "Engine/World.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
+
+namespace
+{
+	/**
+	 * Cone yaw randomisation. Cones are visually round but their MESHES are
+	 * not perfectly symmetric, so yaw changes which facets the LiDAR sees and
+	 * therefore the returned point pattern. Unseeded, that made every run's
+	 * perception input subtly different. One stream for the whole spawn pass,
+	 * seeded from the scenario seed.
+	 */
+	FRandomStream& ConeYawStream()
+	{
+		static FRandomStream Stream;
+		static uint32 SeededForGeneration = 0;   // 0 = never seeded
+
+		// Keyed on GENERATION, not on the seed VALUE. FSDSRandom bumps the
+		// generation on every (re)seed, including a reseed to the same number.
+		// Keying on the value meant that `resetScenario <same seed>` — the
+		// exact case a repeat run uses — compared equal, skipped the reseed,
+		// and let the stream carry on from wherever the previous run left it.
+		// So repeating a scenario with the same seed produced DIFFERENT cone
+		// yaws, which is a different perception input, which defeats the point
+		// of seeding at all. Every sensor already keys on the generation; this
+		// was the one stream that did not.
+		const uint32 Gen = FSDSRandom::GetGeneration();
+		if (SeededForGeneration != Gen)
+		{
+			Stream = FSDSRandom::MakeStream(TEXT("ConeSpawner.yaw"));
+			SeededForGeneration = Gen;
+		}
+		return Stream;
+	}
+}
 
 AFSDSConeSpawner::AFSDSConeSpawner()
 {
@@ -176,6 +211,28 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 
 		SpawnedCones.Add(ConeActor);
 
+		// Report collisions so the car can feel them. Off by default on a
+		// static mesh: without SetNotifyRigidBodyCollision the hit delegate
+		// simply never fires, silently, and the cone is knocked over exactly
+		// as before — which is why this was easy to miss.
+		MeshComp->SetNotifyRigidBodyCollision(true);
+		// Log once what a cone actually is, physically. The migration doc
+		// assumed "cones ARE simulating, so NormalImpulse is populated" — an
+		// assumption worth checking, because if they are not simulating there
+		// is no impulse to recover and the contact path can never fire.
+		static bool bLoggedConePhysics = false;
+		if (!bLoggedConePhysics)
+		{
+			bLoggedConePhysics = true;
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS Cone physics: simulating=%s collision=%d objectType=%d mass=%.2f kg"),
+				MeshComp->IsSimulatingPhysics() ? TEXT("YES") : TEXT("NO"),
+				(int32)MeshComp->GetCollisionEnabled(),
+				(int32)MeshComp->GetCollisionObjectType(),
+				MeshComp->GetMass());
+		}
+		MeshComp->OnComponentHit.AddDynamic(this, &AFSDSConeSpawner::OnConeHit);
+
 		// Tag this mesh's CustomDepthStencilValue so the LiDAR's
 		// post-process pass (#321 D-Phase-2 follow-up) can read
 		// stencil → 905 nm reflectance via FSDSLidarDecode.usf's
@@ -281,11 +338,11 @@ void AFSDSConeSpawner::SpawnTestTrack()
 
 		// Blue cones on the left (inside)
 		FVector BluePos = TrackCenter + FVector(OvalX, OvalY, HeightOffset) - TrackDir * HalfWidth;
-		SpawnStaticMeshCone(BlueMesh, BluePos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), EFSDSConeColor::Blue);
+		SpawnStaticMeshCone(BlueMesh, BluePos, FRotator(0.f, ConeYawStream().GetFraction() * 360.f, 0.f), EFSDSConeColor::Blue);
 
 		// Yellow cones on the right (outside)
 		FVector YellowPos = TrackCenter + FVector(OvalX, OvalY, HeightOffset) + TrackDir * HalfWidth;
-		SpawnStaticMeshCone(YellowMesh, YellowPos, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), EFSDSConeColor::Yellow);
+		SpawnStaticMeshCone(YellowMesh, YellowPos, FRotator(0.f, ConeYawStream().GetFraction() * 360.f, 0.f), EFSDSConeColor::Yellow);
 	}
 
 	// Orange big cones at start/finish
@@ -386,7 +443,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		else if (Type == TEXT("small_orange") || Type == TEXT("orange")) ConeMesh = OrangeConeMesh;
 
 		FVector Location(X, Y, HeightOffset);
-		FRotator Rotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
+		FRotator Rotation(0.f, ConeYawStream().GetFraction() * 360.f, 0.f);
 		SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
 
 		// Record positions for the start-gate-pose derivation. We capture
@@ -425,6 +482,97 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 	FVector OrangeCentroid = FVector::ZeroVector;
 	for (const FVector& P : BigOrangePositions) OrangeCentroid += P;
 	OrangeCentroid /= BigOrangePositions.Num();
+
+	// --- Multi-gate tracks (acceleration / skidpad) -----------------------
+	// The PCA path below assumes ONE start gate (wider-than-deep, so the
+	// smaller-variance axis is along-track = forward). Acceleration and
+	// skidpad have TWO orange gates at opposite ends of the track. PCA over
+	// both makes the ~80 m start->finish span the dominant axis, so
+	// "smaller variance = forward" picks the CROSS-track axis and the car
+	// spawns rotated 90 deg (near the track middle, since the centroid of
+	// both gates sits between them). Detect this by clustering the orange
+	// cones into gates: with >= 2 gates, forward is the gate-to-gate axis
+	// and the car spawns behind the START gate (the one nearest the first
+	// track cone). Closed loops (one gate) fall through to the PCA path
+	// unchanged.
+	{
+		const float GateClusterDistSq = FMath::Square(1000.f); // 10 m in cm
+		TArray<int32> ClusterOf;
+		ClusterOf.Init(-1, BigOrangePositions.Num());
+		TArray<FVector> GateCentroids;
+		TArray<int32> GateCounts;
+		for (int32 i = 0; i < BigOrangePositions.Num(); ++i)
+		{
+			if (ClusterOf[i] != -1) continue;
+			const int32 g = GateCentroids.Num();
+			GateCentroids.Add(FVector::ZeroVector);
+			GateCounts.Add(0);
+			TArray<int32> Stack;
+			Stack.Add(i);
+			ClusterOf[i] = g;
+			while (Stack.Num() > 0)
+			{
+				const int32 c = Stack.Pop();
+				GateCentroids[g] += BigOrangePositions[c];
+				GateCounts[g] += 1;
+				for (int32 j = 0; j < BigOrangePositions.Num(); ++j)
+				{
+					if (ClusterOf[j] == -1 &&
+						FVector::DistSquaredXY(BigOrangePositions[c],
+							BigOrangePositions[j]) <= GateClusterDistSq)
+					{
+						ClusterOf[j] = g;
+						Stack.Add(j);
+					}
+				}
+			}
+			GateCentroids[g] /= FMath::Max(1, GateCounts[g]);
+		}
+
+		if (GateCentroids.Num() >= 2)
+		{
+			// Start gate = the gate nearest the first track cone (the start
+			// of the blue/yellow corridor as authored in the CSV).
+			const FVector TrackStart = BlueYellowPositions[0];
+			int32 StartG = 0;
+			double BestSq = TNumericLimits<double>::Max();
+			for (int32 g = 0; g < GateCentroids.Num(); ++g)
+			{
+				const double d = FVector::DistSquaredXY(GateCentroids[g], TrackStart);
+				if (d < BestSq) { BestSq = d; StartG = g; }
+			}
+			// Forward = from the start gate toward the mean of the others.
+			FVector OtherCentroid = FVector::ZeroVector;
+			int32 OtherN = 0;
+			for (int32 g = 0; g < GateCentroids.Num(); ++g)
+			{
+				if (g != StartG) { OtherCentroid += GateCentroids[g]; ++OtherN; }
+			}
+			OtherCentroid /= FMath::Max(1, OtherN);
+
+			FVector GateForward = OtherCentroid - GateCentroids[StartG];
+			GateForward.Z = 0.f;
+			if (!GateForward.IsNearlyZero())
+			{
+				GateForward.Normalize();
+				OrangeCentroid = GateCentroids[StartG]; // anchor at the START gate
+				OutLocation = OrangeCentroid - GateForward * BackupCm;
+				OutLocation.Z = HeightOffset + 50.f;
+				const float MgYaw = FMath::RadiansToDegrees(
+					FMath::Atan2(GateForward.Y, GateForward.X));
+				OutRotation = FRotator(0.f, MgYaw, 0.f).Quaternion();
+				UE_LOG(LogTemp, Log,
+					TEXT("FSDS ConeSpawner: multi-gate start pose — %d gates, "
+						 "start gate (%.1f, %.1f), forward (%.2f, %.2f), "
+						 "spawn (%.1f, %.1f), yaw %.1f°"),
+					GateCentroids.Num(),
+					GateCentroids[StartG].X, GateCentroids[StartG].Y,
+					GateForward.X, GateForward.Y,
+					OutLocation.X, OutLocation.Y, MgYaw);
+				return true;
+			}
+		}
+	}
 
 	// PCA on the 4 orange cones to recover the gate axes.
 	//
@@ -523,4 +671,24 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 		OutLocation.X, OutLocation.Y, YawDeg);
 
 	return true;
+}
+
+
+void AFSDSConeSpawner::OnConeHit(UPrimitiveComponent* /*HitComp*/, AActor* OtherActor,
+                                 UPrimitiveComponent* /*OtherComp*/, FVector NormalImpulse,
+                                 const FHitResult& Hit)
+{
+	// Only the car. Cones hit each other constantly once one is knocked over,
+	// and feeding those to the plant would have the car braked by a collision
+	// happening ten metres behind it.
+	AFSDSVehiclePawn* Pawn = Cast<AFSDSVehiclePawn>(OtherActor);
+	if (!Pawn) return;
+
+	// A zero impulse means the solver had no reaction to report — both bodies
+	// kinematic, or a grazing contact resolved to nothing. Passing it on would
+	// add a contact event carrying no force, and the plant would divide it by
+	// the timestep all the same.
+	if (NormalImpulse.IsNearlyZero()) return;
+
+	Pawn->ReportContactImpulse(NormalImpulse, Hit.ImpactPoint);
 }

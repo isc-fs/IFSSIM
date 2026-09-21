@@ -215,13 +215,13 @@ private:
     // based viewers (Foxglove web, Lichtblick web) deserialise + WebGL-
     // upload the full 1.5 MB/scan stream on the JS thread, which lands at
     // 30-40 % CPU on a tab. This publisher emits every Nth point to a
-    // companion topic so a viz session can subscribe to /lidar/Lidar1/viz
-    // and leave /lidar/Lidar1 (full density) for the autonomy stack. Only
+    // companion topic so a viz session can subscribe to /lidar_points/viz
+    // and leave /lidar_points (full density) for the autonomy stack. Only
     // created when `lidar_viz_decimation` parameter > 1 (default 0 = off,
     // production runs unaffected).
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_viz_pub_;
     // 0 (default) = disabled, no viz publisher created. >= 2 = publish
-    // every Nth point on /lidar/Lidar1/viz alongside the full cloud.
+    // every Nth point on /lidar_points/viz alongside the full cloud.
     uint32_t lidar_viz_decimation_ = 0;
     rclcpp::Publisher<fs_msgs::msg::GoSignal>::SharedPtr go_signal_pub_;
     rclcpp::Publisher<fs_msgs::msg::FinishedSignal>::SharedPtr finished_signal_pub_;
@@ -325,10 +325,16 @@ private:
     //
     // TODO(braking-steering): authoritative ISC_IFS_08.xlsx MONO sheet
     // gives turning radius 4.5 m + wheelbase 1.570 m → max δ ≈ 0.336
-    // rad. Changing this default will reduce controller authority —
-    // held until Sandra confirms + controller speed/lookahead is
-    // re-tuned. Tracked in issue #462.
-    double max_steering_angle_rad_ = 0.5;
+    // rad. Mirrors settings.json VehiclePhysics.MaxSteerAngle = 22.4 deg.
+    // This scales REPORTED angle only (see the declare_parameter site); it
+    // does not clamp the command, so it cannot reduce controller authority
+    // — the earlier note here claiming otherwise was mistaken, and the
+    // value is now pinned to the plugin rather than held pending a re-tune.
+    // Sandra's confirmation of the true rack limit is still outstanding:
+    // four numbers disagree (28 deg invented, 22.4 tyre peak, 18.2 uDV
+    // MAX_STEER_ROADWHEEL_DEG, 19.25 from the MONO sheet above).
+    // Tracked in issue #462.
+    double max_steering_angle_rad_ = 0.390954;
 
     // Steering ratio (steering wheel angle / road-wheel angle). The
     // Bosch LWS measures the wheel column rotation; the

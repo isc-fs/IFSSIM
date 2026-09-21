@@ -17,12 +17,16 @@
  * UChaosVehicleWheel. Longitudinal grip is capped by FrictionForceMultiplier.
  *
  * Tune via settings.json → VehiclePhysics → Pacejka block.
+ *
+ * These fallbacks MIRROR the Pacejka defaults in matlab/plant/ifssim_params.m
+ * (the PD struct). Change both in the same commit — a silent divergence puts
+ * the two plants on different tyres whenever settings.json omits the block.
  */
 struct FFSDSPacejkaCoeffs
 {
 	float LatB = 10.0f;
-	float LatC =  1.9f;
-	float LatE = -1.5f;
+	float LatC =  1.4f;
+	float LatE = -0.3f;
 
 	// Kept for forward-compatibility if longitudinal graph is added later
 	float LonB = 12.0f;

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "WheeledVehiclePawn.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
+#include "Vehicles/FSDSWheeledVehicleMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "Camera/CameraComponent.h"
@@ -14,6 +15,7 @@
 #include "Sensors/FSDSBarometerSensor.h"
 #include "Sensors/FSDSMagnetometerSensor.h"
 #include "Vehicles/FSDSWheelFront.h"
+#include "Plant/FSDSPlant.h"
 #include "Vehicles/FSDSWheelRear.h"
 #include "EmraxMotor.h"
 #include "FSDSVehiclePawn.generated.h"
@@ -29,7 +31,11 @@ class FSDSPLUGIN_API AFSDSVehiclePawn : public AWheeledVehiclePawn
 	GENERATED_BODY()
 
 public:
-	AFSDSVehiclePawn();
+	// Takes an FObjectInitializer so the constructor can substitute
+	// UFSDSWheeledVehicleMovementComponent for the stock Chaos component —
+	// the movement component is a default subobject created by
+	// AWheeledVehiclePawn, so its class can only be changed here.
+	AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer);
 
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
@@ -145,9 +151,110 @@ public:
 	bool IsEbsLatched() const { return bEbsLatched; }
 
 	// --- Components ---
+	/** The plant behind the interface. Chaos today; an FMU later. Not a
+	 *  UPROPERTY because IFSDSPlant is a plain C++ interface, deliberately —
+	 *  it must be implementable without dragging in UObject machinery. */
+	TUniquePtr<IFSDSPlant> Plant;
+
+	/** Refreshed once per Tick, read by everything downstream. */
+	FFSDSPlantOutput PlantState;
+
+	/** The FMU running alongside Chaos in Plant.Type="shadow". Stepped with
+	 *  the same inputs, read by nothing — so it cannot change behaviour. */
+	/** True when the FMU is integrating the car and Chaos has been stood down.
+	 *  The mesh is then a KINEMATIC TARGET driven from PlantState, not a
+	 *  simulated body. */
+	bool bFmuDrivesPawn = false;
+
+	/** Vertical datum shift between the plant's body origin and the mesh's
+	 *  origin, in cm. The plant reports the CoG; the mesh origin is wherever
+	 *  the artist put it, and under Chaos the car rested at z ~= 0.03 m while
+	 *  the plant says 0.30. Writing the plant's z straight onto the mesh
+	 *  floats the car by the difference. Captured once, from the pose Chaos
+	 *  had the car in at the moment of the swap. */
+	double PlantToMeshZCm = 0.0;
+	bool   bZDatumCaptured = false;
+	double PawnZAtSwapCm = 0.0;
+
+	/** Contact impulses accumulated since the last plant step, in CONTRACT
+	 *  units (N*s, world ENU) with the moment already taken about the body
+	 *  origin. Converted to a force by dividing by the step, and cleared
+	 *  once consumed — an impulse applied twice is a force that doubles with
+	 *  frame rate. */
+	FVector PendingContactImpulse = FVector::ZeroVector;
+	FVector PendingContactMoment  = FVector::ZeroVector;
+	FVector PendingContactPoint   = FVector::ZeroVector;
+	int32   PendingContactCount   = 0;
+
+	/** Write the plant's pose onto the mesh. Only called when the FMU drives. */
+	void DrivePawnFromPlant();
+
+	/** Pose the wheel bones from the plant.
+	 *
+	 *  Chaos's vehicle anim node used to do this, and deactivating Chaos took
+	 *  it with it — leaving the wheels in their bind pose while the chassis
+	 *  moved correctly, which reads on screen as a car not touching the
+	 *  ground. The plant knows where its wheels are; this puts them there. */
+	void PoseWheelsFromPlant(float DeltaTime);
+
+	/** Build the plant-driven wheel meshes and hide the skeletal ones. */
+	void CreatePlantWheels();
+
+	/** Wheels drawn from the plant, in FL/FR/RL/RR order.
+	 *
+	 *  The wheels ARE plant state — omega, steer, suspension travel and
+	 *  contact all come off the Wheels bus — so the platform's only job is to
+	 *  draw what the plant reports. Chaos's animation node drawing them
+	 *  instead put two different simulators into one picture: a chassis from
+	 *  the plant and wheels from Chaos. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> PlantWheels;
+
+	/** Accumulated spin per wheel, radians, integrated from the plant's omega.
+	 *  Chaos snaps wheel speed to ground speed, so its wheels always look like
+	 *  they are rolling; these stop when the plant says the wheel has. */
+	double WheelSpinRad[FSDS_NUM_WHEELS] = {0,0,0,0};
+
+	/** Throttles the wheel-gap report to once a second. */
+	double WheelReportAccum = 0.0;
+
+
+
+	TUniquePtr<IFSDSPlant> ShadowPlant;
+	FFSDSPlantOutput ShadowState;
+	int64 ShadowSteps = 0;
+	/** Each plant's own pose on the first shadow step. The FMU begins at its
+	 *  own initial condition while the Chaos car spawns on the start gate, so
+	 *  absolute positions are not comparable and their difference would be a
+	 *  large meaningless constant. Divergence is measured between DISPLACEMENTS
+	 *  from these origins. */
+	bool   bShadowOriginSet = false;
+	double ShadowOriginFmu[3] = {0,0,0};
+	double ShadowOriginChaos[3] = {0,0,0};
+	double ShadowYaw0Fmu = 0.0;
+	double ShadowYaw0Chaos = 0.0;
+	/** Reference pose on the PREVIOUS step, to catch teleports. */
+	double ShadowPrevChaosPos[3] = {0,0,0};
+	int32  ShadowRelatches = 0;
+	double ShadowWorstPosErrM = 0.0;
+	double ShadowWorstYawErrDeg = 0.0;
+	double ShadowSumPosErrM = 0.0;
+	double ShadowNextLogTime = 0.0;
+
+	/** Fill the road bus by probing terrain under each wheel.
+	 *
+	 *  Deliberately independent of Chaos: it traces from the wheel BONES, not
+	 *  from FWheelStatus::ContactPoint, because Chaos's contact results vanish
+	 *  in Phase 6 and a probe that depends on them would have to be rewritten
+	 *  exactly when it is load-bearing. */
+	void ProbeRoad(FFSDSPlantInput& In) const;
+
+	/** Step the shadow plant and accumulate divergence against PlantState. */
+	void StepShadowPlant(const FFSDSPlantInput& In);
+
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
-	UChaosWheeledVehicleMovementComponent* VehicleMovement;
+	UFSDSWheeledVehicleMovementComponent* VehicleMovement;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vehicle")
 	USpringArmComponent* SpringArm;
@@ -201,6 +308,148 @@ public:
 	class UBoxComponent* PhysicsBox = nullptr;
 
 private:
+	// Writes the settings.json tire model into the wheel CLASS DEFAULT
+	// OBJECTS. Must be called from the constructor, before the movement
+	// component is configured: Chaos builds its physics wheels from the CDO
+	// during CreateVehicle(), so anything applied later never reaches the
+	// solver. See the implementation for why the Pacejka curve in particular
+	// has no other route.
+	void ApplyTireModelToWheelCDOs();
+
+public:
+	/**
+	 * Push everything settings.json contributes to the wheels into the Chaos
+	 * solver, then read it back and complain if it disagrees.
+	 *
+	 * MUST be called again after anything that rebuilds physics state.
+	 * ResetVehicleState() destroys and recreates it, which re-runs
+	 * CreateVehicle() and rebuilds every physics wheel from the CLASS DEFAULT
+	 * OBJECT — silently discarding the runtime-pushed configuration.
+	 */
+	void ApplyWheelSettingsToSolver(bool bLogInherited = false);
+
+	/**
+	 * This tick's plant state, in the platform<->plant contract (SI, ISO 8855,
+	 * ENU) rather than UE's left-handed centimetres.
+	 *
+	 * Consumers should migrate to this instead of reading the pawn or the Chaos
+	 * component directly. Two reasons: the frame conversion then lives in ONE
+	 * place, and when the plant becomes an FMU nothing downstream changes.
+	 *
+	 * Check bPlantOk. A failed step reports false; it does NOT return a
+	 * well-formed zero, which is what the IsSimulatingPhysics guards do today.
+	 */
+	const FFSDSPlantOutput& GetPlantState() const { return PlantState; }
+
+	/** Which plant is driving. "Chaos" today. */
+	FString GetPlantName() const;
+
+	/** Tell the plant(s) the car has been teleported.
+	 *
+	 *  Must be called from every reset path. A plant that integrates its own
+	 *  state has no other way to know: the platform moving the mesh is
+	 *  invisible to it, so without this it keeps driving from wherever it had
+	 *  got to while the rest of the sim starts a fresh mission.
+	 *
+	 *  Position/Quat are in CONTRACT units (m, ENU, w-first quaternion), not
+	 *  UE centimetres. */
+	void ResetPlants(const double Position[3], const double Quat[4]);
+
+	/** Vertical offset between the MESH origin and the PLANT's body origin,
+	 *  in metres: plant_z = mesh_z + this.
+	 *
+	 *  The plant reports its CoG (build_chassis seeds pos to [0;0;CoGH]); the
+	 *  mesh origin sits MeshOriginHeightM above the road. Both directions of
+	 *  this conversion exist, and having them written out separately is how
+	 *  they came to disagree: the plant->mesh path was corrected and the
+	 *  mesh->plant path was not, so a teleport buried the plant's CoG by a
+	 *  full CoG height. The suspension bottomed out, front and rear compressed
+	 *  differently under their different static loads, and the car settled
+	 *  PITCHED — measured as a 3.85 m/s^2 longitudinal "bias" that the EKF
+	 *  then calibrated in, after which SLAM never produced a pose and the
+	 *  watchdog fired. One function, used by both directions. */
+	static double PlantMeshZOffsetM();
+
+	/** The car's velocity in UE units (cm/s, world), from the PLANT when it is
+	 *  driving and from the actor otherwise.
+	 *
+	 *  AActor::GetVelocity() is derived from movement-component motion, and a
+	 *  plant-driven car is placed by transform rather than moved — so it reads
+	 *  zero however fast the car is going. Everything downstream then believes
+	 *  the car is parked: motor rpm went to zero, which starved the odometry
+	 *  filter, which diverged the EKF, which collapsed SLAM's data association
+	 *  and drove the car off the track; and Mission Control's speed readout
+	 *  sat at zero throughout.
+	 *
+	 *  One accessor, so the next reader of vehicle motion cannot reintroduce
+	 *  it by calling GetVelocity() out of habit. */
+	FVector GetVehicleVelocityUe() const;
+
+	/** Angular velocity in UE units (rad/s, world), same reasoning. */
+	FVector GetVehicleAngularVelocityUe() const;
+
+	/** Is the car's motion live — by ANY simulator?
+	 *
+	 *  Replaces `Mesh->IsSimulatingPhysics()` at every site that meant "is
+	 *  this car actually moving". That test asks CHAOS, and when the FMU
+	 *  drives, the mesh is kinematic so it answers no — silently, with no
+	 *  error, disabling whatever it guards. An audit found thirteen such
+	 *  guards; the damaging ones were in the UDP sensor frame and the
+	 *  ground-truth RPC, which between them fed the autonomy a car that was
+	 *  not moving.
+	 *
+	 *  Ask what you actually want to know: is there a live plant behind this
+	 *  vehicle. */
+	bool IsVehicleMotionLive() const;
+
+	/** Report a contact impulse the car just delivered, recovered from the
+	 *  OTHER body.
+	 *
+	 *  It has to come from the other side. When the FMU drives, the car's mesh
+	 *  is kinematic, and a kinematic body's own OnComponentHit reports a
+	 *  NormalImpulse of zero — there is no solver reaction on a body the
+	 *  solver does not integrate. The cone IS simulating, so its hit carries
+	 *  the real impulse, and Newton's third law supplies the car's.
+	 *
+	 *  ImpulseUe is the impulse ON THE OTHER BODY in UE units (kg*cm/s);
+	 *  PointUe is the world contact point in cm. Both are converted and
+	 *  negated here, once, rather than at each call site. */
+	void ReportContactImpulse(const FVector& ImpulseUe, const FVector& PointUe);
+
+	/** Tear the plants down deterministically. Waiting for the pawn to be
+	 *  garbage-collected is too late: PIE restarts BeginPlay on a new pawn
+	 *  while the old one is still alive, and the FMU is one-instance-per
+	 *  -process. */
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+
+	/** Probe the ground under ONE point. Public and single-point so it can be
+	 *  tested against known geometry: the wheel loop below is a caller, not
+	 *  the unit. A probe only ever exercised through four wheel bones on flat
+	 *  ground cannot be told apart from a stub returning zero.
+	 *
+	 *  StartCm is a world UE position; the trace runs down from above it.
+	 *  Outputs are CONTRACT units — height in m, normal in ENU with +y LEFT. */
+	bool ProbeRoadAt(const FVector& StartCm, double& OutHeightM, double OutNormal[3]) const;
+
+	/** Fit a plane to five rays around one point, so the platform reports the
+	 *  surface the tyre actually sits on and can say how well a plane
+	 *  describes it.
+	 *
+	 *  OutResidual is the RMS distance of the hits from the fitted plane, in
+	 *  metres — the contract's "so the plant can DETECT a bad fit rather than
+	 *  trust it". It is kRoadResidualNotFitted (negative, so it cannot be
+	 *  mistaken for a good measurement) when fewer than three rays hit and
+	 *  there is no plane to fit. */
+	bool ProbeRoadPatch(const FVector& CentreCm, double& OutHeightM,
+	                    double OutNormal[3], double& OutResidualM) const;
+
+	/** Reported when no plane could be fitted. Negative because an RMS never
+	 *  is, so a consumer cannot silently read it as "perfectly flat" — which
+	 *  is exactly what a 0.0 here used to invite. */
+	static constexpr double kRoadResidualNotFitted = -1.0;
+
+private:
+
 	void SetupVehicleMovement();
 	void OnThrottleInput(float Value);
 	void OnSteeringInput(float Value);

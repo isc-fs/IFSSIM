@@ -12,6 +12,217 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-09-20
+
+Live testing during 1.0.0 preparation surfaced that `Plant.Type:
+shadow` (documented as behaviour-neutral) in fact leaks enough state
+downstream to break `cone_slam` mid-drive
+— [#606](https://github.com/isc-fs/IFSSIM/issues/606). Defaults on
+this branch flip to pure Chaos plant + CPU LiDAR so a stock checkout
+runs a full trackdrive without a codepath workaround. FMU / Simulink
+plant integration continues on `dev-manual` and merges back to `dev`
+once the shadow-neutrality contract is honoured.
+
+### Changed
+
+- **Default `Plant.Type` is now `chaos`.** `settings.json` shipped
+  with `shadow` since 0.2.0; that flag makes Chaos still drive the
+  pawn but steps the FMU alongside it, and until
+  [#606](https://github.com/isc-fs/IFSSIM/issues/606) is resolved
+  the shadow-step disturbs downstream odometry enough to stall
+  cone_slam. `chaos` mode disables the shadow entirely and matches
+  the pre-0.2.0 behaviour. `dev-manual` keeps `Plant.Type: shadow`
+  (or `fmu`) as its default; merges to `dev` gate on the
+  shadow-neutrality invariant being restored.
+- **Default LiDAR path is now `cpu` at 300 k points/s** (was `gpu`
+  at 1.74 M pts/s, the Hesai ATX_S01 datasheet rate). The GPU path
+  was tuned against ARM Mac unified memory + async GPU→CPU readback;
+  on Windows/x86 the discrete-GPU readback stall + PCIe transfer
+  dominate and the CPU `ParallelFor` + Chaos
+  `LineTraceSingleByChannel` loop is more predictable. 300 k pts/s
+  is 116 ch × 10 Hz × ~258 H-steps → 0.47° H-resolution, still fine
+  for cone detection at ≤30 m. Bump PPS back up on beefier x86
+  boxes or benchmark against real-car captures; flip `LidarPath`
+  back to `gpu` on ARM.
+- **`ProjectVersion` — 0.2.0 → 1.0.0.** First release where a
+  stock checkout runs a full trackdrive without a codepath
+  workaround. 1.0 does not mean the FMU migration is done — that
+  is the arc from `dev-manual` to a future 2.0.
+
+### Added
+
+- **One-command build from source** — `tools/build_sim.sh` (plus
+  `tools/build_sim.ps1`, a PowerShell bootstrap for Windows machines
+  with no Git yet). Detects the platform, checks disk space, verifies
+  git / git-lfs / Xcode / Visual Studio / Unreal, installs what it
+  safely can via brew / winget / apt, repairs unfetched LFS assets and
+  uninitialised submodules, then runs the right `package_*.sh`. Reads
+  the required engine version from `IFSSIM.uproject` rather than
+  hardcoding it. `--check` runs the preflight and changes nothing.
+  Written for contributors who have never used Unreal; the guide is
+  `docs/BUILD_FROM_SOURCE.md`.
+
+### Fixed
+
+- **Setup docs told new contributors to clone into an empty branch.**
+  The repository's default branch is `main` — an intentionally empty
+  placeholder holding one README — so the documented `git clone` left
+  people with no source tree, and the first build step failed with "no
+  such file or directory" and no hint as to why. `docs/SETUP.md` and
+  `docs/BUILD_FROM_SOURCE.md` now `git fetch origin dev && git checkout
+  dev` after cloning, and both spell out the `ls` check that catches it.
+- **`package_mac.sh` now honours `UE_ROOT`.** It hardcoded
+  `/Users/Shared/Epic Games/UE_5.7`, so the override that
+  `docs/SETUP.md` documented — and that `package_windows.sh` (`UE_ROOT`)
+  and `package_linux.sh` (`UE5_ROOT`) both already supported — silently
+  did nothing on macOS. A missing engine now fails with a clear message
+  instead of a bare "No such file or directory".
+
+## [0.2.0] — 2026-08-26
+
+**The vehicle dynamics left Chaos.** This release is dominated by one
+thread: the car's physics moved out of Unreal's arcade vehicle
+simulator and behind an interface, and a team-authored Simulink model
+now drives the car. Alongside that, the autonomy pipeline became a
+submodule, every stochastic source became seedable, and a series of
+long-standing physics defects were found — several of which had been
+silently wrong since the project started.
+
+Two changes are breaking for anyone tracking `settings.json` or the
+repository layout: the autonomy pipeline is no longer in this repo, and
+`MaxSteerAngle` has changed.
+
+### Added
+
+- **`IFSDSPlant` — the platform/plant seam.** The simulator now has an
+  explicit boundary between *the world* (terrain, sensors, cones,
+  referee — Unreal's job) and *the vehicle* (tyres, suspension,
+  powertrain, aero — the dynamics engineers' job). SI units, ISO 8855
+  body frame, ENU world. Two implementations: `FFSDSChaosPlant`
+  (default, and still the only validated reference) and
+  `FFSDSFmuPlant`.
+- **A Simulink vehicle model, in `matlab/plant/`.** Six subsystems with
+  named owners — chassis, tyre/suspension, steering, powertrain, aero,
+  brakes — each generated from a `build_*.m` script so a regenerated
+  model is reviewable in a diff rather than an opaque binary. Every
+  parameter comes from `settings.json`, with per-field provenance
+  (`measured` / `default` / `ASSUMPTION`). Runs in MATLAB alone; no
+  Unreal, Docker or ROS needed to work on it.
+- **An FMI 3.0 co-simulation importer.** Reads, extracts and gates an
+  `.fmu` from inside the engine, including a ZIP reader written against
+  zlib because the engine's own only links under `bBuildEditor`. State
+  save/restore round-trips bitwise exact.
+- **`Plant.Type` in `settings.json`** — `chaos`, `shadow` or `fmu`. In
+  `shadow`, the FMU steps alongside Chaos on identical inputs and the
+  divergence is logged; it drives nothing, so it cannot change
+  behaviour. In **`fmu`** the FMU integrates the vehicle and the mesh
+  becomes a kinematic target written from the plant's pose each tick —
+  sensors already read `PlantState`, so they follow for free.
+- **The FMU drives the car (Phase 6).** Measured: 0 → 21.8 m/s in 10 s
+  with all four wheels in contact, and a 0.5 steering command giving an
+  8.3 m radius against 8.22 m from `L/tan(δ)` — within 1% of an
+  independent kinematic prediction rather than a number tuned to match
+  anything.
+- **A road probe.** The platform now answers *what is under each wheel*
+  — five rays per wheel, least-squares plane fit, reporting height,
+  normal and an RMS residual so the plant can detect a bad fit rather
+  than trust it. Validated against a ramp/crown/step test level with
+  analytic ground truth, because on flat terrain a working probe and a
+  stub returning zero produce identical logs.
+- **Seeded determinism.** `resetScenario` RPC, a seeded scenario
+  runner, `-fsds.seed=` override, and a verifier that proves the RNG
+  reproduces — which on first run *failed*, showing `resetScenario`
+  alone was insufficient.
+- **Benchmarking toolkit** (`tools/sim_benchmark/`) — offline
+  perception/SLAM/control benchmarks, the real C++ EKF driven through
+  pybind11, bag-based drift checks with frame alignment.
+- **Real-car parity for bag lift** — a sim uDV emulator on the stock
+  Mission Control surface, and auto-derived `<name>_carparity` bags
+  (LiDAR + IMU only) for replaying onto the car on stands.
+
+### Changed
+
+- **Breaking — the autonomy pipeline is now a submodule.** Cone
+  detection, SLAM, planning and control moved to
+  [`isc-fs/IFS08-DV-PIPELINE`](https://github.com/isc-fs/IFS08-DV-PIPELINE)
+  and are consumed at `pipeline/`. Pipeline changes go to that repo.
+  After pulling, run `git submodule update --init --recursive`.
+- **Breaking — `MaxSteerAngle` 28° → 22.4°.** Constant-steer sweeps
+  show lateral acceleration peaks at 22.4° (1.336 g) and *falls* to
+  1.268 g by 28°, while yaw/kinematic collapses 0.873 → 0.651. Past the
+  peak, more lock buys less turn, which inverts the sign of a path
+  controller's feedback — it runs wide, adds lock, turns less, adds
+  more. Nothing is lost: every angle removed produced less curvature
+  than 22.4° already does. The 28° it replaced was never measured.
+- **The sim LiDAR publishes on `/lidar_points`**, matching the car.
+  Bags recorded before this need
+  `--remap /lidar/Lidar1:=/lidar_points` on replay.
+- **UE sim time is the authoritative capture clock** end-to-end.
+
+### Fixed
+
+Most of these had been wrong since the project started, and were found
+by building the plant seam rather than by anything failing loudly.
+
+- **Chaos was squaring the steering command.** `SquaredFunction` was
+  the engine default and never overridden, so a 0.5 command produced
+  0.25 of full lock — the autonomy had been getting roughly half the
+  steering it asked for in the mid-range, on top of a rate limit
+  needing 0.4 s to reach full lock.
+- **The Pacejka tyre model never reached the solver.** Chaos builds its
+  physics wheels from the wheel class's *class default object* before
+  `BeginPlay`, so everything written to the per-instance wheels — the
+  tyre curve, friction, brake torque, radius, steer limit — landed on
+  an object the solver never reads. Much of `settings.json`'s
+  `VehiclePhysics` block had been decoration.
+- **The tyre curve was far too peaky** once it did reach the solver:
+  `LatC 1.9 → 1.4`, `LatE −1.5 → −0.3`. The old shape peaked at 4.9° of
+  slip and returned 34% of grip at full lock.
+- **Regen never reached the sim.** The brake/regen channel was dropped
+  in the `/ctrl/cmd` relay, so the car could only coast, never brake —
+  the root cause of corner overshoot at speed.
+- **IMU accelerometer noise was 100× too small** — applied in cm/s²
+  while configured in m/s². The EKF had been tuned against a far too
+  clean IMU.
+- **Spring rate was 2.3× too soft**, aero was applied twice, the aero
+  moment arm was 10× too long, steering ran reverse Ackermann, and the
+  speed-dependent steering curve was authored in km/h while Chaos
+  evaluates it in MPH.
+- **Multi-gate tracks spawned the car 90° off** (acceleration, skidpad).
+- **A finished bag could be abandoned** when the recorder's stop
+  service timed out while finalising a multi-GB mcap — the caller read
+  the timeout as failure and skipped the copy to the host.
+- **`resetScenario` left scoring permanently blind** — every repeat run
+  scored 0/0/0.
+- **Plants were initialised twice on the same object.** Invisible for
+  years because the Chaos plant is idempotent; it only became a crash
+  once something non-reentrant sat behind the same call — the FMU
+  declares one instance per process, and a second `Instantiate`
+  segfaults rather than failing. Teardown is now deterministic in
+  `EndPlay`, since PIE restarts `BeginPlay` on a new pawn while the old
+  one is still alive.
+
+### Known limitations
+
+- **Chaos remains the default and the reference.** The FMU drives the
+  car under `Plant.Type="fmu"`, but `chaos` is still what a fresh
+  checkout runs, and it is the implementation every prior lap was
+  validated against. Same-state parity between the two is ~0.8 m/s²
+  mean.
+- **`Crr = 0.020` and the 22.4° steering clamp both rest on a
+  shape-fitted Pacejka, not measured tyre data.** Every dynamics number
+  in this release is internally consistent and none of it is anchored
+  to the real Hoosier. This is the measurement that would turn a
+  self-consistent simulator into a validated one.
+- **Four sources still disagree on maximum steering lock** — 28°
+  (invented), 22.4° (tyre peak), 18.2° (uDV firmware), 19.25° (the
+  IFS-08 workbook). The workbook's figure may derive from the *IFS-07*
+  wheelbase; see `docs/IFS_08_measured_parameters.md`. Tracked at #462.
+- The controller normalises steering by 18.2° while the sim maps full
+  lock to 22.4° — a 1.23× scale mismatch. The clamp makes it safe, not
+  consistent.
+
+
 ## [0.1.2] — 2026-05-26
 
 The biggest autonomy-pipeline release since v0.1.0. Three intersecting

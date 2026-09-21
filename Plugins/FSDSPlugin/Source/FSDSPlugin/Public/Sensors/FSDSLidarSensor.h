@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "Components/ActorComponent.h"
 #include "RHIGPUReadback.h"
 #include "Math/Vector4.h"
@@ -297,4 +298,23 @@ private:
 	float CurrentHorizontalAngle = 0.f;
 
 	FCriticalSection PointCloudLock;
+
+	// Deterministic noise source. Lazily seeded from the scenario seed on first
+	// use (the seed is set after component construction). Each sensor has its
+	// own stream so sensors cannot perturb each other's sequences.
+	// See FSDSRandom.h.
+	// Monotonic scan index, salts the per-scan GPU RNG seed so each scan
+	// differs while the whole sequence stays reproducible for a given seed.
+	uint32 GpuScanCounter = 0;
+
+	// Generation the scan counter was last restarted for. Without this the
+	// counter runs monotonically from editor start and a repeat scenario draws
+	// different GPU noise than the run it is meant to reproduce.
+	uint32 GpuScanCounterGeneration = 0;
+	FRandomStream NoiseStream;
+	// Generation this stream was seeded for. A scenario reset bumps the
+	// generation, which forces a re-seed so a repeat run genuinely restarts
+	// the sequence instead of continuing the previous one.
+	uint32 NoiseStreamGeneration = 0;
+	FRandomStream& Noise();
 };

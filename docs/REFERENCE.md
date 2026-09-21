@@ -27,23 +27,61 @@ This document is a comprehensive technical reference for all systems, components
 
 ## 1. Architecture Overview
 
-IFSSIM is a Formula Student Driverless simulator built on Unreal Engine 5.7. The system is layered into four levels of abstraction:
+IFSSIM is a Formula Student Driverless simulator built on Unreal Engine 5.7. It is layered, and one of those layers is a seam rather than a stack boundary: **the vehicle dynamics are a swappable plant behind an interface**, not a fixed part of the engine.
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Unreal Engine 5.7                  │
-│  FSDSPlugin (C++)  ·  Chaos Physics  ·  Maps   │
-├─────────────────────────────────────────────────┤
-│         Networking Layer (port 41451)           │
-│    TCP RPC Server  ·  UDP Push Broadcaster     │
-├─────────────────────────────────────────────────┤
-│              Client Interfaces                  │
-│  ROS 2 Bridge  ·  Python Client  ·  REST API   │
-├─────────────────────────────────────────────────┤
-│             Mission Control                     │
-│    FastAPI Backend  ·  React Frontend          │
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  MISSION CONTROL          tools/mission_control/               │
+│  FastAPI backend :8000    ·    React frontend :3000            │
+├────────────────────────────────────────────────────────────────┤
+│  AUTONOMY                 pipeline/   (git submodule)          │
+│  cone detection · SLAM · path planning · control               │
+└────────────────────────────────────────────────────────────────┘
+      ▲  /lidar_points /imu /odom /steering_angle       ▼  /ctrl/cmd
+┌────────────────────────────────────────────────────────────────┐
+│  BRIDGE                   ros2/src/ifssim_bridge/              │
+│  TCP RPC 41451  ·  UDP sensor 41452  ·  UDP LiDAR 41453        │
+└────────────────────────────────────────────────────────────────┘
+      ▲                                                  ▼
+┌────────────────────────────────────────────────────────────────┐
+│  PLATFORM                 Plugins/FSDSPlugin/                  │
+│  Only the platform owns the WORLD:                             │
+│  terrain + road probe · LiDAR/IMU/GPS/GSS · cones · referee     │
+└────────────────────────────────────────────────────────────────┘
+      ▲  FFSDSPlantOutput                  FFSDSPlantInput  ▼
+      │  pose, wheels, powertrain          cmd, road, env,  │
+      │                                    state injection  │
+┌────────────────────────────────────────────────────────────────┐
+│  PLANT       IFSDSPlant   —   SI · ISO 8855 body · ENU world   │
+│  ┌───────────────────────────┐  ┌───────────────────────────┐  │
+│  │ FFSDSChaosPlant           │  │ FFSDSFmuPlant             │  │
+│  │ UE Chaos Vehicles         │  │ FMI 3.0 co-simulation     │  │
+│  │ DEFAULT — and the only    │  │ built from matlab/plant/  │  │
+│  │ validated reference       │  │ runs as a SHADOW today    │  │
+│  └───────────────────────────┘  └───────────────────────────┘  │
+└────────────────────────────────────────────────────────────────┘
 ```
+
+**Why the plant is a seam and not just a layer.** Chaos is an arcade
+vehicle simulator: it squares the steering input, rate-limits controls,
+snaps wheel speed to ground speed, and applies aero the project never
+asked for. Those are reasonable choices for a game and wrong ones for a
+test bench. Rather than fight them, the dynamics moved behind an
+interface so a team-authored model can replace them — and so the two can
+be compared while the car keeps driving on the one that works.
+
+Which plant runs is set by `Plant.Type` in `settings.json`:
+
+| value | behaviour |
+|---|---|
+| `chaos` | Chaos observes the car it is already integrating. Default. |
+| `shadow` | Chaos drives; the FMU steps alongside on identical inputs and the divergence is logged. Behaviour-neutral by construction — nothing downstream reads the shadow. |
+| `fmu` | The FMU is the plant. Bring-up only: the pawn is still Chaos-integrated, so the sensors describe a different car from the one on screen. |
+
+The plant model itself is documented in
+[`../matlab/plant/README.md`](../matlab/plant/README.md); the migration
+design and its open questions in
+[`fmu_plant_migration.md`](fmu_plant_migration.md).
 
 **Key processes and ports:**
 
@@ -90,7 +128,16 @@ The simulation clock speed is configurable via `settings.json` (`ClockSpeed` fie
 
 ### IFS-08 Formula Student Car
 
-The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. All physics parameters are defined in `settings.json` under `VehiclePhysics` and applied at runtime via `AFSDSVehiclePawn`. Compile-time defaults live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/FSDSSettings.h` (`FFSDSVehiclePhysics`).
+The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. All physics parameters are defined in `settings.json` under `VehiclePhysics` and applied at runtime via `AFSDSVehiclePawn`.
+
+> **Not every parameter reaches every plant.** `settings.json` is the single
+> source for the car's numbers, but the two plant implementations consume
+> different subsets of it. Chaos ignores anything it has no equivalent knob for;
+> the FMU takes its values **baked in at export time**, so editing one here does
+> not change an already-exported `.fmu` until `matlab/plant/export_plant_fmu.m`
+> is re-run. Where a parameter is consumed by only one of them, the field
+> comment in `FSDSSettings.h` says so — `RollingResistance` is the current
+> example, and it is FMU-only. Compile-time defaults live in `Plugins/FSDSPlugin/Source/FSDSPlugin/Public/FSDSSettings.h` (`FFSDSVehiclePhysics`).
 
 #### Mass, drivetrain, geometry
 
@@ -100,7 +147,7 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 | Drivetrain | RWD | — | `Drivetrain` |
 | Wheel radius | 0.228 | m | `WheelRadius` |
 | Wheel width | 0.190 | m | `WheelWidth` |
-| Max steer angle | 28 | ° | `MaxSteerAngle` |
+| Max steer angle | 22.4 | ° | `MaxSteerAngle` |
 | Wheelbase | 1.627 | m | `Wheelbase` |
 | Front track | 1.220 | m | `TrackFront` |
 | Rear track | 1.190 | m | `TrackRear` |
@@ -195,7 +242,7 @@ Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric lo
 
 #### Wheels
 
-- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.228 m` from settings at runtime), 19 mm width, max steer 28°, no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
+- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.228 m` from settings at runtime), 19 mm width, max steer 22.4° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
 - **Rear (`UFSDSWheelRear`):** Same tire, no steering, drive wheels (motor torque injected via `SetDriveTorque` with `Additive` combine method), `MaxBrakeTorque` sized at `BeginPlay` to `MaxRegenTorque · GearRatio · DrivetrainEfficiency / 2` per wheel so the brake input channel saturates correctly against the regen ceiling.
 
 #### Aerodynamics

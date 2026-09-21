@@ -6,7 +6,53 @@ this repository. If you only want to run the sim, see
 
 ---
 
-## Repository layout
+## Directory layout
+
+Where things live, and who works on them. The simulator is split along
+one seam — the platform owns the world, the plant owns the vehicle —
+and the directories follow that split rather than cutting across it.
+
+```
+IFSSIM/
+├── Plugins/FSDSPlugin/     PLATFORM. All simulation logic.
+│   └── Source/FSDSPlugin/
+│       ├── Public|Private/Plant/     the IFSDSPlant seam + both impls
+│       ├── Public|Private/FMI/       FMI 3.0 importer (zip, ABI, package)
+│       ├── Public|Private/Sensors/   LiDAR, IMU, GPS, GSS
+│       ├── Public|Private/RPC/       TCP RPC server, UDP push
+│       └── Public|Private/Test/      ramp/crown/step terrain for probe tests
+├── Source/Blocks/          minimal UE game module — entry point only
+├── Content/                maps, cone meshes, track CSVs
+│
+├── matlab/plant/           PLANT. The Simulink vehicle model.
+│   ├── build_*.m           one builder per subsystem — the SOURCE
+│   ├── models/             generated .slx — regenerate, don't hand-edit
+│   ├── fmu/                exported IFSSIM_Plant.fmu
+│   └── test_*_physics.m    per-subsystem physics checks
+│
+├── pipeline/               AUTONOMY. Git submodule, its own repo:
+│                           isc-fs/IFS08-DV-PIPELINE
+├── ros2/src/ifssim_bridge/ the bridge between sim and ROS 2
+│
+├── tools/mission_control/  session orchestration (FastAPI + React)
+├── tools/                  operator scripts, benchmarks, FMU utilities
+├── docker/                 the dv_pipeline_stack image
+└── docs/                   what you are reading
+```
+
+**The one rule that is easy to get wrong.** `matlab/plant/models/*.slx`
+is *generated*. Edit `build_*.m` and regenerate; a hand-edit to the
+`.slx` is overwritten by the next build and is invisible in review,
+because a `.slx` is a binary blob in a diff.
+
+**Where a change belongs.** If it is about terrain, sensors, cones or
+the referee, it is the platform. If it is about how the car responds to
+a command, it is the plant. If it decides what command to send, it is
+the autonomy and lives in the submodule, not here.
+
+---
+
+## Branch layout
 
 The repo has two permanent branches and many short-lived ones.
 
@@ -229,7 +275,37 @@ the branch is deleted. The issue closes as the permanent record.
 ### 6. Merging into main + cutting a release
 
 When `dev` holds a set of validated changes ready to ship, a
-responsible team member opens a PR from `dev` into `main`.
+responsible team member brings it to `main`.
+
+> **`main` and `dev` have UNRELATED HISTORIES.** `main` is an orphan
+> branch — a single placeholder commit holding one `README.md`, with no
+> common ancestor with `dev` at all. `git merge` refuses outright
+> (`fatal: refusing to merge unrelated histories`), so a plain PR from
+> `dev` into `main` **cannot be merged**. This is not a conflict to
+> resolve; it is two disconnected graphs.
+>
+> There is a second trap underneath it: `main` holds `README.md` and
+> `dev` holds `readme.md`. Git treats those as different files, so a
+> merge produces both — and on macOS or Windows, where the filesystem
+> is case-insensitive, they collide and `git status` reports phantom
+> changes forever after.
+>
+> The way that works is to make `main`'s **content** equal `dev`'s
+> without merging their **histories**:
+>
+> ```bash
+> git checkout main
+> git rm README.md              # drop the placeholder, avoid the collision
+> git checkout dev -- .         # take dev's tree wholesale
+> git commit -m "release: vX.Y.Z"
+> ```
+>
+> `main` keeps a clean linear history of release commits. Provenance
+> lives in the tags, which point into `dev`'s history where the work
+> actually happened.
+>
+> Do not `--allow-unrelated-histories` unless you have decided you want
+> two roots in the graph permanently, and do not force-push `main`.
 
 To cut a release:
 

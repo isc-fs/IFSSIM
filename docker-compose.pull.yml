@@ -1,0 +1,24 @@
+# Pull the pre-built pipeline image instead of building it locally.
+#
+# Building dv_pipeline_stack from source compiles the ROS workspace and
+# installs gtsam, numba and the FaSTTUBe planner — minutes of work plus a
+# full toolchain. CI publishes that image on every merge to dev, so for
+# anyone who is not editing bridge/pipeline C++ there is no reason to build
+# it at all.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pull.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.pull.yml up -d
+#
+# Pin a specific build by exporting PIPELINE_IMAGE_TAG (dev, latest, or
+# sha-<short>) — sha- tags are immutable and are what to use when you need
+# two machines running provably identical stacks.
+#
+# NOTE: if you ARE editing ros2/src or pipeline/, do NOT use this override —
+# tools/refresh-bridge.sh rebuilds from your working tree, and a pulled image
+# would silently mask your changes.
+services:
+  dv_pipeline_stack:
+    image: ghcr.io/isc-fs/ifssim-dv_pipeline_stack:${PIPELINE_IMAGE_TAG:-dev}
+    pull_policy: always
+    # Drop the local build context so compose cannot fall back to building.
+    build: !reset null

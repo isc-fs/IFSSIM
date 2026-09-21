@@ -1090,12 +1090,41 @@ def pipeline_stop():
                 "state": _active_recording["state"],
                 "path": _active_recording.get("path", ""),
             }
+            # A stop-service error is not proof the bag is lost. The
+            # common case is a TIMEOUT while the recorder finalises a
+            # multi-GB mcap — it finishes fine, just after we stopped
+            # waiting. rosbag2 writes metadata.yaml last, so that file
+            # is the honest completion signal. Check it before writing
+            # the recording off, or a perfectly good bag is abandoned
+            # in the volume with no auto-pull. (Observed: a 3.45 GB
+            # autocross bag, stop timed out at 15 s, bag complete and
+            # readable.)
+            recovered = False
             if _active_recording.get("error"):
-                bag_info["error"] = _active_recording["error"]
-                log_event(
-                    "record_bag", f"stop failed for {name}: {bag_info['error']}",
-                )
-            else:
+                if _bag.bag_finalised(name):
+                    recovered = True
+                    _active_recording.pop("error", None)
+                    _active_recording["state"] = "stopped"
+                    bag_info["state"] = "stopped"
+                    bag_info.pop("error", None)
+                    # A timed-out stop returns no path; the bag is
+                    # where the recorder was told to put it.
+                    if not bag_info.get("path"):
+                        bag_info["path"] = f"/bags/{name}"
+                        _active_recording["path"] = bag_info["path"]
+                    log_event(
+                        "record_bag",
+                        f"stop reported an error for {name} "
+                        f"({stop_resp.get('error')}), but the bag "
+                        f"finalised — recovering it",
+                    )
+                else:
+                    bag_info["error"] = _active_recording["error"]
+                    log_event(
+                        "record_bag",
+                        f"stop failed for {name}: {bag_info['error']}",
+                    )
+            if not _active_recording.get("error"):
                 log_event(
                     "record_bag",
                     f"stopped {name} → {bag_info['path']}",
@@ -1106,11 +1135,24 @@ def pipeline_stop():
                 # pipeline-stop; the bag is still safe in the
                 # volume and the user can recover via
                 # `tools/pull-bag.sh`.
-                if _bag.is_auto_pull_enabled() and stop_resp.get("ok"):
+                if _bag.is_auto_pull_enabled() and (
+                    stop_resp.get("ok") or recovered
+                ):
                     pull = _bag.auto_pull_and_clean(name)
                     if pull.get("ok"):
                         bag_info["host_path"] = pull["host_path"]
                         _active_recording["host_path"] = pull["host_path"]
+                        # Car-liftable derivative (LiDAR+IMU only), if produced.
+                        cp = pull.get("car_parity_path")
+                        if cp:
+                            bag_info["car_parity_path"] = cp
+                            _active_recording["car_parity_path"] = cp
+                            log_event("record_bag", f"car-parity bag → {cp}")
+                        elif pull.get("car_parity_error"):
+                            log_event(
+                                "record_bag",
+                                f"car-parity derive skipped: "
+                                f"{pull['car_parity_error']}")
                         if pull.get("error"):
                             # Cleanup partial-failure path: bag is on host,
                             # but the volume-side rm failed. Surface as a

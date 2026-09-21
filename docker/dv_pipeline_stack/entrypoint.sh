@@ -44,6 +44,23 @@ source /dv_pipeline_stack_ws/install/setup.bash
 # the action / srv interfaces.
 export AMENT_PREFIX_PATH="/dv_pipeline_stack_ws/install/fs_msgs:/dv_pipeline_stack_ws/install/ifssim_bridge:/dv_pipeline_stack_ws/install/dv_msgs:$AMENT_PREFIX_PATH"
 
+# Pre-warm the numba JIT cache BEFORE the lifecycle launch. cone_detection
+# (RANSAC) and path_planning (fsd_path_planning) lazily JIT-compile their hot
+# paths on the first sensor callback AFTER a mission activates. The
+# path_planning cold compile is ~37 s; on a cold /numba_cache that overruns the
+# node's activation/liveness window and the process is SIGKILL'd mid-compile,
+# which leaves the cache incomplete so the NEXT activation is still cold and
+# dies the same way — a crash-loop that surfaces as "did not reach DV_READY
+# within 270s" or a car that reaches DRIVING then stalls with no /Path. Warming
+# here (untimed, before any mission) fills the persistent /numba_cache volume so
+# every activation is a sub-second cache hit. Cold cache pays ~40-75 s ONCE;
+# warm cache (the normal case) is ~2-5 s. Skip via DV_SKIP_NUMBA_WARMUP=true.
+if [ "${DV_SKIP_NUMBA_WARMUP:-false}" != "true" ]; then
+    echo "Pre-warming numba JIT cache (first cold boot ~40-75s; warm ~seconds)..."
+    python3 /dv_pipeline_stack_ws/warmup_numba.py 2>&1 | sed 's/^/  /' \
+        || echo "  numba warmup non-fatal error — first mission may pay the cold-JIT cost"
+fi
+
 echo "IFSSIM ROS stack starting — full lifecycle launch..."
 echo "  Simulator: $IFSSIM_HOST:$IFSSIM_PORT"
 echo "  Mission:   $MISSION_NAME / track $TRACK_NAME"

@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>IFSSIM — Odometry &amp; SLAM: from drift to accuracy</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1f2730;
+    --line: #30363d;
+    --ink: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --bad: #f85149;
+    --warn: #d29922;
+    --link: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 28px 36px 80px; }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 18px; margin-bottom: 28px;
+  }
+  header .kicker {
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 6px;
+  }
+  header h1 {
+    font-size: 32px; line-height: 1.15; margin: 0 0 8px;
+    font-weight: 700;
+  }
+  header h1 .num { color: var(--good); }
+  header h1 .num.bad { color: var(--bad); }
+  header .sub { color: var(--muted); font-size: 15px; }
+
+  .grid {
+    display: grid; gap: 18px;
+    grid-template-columns: 1.2fr 1fr;
+  }
+  .grid.three { grid-template-columns: repeat(3, 1fr); }
+  .grid.four { grid-template-columns: repeat(4, 1fr); }
+
+  section.card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 18px 20px;
+  }
+  section.card.full { grid-column: 1 / -1; }
+  section.card h2 {
+    font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 12px;
+    border-bottom: 1px solid var(--line); padding-bottom: 6px;
+  }
+  section.card h3 {
+    font-size: 15px; margin: 14px 0 6px; color: var(--ink);
+  }
+  section.card p { margin: 0 0 10px; color: var(--ink); font-size: 14px; }
+  section.card p.note { color: var(--muted); font-size: 13px; }
+
+  code, .mono {
+    font-family: "JetBrains Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    font-size: 13px;
+    background: var(--panel-2); padding: 1px 5px; border-radius: 3px;
+  }
+  pre {
+    margin: 0 0 10px; padding: 12px 14px;
+    background: var(--panel-2); border-radius: 6px;
+    overflow-x: auto; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 12.5px; line-height: 1.5;
+    color: var(--ink);
+  }
+  pre .c { color: var(--muted); }
+  pre .k { color: var(--accent); }
+  pre .ok { color: var(--good); }
+  pre .err { color: var(--bad); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+  td.num, th.num { text-align: right; font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; }
+  tr.highlight td { background: rgba(63, 185, 80, 0.07); }
+  td .good { color: var(--good); }
+  td .bad { color: var(--bad); }
+  td .warn { color: var(--warn); }
+
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  }
+  .pill.good { background: rgba(63, 185, 80, 0.15); color: var(--good); }
+  .pill.bad { background: rgba(248, 81, 73, 0.15); color: var(--bad); }
+  .pill.warn { background: rgba(210, 153, 34, 0.15); color: var(--warn); }
+  .pill.muted { background: rgba(139, 148, 158, 0.15); color: var(--muted); }
+
+  .arrow { color: var(--muted); padding: 0 6px; }
+
+  /* big stat */
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .stat {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 6px; padding: 14px 16px;
+  }
+  .stat .label {
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .stat .number {
+    font-size: 26px; font-weight: 700; margin: 4px 0 4px;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  .stat .number.good { color: var(--good); }
+  .stat .number.bad { color: var(--bad); }
+  .stat .delta { font-size: 12px; color: var(--muted); }
+  .stat .delta .pop { color: var(--good); font-weight: 600; }
+
+  /* covariance grid */
+  .covgrid { display: grid; grid-template-columns: repeat(9, 1fr); gap: 2px; }
+  .covgrid .cell {
+    aspect-ratio: 1; background: var(--panel-2);
+    border-radius: 3px; display: flex; align-items: center; justify-content: center;
+    font-size: 10px; color: var(--muted);
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  .covgrid .cell.diag { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+  .covgrid .cell.observed { background: rgba(63, 185, 80, 0.18); color: var(--good); }
+  .covgrid .cell.frozen { background: rgba(248, 81, 73, 0.12); color: var(--bad); position: relative; }
+  .covgrid .cell.frozen::after {
+    content: ""; position: absolute; left: 12%; right: 12%; top: 50%; height: 2px; background: var(--bad); transform: rotate(-45deg);
+  }
+  .covgrid .cell.kept { background: rgba(210, 153, 34, 0.15); color: var(--warn); }
+
+  /* svg embedded charts */
+  .chart { width: 100%; height: auto; }
+
+  /* arch diagram */
+  .arch {
+    display: grid; gap: 10px;
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+  .node {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 6px; padding: 10px 12px; font-size: 12.5px;
+  }
+  .node .head { color: var(--accent); font-weight: 700; font-size: 12px;
+                text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+  .node .tag { color: var(--muted); font-size: 11px; }
+  .node code { font-size: 11.5px; padding: 0; background: transparent; color: var(--ink); }
+
+  footer { color: var(--muted); font-size: 12px; text-align: right;
+           margin-top: 36px; padding-top: 14px; border-top: 1px solid var(--line); }
+  a { color: var(--link); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ============ HEADER ============ -->
+<header>
+  <div class="kicker">IFSSIM — Autonomous Pipeline · Odometry &amp; SLAM</div>
+  <h1>From <span class="num bad">+1.8 °/s</span> gyro-bias walk to <span class="num">+0.046 °/s</span></h1>
+  <h1 style="margin-top:6px">From <span class="num bad">56 m</span> mid-lap drift to <span class="num">1.4 m</span></h1>
+  <div class="sub">A debugging walk through the 9-state EKF and cone-graph SLAM, the cross-correlation bug that hid in their Kalman update, and the fixes that resolved it (2026-05-18 → 2026-05-25)</div>
+</header>
+
+<!-- ============ HEADLINE NUMBERS ============ -->
+<div class="stat-row" style="margin-bottom:22px">
+  <div class="stat">
+    <div class="label">/odom yaw-rate offset on straights</div>
+    <div class="number good">+0.046 °/s</div>
+    <div class="delta">was +0.526 °/s <span class="pop">— 11× cleaner</span></div>
+  </div>
+  <div class="stat">
+    <div class="label">Peak /odom-vs-GT position drift</div>
+    <div class="number good">1.4 m</div>
+    <div class="delta">was 56 m <span class="pop">— 40× tighter</span></div>
+  </div>
+  <div class="stat">
+    <div class="label">Mean integrated yaw error</div>
+    <div class="number good">+1.3°</div>
+    <div class="delta">was +19° (peak +59°) <span class="pop">— 15× lower</span></div>
+  </div>
+  <div class="stat">
+    <div class="label">SLAM cascade events</div>
+    <div class="number good">0</div>
+    <div class="delta">was 1+ per lap <span class="pop">— gone</span></div>
+  </div>
+</div>
+
+<!-- ============ ARCHITECTURE ============ -->
+<div class="grid" style="margin-bottom:18px">
+  <section class="card">
+    <h2>The stack</h2>
+    <div class="arch">
+      <div class="node">
+        <div class="head">Sensors</div>
+        <code>/imu</code> (BMI088, 333 Hz)<br/>
+        <code>/motor_rpm</code> (~80 Hz)<br/>
+        <code>/steering_angle</code> (rad)<br/>
+        <code>/lidar/Lidar1</code> (10 Hz)
+        <div class="tag" style="margin-top:6px">Ground truth (sim only):<br><code>/testing_only/odom</code></div>
+      </div>
+      <div class="node">
+        <div class="head">odometry_filter</div>
+        9-state EKF, C++<br/>
+        <span class="tag">Predict: IMU<br/>Correct: RPM · steering · NHC</span><br/>
+        Publishes <code>/odom</code> @ 100 Hz<br/>
+        Broadcasts <code>odom → base_link</code>
+      </div>
+      <div class="node">
+        <div class="head">cone_slam</div>
+        GTSAM iSAM2 factor graph<br/>
+        <span class="tag">Factors: IMU pre-integration · cone bearing-range · /odom BetweenFactor (#545) · velocity prior</span><br/>
+        Publishes <code>/slam/pose</code>, <code>/Conos</code><br/>
+        Broadcasts <code>map → odom</code>
+      </div>
+      <div class="node" style="grid-column: 1 / -1; background: var(--panel)">
+        <div class="head">Downstream</div>
+        <code>path_planning</code> (FaSTTUBe centerline) <span class="arrow">→</span> <code>control</code> (PI-velocity + Stanley/PurePursuit) <span class="arrow">→</span> <code>/control_command</code>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>The 9-state EKF</h2>
+    <p class="note">State vector — 9 dimensions, body-frame mechanics with Coriolis cross-terms in the predict step.</p>
+    <pre>
+x = [ <span class="k">X</span>, <span class="k">Y</span>, <span class="k">THETA</span>,      <span class="c">// pose in world frame</span>
+      <span class="k">VX</span>, <span class="k">VY</span>, <span class="k">OMEGA</span>,    <span class="c">// body-frame velocities</span>
+      <span class="k">BA_X</span>, <span class="k">BA_Y</span>,         <span class="c">// accel bias</span>
+      <span class="k">BG_Z</span> ]               <span class="c">// gyro bias</span>
+
+predict:  v̇x = ax + ω·vy      <span class="c">// ← Coriolis</span>
+          v̇y = ay − ω·vx      <span class="c">// ← Coriolis</span>
+          ω  = gyro_z − BG_Z   <span class="c">// assignment, not integration</span>
+
+correct:  RPM      → observes VX
+          steering → observes OMEGA (kinematic bicycle)
+          NHC      → observes VY ≈ 0 (lateral-slip-bounded)</pre>
+    <p class="note"><strong>Calibration:</strong> 3 s of stationary IMU samples at activate → estimates accel + gyro biases and gravity vector. Without it, post-activation drift is fatal.</p>
+  </section>
+</div>
+
+<!-- ============ THE BUG ============ -->
+<section class="card full" style="margin-bottom:18px">
+  <h2>The bug — a quiet Kalman cross-correlation leak</h2>
+
+  <div class="grid three" style="margin-top:6px">
+    <div>
+      <h3>1. The propagation builds a correlation</h3>
+      <p>The predict step's Jacobian has<br>
+      <code>F[OMEGA, BG_Z] = −1</code> &nbsp;<span class="tag">(ω = gyro − BG_Z)</span><br>
+      <code>F[VX, BG_Z]    = −vy·dt</code><br>
+      <code>F[VY, BG_Z]    = +vx·dt</code></p>
+      <p>So <code>P[BG_Z, OMEGA]</code> and <code>P[BG_Z, VX/VY]</code> become non-zero after a single tick of propagation.</p>
+    </div>
+    <div>
+      <h3>2. The correction multiplies it back</h3>
+      <p>Any correction with H picking up ω (steering), vx (RPM), or vy (NHC) computes</p>
+      <pre>K = P · Hᵀ / S</pre>
+      <p>and applies <code>x += K · y</code>. Because <code>P[BG_Z, observed] ≠ 0</code>, the Kalman gain <code>K[BG_Z] ≠ 0</code> too — every non-gyro observation pulls the gyro-bias state.</p>
+    </div>
+    <div>
+      <h3>3. Bias walks; θ integrates wrong</h3>
+      <p>Kinematic-bicycle residuals carry <em>model error</em> (tire slip, suspension flex) — not gyro bias information. But the EKF can't tell the difference. During a 15 s corner, <code>BG_Z</code> walked <strong>±1.8 °/s</strong>.</p>
+      <p>Integrated over the corner: <span class="bad">~27° of phantom yaw</span> in <code>/odom.angular.z</code>, then position drift via <code>vx · sin(θ_err)</code>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COVARIANCE VISUALIZATION ============ -->
+<div class="grid" style="margin-bottom:18px">
+  <section class="card">
+    <h2>Before: full Kalman gain — every cell is "fair game"</h2>
+    <p class="note">Standard EKF update for the <code>correct_steering</code> observation (H picks OMEGA). Cross-correlations let it leak into every other state.</p>
+    <div class="covgrid" style="margin-top:10px">
+      <!-- 9x9: row = updated by K, col = observed via H -->
+      <div class="cell diag">X</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell diag">Y</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell diag">Θ</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell diag">vx</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell diag">vy</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell observed">ω*</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell diag">bax</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell diag">bay</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell diag">bgz</div>
+    </div>
+    <p class="note" style="margin-top:10px">Green ω* is the observed component. Every other diagonal — including <code>bgz</code> — gets updated through cross-correlations in <code>P</code>.</p>
+  </section>
+
+  <section class="card">
+    <h2>After: Schmidt-Kalman partition — observed-and-physically-coupled only</h2>
+    <p class="note">Per-observation, only the states physically informed by the measurement are allowed to update. The rest are explicitly held: <code>K[i] = 0</code>. Joseph-form update preserves P symmetry under the modified gain.</p>
+    <div class="covgrid" style="margin-top:10px">
+      <div class="cell frozen">X</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell frozen">Y</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell frozen">Θ</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell frozen">vx</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell frozen">vy</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell observed">ω*</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell frozen">bax</div><div class="cell">·</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell frozen">bay</div><div class="cell">·</div>
+      <div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell">·</div><div class="cell frozen">bgz</div>
+    </div>
+    <p class="note" style="margin-top:10px">Red-hatched = <code>K[i] = 0</code> for this correction. Same idea applied separately for RPM (observes VX) and NHC (observes VY): each keeps the legitimately informed states open and freezes the rest. Joseph form keeps <code>P</code> symmetric and positive-semidefinite under any K.</p>
+  </section>
+</div>
+
+<!-- ============ PROGRESSION TABLE ============ -->
+<section class="card full" style="margin-bottom:18px">
+  <h2>The progression — one bag per fix on the same autocross track</h2>
+  <p class="note">All numbers from bag-replay against <code>/testing_only/odom</code> ground truth.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Stage</th>
+        <th>Change</th>
+        <th class="num">/odom ω offset on straights</th>
+        <th class="num">Peak /odom-vs-GT drift</th>
+        <th class="num">Mean ∫ yaw error</th>
+        <th class="num">SLAM cascade</th>
+        <th class="num">/Path rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="pill bad">baseline</span></td>
+        <td>dev (post-#545 /odom BetweenFactor)</td>
+        <td class="num"><span class="bad">+0.526 °/s</span></td>
+        <td class="num"><span class="bad">56 m</span></td>
+        <td class="num"><span class="bad">~+19°</span></td>
+        <td class="num">yes</td>
+        <td class="num">9.0 Hz</td>
+      </tr>
+      <tr>
+        <td><span class="pill warn">try 1</span></td>
+        <td>sigma_bg_walk tighten 1e-4 → 1e-5</td>
+        <td class="num">+1.8 (peak)</td>
+        <td class="num">worse</td>
+        <td class="num">—</td>
+        <td class="num"><span class="bad">earlier</span></td>
+        <td class="num"><span class="bad">0.6 Hz</span></td>
+      </tr>
+      <tr>
+        <td><span class="pill bad">try 2</span></td>
+        <td>K[BG_Z]=0, standard P update</td>
+        <td class="num"><span class="good">+0.05</span></td>
+        <td class="num">unchanged</td>
+        <td class="num">unchanged</td>
+        <td class="num">yes</td>
+        <td class="num"><span class="bad">0.6 Hz collapse</span></td>
+      </tr>
+      <tr>
+        <td><span class="pill warn">fix 1</span></td>
+        <td>K[BG_Z]=0 + Joseph form</td>
+        <td class="num"><span class="good">+0.046 °/s</span></td>
+        <td class="num">56 m</td>
+        <td class="num">+19°</td>
+        <td class="num">yes</td>
+        <td class="num"><span class="good">9.8 Hz</span></td>
+      </tr>
+      <tr>
+        <td><span class="pill warn">fix 2</span></td>
+        <td>+ NHC always-on, slip-aware sigma</td>
+        <td class="num"><span class="good">+0.046 °/s</span></td>
+        <td class="num"><span class="warn">32 m</span></td>
+        <td class="num">+19°</td>
+        <td class="num">yes</td>
+        <td class="num"><span class="good">9.7 Hz</span></td>
+      </tr>
+      <tr class="highlight">
+        <td><span class="pill good">fix 3</span></td>
+        <td>+ Schmidt-Kalman partition all 3 corrections</td>
+        <td class="num"><span class="good">+0.046 °/s</span></td>
+        <td class="num"><span class="good">1.4 m</span></td>
+        <td class="num"><span class="good">+1.3°</span></td>
+        <td class="num"><span class="good">none</span></td>
+        <td class="num"><span class="good">10.0 Hz</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ CHARTS ============ -->
+<div class="grid" style="margin-bottom:18px">
+  <section class="card">
+    <h2>Per-tick gyro bias estimate — before vs after</h2>
+    <p class="note"><code>b_est ≈ /imu.ω_z − /odom.ω_z</code> over a 60 s autocross drive. Before: bias state walks freely during corners. After: locked at calibration value.</p>
+    <svg class="chart" viewBox="0 0 600 240" preserveAspectRatio="none">
+      <!-- axes -->
+      <rect x="0" y="0" width="600" height="240" fill="none"/>
+      <line x1="40" y1="20" x2="40" y2="210" stroke="#30363d"/>
+      <line x1="40" y1="120" x2="590" y2="120" stroke="#30363d" stroke-dasharray="2 4"/>
+      <line x1="40" y1="210" x2="590" y2="210" stroke="#30363d"/>
+      <!-- labels -->
+      <text x="6" y="30" fill="#8b949e" font-family="monospace" font-size="10">+2.0°/s</text>
+      <text x="6" y="124" fill="#8b949e" font-family="monospace" font-size="10">0</text>
+      <text x="6" y="214" fill="#8b949e" font-family="monospace" font-size="10">-2.0°/s</text>
+      <text x="565" y="232" fill="#8b949e" font-family="monospace" font-size="10">60 s</text>
+
+      <!-- before: walks ±1.8°/s -->
+      <polyline fill="none" stroke="#f85149" stroke-width="1.6"
+        points="40,118 50,116 60,114 70,113 80,109 90,103 100,98 110,95 120,90 130,86 140,82 150,76 160,72 170,68 180,72 190,76 200,80 210,82 220,79 230,76 240,72 250,68 260,64 270,60 280,56 290,52 300,46 310,42 320,38 330,34 340,32 350,36 360,40 370,46 380,52 390,58 400,66 410,75 420,84 430,94 440,108 450,124 460,140 470,156 480,168 490,180 500,192 510,200 520,206 530,210 540,212 550,210 560,206 570,204 580,202 590,200" />
+      <text x="450" y="38" fill="#f85149" font-family="monospace" font-size="11">before (walks ±1.8°/s)</text>
+
+      <!-- after: pinned to ~0 -->
+      <polyline fill="none" stroke="#3fb950" stroke-width="2"
+        points="40,121 60,120 80,121 100,120 120,121 140,120 160,121 180,120 200,121 220,120 240,121 260,120 280,121 300,121 320,120 340,121 360,121 380,120 400,121 420,120 440,121 460,120 480,121 500,120 520,121 540,121 560,120 580,121" />
+      <text x="450" y="138" fill="#3fb950" font-family="monospace" font-size="11">after (frozen at ~0)</text>
+    </svg>
+  </section>
+
+  <section class="card">
+    <h2>/odom-vs-GT position drift envelope</h2>
+    <p class="note">Body-frame magnitude of <code>(odom − GT_anchored)</code> over the lap. Same autocross course, four progressive builds.</p>
+    <svg class="chart" viewBox="0 0 600 240" preserveAspectRatio="none">
+      <line x1="40" y1="20" x2="40" y2="210" stroke="#30363d"/>
+      <line x1="40" y1="210" x2="590" y2="210" stroke="#30363d"/>
+
+      <text x="6" y="30" fill="#8b949e" font-family="monospace" font-size="10">60 m</text>
+      <text x="6" y="106" fill="#8b949e" font-family="monospace" font-size="10">30 m</text>
+      <text x="6" y="214" fill="#8b949e" font-family="monospace" font-size="10">0 m</text>
+      <text x="565" y="232" fill="#8b949e" font-family="monospace" font-size="10">60 s</text>
+
+      <!-- baseline 56m -->
+      <polyline fill="none" stroke="#f85149" stroke-width="1.8"
+        points="40,208 80,202 120,190 160,162 200,140 240,104 280,72 320,42 360,38 400,46 440,80 480,128 520,160 560,196 580,124" />
+      <text x="380" y="36" fill="#f85149" font-family="monospace" font-size="11">baseline · peak 56 m</text>
+
+      <!-- nhc-loose 32m -->
+      <polyline fill="none" stroke="#d29922" stroke-width="1.8"
+        points="40,208 80,202 120,194 160,176 200,168 240,140 280,116 320,90 360,80 400,86 440,128 480,162 520,168 560,190 580,150" />
+      <text x="370" y="80" fill="#d29922" font-family="monospace" font-size="11">+NHC-loose · peak 32 m</text>
+
+      <!-- schmidt 1.4m -->
+      <polyline fill="none" stroke="#3fb950" stroke-width="2.2"
+        points="40,206 80,205 120,204 160,206 200,205 240,204 280,205 320,205 360,204 400,205 440,206 480,205 520,206 560,205 580,205" />
+      <text x="380" y="200" fill="#3fb950" font-family="monospace" font-size="11">+Schmidt-Kalman · peak 1.4 m</text>
+    </svg>
+  </section>
+</div>
+
+<!-- ============ WHAT WAS UNCHANGED ============ -->
+<div class="grid three" style="margin-bottom:18px">
+  <section class="card">
+    <h2>What we left alone</h2>
+    <p>The factor graph SLAM structure didn't change. Cone DA stayed Euclidean-gated. Calibration stayed at 3 s. RPM_TO_MS stayed at 0.00821 (re-derivation showed it's already correct to 0.05 %).</p>
+    <p class="note">The fix was entirely in how the EKF distributes a single observation's residual across its 9 states.</p>
+  </section>
+
+  <section class="card">
+    <h2>What we tried and rolled back</h2>
+    <ul style="font-size:13px; padding-left: 18px">
+      <li><code>sigma_bg_walk</code> 1e-4 → 1e-5: bias walk grew, not shrunk — process noise was never the issue.</li>
+      <li>Disable <code>correct_steering</code> entirely: lost cone-DA cascade later but introduced a vy issue.</li>
+      <li>Standard <code>P = (I−KH)P</code> with K[BG_Z]=0: drove P non-PSD, NaN'd covariance, collapsed /Path. Joseph form fixes this.</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>What's still left</h2>
+    <p>With <code>/odom</code> and SLAM both clean, the lap still ends at the same physical corner. Cause is now <strong>controller saturation</strong> — Stanley commands full lock at ~1 m of cross-track error, oscillates, and the car physically spins.</p>
+    <p class="note">That's a separate problem with separate fixes (cross-track gain, yaw-rate damping). The signal layer below it is now solid.</p>
+  </section>
+</div>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  2026-05-25 · Pipeline branch <code>dev</code> · PRs <a href="https://github.com/isc-fs/IFSSIM/pull/555">#555</a> (EKF) · <a href="https://github.com/isc-fs/IFSSIM/pull/548">#548</a> (refresh-bridge) · Bags analysed: <code>_113508</code>, <code>_222555</code>, <code>_223932</code>, <code>_225200</code>, <code>_225756</code>, <code>_123201</code>, <code>_210206</code>, <code>_211619</code>
+</footer>
+
+</div>
+</body>
+</html>

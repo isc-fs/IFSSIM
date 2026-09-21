@@ -100,7 +100,7 @@ jobs:
                 '',
                 '---',
                 `*This issue was opened automatically when branch \`${branch}\` was created.*`,
-                `*Close it by merging the PR with \`Closes #<issue-number>\` in the description.*`,
+                `*It closes automatically when a PR from \`${branch}\` is merged into \`dev\` — see \`.github/workflows/close-on-dev-merge.yml\`. No \`Closes #N\` keyword needed.*`,
               ].join('\n'),
             });
 
@@ -151,15 +151,21 @@ jobs:
 
             const firstMessage = commits[0].message.trim();
 
-            const { data: issues } = await github.rest.issues.listForRepo({
+            /* Paginated: a non-paginated per_page:50 silently missed the
+               tracking issue whenever more than 50 open issues carried this
+               label, and the job then logged "no open issue found" and
+               exited 0 — a failure that looks identical to success. */
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner:    context.repo.owner,
               repo:     context.repo.repo,
               labels:   type,
               state:    'open',
-              per_page: 50,
+              per_page: 100,
             });
 
-            const branchIssue = issues.find(i => i.title.startsWith(`[${branch}]`));
+            const branchIssue = issues.find(
+              i => !i.pull_request && i.title.startsWith(`[${branch}]`)
+            );
             if (!branchIssue) {
               console.log('No open issue found for this branch, skipping.');
               return;
