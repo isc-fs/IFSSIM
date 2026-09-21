@@ -257,14 +257,6 @@ class SimSupervisorNode(LifecycleNode):
         self.get_logger().info(
             f"on_activate: starting AS-state tick ({AS_PUBLISH_HZ:.0f} Hz)")
 
-        # Latched /signal/ebs_reset (post-#384). On the real car the uDV
-        # firmware clears the EBS gate at power-up; the emulator does the
-        # same the moment its lifecycle goes active. Without this, the
-        # bridge's ebs_triggered_ gate stays latched from a previous run
-        # and every relayed control command is silently dropped.
-        if self._ebs_reset_pub is not None:
-            self._ebs_reset_pub.publish(EmptyMsg())
-
         # AS-state machine heartbeat — publishes /assi/state + /ami/mission.
         self._as_tick_timer = self.create_timer(
             1.0 / AS_PUBLISH_HZ, self._as_tick, callback_group=self._cb_group)
@@ -304,7 +296,23 @@ class SimSupervisorNode(LifecycleNode):
                 1.0 / ODOM_PUBLISH_HZ, self._publish_odom,
                 callback_group=self._cb_group)
 
-        return super().on_activate(state)
+        # LifecyclePublisher.publish() is a silent no-op until the base
+        # class on_activate() enables the node's managed publishers, so
+        # anything that must go out exactly once on activation has to be
+        # published AFTER super().on_activate().
+        ret = super().on_activate(state)
+        if ret != TransitionCallbackReturn.SUCCESS:
+            return ret
+
+        # Latched /signal/ebs_reset (post-#384). On the real car the uDV
+        # firmware clears the EBS gate at power-up; the emulator does the
+        # same the moment its lifecycle goes active. Without this, the
+        # bridge's ebs_triggered_ gate stays latched from a previous run
+        # and every relayed control command is silently dropped.
+        if self._ebs_reset_pub is not None:
+            self._ebs_reset_pub.publish(EmptyMsg())
+
+        return ret
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
         self.get_logger().info("on_deactivate: stopping AS tick + /odom subs")

@@ -8,9 +8,14 @@ ground line-trace and fall through.
 
 The random-track-generator pins each track's start gate at (0, 0) and lets the
 loop sprawl off to one side, so a track whose start line is near one end of
-the loop overruns the floor. This module recentres such tracks at *load* time,
-in code we own and deploy (the backend image) — the generator lives in a
-third-party git submodule that's baked into the image, so we don't touch it.
+the loop overruns the floor. This module recentres such tracks in code we own
+and deploy — the generator lives in a third-party git submodule that's baked
+into the image, so we don't touch it. It runs at two points:
+
+* *generate* time (`/api/track/generate`, and the standalone track_manager),
+  so the CSV on disk and its preview are centred from the start;
+* *load* time (`/api/track/{name}/load`), as a safety net for tracks generated
+  before generate-time centring existed and for hand-authored tracks.
 
 "Centred" means the bounding box of the **blue/yellow** boundary cones is
 centred on the origin. The orange start gate is *not* part of the bbox; it

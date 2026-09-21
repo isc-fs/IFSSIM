@@ -24,6 +24,16 @@ if os.path.exists(TRACK_GEN_PATH):
 TRACKS_DIR = os.path.abspath(os.environ.get("TRACKS_DIR",
     os.path.join(os.path.dirname(__file__), "..", "..", "Content", "tracks")))
 
+# track_centering (stdlib-only) lives in the mission_control backend; reuse it
+# here so both generation front-ends write the same origin-centred CSVs.
+_BACKEND_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mission_control", "backend"))
+if os.path.isdir(_BACKEND_PATH) and _BACKEND_PATH not in sys.path:
+    sys.path.insert(0, _BACKEND_PATH)
+try:
+    from track_centering import ensure_centered
+except ImportError:  # backend not checked out alongside — generate uncentred
+    ensure_centered = None
+
 SIM_HOST = "127.0.0.1"
 SIM_PORT = 41451
 
@@ -186,6 +196,15 @@ def generate_track():
                 shutil.rmtree(os.path.join(TRACK_GEN_PATH, temp_rel))
             except:
                 pass
+
+            # The generator pins the start gate at (0, 0); recentre the
+            # track's boundary bbox on the origin so big tracks fit the
+            # sim's origin-centred floor. The gate shifts along with it.
+            if ensure_centered is not None:
+                try:
+                    ensure_centered(dest_file)
+                except Exception as e:
+                    print(f"track centering skipped for {name_base}: {e}")
 
             cones = parse_track_csv(dest_file)
             total = sum(len(v) for v in cones.values())

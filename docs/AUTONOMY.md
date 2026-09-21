@@ -28,7 +28,7 @@ The DV pipeline (perception, SLAM, path planning, control, mission management) l
 
 `mission_control_node` and `sim_supervisor_node` are **always co-resident in sim** — the supervisor doesn't host the DVPC role itself. The autonomy stack's view of the world is therefore the same in sim and on the real car: identical ROS 2 client calls into a microROS endpoint, with only the underlying DDS transport differing. `mission_control_backend` (the web stack) targets `mission_control_node` directly via `SetMission` + `RuntimeControl`; the supervisor receives the throttle/steering stream as `RuntimeControl` `Feedback` and republishes onto the bridge.
 
-Odometry lives inside `slam_node` (or in a thin fusion library it imports) rather than as a separate node — see [Open questions](#open-questions) for the exact placement decision, which has consequences for how DA degradation in cone-only sections is recoverable.
+Odometry is its own managed node: `odometry_filter_node` (C++) runs a 9-state EKF over IMU + motor RPM + steering and owns `/odom` and the `odom → base_link` transform; `slam_node` consumes `/odom` as its motion model and owns `map → odom`. See [Open questions](#open-questions) Q1.
 
 ## End-to-end graph
 

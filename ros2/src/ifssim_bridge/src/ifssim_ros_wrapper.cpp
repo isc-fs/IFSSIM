@@ -868,6 +868,26 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     rclcpp::Time now(static_cast<int64_t>(f.timestamp), RCL_ROS_TIME);
     ++sensor_frame_count_;
 
+    // Sim-time rewind — IFSSIM restarted / level reloaded while the bridge
+    // stayed up (see last_clock_stamp_ in the header). Frames arrive in order
+    // on one TCP stream, so a step back beyond the jitter threshold can only
+    // mean the plugin's game clock started over. Reset the per-session
+    // guards so /clock follows the new sim time immediately instead of going
+    // silent, and so the IMU clamp stops pinning stamps to old_time + 1 ns.
+    // Downstream, rcl timers re-arm on a backward jump and tf2 buffers clear.
+    // Both guards live on this (sensor) thread; the LiDAR clamp is reset on
+    // its own thread in onLidarFrame().
+    if (last_clock_stamp_.nanoseconds() > 0 &&
+        now.nanoseconds() + kSimTimeRewindThresholdNs < last_clock_stamp_.nanoseconds())
+    {
+        RCLCPP_WARN(node_->get_logger(),
+            "Sim time rewound %.1f s → %.1f s (IFSSIM restart / level reload?) "
+            "— re-basing /clock and sensor stamp guards on the new session",
+            last_clock_stamp_.seconds(), now.seconds());
+        last_clock_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        last_imu_stamp_   = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    }
+
     // Drive /clock from the sim stamp. /clock must be non-decreasing; the
     // game tick can repeat a sim ns across consecutive 400 Hz frames, so only
     // publish when time actually advanced (a repeat is a no-op, not a rewind).
@@ -1079,6 +1099,19 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     rclcpp::Time lidar_stamp;
     if (header.sim_capture_ns > 0) {
         lidar_stamp = rclcpp::Time(header.sim_capture_ns, RCL_ROS_TIME);
+        // Sim-time rewind (IFSSIM restart / level reload) — same detection
+        // as onSensorFrame(), applied to this stream's own clamp because it
+        // lives on the LiDAR publish thread. Without this the clamp below
+        // would pin every scan to old_time + 1 ns after a sim restart.
+        if (last_lidar_stamp_.nanoseconds() > 0 &&
+            lidar_stamp.nanoseconds() + kSimTimeRewindThresholdNs
+                < last_lidar_stamp_.nanoseconds())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                "LiDAR sim time rewound %.1f s → %.1f s — re-basing stamp guard",
+                last_lidar_stamp_.seconds(), lidar_stamp.seconds());
+            last_lidar_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        }
     } else {
         lidar_stamp = node_->now();
         if (header.lag_ns > 0) {
