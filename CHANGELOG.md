@@ -12,6 +12,13 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Changed
+
+- **`dv_pipeline_stack` now compiles C++ packages as Release.** The
+  image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
+  optimization off for any package that didn't hardcode its own.
+  Matches CI and `mission_control_backend`'s Dockerfile.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:
