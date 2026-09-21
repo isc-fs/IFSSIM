@@ -12,6 +12,10 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **Onboard bag replay report.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT) and writes an HTML report of detections, odom/SLAM trajectories, the cone map, and autonomy vs recorded pilot steering.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:

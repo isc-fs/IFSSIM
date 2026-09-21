@@ -9,6 +9,7 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
+- `run_onboard_replay.py` — live pipeline replay of an **onboard** bag (no sim GT) + HTML report of pipeline outputs.
 - `slam_metrics.py` / `slam_report.py` — GT cone injection, trajectory and error plots.
 - `control_benchmark_node.py` — online GT control error harness.
 - `../track_driver.py` — GT pure-pursuit driver (uses `pipeline/control` Pure Pursuit).
@@ -32,6 +33,13 @@ outside `pipeline/` so it is not carried into the car submodule.
    - `python run_perception_benchmark.py results/capture/<bag_name>`
    - `python tools/sim_benchmark/run_slam_benchmark.py <bag_path>` → `results/slam/<strategy>_<ts>/report.html`
      (needs `/testing_only/track`, `/odom`, `/imu`; see capture notes below)
+   - Onboard / car bags (no `/testing_only/*`):
+     `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag_name>`
+     → `results/onboard/<mission>_<ts>/report.html`
+     Plays `/imu` `/lidar_points` `/motor_rpm` `/steering_angle` into the live
+     autonomy nodes and reports detection counts, odom/SLAM trajectories, map,
+     and autonomy vs pilot steering. There is no precision/recall — there is
+     no GT. `--duration-s 30` clips a long bag; `--rate 1.0` keeps control timing.
    - Bag and results paths must live under `tools/sim_benchmark/`. Use `--no-docker` inside a sourced ROS shell to run locally.
 
    **Perception GT alignment.** GT odom is looked up at the LiDAR `header.stamp`, which is

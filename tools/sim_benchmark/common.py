@@ -139,12 +139,17 @@ def _translate_argv(argv: list[str]) -> list[str]:
     return out
 
 
-def maybe_reexec_in_docker(script_name: str) -> None:
+def maybe_reexec_in_docker(
+    script_name: str,
+    *,
+    extra_docker_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> None:
     """Re-run this benchmark inside dv_pipeline_stack when host lacks ROS."""
     if os.environ.get("IFSSIM_BENCHMARK_IN_DOCKER") == "1":
         return
     argv = sys.argv[1:]
-    if "--local-ros" in argv or "--no-docker" in argv:
+    if "--local-ros" in argv or "--no-docker" in argv or "--help" in argv or "-h" in argv:
         return
     if _in_ros_env():
         return
@@ -175,9 +180,15 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     if have_native:
         pythonpath_dirs = "/native:" + pythonpath_dirs
 
+    env_exports = ""
+    if extra_env:
+        env_exports = " ".join(
+            f"export {k}={shlex.quote(v)};" for k, v in extra_env.items()
+        )
     inner = (
         "set -eo pipefail; "
         "export IFSSIM_BENCHMARK_IN_DOCKER=1; "
+        f"{env_exports}"
         f"{dv_pipeline_ros_setup_shell()}"
         f"export PYTHONPATH={pythonpath_dirs}:${{PYTHONPATH}}; "
         f"cd /bench && python3 {shlex.quote(script_name)} {arg_str}"
@@ -189,6 +200,7 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         "--rm",
         "--entrypoint",
         "bash",
+        *(extra_docker_args or []),
         "-v",
         f"{bench.resolve()}:/bench:ro",
         "-v",
@@ -200,9 +212,11 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     ]
     if have_native:
         cmd += ["-v", f"{native_dir.resolve()}:/native:ro"]
+    cmd += ["-e", "IFSSIM_BENCHMARK_IN_DOCKER=1"]
+    if extra_env:
+        for key, value in extra_env.items():
+            cmd += ["-e", f"{key}={value}"]
     cmd += [
-        "-e",
-        "IFSSIM_BENCHMARK_IN_DOCKER=1",
         image,
         "-lc",
         inner,
