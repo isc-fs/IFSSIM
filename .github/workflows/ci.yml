@@ -7,15 +7,19 @@ name: CI
 # Config/** — that's the path that genuinely needs UE5 installed.
 #
 # Triggers:
-#   - pull_request to dev/main: gates merges
-#   - push to dev/main: post-merge sanity (catches squash-introduced
-#     accidents and gives main/dev a clean status badge)
+#   - pull_request to dev/dev-manual/main: gates merges
+#   - push to dev/dev-manual/main: post-merge sanity (catches squash-
+#     introduced accidents and gives each branch a clean status badge)
+#
+# dev-manual is included because it is a protected branch too. A required
+# status check on a branch the workflow never runs for does not gate
+# anything -- the PR simply waits forever for a check that will not start.
 
 on:
   pull_request:
-    branches: [dev, main]
+    branches: [dev, dev-manual, main]
   push:
-    branches: [dev, main]
+    branches: [dev, dev-manual, main]
 
 # Cancel an in-flight run when the same PR gets a new push — saves
 # minutes and keeps the queue moving.
@@ -302,3 +306,24 @@ jobs:
               });
               core.info('created sticky comment');
             }
+
+      # THIS JOB MUST BE ABLE TO FAIL.
+      #
+      # Everything above only writes a comment, and the job carries
+      # `if: always()`, so "CI summary" reported SUCCESS even when every
+      # other job failed. As a required status check that is worse than
+      # having none: the branch looks gated and is not.
+      #
+      # One required check that aggregates the rest is easier to maintain
+      # than five that have to be renamed in the branch rules whenever a
+      # job is renamed -- but only if it actually reflects them.
+      - name: Fail if any CI job failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::One or more CI jobs did not pass:"
+          echo "  bridge-build : ${{ needs.bridge-build.result }}"
+          echo "  frontend     : ${{ needs.frontend.result }}"
+          echo "  backend      : ${{ needs.backend.result }}"
+          echo "  tracks       : ${{ needs.tracks.result }}"
+          echo "  links        : ${{ needs.links.result }}"
+          exit 1
