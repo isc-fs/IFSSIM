@@ -50,6 +50,14 @@ from mission_control.interface_contract import (
     mission_id_to_ami_index,
 )
 
+# How long the handshake waits for the FIRST /dv/status sample received after
+# an intent was published before declaring mission_control unresponsive.
+# mission_control heartbeats /dv/status at 10 Hz whenever it is alive, so 3 s
+# is ~30 missed beats — well past DDS discovery jitter, well short of the
+# prepare timeout. Without this, a frozen pipeline (e.g. no /clock under
+# use_sim_time) is indistinguishable from a slow prepare for 270 s.
+DV_HEARTBEAT_TIMEOUT_S: float = 3.0
+
 
 @dataclass
 class SetMissionOutcome:
@@ -123,6 +131,14 @@ class RosBridge:
         # Latest /dv/status byte (set on the executor thread; int reads are
         # atomic under the GIL so no lock needed).
         self._dv_status: Optional[int] = None
+        # Number of /dv/status samples received so far. The handshake waits
+        # snapshot this before publishing an intent and only accept samples
+        # that arrived afterwards. /dv/status is TRANSIENT_LOCAL, so the byte
+        # left over from the previous session (typically DV_RUNNING) is
+        # otherwise "already satisfied" the instant READY/GO go out — which
+        # is how a completely frozen pipeline used to report "Session
+        # started" without a single node having reacted.
+        self._dv_status_seq: int = 0
         self._bridge_lock = threading.Lock()
 
     def _spin_up(self) -> None:
@@ -198,11 +214,15 @@ class RosBridge:
         self._control_get_state_client = None
         self._control_state_cache = (None, 0.0)
         self._dv_status = None
+        self._dv_status_seq = 0
         self._rclpy = None
 
     # ------------------------------------------------------------------
     def _on_dv_status(self, msg) -> None:
+        # Status first, then the sequence bump: a reader that observes the
+        # new seq is guaranteed to read the matching (or a newer) status.
         self._dv_status = int(msg.data)
+        self._dv_status_seq += 1
 
     def _publish_intent(self, intent: int) -> None:
         if self._intent_pub is not None:
@@ -211,17 +231,40 @@ class RosBridge:
     def _wait_for_dv_status(
         self, targets: set[int], timeout_s: float,
         fail_on: Optional[set[int]] = None,
-    ) -> bool:
-        """Poll the cached /dv/status (updated on the spin thread)."""
-        deadline = time.monotonic() + timeout_s
+        after_seq: Optional[int] = None,
+    ) -> tuple[bool, str]:
+        """Wait for /dv/status (cached on the spin thread) to reach `targets`.
+
+        `after_seq` — pass the `_dv_status_seq` snapshotted *before* the
+        intent was published. Only samples received after it count, so the
+        latched byte from a previous session can never satisfy the wait. If
+        no sample at all arrives within DV_HEARTBEAT_TIMEOUT_S the pipeline
+        is treated as unresponsive and the wait fails early.
+
+        Returns (ok, reason); `reason` is human-readable on failure.
+        """
+        start = time.monotonic()
+        deadline = start + timeout_s
+        heartbeat_deadline = start + min(DV_HEARTBEAT_TIMEOUT_S, timeout_s)
         while time.monotonic() < deadline:
+            seq = self._dv_status_seq
             status = self._dv_status
-            if status in targets:
-                return True
-            if fail_on and status in fail_on:
-                return False
+            fresh = after_seq is None or seq > after_seq
+            if not fresh:
+                if time.monotonic() >= heartbeat_deadline:
+                    return False, (
+                        "no /dv/status heartbeat from mission_control within "
+                        f"{DV_HEARTBEAT_TIMEOUT_S:.0f}s — pipeline unresponsive "
+                        "(is /clock being published? are the stack nodes alive?)"
+                    )
+            elif status in targets:
+                return True, "ok"
+            elif fail_on and status in fail_on:
+                return False, f"/dv/status reported {status} (failed)"
             time.sleep(0.05)
-        return False
+        return False, (
+            f"timed out after {timeout_s:.0f}s (last /dv/status={self._dv_status})"
+        )
 
     def is_action_server_available(self, timeout_s: float = 0.0) -> bool:
         """Back-compat probe — now "is the sim panel bridge up?"."""
@@ -287,15 +330,18 @@ class RosBridge:
 
         ami = mission_id_to_ami_index(mission_id)
         self._mission_pub.publish(self._Int32(data=int(ami)))
+        seq0 = self._dv_status_seq
         self._publish_intent(SIM_INTENT_READY)
 
-        if self._wait_for_dv_status(
-                {DV_READY, DV_RUNNING}, timeout_s, fail_on={DV_FAILED}):
+        ok, why = self._wait_for_dv_status(
+            {DV_READY, DV_RUNNING}, timeout_s, fail_on={DV_FAILED},
+            after_seq=seq0)
+        if ok:
             return SetMissionOutcome(
                 success=True, message=f"{mission} prepared (DV_READY)")
         return SetMissionOutcome(
             success=False,
-            message=f"{mission} did not reach DV_READY within {timeout_s:.0f}s",
+            message=f"{mission} did not reach DV_READY: {why}",
         )
 
     def start_runtime(self, timeout_s: float = 60.0) -> RuntimeControlOutcome:
@@ -307,14 +353,16 @@ class RosBridge:
         if self._intent_pub is None:
             return RuntimeControlOutcome(
                 success=False, message="ros_bridge not started")
+        seq0 = self._dv_status_seq
         self._publish_intent(SIM_INTENT_GO)
-        if self._wait_for_dv_status(
-                {DV_RUNNING}, timeout_s, fail_on={DV_FAILED}):
+        ok, why = self._wait_for_dv_status(
+            {DV_RUNNING}, timeout_s, fail_on={DV_FAILED}, after_seq=seq0)
+        if ok:
             return RuntimeControlOutcome(
                 success=True, message="mission running (DV_RUNNING)")
         return RuntimeControlOutcome(
             success=False,
-            message=f"did not reach DV_RUNNING within {timeout_s:.0f}s",
+            message=f"did not reach DV_RUNNING: {why}",
         )
 
     def cancel_runtime(self, timeout_s: float = 5.0) -> None:

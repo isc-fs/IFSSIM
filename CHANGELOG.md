@@ -12,6 +12,26 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bridge `/clock` recovers after a sim restart.** Restarting IFSSIM
+  (or reloading the level) while `dv_pipeline_stack` stayed up left
+  `/clock` permanently silent: the monotonic high-water mark from the
+  previous session was never reset, so every `use_sim_time` timer in
+  the graph froze with no error. A backwards jump larger than 0.5 s
+  is now treated as a new session. See #611.
+- **Prepare/start fails in 3 s when `/dv/status` is silent**, instead
+  of hanging for the full 270 s prepare timeout. Also ignores the
+  latched byte from the previous session so a frozen pipeline can no
+  longer report "Session started".
+- **`/signal/ebs_reset` actually publishes on supervisor activate.**
+  `LifecyclePublisher.publish()` is a no-op until `on_activate()` of
+  the base class enables managed publishers; the reset was sent before
+  that, so a latched EBS from the previous run could silently drop
+  every control command.
+- **Generated tracks are centred at write time**, not only at load, so
+  the CSV on disk and its preview already fit the sim floor.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:

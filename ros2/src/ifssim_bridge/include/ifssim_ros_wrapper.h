@@ -182,8 +182,18 @@ private:
     // it's the clock *source*, so it builds rclcpp::Time straight from the wire
     // sim ns and must avoid the chicken-and-egg of waiting on its own /clock.
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_pub_;
-    // Last sim time published on /clock — /clock must be non-decreasing.
+    // Last sim time published on /clock — /clock must be non-decreasing
+    // WITHIN a sim session. A step backwards larger than
+    // kSimTimeRewindThresholdNs is not jitter but a sim-time rewind: IFSSIM
+    // was restarted or the level reloaded while the bridge stayed up (UE game
+    // time restarts at 0 on level load). onSensorFrame() then resets this and
+    // the IMU clamp and lets /clock jump back; onLidarFrame() does the same
+    // for its own clamp. Without that, /clock would stay silent until the new
+    // session's sim time overtook the old one, and every use_sim_time node's
+    // timers (AS tick, reconciler, controller) would sit frozen for as long as
+    // the previous session lasted — "session started" but the car never moves.
     rclcpp::Time last_clock_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    static constexpr int64_t kSimTimeRewindThresholdNs = 500000000;  // 0.5 s
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;

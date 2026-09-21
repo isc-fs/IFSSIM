@@ -264,11 +264,16 @@ IFSSIM Bridge: Connected to host.docker.internal:41451
 ifssim_bridge: IFSSIM connected (TCP push model)
 ifssim_bridge: Sensor stream connected
 ifssim_bridge: LiDAR transport: TCP (streamLidar, PR-#482)
-odometry_filter_node: /odom first publish — IMU+RPM filter calibrated
+odometry_filter_node: /odom first publish — EKF calibrated
 ```
 
-That's the green light: bridge connected, sensors streaming,
-complementary filter calibrated and publishing `/odom` at 100 Hz.
+That's the green light: bridge connected, sensors streaming, the
+odometry EKF calibrated and publishing `/odom` at 100 Hz. The last
+line only appears once a mission has been prepared + started (the
+node is a lifecycle node and stays silent until `activate`), and
+~3 s after that — the EKF averages IMU samples for its stationary
+bias calibration first, so make sure the car is standing still when
+you press Start.
 
 ---
 
@@ -339,7 +344,7 @@ docker compose exec dv_pipeline_stack bash -lc \
   '. /opt/ros/humble/setup.bash && ros2 topic hz /lidar/Lidar1 --window 30'
 # should print ~10 Hz
 
-# odom (complementary filter)
+# odom (odometry_filter_node EKF — only publishes once a mission is active)
 docker compose exec dv_pipeline_stack bash -lc \
   '. /opt/ros/humble/setup.bash && ros2 topic hz /odom --window 100'
 # should print ~100 Hz

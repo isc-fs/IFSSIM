@@ -213,7 +213,8 @@ Once a track is loaded, **Event** tab lets you choose:
 - **Autocross** — single lap of any track. Stop condition: complete a
   lap.
 - **Trackdrive** — multiple laps of an autocross-shaped track. Stop
-  condition: lap count.
+  condition: lap count (10 by default; `control_node`'s
+  `stop_after_laps` parameter overrides, e.g. `3` for a short test).
 
 Match the track to the mission — Skidpad on an acceleration track
 won't end cleanly (no figure-8 to count laps on).
@@ -270,11 +271,28 @@ docker compose logs dv_pipeline_stack | grep -iE "cascade|skip cone"
 ```
 
 If you see "skip cone factors: DA-failure spike" — that's the
-documented cascade. The current default mitigations (proximity veto,
-spike detector, sanity check) push cascade onset to ~63 s on most
-tracks but don't close it. The root-cause work is tracked at
+documented cascade. Mitigations in the current stack: proximity veto,
+spike detector with skip-recovery, post-commit pose-jump check, the
+EKF `/odom` delta as SLAM's motion model (`motion_model=odom`), and
+the loop-closure mapping freeze + localization-only mode once a lap
+is complete. History of the root-cause work:
 [#447](https://github.com/isc-fs/IFSSIM/issues/447) and
 [#485](https://github.com/isc-fs/IFSSIM/issues/485).
+
+To tell an odometry problem from a perception problem:
+
+```bash
+# SLAM's own view of the failure, per scan / per second
+docker compose logs dv_pipeline_stack | grep -E "SLAM_OBS|SLAM_LAT|LOOP_CLOSED|pose-jump"
+# EKF slip gate — if slip_flag is true through every corner, the
+# steering sign / kinematic model is off, not the tyres
+docker compose exec dv_pipeline_stack bash -lc \
+  '. /opt/ros/humble/setup.bash && ros2 topic echo /odom_diag/slip_flag'
+```
+
+and re-run with `DV_SLAM_GT_CONES=1` (perfect cones, real timing):
+if SLAM still drifts, look at `/odom`; if it holds, look at
+`cone_detection`. See [`AUTONOMY.md`](AUTONOMY.md#diagnostic-tools).
 
 ### Mission Control session log stops updating mid-session
 
@@ -386,6 +404,7 @@ A few that get asked about; full list in `docker-compose.yml`.
 | `OPENBLAS_NUM_THREADS` / `MKL_NUM_THREADS` / `OMP_NUM_THREADS` | `2` | BLAS thread caps. Capped because cone_detection's per-call RANSAC spawned 8-10 threads per call and saturated CPU. |
 | `DV_PLANNER_CAPTURE` | empty | Path-planning JSONL dump path. For offline replay against failing scenes. |
 | `DV_SLAM_LANDMARK_CAPTURE` | empty | cone_slam landmark-creation JSONL dump. For DA cascade triage. |
+| `DV_SLAM_GT_CONES` | `false` | Sim-only. `slam_node` replaces perceived cone positions with GT cones from `/testing_only/track` projected through `/testing_only/odom` (real `/Conos_raw` still gates timing). Isolates SLAM/odometry faults from perception faults. Never on the car. |
 
 ---
 

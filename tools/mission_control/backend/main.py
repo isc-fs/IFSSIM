@@ -1338,11 +1338,12 @@ def track_load(name: str):
     ue5_path = os.path.join(UE5_TRACKS_DIR, name)
     event_type = BUILTIN_TRACKS.get(name)
     # Recentre the track on the sim's origin-centred track area before loading,
-    # so older gate-at-origin tracks don't spill outside it. We rewrite the
-    # backend-visible file at `filepath`; `ue5_path` points at the same volume
-    # (UE5_TRACKS_DIR defaults to TRACKS_DIR), so the sim reads the rewritten
-    # bytes. Cheap when already centred — one min/max pass, no rewrite — so
-    # newly generated tracks pass straight through. See track_centering.
+    # so older gate-at-origin tracks (generated before `track_generate`
+    # started centring at write time) and hand-authored off-centre tracks
+    # don't spill outside it. We rewrite the backend-visible file at
+    # `filepath`; `ue5_path` points at the same volume (UE5_TRACKS_DIR
+    # defaults to TRACKS_DIR), so the sim reads the rewritten bytes. Cheap
+    # when already centred — one min/max pass, no rewrite. See track_centering.
     try:
         from track_centering import ensure_centered
         if ensure_centered(filepath):
@@ -1475,6 +1476,20 @@ def track_generate(params: TrackGenerate):
                 shutil.rmtree(tmp_dir)
             except Exception:
                 pass
+
+            # The generator pins the start gate at (0, 0), so the loop
+            # sprawls off to one side of the map and large tracks overrun
+            # the sim's origin-centred floor. Recentre the boundary bbox on
+            # the origin *now*, so the file on disk (and its preview) is
+            # already correct rather than relying on the load-time pass.
+            # The orange gate shifts with the boundary; the sim derives the
+            # spawn pose from the gate cones, not the world origin.
+            try:
+                from track_centering import ensure_centered
+                ensure_centered(dest)
+            except Exception as e:
+                _state_logger.warning(
+                    "track centering skipped for %s: %s", name_base, e)
 
             cones = parse_track_csv(dest)
             total = sum(len(v) for v in cones.values())
