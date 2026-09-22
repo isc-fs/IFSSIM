@@ -165,6 +165,8 @@ def maybe_reexec_in_docker(
     results.mkdir(parents=True, exist_ok=True)
     cone_detection_src = repo_root() / "pipeline" / "cone_detection"
     cone_slam_src = repo_root() / "pipeline" / "cone_slam"
+    path_planning_src = repo_root() / "pipeline" / "path_planning"
+    control_src = repo_root() / "pipeline" / "control"
     image = os.environ.get("IFSSIM_DV_IMAGE", "ifssim-dv_pipeline_stack:latest")
     inner_argv = _translate_argv(argv)
     if not any(a == "--results-root" or a.startswith("--results-root=") for a in inner_argv):
@@ -176,7 +178,9 @@ def maybe_reexec_in_docker(
     # Python fallback. Optional: absent → OdometryFilterCpp falls back.
     native_dir = bench / "_native"
     have_native = native_dir.is_dir() and any(native_dir.glob("odometry_filter_py*.so"))
-    pythonpath_dirs = "/dev_cone_detection:/dev_cone_slam"
+    pythonpath_dirs = (
+        "/dev_cone_detection:/dev_cone_slam:/dev_path_planning:/dev_control"
+    )
     if have_native:
         pythonpath_dirs = "/native:" + pythonpath_dirs
 
@@ -207,6 +211,10 @@ def maybe_reexec_in_docker(
         f"{cone_detection_src.resolve()}:/dev_cone_detection:ro",
         "-v",
         f"{cone_slam_src.resolve()}:/dev_cone_slam:ro",
+        "-v",
+        f"{path_planning_src.resolve()}:/dev_path_planning:ro",
+        "-v",
+        f"{control_src.resolve()}:/dev_control:ro",
         "-v",
         f"{results.resolve()}:/results",
     ]

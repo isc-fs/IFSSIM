@@ -1,0 +1,1411 @@
+{
+  "configById": {
+    "Tab!main": {
+      "activeTabIdx": 0,
+      "tabs": [
+        {
+          "title": "Perception",
+          "layout": {
+            "direction": "row",
+            "first": {
+              "direction": "column",
+              "first": "3D!perc_bev",
+              "second": "3D!perc_persp",
+              "splitPercentage": 58
+            },
+            "second": {
+              "direction": "column",
+              "first": "Plot!perc_counts",
+              "second": {
+                "direction": "column",
+                "first": "Plot!perc_orange",
+                "second": "RawMessages!conos_raw",
+                "splitPercentage": 40
+              },
+              "splitPercentage": 42
+            },
+            "splitPercentage": 68
+          }
+        },
+        {
+          "title": "Filter",
+          "layout": {
+            "direction": "column",
+            "first": "Plot!funnel",
+            "second": {
+              "direction": "row",
+              "first": "Plot!sides",
+              "second": "Plot!far_drop",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 50
+          }
+        },
+        {
+          "title": "Map",
+          "layout": {
+            "direction": "row",
+            "first": "3D!map",
+            "second": {
+              "direction": "column",
+              "first": "Plot!map_size",
+              "second": {
+                "direction": "column",
+                "first": "Plot!map_corr",
+                "second": {
+                  "direction": "column",
+                  "first": {
+                    "direction": "row",
+                    "first": "Plot!pose_x",
+                    "second": "Plot!pose_y",
+                    "splitPercentage": 50
+                  },
+                  "second": "RawMessages!slam_pose",
+                  "splitPercentage": 55
+                },
+                "splitPercentage": 28
+              },
+              "splitPercentage": 22
+            },
+            "splitPercentage": 70
+          }
+        },
+        {
+          "title": "Path",
+          "layout": {
+            "direction": "row",
+            "first": "3D!path",
+            "second": {
+              "direction": "column",
+              "first": "Plot!path_size",
+              "second": {
+                "direction": "column",
+                "first": "Plot!path_fail",
+                "second": "RawMessages!path",
+                "splitPercentage": 45
+              },
+              "splitPercentage": 40
+            },
+            "splitPercentage": 68
+          }
+        },
+        {
+          "title": "Control",
+          "layout": {
+            "direction": "row",
+            "first": "3D!drive",
+            "second": {
+              "direction": "column",
+              "first": {
+                "direction": "row",
+                "first": "Plot!steer",
+                "second": "Plot!speed",
+                "splitPercentage": 50
+              },
+              "second": {
+                "direction": "column",
+                "first": {
+                  "direction": "row",
+                  "first": "Plot!throttle",
+                  "second": "Plot!imu_accel",
+                  "splitPercentage": 50
+                },
+                "second": {
+                  "direction": "row",
+                  "first": "Plot!yaw",
+                  "second": "RawMessages!cmd",
+                  "splitPercentage": 55
+                },
+                "splitPercentage": 50
+              },
+              "splitPercentage": 34
+            },
+            "splitPercentage": 38
+          }
+        },
+        {
+          "title": "Odom",
+          "layout": {
+            "direction": "row",
+            "first": "3D!odom",
+            "second": {
+              "direction": "column",
+              "first": "Plot!odom_twist",
+              "second": {
+                "direction": "column",
+                "first": "Plot!odom_slip",
+                "second": "RawMessages!odom",
+                "splitPercentage": 50
+              },
+              "splitPercentage": 40
+            },
+            "splitPercentage": 55
+          }
+        },
+        {
+          "title": "IMU",
+          "layout": {
+            "direction": "row",
+            "first": "3D!imu",
+            "second": {
+              "direction": "column",
+              "first": "Plot!imu_accel_xyz",
+              "second": {
+                "direction": "column",
+                "first": "Plot!angular_vel",
+                "second": "Plot!rpm",
+                "splitPercentage": 50
+              },
+              "splitPercentage": 40
+            },
+            "splitPercentage": 32
+          }
+        },
+        {
+          "title": "Mission",
+          "layout": {
+            "direction": "column",
+            "first": "Plot!mission_flags",
+            "second": {
+              "direction": "row",
+              "first": "RawMessages!slam_pose_mission",
+              "second": "RawMessages!cmd_mission",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 45
+          }
+        },
+        {
+          "title": "Performance",
+          "layout": {
+            "direction": "column",
+            "first": "Plot!hz",
+            "second": {
+              "direction": "row",
+              "first": "Plot!latency",
+              "second": "Plot!stages",
+              "splitPercentage": 50
+            },
+            "splitPercentage": 36
+          }
+        }
+      ]
+    },
+    "3D!perc_bev": {
+      "cameraState": {
+        "distance": 26,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [8, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "base_link",
+      "followMode": "follow-position",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": false, "axisScale": 0.8 },
+        "background": { "color": "#0a0a12" }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar_points/above_ground": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -0.05,
+          "maxValue": 0.7,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/lidar_points/ground": { "visible": false },
+        "/lidar_points": { "visible": false },
+        "/Conos_raw": { "visible": true },
+        "/Conos_Orange": { "visible": true }
+      },
+      "layers": []
+    },
+    "3D!perc_persp": {
+      "cameraState": {
+        "distance": 18,
+        "perspective": true,
+        "phi": 58,
+        "target": [0, 0, 0],
+        "targetOffset": [6, 0, 0.3],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "base_link",
+      "followMode": "follow-pose",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": false, "axisScale": 0.5 },
+        "background": { "color": "#0a0a12" }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar_points/ground": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -0.15,
+          "maxValue": 0.7,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "decayTime": 0
+        },
+        "/lidar_points": { "visible": false },
+        "/Conos_raw": { "visible": true },
+        "/Conos_Orange": { "visible": true },
+        "/Path": { "visible": true }
+      },
+      "layers": []
+    },
+    "3D!map": {
+      "cameraState": {
+        "distance": 90,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "map",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": false, "axisScale": 1 },
+        "background": { "color": "#0d0d0d" }
+      },
+      "transforms": {
+        "frame:map": { "visible": true },
+        "frame:odom": { "visible": true },
+        "frame:base_link": { "visible": true }
+      },
+      "topics": {
+        "/Conos_full": { "visible": true },
+        "/Conos": { "visible": false },
+        "/Path": { "visible": true },
+        "/path_planning/debug": { "visible": true },
+        "/slam/pose": { "visible": true },
+        "/odom": { "visible": true },
+        "/studio_script/recon_paths": { "visible": true },
+        "/lidar_points": { "visible": false },
+        "/lidar_points/ground": { "visible": false }
+      },
+      "layers": []
+    },
+    "3D!drive": {
+      "cameraState": {
+        "distance": 32,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [8, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "base_link",
+      "followMode": "follow-position",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": false, "axisScale": 0.6 },
+        "background": { "color": "#0a0a0a" }
+      },
+      "transforms": {},
+      "topics": {
+        "/Path": { "visible": true },
+        "/path_planning/debug": { "visible": true },
+        "/Conos": { "visible": true },
+        "/Conos_Orange": { "visible": true },
+        "/slam/pose": { "visible": true },
+        "/lidar_points/ground": { "visible": false }
+      },
+      "layers": []
+    },
+    "3D!imu": {
+      "cameraState": {
+        "distance": 16,
+        "perspective": true,
+        "phi": 60,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 35,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "base_link",
+      "followMode": "follow-pose",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": true, "axisScale": 1 },
+        "background": { "color": "#0a0a0a" }
+      },
+      "transforms": {},
+      "topics": {
+        "/lidar_points/ground": {
+          "visible": true,
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "turbo",
+          "minValue": -0.15,
+          "maxValue": 0.7,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "decayTime": 0.4
+        },
+        "/Path": { "visible": true }
+      },
+      "layers": []
+    },
+    "Plot!perc_counts": {
+      "title": "Cones this LiDAR scan — accepted detections on /Conos_raw (magenta markers)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/n_accepted.data",
+          "enabled": true,
+          "label": "Accepted cones / scan",
+          "color": "#e040fb",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/studio_script/perc_detected_count.data",
+          "enabled": true,
+          "label": "Markers on /Conos_raw",
+          "color": "#ce93d8",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 220
+    },
+    "Plot!perc_orange": {
+      "title": "Big-orange cones this scan — finish-gate markers on /Conos_Orange",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/perc_orange_count.data",
+          "enabled": true,
+          "label": "Orange cones / scan",
+          "color": "#ff9800",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 220
+    },
+    "RawMessages!conos_raw": {
+      "topicPath": "/Conos_raw"
+    },
+    "Plot!map_size": {
+      "title": "SLAM map size — landmarks in the graph (grows while mapping, flat in loc-only)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_slam/map_size.data",
+          "enabled": true,
+          "label": "Landmarks in graph",
+          "color": "#00cc88",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/Conos.markers[:]{id}.id",
+          "enabled": true,
+          "label": "Published /Conos (local crop)",
+          "color": "#80cbc4",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!map_corr": {
+      "title": "||map → odom|| [m] — how far SLAM has dragged odom onto the cone map (low = healthy)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/studio_script/map_to_odom_norm.data",
+          "enabled": true,
+          "label": "||map → odom|| [m]",
+          "color": "#ff44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/studio_script/slam_odom_gap.data",
+          "enabled": true,
+          "label": "||SLAM XY − odom XY|| [m]",
+          "color": "#ffab40",
+          "lineSize": 1.1,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!pose_x": {
+      "title": "Position X [m] — SLAM (/slam/pose, map) vs dead-reckoning (/odom)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/slam/pose.pose.pose.position.x",
+          "enabled": true,
+          "label": "SLAM x",
+          "color": "#42a5f5",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.pose.pose.position.x",
+          "enabled": true,
+          "label": "odom x",
+          "color": "#ef5350",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 180
+    },
+    "Plot!pose_y": {
+      "title": "Position Y [m] — SLAM (/slam/pose, map) vs dead-reckoning (/odom)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/slam/pose.pose.pose.position.y",
+          "enabled": true,
+          "label": "SLAM y",
+          "color": "#42a5f5",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.pose.pose.position.y",
+          "enabled": true,
+          "label": "odom y",
+          "color": "#ef5350",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 180
+    },
+    "RawMessages!slam_pose": {
+      "topicPath": "/slam/pose"
+    },
+    "Plot!steer": {
+      "title": "Steering — autonomy /ctrl/cmd_internal [-1…1] vs bag /steering_angle [rad]",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/ctrl/cmd_internal.steering",
+          "enabled": true,
+          "label": "Autonomy cmd [-1…1]",
+          "color": "#42a5f5",
+          "lineSize": 1.6,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/steering_angle.data",
+          "enabled": true,
+          "label": "Bag steering [rad]",
+          "color": "#ffcc44",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 230
+    },
+    "Plot!speed": {
+      "title": "Speed [m/s] — SLAM vx vs odom vx vs controller setpoint, plus path curvature",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/control/v_set_mps.data",
+          "enabled": true,
+          "label": "v_set (controller)",
+          "color": "#ffffff",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/slam/pose.twist.twist.linear.x",
+          "enabled": true,
+          "label": "SLAM vx",
+          "color": "#42a5f5",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.twist.twist.linear.x",
+          "enabled": true,
+          "label": "odom vx",
+          "color": "#ff6644",
+          "lineSize": 1.1,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/control/kappa_max_per_m.data",
+          "enabled": true,
+          "label": "|κ| max ahead [1/m]",
+          "color": "#ab47bc",
+          "lineSize": 1.0,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 220
+    },
+    "Plot!throttle": {
+      "title": "Actuation [0…1] — motor throttle vs regen (brake channel on /ctrl/cmd_internal)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "maxYValue": 1,
+      "paths": [
+        {
+          "value": "/ctrl/cmd_internal.throttle",
+          "enabled": true,
+          "label": "Throttle",
+          "color": "#66bb6a",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/ctrl/cmd_internal.brake",
+          "enabled": true,
+          "label": "Regen",
+          "color": "#ef5350",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 180
+    },
+    "Plot!imu_accel": {
+      "title": "IMU accel [m/s²] — body X forward, Y left (same as Control tab on racing_dashboard)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.linear_acceleration.x",
+          "enabled": true,
+          "label": "ax (forward)",
+          "color": "#4488ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.linear_acceleration.y",
+          "enabled": true,
+          "label": "ay (left)",
+          "color": "#ff8800",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+    "Plot!yaw": {
+      "title": "Yaw rate [rad/s] — raw IMU gyro Z vs EKF /odom (no GT on onboard bags)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "label": "IMU ωz",
+          "color": "#aa44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.twist.twist.angular.z",
+          "enabled": true,
+          "label": "Filter /odom ωz",
+          "color": "#ffaa44",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+    "RawMessages!cmd": {
+      "topicPath": "/ctrl/cmd_internal"
+    },
+    "Plot!imu_accel_xyz": {
+      "title": "IMU linear acceleration [m/s²] — body frame (X forward, Y left, Z up)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.linear_acceleration.x",
+          "enabled": true,
+          "label": "ax",
+          "color": "#4488ff",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.linear_acceleration.y",
+          "enabled": true,
+          "label": "ay",
+          "color": "#ff8800",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.linear_acceleration.z",
+          "enabled": true,
+          "label": "az",
+          "color": "#66bb6a",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 160
+    },
+    "Plot!angular_vel": {
+      "title": "IMU angular velocity [rad/s] — body rates (Z is yaw)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/imu.angular_velocity.x",
+          "enabled": true,
+          "label": "ωx (roll)",
+          "color": "#4488ff",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.angular_velocity.y",
+          "enabled": true,
+          "label": "ωy (pitch)",
+          "color": "#ff8800",
+          "lineSize": 1.2,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/imu.angular_velocity.z",
+          "enabled": true,
+          "label": "ωz (yaw)",
+          "color": "#aa44ff",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 180
+    },
+    "Plot!rpm": {
+      "title": "Motor shaft RPM (/motor_rpm) and SLAM forward speed — wheel-speed vs pose twist",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/motor_rpm.data",
+          "enabled": true,
+          "label": "Motor RPM",
+          "color": "#ffcc44",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/slam/pose.twist.twist.linear.x",
+          "enabled": true,
+          "label": "SLAM vx [m/s]",
+          "color": "#42a5f5",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 180
+    },
+    "Plot!hz": {
+      "title": "Node rate [Hz] — callbacks per second (LiDAR / SLAM / planner ≈ 10 Hz; drop = falling behind)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/hz.data",
+          "enabled": true,
+          "label": "Perception Hz",
+          "color": "#e040fb",
+          "lineSize": 1.6,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/hz.data",
+          "enabled": true,
+          "label": "SLAM Hz",
+          "color": "#42a5f5",
+          "lineSize": 1.6,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/path_planning/hz.data",
+          "enabled": true,
+          "label": "Planner Hz",
+          "color": "#66bb6a",
+          "lineSize": 1.6,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 180
+    },
+    "Plot!latency": {
+      "title": "Callback wall time [ms] — work per tick. SLAM age_ms is stamp staleness seen by the planner",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/latency_ms.data",
+          "enabled": true,
+          "label": "Perception detect() [ms]",
+          "color": "#e040fb",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/latency_ms.data",
+          "enabled": true,
+          "label": "SLAM proc [ms]",
+          "color": "#42a5f5",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/age_ms.data",
+          "enabled": true,
+          "label": "SLAM stamp age [ms]",
+          "color": "#90caf9",
+          "lineSize": 1.1,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/path_planning/latency_ms.data",
+          "enabled": true,
+          "label": "Planner tick [ms]",
+          "color": "#66bb6a",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/control/latency_ms.data",
+          "enabled": true,
+          "label": "Control 40 Hz tick [ms]",
+          "color": "#ffcc44",
+          "lineSize": 1.1,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!stages": {
+      "title": "Stage time [ms] — perception RANSAC / DBSCAN / cone-fit vs SLAM iSAM2 commit",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/ransac_ms.data",
+          "enabled": true,
+          "label": "RANSAC ground [ms]",
+          "color": "#26c6da",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_detection/dbscan_ms.data",
+          "enabled": true,
+          "label": "DBSCAN cluster [ms]",
+          "color": "#ffa726",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_detection/fit_ms.data",
+          "enabled": true,
+          "label": "Cone template fit [ms]",
+          "color": "#ef5350",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/commit_ms.data",
+          "enabled": true,
+          "label": "SLAM iSAM2 commit [ms]",
+          "color": "#7e57c2",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 230
+    },
+    "Plot!funnel": {
+      "title": "Detection funnel this scan — input points → DBSCAN clusters → shape gate → accepted cones",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/n_input_points.data",
+          "enabled": true,
+          "label": "Cropped LiDAR points",
+          "color": "#90a4ae",
+          "lineSize": 1.1,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_detection/n_clusters.data",
+          "enabled": true,
+          "label": "DBSCAN clusters",
+          "color": "#26c6da",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_detection/n_after_shape.data",
+          "enabled": true,
+          "label": "Passed height/range shape",
+          "color": "#ffa726",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_detection/n_accepted.data",
+          "enabled": true,
+          "label": "Accepted (published)",
+          "color": "#e040fb",
+          "lineSize": 1.6,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "Plot!sides": {
+      "title": "Accepted cones by side — body +Y left / −Y right (imbalance here vs later in SLAM)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/n_left.data",
+          "enabled": true,
+          "label": "Left (y > 0.5 m)",
+          "color": "#42a5f5",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_detection/n_right.data",
+          "enabled": true,
+          "label": "Right (y < −0.5 m)",
+          "color": "#ffee58",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 220
+    },
+    "Plot!far_drop": {
+      "title": "Far-range drops — clusters discarded past range_gate (~20 m), too sparse to trust",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/cone_detection/n_far_dropped.data",
+          "enabled": true,
+          "label": "Far clusters dropped",
+          "color": "#ef5350",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/cone_slam/n_obs.data",
+          "enabled": true,
+          "label": "SLAM observations this scan",
+          "color": "#7e57c2",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 240
+    },
+    "3D!path": {
+      "cameraState": {
+        "distance": 36,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [10, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "base_link",
+      "followMode": "follow-position",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": false, "axisScale": 0.6 },
+        "background": { "color": "#0a0a10" }
+      },
+      "transforms": {},
+      "topics": {
+        "/Path": { "visible": true },
+        "/path_planning/debug": { "visible": true },
+        "/Conos": { "visible": true },
+        "/Conos_Orange": { "visible": true },
+        "/slam/pose": { "visible": true }
+      },
+      "layers": []
+    },
+    "Plot!path_size": {
+      "title": "Planner output — waypoint count and polyline length [m] of /Path (empty = 0)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "paths": [
+        {
+          "value": "/path_planning/n_waypoints.data",
+          "enabled": true,
+          "label": "Waypoints",
+          "color": "#66bb6a",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/path_planning/length_m.data",
+          "enabled": true,
+          "label": "Path length [m]",
+          "color": "#26c6da",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+    "Plot!path_fail": {
+      "title": "Planner failures this tick — 1 = empty path or TF miss (map→base_link lookup failed)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "maxYValue": 1.2,
+      "paths": [
+        {
+          "value": "/path_planning/empty.data",
+          "enabled": true,
+          "label": "Empty / no cones",
+          "color": "#ef5350",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/path_planning/tf_miss.data",
+          "enabled": true,
+          "label": "TF miss",
+          "color": "#ffee58",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+    "RawMessages!path": {
+      "topicPath": "/Path"
+    },
+    "3D!odom": {
+      "cameraState": {
+        "distance": 40,
+        "perspective": false,
+        "phi": 0,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "followTf": "odom",
+      "followMode": "follow-none",
+      "scene": {
+        "syncCamera": false,
+        "transforms": { "showAxes": true, "showLabels": true, "axisScale": 1 },
+        "background": { "color": "#101010" }
+      },
+      "transforms": {
+        "frame:map": { "visible": true },
+        "frame:odom": { "visible": true },
+        "frame:base_link": { "visible": true }
+      },
+      "topics": {
+        "/odom": { "visible": true },
+        "/slam/pose": { "visible": true },
+        "/studio_script/recon_paths": { "visible": true },
+        "/Path": { "visible": false }
+      },
+      "layers": []
+    },
+    "Plot!odom_twist": {
+      "title": "EKF /odom twist — vx/vy [m/s] and yaw rate [rad/s] (vy should stay near 0)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/odom.twist.twist.linear.x",
+          "enabled": true,
+          "label": "odom vx",
+          "color": "#42a5f5",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.twist.twist.linear.y",
+          "enabled": true,
+          "label": "odom vy (NHC)",
+          "color": "#ef5350",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom.twist.twist.angular.z",
+          "enabled": true,
+          "label": "odom ωz",
+          "color": "#ffaa44",
+          "lineSize": 1.3,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 200
+    },
+    "Plot!odom_slip": {
+      "title": "Odom slip diagnostics — yaw residual (ω_pred − ω) and slip_flag (1 = steering update rejected)",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "paths": [
+        {
+          "value": "/odom_diag/yaw_residual_rad_s.data",
+          "enabled": true,
+          "label": "Yaw residual [rad/s]",
+          "color": "#ab47bc",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom_diag/slip_flag.data",
+          "enabled": true,
+          "label": "Slip flag",
+          "color": "#ef5350",
+          "lineSize": 1.4,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/odom_diag/effective_alpha_vx.data",
+          "enabled": true,
+          "label": "Effective α_vx",
+          "color": "#80cbc4",
+          "lineSize": 1.1,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 220
+    },
+    "RawMessages!odom": {
+      "topicPath": "/odom"
+    },
+    "Plot!mission_flags": {
+      "title": "Mission flags — 1 = true. final_lap arms the stop; stop_request asks the uDV to brake; finished is standstill",
+      "isSynced": true,
+      "legendDisplay": "floating",
+      "showLegend": true,
+      "showPlotValuesInLegend": true,
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "xAxisVal": "timestamp",
+      "minYValue": 0,
+      "maxYValue": 1.2,
+      "paths": [
+        {
+          "value": "/slam/final_lap.data",
+          "enabled": true,
+          "label": "/slam/final_lap",
+          "color": "#ffcc44",
+          "lineSize": 1.6,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/slam/stop_request.data",
+          "enabled": true,
+          "label": "/slam/stop_request",
+          "color": "#ff9800",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        },
+        {
+          "value": "/slam/finished.data",
+          "enabled": true,
+          "label": "/slam/finished",
+          "color": "#66bb6a",
+          "lineSize": 1.5,
+          "timestampMethod": "receiveTime",
+          "showLine": true
+        }
+      ],
+      "sidebarDimension": 220
+    },
+    "RawMessages!slam_pose_mission": {
+      "topicPath": "/slam/pose"
+    },
+    "RawMessages!cmd_mission": {
+      "topicPath": "/ctrl/cmd_internal"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {
+    "perc_detected_count": {
+      "name": "perc_detected_count",
+      "sourceCode": "// Per-scan cone count from /Conos_raw (skips the DELETEALL leader).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nconst ADD = 0;\n\nexport const inputs = [\"/Conos_raw\"];\nexport const output = \"/studio_script/perc_detected_count\";\n\nexport default function node(\n  event: Input<\"/Conos_raw\">,\n): Output | undefined {\n  let n = 0;\n  for (const m of event.message.markers) {\n    if (m.action === ADD) n++;\n  }\n  return { data: n };\n}\n"
+    },
+    "perc_orange_count": {
+      "name": "perc_orange_count",
+      "sourceCode": "// Big-orange cone count from /Conos_Orange.\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nconst ADD = 0;\n\nexport const inputs = [\"/Conos_Orange\"];\nexport const output = \"/studio_script/perc_orange_count\";\n\nexport default function node(\n  event: Input<\"/Conos_Orange\">,\n): Output | undefined {\n  let n = 0;\n  for (const m of event.message.markers) {\n    if (m.action === ADD) n++;\n  }\n  return { data: n };\n}\n"
+    },
+    "recon_paths": {
+      "name": "recon_paths",
+      "sourceCode": "// SLAM (blue) and EKF /odom (red) trails in the map frame.\n// /slam/pose is map-frame. /odom is odom-frame; raw XY in map shows\n// dead-reckoning vs the cone map (they split by ||map→odom||).\n// Trails clear on stamp rewind (replay loop) or a >10 m teleport.\n\nimport { Input } from \"./types\";\n\ntype Point = { x: number; y: number; z: number };\ntype RGBA = { r: number; g: number; b: number; a: number };\ntype Marker = {\n  header: { frame_id: string; stamp: { sec: number; nsec: number } };\n  ns: string; id: number; type: number; action: number;\n  pose: { position: Point; orientation: { x: number; y: number; z: number; w: number } };\n  scale: Point; color: RGBA; points: Point[];\n};\ntype MarkerArray = { markers: Marker[] };\n\nconst LINE_STRIP = 4;\nconst ADD = 0;\nconst MAX_PTS = 6000;\nconst STAMP_REWIND_S = 0.5;\nconst TELEPORT_M = 10.0;\n\nexport const inputs = [\"/slam/pose\", \"/odom\"];\nexport const output = \"/studio_script/recon_paths\";\n\nconst slamPts: Point[] = [];\nconst ekfPts: Point[] = [];\nconst lastPos: { [topic: string]: Point } = {};\nlet maxStamp = -1;\nlet lastStamp = { sec: 0, nsec: 0 };\n\nfunction toSec(s: { sec: number; nsec: number }): number {\n  return s.sec + s.nsec * 1e-9;\n}\n\nfunction clearAll(): void {\n  slamPts.length = 0;\n  ekfPts.length = 0;\n  for (const k of Object.keys(lastPos)) delete lastPos[k];\n}\n\nfunction push(arr: Point[], p: Point): void {\n  arr.push({ x: p.x, y: p.y, z: 0.05 });\n  if (arr.length > MAX_PTS) arr.shift();\n}\n\nfunction line(id: number, pts: Point[], color: RGBA): Marker {\n  return {\n    header: { frame_id: \"map\", stamp: lastStamp },\n    ns: \"recon_paths\", id, type: LINE_STRIP, action: ADD,\n    pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },\n    scale: { x: 0.15, y: 0, z: 0 },\n    color, points: pts.map((q) => ({ x: q.x, y: q.y, z: q.z })),\n  };\n}\n\nexport default function node(\n  event: Input<\"/slam/pose\"> | Input<\"/odom\">,\n): MarkerArray | undefined {\n  const stamp = event.message.header.stamp;\n  const t = toSec(stamp);\n  const p = event.message.pose.pose.position;\n  if (maxStamp >= 0 && t < maxStamp - STAMP_REWIND_S) clearAll();\n  if (t > maxStamp) maxStamp = t;\n  const prev = lastPos[event.topic];\n  if (prev !== undefined && Math.hypot(p.x - prev.x, p.y - prev.y) > TELEPORT_M) {\n    clearAll();\n  }\n  lastPos[event.topic] = { x: p.x, y: p.y, z: 0 };\n  lastStamp = stamp;\n  if (event.topic === \"/slam/pose\") push(slamPts, p);\n  else push(ekfPts, p);\n  const markers: Marker[] = [];\n  if (slamPts.length > 1) markers.push(line(0, slamPts, { r: 0.27, g: 0.53, b: 1.0, a: 0.95 }));\n  if (ekfPts.length > 1) markers.push(line(1, ekfPts, { r: 1.0, g: 0.27, b: 0.27, a: 0.95 }));\n  return { markers };\n}\n"
+    },
+    "map_to_odom_norm": {
+      "name": "map_to_odom_norm",
+      "sourceCode": "// ||map → odom|| translation from /tf (SLAM drift correction).\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\n\nexport const inputs = [\"/tf\"];\nexport const output = \"/studio_script/map_to_odom_norm\";\n\nexport default function node(event: Input<\"/tf\">): Output | undefined {\n  for (const t of event.message.transforms) {\n    if (t.header.frame_id === \"map\" && t.child_frame_id === \"odom\") {\n      const tx = t.transform.translation.x;\n      const ty = t.transform.translation.y;\n      return { data: Math.hypot(tx, ty) };\n    }\n  }\n  return undefined;\n}\n"
+    },
+    "slam_odom_gap": {
+      "name": "slam_odom_gap",
+      "sourceCode": "// ||SLAM XY − odom XY||. Frames differ by map→odom; a growing gap with a\n// flat ||map→odom|| means the two estimators are walking apart in place.\n\nimport { Input } from \"./types\";\n\ntype Output = { data: number };\ntype Pose = { pose: { pose: { position: { x: number; y: number } } } };\n\nexport const inputs = [\"/slam/pose\", \"/odom\"];\nexport const output = \"/studio_script/slam_odom_gap\";\n\nlet slam: Pose | undefined;\nlet odom: Pose | undefined;\n\nexport default function node(\n  event: Input<\"/slam/pose\"> | Input<\"/odom\">,\n): Output | undefined {\n  if (event.topic === \"/slam/pose\") slam = event.message;\n  else odom = event.message;\n  if (!slam || !odom) return undefined;\n  const dx = slam.pose.pose.position.x - odom.pose.pose.position.x;\n  const dy = slam.pose.pose.position.y - odom.pose.pose.position.y;\n  return { data: Math.hypot(dx, dy) };\n}\n"
+    }
+  },
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": "Tab!main"
+}

@@ -17,7 +17,15 @@ from onboard_report import (  # noqa: E402
     steer_residual_rad,
     summarize,
 )
-from run_onboard_replay import bag_duration_s, bag_topic_counts  # noqa: E402
+from run_onboard_replay import (  # noqa: E402
+    bag_duration_s,
+    bag_topic_counts,
+    count_tcp_established,
+    foxglove_client_connected,
+    foxglove_params_yaml,
+    live_docker_publish_args,
+    wait_for_foxglove_client,
+)
 
 
 def _samples() -> dict:
@@ -118,6 +126,78 @@ class BagMetadataTest(unittest.TestCase):
             self.assertAlmostEqual(bag_duration_s(bag), 1.5)
             self.assertEqual(bag_topic_counts(bag)["/imu"], 10)
             self.assertEqual(bag_topic_counts(bag)["/lidar_points"], 2)
+
+
+class LiveFoxgloveTest(unittest.TestCase):
+    def test_params_yaml_has_lidar_points_and_port(self) -> None:
+        yaml = foxglove_params_yaml(8766)
+        self.assertIn("port: 8766", yaml)
+        self.assertIn("/lidar_points", yaml)
+        self.assertIn("/lidar_points/ground", yaml)
+        self.assertIn("/lidar_points/above_ground", yaml)
+        self.assertIn("/cone_detection/latency_ms", yaml)
+        self.assertIn("/cone_detection/n_left", yaml)
+        self.assertIn("/path_planning/n_waypoints", yaml)
+        self.assertIn("/cone_slam/n_obs", yaml)
+        self.assertIn("/slam/final_lap", yaml)
+        self.assertIn("/cone_slam/hz", yaml)
+        self.assertIn("/Conos_raw", yaml)
+        self.assertIn("use_sim_time: true", yaml)
+
+    def test_docker_publish_only_when_live(self) -> None:
+        self.assertEqual(live_docker_publish_args(["--duration-s", "30"]), ["--shm-size=1g"])
+        self.assertEqual(
+            live_docker_publish_args(["--live"]),
+            ["--shm-size=1g", "-p", "8766:8766"],
+        )
+        self.assertEqual(
+            live_docker_publish_args(["--live", "--foxglove-port", "8765"]),
+            ["--shm-size=1g", "-p", "8765:8765"],
+        )
+
+    def test_client_connected_matches_bridge_logs(self) -> None:
+        self.assertTrue(
+            foxglove_client_connected(
+                '[INFO] [foxglove_bridge]: Client 0 connected from 172.17.0.1'
+            )
+        )
+        self.assertTrue(
+            foxglove_client_connected(
+                "[2026-09-22T17:18:52Z INFO  foxglove::websocket::server] Connection opened"
+            )
+        )
+        self.assertFalse(
+            foxglove_client_connected(
+                '[INFO] [foxglove_bridge]: Server listening on port 8766'
+            )
+        )
+        self.assertFalse(
+            foxglove_client_connected(
+                '[INFO] [foxglove_bridge]: Advertising new channel 2 for topic "/tf"'
+            )
+        )
+
+    def test_wait_returns_immediately_when_log_already_has_client(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "foxglove_bridge.log"
+            log.write_text("[INFO] [foxglove_bridge]: Client 0 connected\n")
+            self.assertTrue(wait_for_foxglove_client(log, timeout_s=5.0, poll_s=0.05))
+
+    def test_wait_skipped_when_timeout_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "missing.log"
+            self.assertFalse(wait_for_foxglove_client(log, timeout_s=0.0))
+
+    def test_tcp_established_ignores_listen(self) -> None:
+        # 8766 = 0x223E. Listen (0A) must not count; ESTABLISHED (01) must.
+        dump = (
+            "  sl  local_address rem_address   st\n"
+            "   0: 00000000:223E 00000000:0000 0A\n"
+            "   1: 0100007F:223E 0100007F:C000 01\n"
+            "   2: 00000000:2235 00000000:0000 0A\n"
+        )
+        self.assertEqual(count_tcp_established(8766, dump), 1)
+        self.assertEqual(count_tcp_established(8765, dump), 0)
 
 
 if __name__ == "__main__":

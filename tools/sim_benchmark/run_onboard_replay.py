@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Replay an onboard (no-GT) rosbag through the live DV pipeline and report.
+"""Replay an onboard (no-GT) rosbag through the live DV pipeline.
 
-Plays sensor topics into the autonomy nodes (car topic names), records the
-pipeline outputs, and writes an HTML report — detection counts, odom/SLAM
-trajectories, map, autonomy vs pilot steering. There is no ground truth.
+Plays sensor topics into the autonomy nodes (car topic names). Pass
+``--report`` to record pipeline outputs and write the HTML summary
+(detection counts, odom/SLAM trajectories, map, autonomy vs pilot
+steering). ``--live`` without ``--report`` only plays into the nodes
+(no second bag). There is no ground truth.
 
 Usage (repo root; auto re-execs in ifssim-dv_pipeline_stack when host has no ROS):
 
     python tools/sim_benchmark/run_onboard_replay.py \\
-        results/capture/manual_20260920_154527_indexed
+        results/capture/manual_20260920_154527_indexed --live
 
-    python tools/sim_benchmark/run_onboard_replay.py <bag> --duration-s 30 --rate 1.0
+    python tools/sim_benchmark/run_onboard_replay.py <bag> --report
 """
 
 from __future__ import annotations
@@ -18,8 +20,10 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import re
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -32,6 +36,60 @@ from common import (
     resolve_benchmark_path,
 )
 from onboard_report import summarize, write_onboard_report
+
+DEFAULT_FOXGLOVE_PORT = 8766
+FOXGLOVE_WHITELIST = (
+    "/Conos",
+    "/Conos_full",
+    "/Conos_Orange",
+    "/Conos_raw",
+    "/Path",
+    "/path_planning/debug",
+    "/path_planning/hz",
+    "/path_planning/latency_ms",
+    "/path_planning/n_waypoints",
+    "/path_planning/length_m",
+    "/path_planning/empty",
+    "/path_planning/tf_miss",
+    "/slam/pose",
+    "/slam/finished",
+    "/slam/final_lap",
+    "/slam/stop_request",
+    "/odom",
+    "/odom_diag/yaw_residual_rad_s",
+    "/odom_diag/slip_flag",
+    "/odom_diag/effective_alpha_vx",
+    "/ctrl/cmd_internal",
+    "/lidar_points",
+    "/lidar_points/ground",
+    "/lidar_points/above_ground",
+    "/imu",
+    "/motor_rpm",
+    "/steering_angle",
+    "/tf",
+    "/tf_static",
+    "/control/v_set_mps",
+    "/control/kappa_max_per_m",
+    "/control/latency_ms",
+    "/cone_detection/hz",
+    "/cone_detection/latency_ms",
+    "/cone_detection/ransac_ms",
+    "/cone_detection/dbscan_ms",
+    "/cone_detection/fit_ms",
+    "/cone_detection/n_accepted",
+    "/cone_detection/n_clusters",
+    "/cone_detection/n_input_points",
+    "/cone_detection/n_after_shape",
+    "/cone_detection/n_far_dropped",
+    "/cone_detection/n_left",
+    "/cone_detection/n_right",
+    "/cone_slam/hz",
+    "/cone_slam/latency_ms",
+    "/cone_slam/age_ms",
+    "/cone_slam/commit_ms",
+    "/cone_slam/map_size",
+    "/cone_slam/n_obs",
+)
 
 PLAY_TOPICS = (
     "/imu",
@@ -274,6 +332,39 @@ def load_pipeline_outputs(bag: Path) -> dict[str, Any]:
     return samples
 
 
+def foxglove_params_yaml(port: int) -> str:
+    topics = "\n".join(f'      - "{t}"' for t in FOXGLOVE_WHITELIST)
+    return (
+        "/**:\n"
+        "  ros__parameters:\n"
+        f"    port: {int(port)}\n"
+        '    address: "0.0.0.0"\n'
+        "    use_sim_time: true\n"
+        "    send_buffer_limit: 67108864\n"
+        "    use_compression: true\n"
+        "    topic_whitelist:\n"
+        f"{topics}\n"
+    )
+
+
+def live_docker_publish_args(argv: list[str] | None = None) -> list[str]:
+    """Host port map for --live so Lichtblick can reach foxglove_bridge."""
+    args = ["--shm-size=1g"]
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--live" not in argv:
+        return args
+    port = str(DEFAULT_FOXGLOVE_PORT)
+    if "--foxglove-port" in argv:
+        idx = argv.index("--foxglove-port")
+        if idx + 1 < len(argv) and not argv[idx + 1].startswith("-"):
+            port = argv[idx + 1]
+    for token in argv:
+        if token.startswith("--foxglove-port="):
+            port = token.split("=", 1)[1]
+    args += ["-p", f"{port}:{port}"]
+    return args
+
+
 def _popen(cmd: list[str], log_path: Path) -> subprocess.Popen:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fh = log_path.open("w")
@@ -366,6 +457,111 @@ def _setup_and_activate(mission: str, log_dir: Path) -> None:
                 )
 
 
+def _start_foxglove(log_dir: Path, params_path: Path, port: int) -> subprocess.Popen:
+    params_path.write_text(foxglove_params_yaml(port), encoding="utf-8")
+    cmd = [
+        "ros2",
+        "run",
+        "foxglove_bridge",
+        "foxglove_bridge",
+        "--ros-args",
+        "--params-file",
+        str(params_path),
+    ]
+    # Line-buffer C++ logs so "client connected" is visible before play.
+    if Path("/usr/bin/stdbuf").is_file():
+        cmd = ["stdbuf", "-oL", "-eL", *cmd]
+    proc = _popen(cmd, log_dir / "foxglove_bridge.log")
+    print(f"  started foxglove_bridge pid={proc.pid} ws://localhost:{port}")
+    return proc
+
+
+_FOXGLOVE_CLIENT_RE = re.compile(
+    r"(client(?:\s+\d+)?\s+connected|connection opened|"
+    r"new client connection|accepted connection)",
+    re.IGNORECASE,
+)
+_TCP_ESTABLISHED = "01"
+
+
+def foxglove_client_connected(log_text: str) -> bool:
+    """True when foxglove_bridge has logged a Lichtblick / Studio client."""
+    return _FOXGLOVE_CLIENT_RE.search(log_text) is not None
+
+
+def count_tcp_established(port: int, *proc_net_texts: str) -> int:
+    """Count ESTABLISHED sockets whose local port is ``port``.
+
+    Each argument is a ``/proc/net/tcp`` or ``/proc/net/tcp6`` dump.
+    The listen socket itself is state ``0A`` and is not counted — that is
+    why a foxglove_bridge that is merely *listening* on 8766 does not
+    count as a client.
+    """
+    want = f"{int(port):04X}"
+    n = 0
+    for text in proc_net_texts:
+        for line in text.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            local, _rem, st = parts[1], parts[2], parts[3]
+            if st != _TCP_ESTABLISHED:
+                continue
+            if local.rsplit(":", 1)[-1].upper() == want:
+                n += 1
+    return n
+
+
+def foxglove_tcp_clients(port: int) -> int:
+    """ESTABLISHED peers on ``port`` (IPv4 + IPv6). 0 if ``/proc/net`` is missing."""
+    chunks: list[str] = []
+    for name in ("tcp", "tcp6"):
+        path = Path("/proc/net") / name
+        if path.is_file():
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+    return count_tcp_established(port, *chunks)
+
+
+def wait_for_foxglove_client(
+    log_path: Path,
+    timeout_s: float,
+    *,
+    port: int | None = None,
+    poll_s: float = 0.2,
+) -> bool:
+    """Block until a client connects, or ``timeout_s`` elapses.
+
+    Prefers an ESTABLISHED TCP peer on ``port`` (Lichtblick connecting
+    through docker ``-p`` does not always flush the bridge log in time).
+    Falls back to scraping ``foxglove_bridge.log``. ``timeout_s <= 0``
+    skips the wait.
+    """
+    if timeout_s <= 0:
+        return False
+    deadline = time.time() + timeout_s
+    while True:
+        if port is not None and foxglove_tcp_clients(port) > 0:
+            return True
+        if log_path.is_file() and foxglove_client_connected(
+            log_path.read_text(encoding="utf-8", errors="replace")
+        ):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(poll_s)
+
+
+def _print_live_connect(port: int) -> None:
+    print()
+    print("==> live Foxglove / Lichtblick — connect now (bag starts on connect)")
+    print("    1. Open http://localhost:8080 (compose lichtblick) or Foxglove Studio")
+    print(f"    2. Open connection → Foxglove WebSocket → ws://localhost:{port}")
+    print("       (8766 by default so it does not collide with the sim stack on 8765)")
+    print("    3. Layout: lichtblick/onboard_live.json")
+    print("       BEV: /lidar_points/above_ground  persp: /lidar_points/ground")
+    print()
+
+
 def _record_and_play(
     source_bag: Path,
     replay_bag: Path,
@@ -373,25 +569,30 @@ def _record_and_play(
     *,
     rate: float,
     duration_s: float,
+    loop: bool = False,
+    play_delay_s: float = 0.0,
+    record: bool = True,
 ) -> None:
-    record_cmd = [
-        "ros2",
-        "bag",
-        "record",
-        "--use-sim-time",
-        "-s",
-        "mcap",
-        "-o",
-        str(replay_bag),
-        *RECORD_TOPICS,
-    ]
-    recorder = _popen(record_cmd, log_dir / "record.log")
-    time.sleep(2.0)
-    if recorder.poll() is not None:
-        raise RuntimeError(
-            "ros2 bag record exited immediately:\n"
-            + (log_dir / "record.log").read_text()[-2000:]
-        )
+    recorder = None
+    if record:
+        record_cmd = [
+            "ros2",
+            "bag",
+            "record",
+            "--use-sim-time",
+            "-s",
+            "mcap",
+            "-o",
+            str(replay_bag),
+            *RECORD_TOPICS,
+        ]
+        recorder = _popen(record_cmd, log_dir / "record.log")
+        time.sleep(2.0)
+        if recorder.poll() is not None:
+            raise RuntimeError(
+                "ros2 bag record exited immediately:\n"
+                + (log_dir / "record.log").read_text()[-2000:]
+            )
 
     play_cmd = [
         "ros2",
@@ -407,25 +608,34 @@ def _record_and_play(
         "--topics",
         *PLAY_TOPICS,
     ]
+    if loop:
+        play_cmd.append("--loop")
+    if play_delay_s > 0:
+        play_cmd += ["--delay", str(play_delay_s)]
     print("  playing", source_bag)
     player = _popen(play_cmd, log_dir / "play.log")
     wall_limit = None
     if duration_s > 0:
         wall_limit = duration_s / max(rate, 1e-6) + 15.0
     try:
-        if wall_limit is None:
-            player.wait()
-        else:
-            try:
-                player.wait(timeout=wall_limit)
-            except subprocess.TimeoutExpired:
-                print(f"  stopping playback after {duration_s:.0f}s bag time")
-                _stop(player)
+        try:
+            if wall_limit is None:
+                player.wait()
+            else:
+                try:
+                    player.wait(timeout=wall_limit)
+                except subprocess.TimeoutExpired:
+                    print(f"  stopping playback after {duration_s:.0f}s bag time")
+                    _stop(player)
+        except KeyboardInterrupt:
+            print("  interrupted — stopping playback")
+            _stop(player)
         if player.returncode not in (0, None, -signal.SIGINT, -signal.SIGTERM):
             print("  play log tail:\n", (log_dir / "play.log").read_text()[-1500:])
     finally:
-        time.sleep(2.0)
-        _stop(recorder)
+        if recorder is not None:
+            time.sleep(2.0)
+            _stop(recorder)
         _stop(player)
 
 
@@ -436,6 +646,11 @@ def replay_pipeline(
     mission: str,
     rate: float,
     duration_s: float,
+    live: bool = False,
+    foxglove_port: int = DEFAULT_FOXGLOVE_PORT,
+    live_wait_s: float = 20.0,
+    loop: bool = False,
+    record: bool = True,
 ) -> Path:
     log_dir = run_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -444,6 +659,18 @@ def replay_pipeline(
     try:
         print("==> starting autonomy nodes (use_sim_time, car LiDAR remap)")
         procs = _start_nodes(log_dir)
+        if live:
+            procs.append(
+                (
+                    "foxglove_bridge",
+                    _start_foxglove(
+                        log_dir,
+                        run_dir / "foxglove_params.yaml",
+                        foxglove_port,
+                    ),
+                )
+            )
+            _print_live_connect(foxglove_port)
         print("==> waiting for ~/setup")
         time.sleep(4.0)
         dead = [name for name, proc in procs if proc.poll() is not None]
@@ -456,18 +683,47 @@ def replay_pipeline(
             )
         _setup_and_activate(mission, log_dir)
         time.sleep(2.0)
-        print("==> recording pipeline outputs + playing bag")
+        if live:
+            fox = next((p for n, p in procs if n == "foxglove_bridge"), None)
+            if fox is not None and fox.poll() is not None:
+                raise RuntimeError(
+                    "foxglove_bridge died — is the port already bound?\n"
+                    + (log_dir / "foxglove_bridge.log").read_text()[-2000:]
+                )
+            fox_log = log_dir / "foxglove_bridge.log"
+            print(
+                f"==> waiting for Foxglove client (starts immediately on connect, "
+                f"else after {live_wait_s:.0f}s)"
+            )
+            if wait_for_foxglove_client(
+                fox_log, live_wait_s, port=foxglove_port
+            ):
+                print("    client connected — starting bag")
+            else:
+                print(
+                    "    no WebSocket client on "
+                    f"ws://localhost:{foxglove_port} — starting bag anyway\n"
+                    "    (Lichtblick must Open connection to this port; "
+                    "the compose stack on 8765 is a different bridge. "
+                    "Reconnect if a previous replay died.)"
+                )
+        if record:
+            print("==> recording pipeline outputs + playing bag")
+        else:
+            print("==> playing bag (no output recording; pass --report to record)")
         _record_and_play(
             source_bag,
             replay_bag,
             log_dir,
             rate=rate,
             duration_s=duration_s,
+            loop=loop,
+            record=record,
         )
     finally:
         for _, proc in procs:
             _stop(proc, sig=signal.SIGTERM, wait_s=5.0)
-    if not (replay_bag / "metadata.yaml").is_file():
+    if record and not (replay_bag / "metadata.yaml").is_file():
         raise RuntimeError(
             f"replay bag missing metadata.yaml under {replay_bag}\n"
             + (log_dir / "record.log").read_text()[-2000:]
@@ -489,7 +745,7 @@ def build_samples(source_bag: Path, replay_bag: Path) -> dict[str, Any]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Replay an onboard bag through the DV pipeline and write a no-GT HTML report.",
+        description="Replay an onboard bag through the DV pipeline.",
     )
     ap.add_argument("bag", help="rosbag2 directory (under tools/sim_benchmark/)")
     ap.add_argument("--mission", default="trackdrive", choices=sorted(MISSION_BEHAVIORS))
@@ -502,12 +758,49 @@ def main() -> None:
     )
     ap.add_argument("--results-root", default=default_results_root())
     ap.add_argument(
+        "--report",
+        action="store_true",
+        help=(
+            "Record pipeline outputs to replay_bag and write the no-GT HTML "
+            "report (or from --replay-bag with --skip-replay). Without this "
+            "flag, playback does not record a second bag."
+        ),
+    )
+    ap.add_argument(
         "--skip-replay",
         action="store_true",
-        help="Only regenerate the report from an existing --replay-bag.",
+        help="Skip playback; only generate a report from --replay-bag (requires --report).",
     )
     ap.add_argument("--replay-bag", default="", help="Existing replay bag for --skip-replay")
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="Start foxglove_bridge and wait so Lichtblick can watch playback.",
+    )
+    ap.add_argument(
+        "--foxglove-port",
+        type=int,
+        default=DEFAULT_FOXGLOVE_PORT,
+        help="WebSocket port for --live (default 8766, avoids the sim stack on 8765).",
+    )
+    ap.add_argument(
+        "--live-wait-s",
+        type=float,
+        default=20.0,
+        help=(
+            "Max seconds to wait for a Lichtblick/Foxglove client before "
+            "playing the bag anyway (--live). 0 = do not wait. Playback "
+            "starts as soon as a client connects."
+        ),
+    )
+    ap.add_argument(
+        "--loop",
+        action="store_true",
+        help="Loop bag play (useful with --live). Ctrl-C stops playback.",
+    )
     args = ap.parse_args()
+    if args.skip_replay and not args.report:
+        raise SystemExit("--skip-replay requires --report")
 
     os.environ.setdefault("ROS_DOMAIN_ID", "42")
     source = resolve_benchmark_path(args.bag)
@@ -523,9 +816,18 @@ def main() -> None:
             mission=args.mission,
             rate=args.rate,
             duration_s=args.duration_s,
+            live=args.live,
+            foxglove_port=args.foxglove_port,
+            live_wait_s=args.live_wait_s,
+            loop=args.loop,
+            record=args.report,
         )
     elif not (replay_bag / "metadata.yaml").is_file():
         raise SystemExit(f"--skip-replay needs a recorded bag at {replay_bag}")
+
+    if not args.report:
+        print(f"Replay finished (no output bag or report; pass --report for both). Logs in {run_dir}")
+        return
 
     samples = build_samples(source, replay_bag)
     summary = summarize(samples)
@@ -546,7 +848,7 @@ def main() -> None:
 if __name__ == "__main__":
     maybe_reexec_in_docker(
         "run_onboard_replay.py",
-        extra_docker_args=["--shm-size=1g"],
+        extra_docker_args=live_docker_publish_args(),
         extra_env={"ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID", "42")},
     )
     main()

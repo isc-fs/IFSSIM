@@ -35,11 +35,31 @@ outside `pipeline/` so it is not carried into the car submodule.
      (needs `/testing_only/track`, `/odom`, `/imu`; see capture notes below)
    - Onboard / car bags (no `/testing_only/*`):
      `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag_name>`
-     → `results/onboard/<mission>_<ts>/report.html`
      Plays `/imu` `/lidar_points` `/motor_rpm` `/steering_angle` into the live
-     autonomy nodes and reports detection counts, odom/SLAM trajectories, map,
-     and autonomy vs pilot steering. There is no precision/recall — there is
-     no GT. `--duration-s 30` clips a long bag; `--rate 1.0` keeps control timing.
+     autonomy nodes. Add `--report` to record pipeline outputs and write
+     `results/onboard/<mission>_<ts>/report.html` (detection counts, odom/SLAM
+     trajectories, map, autonomy vs pilot steering). Without `--report` there
+     is no second bag. There is no precision/recall — there is no GT.
+     `--duration-s 30` clips a long bag; `--rate 1.0` keeps control timing.
+
+     To watch in Lichtblick / Foxglove while it plays:
+
+     ```bash
+     python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag_name> --live
+     ```
+
+     The replay container publishes `foxglove_bridge` on **ws://localhost:8766**
+     (8766 so it does not collide with the sim stack on 8765). Open
+     http://localhost:8080 → Open connection → Foxglove WebSocket → that URL.
+     Layout `lichtblick/onboard_live.json` (Perception / Filter / Map / Path /
+     Control / Odom / IMU / Mission / Performance tabs). Perception BEV shows
+     `/lidar_points/above_ground` (RANSAC outliers, what clustering sees);
+     perspective shows `/lidar_points/ground` (full rotated crop, including
+     ground inliers). Both share the `base_link` plane with `/Conos_raw`.
+     Diagnostic clouds/Float32s are subscription-gated so unused viz does not
+     burn rotate/pack/bridge CPU.
+     The bag starts as soon as Lichtblick connects (or after `--live-wait-s`,
+     default 20 s, if nobody connects). `--loop` repeats until Ctrl-C.
    - Bag and results paths must live under `tools/sim_benchmark/`. Use `--no-docker` inside a sourced ROS shell to run locally.
 
    **Perception GT alignment.** GT odom is looked up at the LiDAR `header.stamp`, which is
