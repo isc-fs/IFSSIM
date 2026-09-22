@@ -12,6 +12,10 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **Onboard bag replay.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT). `--report` records pipeline outputs and writes the HTML summary (detections, odom/SLAM trajectories, cone map, autonomy vs recorded pilot steering). `--live` without `--report` only plays into the nodes — no second bag. `--live` starts `foxglove_bridge` on `ws://localhost:8766` and plays as soon as a WebSocket client is ESTABLISHED on that port (falls back after `--live-wait-s`). Layout `lichtblick/onboard_live.json`: Perception BEV is `/lidar_points/above_ground` (RANSAC outliers only); perspective is `/lidar_points/ground` (full rotated crop). Both sit in the same `base_link` plane as `/Conos_raw`. Clouds and diagnostic Float32s publish only while subscribed, so the 15 k-point rotate is skipped when Lichtblick is not connected.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:
