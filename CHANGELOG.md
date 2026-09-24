@@ -12,6 +12,23 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **Benchmark tracking and `bench-view`** (`tools/sim_benchmark/tracking/`).
+  `bench-track` loads bag-replay results (onboard `--report` and `--live`)
+  and simulator results (currently a mock generator) into one run format.
+  It can upload them to W&B, MLflow or ClearML, with the same dashboards on
+  each, which lets the trackers be compared side by side. `bench-view`
+  is a browser app that reads the runs from MLflow:
+  - a page per kind of report;
+  - a run browser for picking one report, or comparing several overlaid
+    or side by side;
+  - a shared playhead that moves every time chart, the route map and an
+    event log together, as in Foxglove.
+
+  It is an evaluation build: sim data is mock, and nothing is uploaded
+  unless you run it. Design and results are in `docs/history/2026-09-23_*`.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:

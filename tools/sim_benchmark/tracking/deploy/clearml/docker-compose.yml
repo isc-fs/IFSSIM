@@ -1,0 +1,100 @@
+# Local self-hosted ClearML server for the tracker evaluation.
+# Derived from clearml-server/docker/docker-compose.yml with:
+#   * named volumes instead of /opt/clearml (no root needed),
+#   * web UI on :8090 (Lichtblick already owns :8080),
+#   * no agent-services / async_delete (not needed to browse results),
+#   * a fixed API credential from .env so scripts can log without a UI step.
+# Start:  docker compose --env-file .env up -d      UI: http://localhost:8090
+name: ifssim-clearml
+
+services:
+  apiserver:
+    command: [apiserver]
+    image: clearml/server:latest
+    restart: unless-stopped
+    volumes:
+      - clearml_logs:/var/log/clearml
+      - clearml_config:/opt/clearml/config
+      - clearml_files:/mnt/fileserver
+    depends_on: [redis, mongo, elasticsearch, fileserver]
+    environment:
+      CLEARML_ELASTIC_SERVICE_HOST: elasticsearch
+      CLEARML_ELASTIC_SERVICE_PORT: 9200
+      CLEARML_MONGODB_SERVICE_HOST: mongo
+      CLEARML_MONGODB_SERVICE_PORT: 27017
+      CLEARML_REDIS_SERVICE_HOST: redis
+      CLEARML_REDIS_SERVICE_PORT: 6379
+      CLEARML_SERVER_DEPLOYMENT_TYPE: linux
+      CLEARML__apiserver__pre_populate__enabled: "false"
+      CLEARML__secure__credentials__services_agent__user_key: ${CLEARML_API_ACCESS_KEY}
+      CLEARML__secure__credentials__services_agent__user_secret: ${CLEARML_API_SECRET_KEY}
+    ports: ["${CLEARML_API_PORT:-8008}:8008"]
+    networks: [backend, frontend]
+
+  elasticsearch:
+    image: elasticsearch:8.19.9
+    restart: unless-stopped
+    networks: [backend]
+    environment:
+      bootstrap.memory_lock: "true"
+      cluster.name: clearml
+      cluster.routing.allocation.node_initial_primaries_recoveries: "500"
+      cluster.routing.allocation.disk.watermark.low: 500mb
+      cluster.routing.allocation.disk.watermark.high: 500mb
+      cluster.routing.allocation.disk.watermark.flood_stage: 500mb
+      discovery.type: single-node
+      http.compression_level: "7"
+      node.name: clearml
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms2g -Xmx2g
+    ulimits:
+      memlock: {soft: -1, hard: -1}
+      nofile: {soft: 65536, hard: 65536}
+    volumes: [clearml_elastic:/usr/share/elasticsearch/data]
+
+  fileserver:
+    command: [fileserver]
+    image: clearml/server:latest
+    restart: unless-stopped
+    environment:
+      CLEARML__fileserver__delete__allow_batch: "true"
+    volumes:
+      - clearml_logs:/var/log/clearml
+      - clearml_files:/mnt/fileserver
+      - clearml_config:/opt/clearml/config
+    ports: ["${CLEARML_FILES_PORT:-8081}:8081"]
+    networks: [backend, frontend]
+
+  mongo:
+    image: mongo:8.0.15
+    restart: unless-stopped
+    command: --setParameter internalQueryMaxBlockingSortMemoryUsageBytes=196100200
+    volumes: [clearml_mongo_db:/data/db, clearml_mongo_cfg:/data/configdb]
+    networks: [backend]
+
+  redis:
+    image: redis:8.2.3
+    restart: unless-stopped
+    volumes: [clearml_redis:/data]
+    networks: [backend]
+
+  webserver:
+    command: [webserver]
+    image: clearml/server:latest
+    restart: unless-stopped
+    depends_on: [apiserver]
+    ports: ["${CLEARML_WEB_PORT:-8090}:80"]
+    networks: [backend, frontend]
+
+volumes:
+  clearml_logs:
+  clearml_config:
+  clearml_files:
+  clearml_elastic:
+  clearml_mongo_db:
+  clearml_mongo_cfg:
+  clearml_redis:
+
+networks:
+  backend:
+  frontend:

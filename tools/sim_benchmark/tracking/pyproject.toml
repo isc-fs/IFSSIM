@@ -1,0 +1,25 @@
+[project]
+name = "bench-tracking"
+version = "0.1.0"
+description = "Experiment tracking harness for IFSSIM sim_benchmark (W&B / MLflow / ClearML comparison)"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "plotly>=5.20", "pyyaml>=6"]
+
+[project.optional-dependencies]
+wandb = ["wandb>=0.19", "wandb-workspaces>=0.1.10"]
+mlflow = ["mlflow>=2.18"]
+clearml = ["clearml>=1.16"]
+viewer = ["bench-tracking[mlflow]", "dash>=3.0", "dash-ag-grid>=31", "pyarrow>=15"]
+all = ["bench-tracking[wandb,mlflow,clearml,viewer]"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+bench-track = "bench_tracking.cli:main"
+bench-view = "bench_tracking.viewer.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bench_tracking"]

@@ -1,0 +1,118 @@
+# Canonical metric registry.
+#
+# Name pattern: <domain>/<quantity>[_<stat>][@<qualifier>]_<unit>
+#   units: _m _s _ms _rad _deg _mps _hz _frac ; counts use the n_ prefix, no unit.
+# direction: min (lower is better) | max (higher is better) | none (context only)
+# threshold: absolute regression tolerance vs baseline before it is flagged
+#            (applied as: worse by more than threshold -> regression)
+# headline:  shown in the overview tables / bar charts of every dashboard
+
+# ---------------------------------------------------------------- perception
+perception/n_cones_mean:            {unit: count, direction: none, desc: "Mean raw cone detections per LiDAR scan", headline: true}
+perception/n_cones_median:          {unit: count, direction: none, desc: "Median raw cone detections per scan"}
+perception/n_cones_max:             {unit: count, direction: none, desc: "Max raw cone detections in one scan"}
+perception/empty_frame_rate_frac:   {unit: frac, direction: min, threshold: 0.02, desc: "Fraction of scans with zero detections", headline: true}
+perception/n_scans:                 {unit: count, direction: none, desc: "Scans with a /Conos_raw output"}
+perception/output_rate_hz:          {unit: hz, direction: max, threshold: 0.5, desc: "/Conos_raw publish rate over the replay"}
+perception/filter_rate_mean_hz:          {unit: hz, direction: max, threshold: 0.5, desc: "Cone-detection node processing rate (CONE_FILTER log)"}
+perception/funnel_clusters_mean:    {unit: count, direction: none, desc: "DBSCAN clusters per scan"}
+perception/funnel_shape_pass_mean:  {unit: count, direction: none, desc: "Clusters passing the shape test per scan"}
+perception/funnel_accepted_mean:    {unit: count, direction: none, desc: "Cones accepted per scan (CONE_FILTER)"}
+perception/funnel_far_dropped_mean: {unit: count, direction: none, desc: "Cones dropped for range per scan"}
+perception/side_balance_frac:       {unit: frac, direction: none, desc: "Left / (left+right) accepted cones — 0.5 is balanced"}
+perception/n_dbscan_guard_trips:    {unit: count, direction: min, threshold: 5, desc: "DBSCAN guard trips (cloud too dense, points dropped)", headline: true}
+perception/dbscan_guard_pts_dropped_mean: {unit: count, direction: min, desc: "Points dropped per DBSCAN guard trip"}
+perception/precision_frac:          {unit: frac, direction: max, threshold: 0.02, desc: "TP / (TP+FP) vs sim GT", headline: true}
+perception/recall_frac:             {unit: frac, direction: max, threshold: 0.02, desc: "TP / (TP+FN) vs sim GT", headline: true}
+perception/recall@10m_frac:         {unit: frac, direction: max, threshold: 0.02, desc: "Recall for GT cones within 10 m"}
+perception/recall@20m_frac:         {unit: frac, direction: max, threshold: 0.03, desc: "Recall for GT cones within 20 m"}
+perception/pos_err_mean_m:          {unit: m, direction: min, threshold: 0.02, desc: "Mean matched-cone position error"}
+perception/pos_err_p95_m:           {unit: m, direction: min, threshold: 0.05, desc: "p95 matched-cone position error"}
+perception/color_acc_frac:          {unit: frac, direction: max, threshold: 0.02, desc: "Colour classification accuracy of matched cones"}
+
+# ---------------------------------------------------------------- odometry / SLAM
+odom/path_length_m:                 {unit: m, direction: none, desc: "Distance travelled according to /odom"}
+slam/path_length_m:                 {unit: m, direction: none, desc: "Distance travelled according to /slam/pose"}
+slam/end_gap_vs_odom_m:             {unit: m, direction: min, threshold: 1.0, desc: "Distance between final SLAM and odom pose (no GT: drift proxy)", headline: true}
+slam/odom_divergence_max_m:         {unit: m, direction: min, threshold: 1.0, desc: "Max SLAM-vs-odom position gap during the run"}
+slam/n_map_cones:                   {unit: count, direction: none, desc: "Landmarks in the final SLAM map", headline: true}
+slam/map_cones_vs_track_frac:       {unit: frac, direction: none, desc: "Final landmarks / GT track cones (1.0 = no duplicates, no misses)"}
+slam/proc_p50_ms:                   {unit: ms, direction: min, threshold: 1.0, desc: "SLAM callback processing time p50 (SLAM_LAT)"}
+slam/proc_p95_ms:                   {unit: ms, direction: min, threshold: 2.0, desc: "SLAM callback processing time p95", headline: true}
+slam/age_p95_ms:                    {unit: ms, direction: min, threshold: 20.0, desc: "Age of the cone message when SLAM processed it, p95"}
+slam/prof_total_p95_ms:             {unit: ms, direction: min, threshold: 2.0, desc: "SLAM_PROF total per update, p95"}
+slam/assoc_frac:                    {unit: frac, direction: max, threshold: 0.03, desc: "Associated / observed cones (SLAM_OBS)"}
+slam/n_pose_jump_rejected:          {unit: count, direction: min, threshold: 10, desc: "Localisation pose jumps rejected", headline: true}
+slam/pose_jump_dev_max_m:           {unit: m, direction: min, desc: "Largest rejected pose-jump deviation"}
+slam/n_da_failure_skips:            {unit: count, direction: min, threshold: 5, desc: "Scans skipped for data-association failure spikes", headline: true}
+slam/n_cascade_recoveries:          {unit: count, direction: min, desc: "CASCADE_SKIP_RECOVERY force-accepts"}
+slam/n_proximity_vetoes:            {unit: count, direction: none, desc: "New landmarks vetoed as too close to an existing one"}
+slam/loc_mode_frac:                 {unit: frac, direction: none, desc: "Fraction of SLAM updates in localisation mode"}
+slam/t_first_loc_s:                 {unit: s, direction: none, desc: "Time until SLAM first ran in localisation mode (map closed)"}
+slam/pos_err_rms_m:                 {unit: m, direction: min, threshold: 0.05, desc: "SLAM position error vs GT, RMS", headline: true}
+slam/yaw_err_rms_rad:               {unit: rad, direction: min, threshold: 0.01, desc: "SLAM heading error vs GT, RMS"}
+slam/map_err_mean_m:                {unit: m, direction: min, threshold: 0.05, desc: "Mean landmark error vs matched GT cone"}
+odom/pos_err_rms_m:                 {unit: m, direction: min, threshold: 0.1, desc: "EKF odom position error vs GT, RMS"}
+odom/t_calibrated_s:                {unit: s, direction: min, desc: "Time from activation to first /odom (EKF calibration)"}
+
+# ---------------------------------------------------------------- planning
+planning/cb_rate_mean_hz:           {unit: hz, direction: max, threshold: 0.5, desc: "Path-planning callback rate"}
+planning/pub_rate_mean_hz:          {unit: hz, direction: max, threshold: 0.5, desc: "/Path publish rate", headline: true}
+planning/n_no_cones:                {unit: count, direction: min, desc: "Planning cycles with no cones"}
+planning/n_tf_miss:                 {unit: count, direction: min, threshold: 3, desc: "Planning cycles with TF lookup failure"}
+planning/n_plan_empty:              {unit: count, direction: min, threshold: 3, desc: "Planning cycles producing an empty path"}
+planning/path_poses_mean:           {unit: count, direction: none, desc: "Mean poses per /Path"}
+planning/path_length_mean_m:        {unit: m, direction: none, desc: "Mean planned path length (control log)"}
+
+# ---------------------------------------------------------------- control
+control/steer_residual_mean_abs_rad: {unit: rad, direction: min, threshold: 0.02, desc: "Mean |autonomy steer - pilot steer| (onboard, no GT)", headline: true}
+control/steer_residual_p95_rad:     {unit: rad, direction: min, desc: "p95 |autonomy steer - pilot steer|"}
+control/throttle_mean_frac:              {unit: frac, direction: none, desc: "Mean throttle command"}
+control/brake_mean_frac:                 {unit: frac, direction: none, desc: "Mean brake command"}
+control/steer_rate_rms_radps:       {unit: rad/s, direction: min, desc: "RMS steering-command rate (smoothness)"}
+control/cmd_rate_hz:                {unit: hz, direction: max, desc: "/ctrl/cmd_internal rate"}
+control/stop_latched:               {unit: bool, direction: none, desc: "1 if the stop anchor latched"}
+control/cross_track_rms_m:          {unit: m, direction: min, threshold: 0.05, desc: "Cross-track error vs GT centerline, RMS", headline: true}
+control/cross_track_max_m:          {unit: m, direction: min, threshold: 0.2, desc: "Cross-track error, max"}
+control/heading_err_rms_rad:        {unit: rad, direction: min, threshold: 0.01, desc: "Heading error vs centerline tangent, RMS"}
+control/speed_mean_mps:             {unit: mps, direction: max, desc: "Mean speed"}
+control/speed_max_mps:              {unit: mps, direction: none, desc: "Max speed"}
+control/lat_acc_max_mps2:           {unit: m/s2, direction: none, desc: "Max lateral acceleration"}
+
+# ---------------------------------------------------------------- race (sim referee)
+race/finished:                      {unit: bool, direction: max, desc: "1 if the referee marked the event finished", headline: true}
+race/n_laps:                        {unit: count, direction: max, desc: "Completed laps"}
+race/lap_time_best_s:               {unit: s, direction: min, threshold: 0.3, desc: "Best lap time", headline: true}
+race/lap_time_mean_s:               {unit: s, direction: min, threshold: 0.3, desc: "Mean lap time (excl. first lap)", headline: true}
+race/lap_time_std_s:                {unit: s, direction: min, desc: "Lap-time standard deviation"}
+race/total_time_s:                  {unit: s, direction: min, threshold: 2.0, desc: "Total event time incl. penalties"}
+race/n_doo:                         {unit: count, direction: min, threshold: 0, desc: "Cones down or out (referee)", headline: true}
+race/n_off_track:                   {unit: count, direction: min, threshold: 0, desc: "Off-course events (referee)", headline: true}
+race/penalty_s:                     {unit: s, direction: min, threshold: 0, desc: "Penalty seconds (DOO 2 s, OC 10 s)"}
+race/first_failure_s_m:             {unit: m, direction: max, desc: "Track distance of the first failure (DNF / OC); total distance if none"}
+race/finish_rate_frac:              {unit: frac, direction: max, threshold: 0.0, desc: "Fraction of seeds that finished (aggregate runs)", headline: true}
+race/lap_time_mean_ci95_s:          {unit: s, direction: min, desc: "Half-width of the 95% CI of the mean lap time across seeds"}
+
+# ---------------------------------------------------------------- latency / compute
+latency/perception_p95_ms:          {unit: ms, direction: min, threshold: 5, desc: "Cone detection latency p95", headline: true}
+latency/slam_p95_ms:                {unit: ms, direction: min, threshold: 2, desc: "SLAM latency p95"}
+latency/planning_p95_ms:            {unit: ms, direction: min, threshold: 5, desc: "Path planning latency p95"}
+latency/control_p95_ms:             {unit: ms, direction: min, threshold: 1, desc: "Control latency p95"}
+latency/e2e_p95_ms:                 {unit: ms, direction: min, threshold: 10, desc: "LiDAR stamp -> control command p95", headline: true}
+compute/cpu_mean_frac:              {unit: frac, direction: min, desc: "Mean CPU usage of the pipeline container"}
+
+# ---------------------------------------------------------------- run / health / startup
+run/n_crashes:                      {unit: count, direction: min, threshold: 0, desc: "Node tracebacks other than shutdown noise", headline: true}
+run/n_warnings:                     {unit: count, direction: none, desc: "WARN lines across node logs"}
+run/n_errors:                       {unit: count, direction: min, desc: "ERROR lines across node logs"}
+run/replay_duration_s:              {unit: s, direction: none, desc: "Wall time the bag played"}
+run/startup_s:                      {unit: s, direction: min, desc: "First node Ready -> last node Activated"}
+run/numba_warmup_s:                 {unit: s, direction: min, desc: "Cone-detection Numba warmup"}
+run/n_viewer_clients:               {unit: count, direction: none, desc: "Lichtblick/Foxglove clients that connected (live runs)"}
+run/completed:                      {unit: bool, direction: max, desc: "1 if the replay played to the end"}
+run/replay_coverage_frac:           {unit: frac, direction: max, desc: "Replayed seconds / bag duration"}
+planning/n_last_path_poses:         {unit: count, direction: none, desc: "Poses in the last /Path of the run"}
+race/n_dnf:                         {unit: count, direction: min, threshold: 0, desc: "Seeds that did not finish (aggregate runs)", headline: true}
+run/n_seeds:                        {unit: count, direction: none, desc: "Seeds in an aggregate run"}
+compare/n_regressions:              {unit: count, direction: min, desc: "Registry metrics worse than the scenario baseline beyond tolerance", headline: true}
+compare/n_improvements:             {unit: count, direction: max, desc: "Registry metrics better than the scenario baseline beyond tolerance"}
