@@ -12,6 +12,20 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Changed
+
+- **The `pipeline/` submodule now tracks
+  [`isc-fs/IFS09-DV-PIPELINE`](https://github.com/isc-fs/IFS09-DV-PIPELINE)**
+  instead of the frozen `IFS08-DV-PIPELINE`. 09 was imported with 08's
+  full history, so existing pins stay valid. The new pin also brings in
+  08's last two PRs: the DBSCAN OOM guard and SLAM fixes
+  ([IFS08#112](https://github.com/isc-fs/IFS08-DV-PIPELINE/pull/112)),
+  and the ground-aligned `/lidar_points/*` clouds
+  ([IFS08#114](https://github.com/isc-fs/IFS08-DV-PIPELINE/pull/114)).
+  After pulling, run `git submodule sync --recursive && git submodule
+  update --init --recursive`. Otherwise your checkout keeps fetching
+  from the old URL.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:
