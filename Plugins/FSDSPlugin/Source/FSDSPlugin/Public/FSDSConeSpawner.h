@@ -118,6 +118,8 @@ public:
 	 *
 	 * BackupCm is the gap behind the start gate in centimetres
 	 * (default 300 cm = 3 m, matches FS Driverless start-area spec).
+	 * Skidpad ignores it and starts 15 m before the timing line, as the
+	 * FS rules place the skidpad start line.
 	 */
 	bool ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm = 300.f) const;
 
@@ -145,6 +147,9 @@ private:
 	// track's cones.
 	TArray<FVector> BigOrangePositions;
 	TArray<FVector> BlueYellowPositions;
+	// Parallel to BlueYellowPositions: true where that cone is blue. The
+	// skidpad start pose needs it to tell the entry side from the exit side.
+	TArray<bool> BlueYellowIsBlue;
 
 	UPROPERTY()
 	AFSDSReferee* Referee = nullptr;

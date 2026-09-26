@@ -12,6 +12,14 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Skidpad put the car inside the figure 8.** Loading `skidpad.csv`
+  (or resetting the scenario on it) placed the car 3 m from the
+  crossing, turned 90°, between the two circles. It now starts 15 m
+  before the timing line, on the entry axis and facing the crossing,
+  so its first circle is the right-hand one, as the FS rules require.
+
 ## [1.0.0] — 2026-09-20
 
 Live testing during 1.0.0 preparation surfaced that `Plant.Type:

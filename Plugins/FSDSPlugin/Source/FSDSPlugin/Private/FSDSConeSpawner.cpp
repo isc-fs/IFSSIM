@@ -417,6 +417,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 	// spawn also gets a clean slate.
 	BigOrangePositions.Reset();
 	BlueYellowPositions.Reset();
+	BlueYellowIsBlue.Reset();
 	GroundSnapHits = 0;
 	GroundSnapMisses = 0;
 
@@ -456,6 +457,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		else if (Color == EFSDSConeColor::Blue || Color == EFSDSConeColor::Yellow)
 		{
 			BlueYellowPositions.Add(Location);
+			BlueYellowIsBlue.Add(Color == EFSDSConeColor::Blue);
 		}
 	}
 
@@ -569,6 +571,93 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 					GateCentroids[StartG].X, GateCentroids[StartG].Y,
 					GateForward.X, GateForward.Y,
 					OutLocation.X, OutLocation.Y, MgYaw);
+				return true;
+			}
+		}
+	}
+
+	// --- Skidpad (gate at the centre of the track) -----------------------
+	// The skidpad's one gate sits on the timing line at the crossing of the
+	// figure 8, and it is deeper (4 m along the entry axis) than wide (3 m),
+	// so the PCA path below picks the cross-track axis and spawns the car
+	// 3 m off the crossing, rotated 90 deg, inside the 8. Detect it by the
+	// track surrounding the gate: the circles are symmetric about the
+	// crossing, so the track-cone centroid lands on the gate. On any other
+	// layout the gate sits on the track's edge, far from that centroid.
+	// Acceleration is symmetric too, but it has two gates and returned
+	// above, so this branch must stay after the multi-gate one.
+	//
+	// Forward is the axis across the line joining the circle centres,
+	// which is the track cones' smaller-variance axis (the 8 is ~40 m long
+	// that way and ~21 m across). The sign comes from the cone colours:
+	// the car crosses the timing line with blue on its left, and the four
+	// cones nearest the crossing are the inner cones of each circle, one
+	// colour per side. The car starts 15 m before the timing line.
+	{
+		constexpr float SkidpadCentreTolCm = 300.f;
+		constexpr float SkidpadEntryCm = 1500.f;
+		constexpr int32 K_SIDE = 4;
+
+		FVector TrackCentroid = FVector::ZeroVector;
+		for (const FVector& P : BlueYellowPositions) TrackCentroid += P;
+		TrackCentroid /= BlueYellowPositions.Num();
+
+		if (BlueYellowPositions.Num() >= K_SIDE &&
+			BlueYellowIsBlue.Num() == BlueYellowPositions.Num() &&
+			FVector::DistXY(TrackCentroid, OrangeCentroid) <= SkidpadCentreTolCm)
+		{
+			float Txx = 0.f, Tyy = 0.f, Txy = 0.f;
+			for (const FVector& P : BlueYellowPositions)
+			{
+				const float dx = P.X - TrackCentroid.X;
+				const float dy = P.Y - TrackCentroid.Y;
+				Txx += dx * dx;
+				Tyy += dy * dy;
+				Txy += dx * dy;
+			}
+			const float THalfTrace = 0.5f * (Txx + Tyy);
+			const float TDisc = FMath::Max(0.f, THalfTrace * THalfTrace - (Txx * Tyy - Txy * Txy));
+			const float TLambdaSmall = THalfTrace - FMath::Sqrt(TDisc);
+
+			FVector SkForward = (FMath::Abs(Txy) > 1e-3f)
+				? FVector(Txy, TLambdaSmall - Txx, 0.f)
+				: ((Txx <= Tyy) ? FVector(1.f, 0.f, 0.f) : FVector(0.f, 1.f, 0.f));
+			SkForward.Z = 0.f;
+
+			if (!SkForward.IsNearlyZero())
+			{
+				SkForward.Normalize();
+
+				// UE is left-handed (X forward, Y right), so left of
+				// (Fx, Fy) is (Fy, -Fx).
+				const FVector Left(SkForward.Y, -SkForward.X, 0.f);
+				TArray<int32> Order;
+				Order.Reserve(BlueYellowPositions.Num());
+				for (int32 i = 0; i < BlueYellowPositions.Num(); ++i) Order.Add(i);
+				Order.Sort([this, &OrangeCentroid](int32 A, int32 B)
+				{
+					return FVector::DistSquaredXY(BlueYellowPositions[A], OrangeCentroid)
+					     < FVector::DistSquaredXY(BlueYellowPositions[B], OrangeCentroid);
+				});
+				float BlueLeftScore = 0.f;
+				for (int32 k = 0; k < K_SIDE; ++k)
+				{
+					const int32 i = Order[k];
+					const float Side = FVector::DotProduct(BlueYellowPositions[i] - OrangeCentroid, Left);
+					BlueLeftScore += BlueYellowIsBlue[i] ? Side : -Side;
+				}
+				if (BlueLeftScore < 0.f) SkForward = -SkForward;
+
+				OutLocation = OrangeCentroid - SkForward * SkidpadEntryCm;
+				OutLocation.Z = HeightOffset + 50.f;
+				const float SkYaw = FMath::RadiansToDegrees(FMath::Atan2(SkForward.Y, SkForward.X));
+				OutRotation = FRotator(0.f, SkYaw, 0.f).Quaternion();
+				UE_LOG(LogTemp, Log,
+					TEXT("FSDS ConeSpawner: skidpad start pose — timing line (%.1f, %.1f), "
+						 "forward (%.2f, %.2f), spawn (%.1f, %.1f), yaw %.1f°"),
+					OrangeCentroid.X, OrangeCentroid.Y,
+					SkForward.X, SkForward.Y,
+					OutLocation.X, OutLocation.Y, SkYaw);
 				return true;
 			}
 		}
