@@ -29,6 +29,17 @@ perception/recall@20m_frac:         {unit: frac, direction: max, threshold: 0.03
 perception/pos_err_mean_m:          {unit: m, direction: min, threshold: 0.02, desc: "Mean matched-cone position error"}
 perception/pos_err_p95_m:           {unit: m, direction: min, threshold: 0.05, desc: "p95 matched-cone position error"}
 perception/color_acc_frac:          {unit: frac, direction: max, threshold: 0.02, desc: "Colour classification accuracy of matched cones"}
+perception/f1_frac:                 {unit: frac, direction: max, threshold: 0.02, desc: "F1 of detections vs sim GT (precision and recall together)"}
+perception/pos_err_median_m:        {unit: m, direction: min, threshold: 0.02, desc: "Median matched-cone position error"}
+perception/pos_err_max_m:           {unit: m, direction: min, desc: "Worst matched-cone position error"}
+perception/bias_x_mean_m:           {unit: m, direction: none, desc: "Mean forward offset of detections from the true cone (body frame)"}
+perception/bias_y_mean_m:           {unit: m, direction: none, desc: "Mean sideways offset of detections from the true cone (body frame)"}
+perception/n_gt_cones_mean:         {unit: count, direction: none, desc: "True cones in view per scan (after range/FOV gating)"}
+perception/n_false_pos:             {unit: count, direction: min, threshold: 5, desc: "Detections with no true cone nearby, whole bag"}
+perception/n_missed:                {unit: count, direction: min, desc: "True cones in view that were not detected, whole bag"}
+perception/proc_mean_ms:            {unit: ms, direction: min, threshold: 0.5, desc: "Cone detection time per scan, mean (offline replay)"}
+perception/proc_p95_ms:             {unit: ms, direction: min, threshold: 1.0, desc: "Cone detection time per scan, p95 (offline replay)", headline: true}
+perception/proc_max_ms:             {unit: ms, direction: min, desc: "Cone detection time per scan, worst"}
 
 # ---------------------------------------------------------------- odometry / SLAM
 odom/path_length_m:                 {unit: m, direction: none, desc: "Distance travelled according to /odom"}
@@ -52,7 +63,18 @@ slam/t_first_loc_s:                 {unit: s, direction: none, desc: "Time until
 slam/pos_err_rms_m:                 {unit: m, direction: min, threshold: 0.05, desc: "SLAM position error vs GT, RMS", headline: true}
 slam/yaw_err_rms_rad:               {unit: rad, direction: min, threshold: 0.01, desc: "SLAM heading error vs GT, RMS"}
 slam/map_err_mean_m:                {unit: m, direction: min, threshold: 0.05, desc: "Mean landmark error vs matched GT cone"}
+slam/pos_err_mean_m:                {unit: m, direction: min, threshold: 0.05, desc: "SLAM position error vs the true pose, mean"}
+slam/pos_err_p95_m:                 {unit: m, direction: min, threshold: 0.1, desc: "SLAM position error vs the true pose, p95", headline: true}
+slam/pos_err_max_m:                 {unit: m, direction: min, desc: "SLAM position error vs the true pose, worst"}
+slam/yaw_err_mean_deg:              {unit: deg, direction: min, threshold: 0.2, desc: "SLAM heading error vs the true pose, mean"}
+slam/pos_err_at_scans_mean_m:       {unit: m, direction: min, threshold: 0.02, desc: "SLAM position error at the scans it was updated on, mean"}
+slam/map_recall_frac:               {unit: frac, direction: max, threshold: 0.02, desc: "True track cones that ended up in the SLAM map", headline: true}
+slam/n_map_false_pos:               {unit: count, direction: min, threshold: 2, desc: "SLAM landmarks with no true cone nearby"}
 odom/pos_err_rms_m:                 {unit: m, direction: min, threshold: 0.1, desc: "EKF odom position error vs GT, RMS"}
+odom/pos_err_mean_m:                {unit: m, direction: min, threshold: 0.1, desc: "EKF odometry position error vs the true pose, mean", headline: true}
+odom/pos_err_p95_m:                 {unit: m, direction: min, threshold: 0.2, desc: "EKF odometry position error vs the true pose, p95"}
+odom/wheel_pos_err_mean_m:          {unit: m, direction: min, desc: "Wheel-only odometry position error vs the true pose, mean"}
+odom/imu_only_pos_err_mean_m:       {unit: m, direction: min, desc: "IMU-only dead reckoning position error vs the true pose, mean"}
 odom/t_calibrated_s:                {unit: s, direction: min, desc: "Time from activation to first /odom (EKF calibration)"}
 
 # ---------------------------------------------------------------- planning
@@ -114,5 +136,6 @@ run/replay_coverage_frac:           {unit: frac, direction: max, desc: "Replayed
 planning/n_last_path_poses:         {unit: count, direction: none, desc: "Poses in the last /Path of the run"}
 race/n_dnf:                         {unit: count, direction: min, threshold: 0, desc: "Seeds that did not finish (aggregate runs)", headline: true}
 run/n_seeds:                        {unit: count, direction: none, desc: "Seeds in an aggregate run"}
+run/n_benchmarks:                   {unit: count, direction: none, desc: "Benchmarks in a simulator bag session"}
 compare/n_regressions:              {unit: count, direction: min, desc: "Registry metrics worse than the scenario baseline beyond tolerance", headline: true}
 compare/n_improvements:             {unit: count, direction: max, desc: "Registry metrics better than the scenario baseline beyond tolerance"}

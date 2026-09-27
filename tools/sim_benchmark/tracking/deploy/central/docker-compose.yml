@@ -1,0 +1,65 @@
+# The central benchmark server: MLflow (with logins) on Postgres, and bench-view.
+# Both listen on 127.0.0.1 only; Tailscale serves them to the team (DEPLOY.md).
+#
+#   cp .env.example .env    # then fill it in
+#   ./setup.sh              # first time: start, create experiments and the viewer's login
+#   docker compose up -d    # after that
+name: ifssim-bench
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: mlflow
+    volumes:
+      - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro # also creates the login database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      retries: 20
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: mlflow.Dockerfile
+      args:
+        MLFLOW_VERSION: ${MLFLOW_VERSION:-3.16.1}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MLFLOW_AUTH_ADMIN_PASSWORD: ${MLFLOW_ADMIN_PASSWORD:?set MLFLOW_ADMIN_PASSWORD in .env}
+      # signs the login pages' CSRF tokens; must stay the same across restarts and workers
+      MLFLOW_FLASK_SERVER_SECRET_KEY: ${MLFLOW_SECRET_KEY:?set MLFLOW_SECRET_KEY in .env}
+      # the names people use to reach it; MLflow refuses other Host headers
+      BENCH_HOSTNAME: ${BENCH_HOSTNAME:-localhost}
+      MLFLOW_WORKERS: ${MLFLOW_WORKERS:-4}
+    volumes:
+      - ${DATA_DIR:-./data}/artifacts:/artifacts
+    ports:
+      - "127.0.0.1:${MLFLOW_PORT:-5005}:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      retries: 30
+
+  viewer:
+    build:
+      context: ../..
+      dockerfile: deploy/central/viewer.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_TRACKING_USERNAME: viewer
+      MLFLOW_TRACKING_PASSWORD: ${VIEWER_PASSWORD:?set VIEWER_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${VIEWER_PORT:-8050}:8050"

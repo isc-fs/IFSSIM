@@ -13,10 +13,21 @@ a:hover { text-decoration: underline; }
 .nowrap { white-space: nowrap; }
 
 /* ------------------------------------------------------------------ shell */
-.app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+:root { --navw: 232px; }
+.app { display: grid; grid-template-columns: var(--navw) minmax(0, 1fr); min-height: 100vh; }
 .nav { background: var(--nav); color: var(--navink); position: sticky; top: 0; height: 100vh; overflow-y: auto;
   display: flex; flex-direction: column; padding: 14px 10px; }
-.brand-box { padding: 4px 10px 16px; }
+.brand-box { padding: 4px 4px 16px 10px; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.nav-toggle { background: transparent; border: 1px solid #334155; color: var(--navink); border-radius: 6px; cursor: pointer;
+  font: inherit; font-size: 14px; line-height: 1; width: 26px; height: 26px; flex: none; }
+.nav-toggle:hover { border-color: #64748b; color: #fff; }
+/* collapsed: a slim rail with just the toggle; the plots get the room (wide screens only) */
+@media (min-width: 1101px) {
+  html.nav-min { --navw: 44px; }
+  html.nav-min .nav { padding: 14px 8px; overflow: hidden; }
+  html.nav-min .nav > :not(.brand-box), html.nav-min .brand-box > :not(.nav-toggle) { display: none; }
+  html.nav-min .brand-box { padding: 4px 0; justify-content: center; }
+}
 .brand { color: #fff; font-weight: 700; font-size: 16px; letter-spacing: .2px; }
 .brand-box .sub { color: #64748b; font-size: 12px; }
 .nav-kind { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px; border-radius: 8px;
@@ -78,6 +89,8 @@ a:hover { text-decoration: underline; }
 .run-row:hover { background: #f8fafc; border-color: var(--line); }
 .run-row.is-open { background: var(--accentbg); border-color: #c7d7fb; }
 .run-row.is-cmp { background: #fafaf5; border-color: #e7e5d8; }
+.run-row.older:not(.is-open):not(.is-cmp) { opacity: .62; }
+.run-row.older:hover { opacity: 1; }
 .rr-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
 .rr-title .rr-name { color: var(--ink2); }
 .rr-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
@@ -209,7 +222,7 @@ td.delta.good, .verdict-cell.good { color: var(--good); background: var(--goodbg
 .pills input { display: none; }
 
 /* playback bar (fixed at the bottom, like a Foxglove player) */
-.player { position: fixed; left: 232px; right: 0; bottom: 0; z-index: 45; display: flex; align-items: center; gap: 12px;
+.player { position: fixed; left: var(--navw); right: 0; bottom: 0; z-index: 45; display: flex; align-items: center; gap: 12px;
   background: #0f172a; color: #e2e8f0; padding: 8px 20px; box-shadow: 0 -4px 16px rgba(0,0,0,.12); }
 .ph-btn { width: 38px; height: 32px; border-radius: 8px; border: 0; background: #2563eb; color: #fff; font-size: 14px;
   cursor: pointer; }
@@ -267,6 +280,7 @@ details.fold[open] > summary::before { content: "▾ "; }
 
 @media (max-width: 1100px) {
   .app { grid-template-columns: 1fr; }
+  .nav-toggle { display: none; }
   .nav { position: static; height: auto; }
   .player { left: 0; }
   .run-row { grid-template-columns: 1fr; }

@@ -36,6 +36,7 @@ from .. import registry
 from ..bundle import RunBundle
 from . import replay as R
 from . import sim as S
+from . import simbag as SB
 from .data import Catalog, RunRow
 from .theme import BASELINE, PALETTE, base_layout, empty, human
 
@@ -94,6 +95,20 @@ KINDS: dict[str, Kind] = {
             "run",
         ),
         Kind(
+            "simbag",
+            "Simulator bag benchmarks",
+            "A bag recorded in the simulator, run through perception and SLAM offline and scored "
+            "against the simulator's ground truth (run_sim_bag_benchmark.py). One report is one session.",
+            (
+                ("summary", "Summary"),
+                ("trajectory", "Trajectory"),
+                ("perception", "Perception"),
+                ("slam", "SLAM & odometry"),
+                ("all", "Everything"),
+            ),
+            "session",
+        ),
+        Kind(
             "sim",
             "Sim benchmarks",
             "Every scenario of the matrix, several seeds each, for one pipeline commit. MOCK data.",
@@ -134,6 +149,8 @@ def rows_of(c: Catalog, kind: str) -> list[RunRow]:
     if kind in ("bag", "live"):
         job = "onboard_replay" if kind == "bag" else "live_replay"
         rows = [r for r in c.collection("replay") if r.job_type == job]
+    elif kind == "simbag":
+        rows = c.collection("simbag")
     else:
         rows = c.collection({"sim": "matrix"}.get(kind, kind))
     return sorted(rows, key=lambda r: r.started, reverse=True)
@@ -169,6 +186,8 @@ def options(c: Catalog, kind: str) -> list[dict]:
                 + ("  ⚠ aborted" if r.status != "finished" else "")
                 + star
             )
+        elif kind == "simbag":
+            lab = f"{r.started:%a %d %b %H:%M} · {r.code_label} · {r.scenario}" + star
         elif kind == "sim":
             lab = f"{r.commit} · {r.branch} · {r.message[:48]}" + star
         else:
@@ -189,6 +208,13 @@ def names(c: Catalog, kind: str, keys: list[str]) -> dict[str, str]:
                 out[k] = k[:8]
             elif kind in ("bag", "live"):
                 out[k] = f"{r.started:%a %d %b %H:%M}"
+            elif kind == "simbag":
+                # the code is what differs between two sessions worth comparing; the time tells reruns apart
+                out[k] = (
+                    f"{r.code_label} · {r.started:%d %b %H:%M}"
+                    if r.code_label != "?"
+                    else f"{r.started:%a %d %b %H:%M}"
+                )
             elif kind == "nightly":
                 out[k] = f"night {r.params.get('nightly.night', '?')} · {r.commit}"
             else:
@@ -1000,13 +1026,150 @@ BAG_SECTIONS = {
     "events": EVENTS,
 }
 
+# ---------------------------------------------------------------- simulator bag charts (vs ground truth)
+SIMBAG_PERCEPTION = [
+    Chart(
+        "recall",
+        "Recall per scan",
+        "Detected ÷ true cones in view (range and field-of-view gated), 1 s mean. 1 = nothing missed.",
+        _so("gt_perception", "recall_frac", "recall", 1.0),
+    ),
+    Chart(
+        "detections",
+        "Cones detected vs cones in view",
+        "Solid = detected, dashed = true cones the sensor could see. 1 s mean.",
+        lambda B, col, ref, h: SB.detections(B, col, h),
+    ),
+    Chart(
+        "err-range",
+        "Position error against range",
+        "Every detection matched to a true cone. Line = median per metre of range, dotted = p90.",
+        lambda B, col, ref, h: SB.error_vs_range(B, col, h),
+        time=False,
+        legend=True,
+        height=340,
+    ),
+    Chart(
+        "err",
+        "Detection position error over time",
+        "Mean over the scan's matched cones, 1 s mean.",
+        _so("gt_perception", "match_err_m", "m", 1.0),
+    ),
+    Chart(
+        "err-cdf",
+        "Position error: distribution",
+        "All matched cones. The dotted line is the 95th percentile.",
+        lambda B, col, ref, h: SB.error_cdf(B, col, h),
+        time=False,
+        main=False,
+        legend=True,
+        height=320,
+    ),
+    Chart(
+        "missed",
+        "Missed and false detections per scan",
+        "Solid = true cones in view not detected, dotted = detections with no cone there. 1 s mean.",
+        lambda B, col, ref, h: SB.missed(B, col, h),
+        main=False,
+    ),
+    Chart(
+        "ms",
+        "Cone detection time",
+        "Per scan, offline on this machine (not the car's timing).",
+        _so("gt_perception", "latency_ms", "ms", 1.0),
+        main=False,
+    ),
+    Chart(
+        "stages",
+        "Where cone detection spends its time",
+        "Mean per stage. Only with --profile.",
+        lambda B, col, ref, h: SB.stages(B, col, h),
+        time=False,
+        main=False,
+        height=300,
+    ),
+    Chart(
+        "points",
+        "LiDAR points per scan",
+        "",
+        _so("gt_perception", "n_points", "points"),
+        main=False,
+    ),
+]
+SIMBAG_SLAM = [
+    Chart(
+        "slam-err",
+        "SLAM position error vs the true pose",
+        "Distance between the SLAM pose and where the car really was. The saw-tooth is drift between "
+        "SLAM updates, corrected at each LiDAR scan.",
+        _so("replay_pose", "slam_err_m", "m"),
+    ),
+    Chart(
+        "sources",
+        "Position error by pose source",
+        "Mean error against the true pose over the whole bag; whisker = p95. Log scale: "
+        "SLAM and the EKF sit orders of magnitude below dead reckoning.",
+        lambda B, col, ref, h: SB.pose_sources(B, col, h),
+        time=False,
+        legend=True,
+        height=300,
+    ),
+    Chart(
+        "final-map",
+        "Final SLAM map vs the true track",
+        "Rings = true cones in their colour, triangles = each run's SLAM landmarks.",
+        lambda B, col, ref, h: SB.final_map(B, col, 560),
+        time=False,
+        legend=True,
+        height=560,
+    ),
+    Chart(
+        "ekf-err",
+        "EKF odometry error vs the true pose",
+        "",
+        _so("replay_pose", "ekf_err_m", "m"),
+    ),
+    Chart(
+        "yaw",
+        "SLAM heading error vs the true pose",
+        "",
+        _so("replay_pose", "slam_yaw_err_deg", "deg"),
+        main=False,
+    ),
+    Chart(
+        "slam-cdf",
+        "SLAM position error: distribution",
+        "The dotted line is the 95th percentile.",
+        lambda B, col, ref, h: _nodata(
+            R.cdf(B, col, "replay_pose", "slam_err_m", title="", xtitle="m", height=h)
+        ),
+        time=False,
+        main=False,
+        legend=True,
+        height=320,
+    ),
+    Chart(
+        "speed",
+        "True speed",
+        "From the simulator's pose, 0.5 s mean.",
+        _so("replay_pose", "gt_speed_mps", "m/s", 0.5),
+        main=False,
+    ),
+]
+SIMBAG_SECTIONS = {"perception": SIMBAG_PERCEPTION, "slam": SIMBAG_SLAM}
+
+
+def sections_of(kind: str) -> dict[str, list[Chart]]:
+    return SIMBAG_SECTIONS if kind == "simbag" else BAG_SECTIONS
+
 
 # ======================================================================== bag / live pages
 def bag_data(
     c: Catalog, v: View
 ) -> tuple[list[RunRow], list[RunBundle | None], RunBundle | None]:
     rows = [c.rows[k] for k in v.keys if k in c.rows]
-    played = [r.run_id for r in rows if r.status == "finished"]
+    # a simulator bag session that lost one benchmark still has the other to show
+    played = [r.run_id for r in rows if r.status == "finished" or v.kind == "simbag"]
     loaded = dict(zip(played, c.bundles(played)))
     for k, b in loaded.items():
         b.display = v.names.get(k)  # type: ignore[attr-defined]  (charts label runs the way the page does)
@@ -1019,7 +1182,17 @@ def bag_page(c: Catalog, v: View) -> list:
     rows, runs, ref = bag_data(c, v)
     warn = []
     dead = [r for r in rows if r.status != "finished"]
-    if dead:
+    if dead and v.kind == "simbag":
+        warn.append(
+            note(
+                [
+                    "A benchmark in this session failed or was not run: ",
+                    html.B(", ".join(v.names[r.run_id] for r in dead)),
+                    ". What did run is shown; see the summary for which part is missing.",
+                ]
+            )
+        )
+    elif dead:
         warn.append(
             note(
                 [
@@ -1039,12 +1212,13 @@ def bag_page(c: Catalog, v: View) -> list:
     if v.section == "trajectory":
         return warn + trajectory(v, runs, ref)
     B = [b for b in runs if b is not None]
-    if v.section in BAG_SECTIONS:
+    charts = sections_of(v.kind)
+    if v.section in charts:
         return (
             warn
             + render_charts(
                 v,
-                BAG_SECTIONS[v.section],
+                charts[v.section],
                 runs,
                 ref,
                 v.col,
@@ -1063,7 +1237,7 @@ def bag_page(c: Catalog, v: View) -> list:
     )
     for s in secs:
         out += [heading(dict(KINDS[v.kind].sections)[s])] + render_charts(
-            v, BAG_SECTIONS[s], runs, ref, v.col, s, expand_all=True
+            v, charts[s], runs, ref, v.col, s, expand_all=True
         )
         if s == "events":
             out += event_tables(v, runs)
@@ -1199,6 +1373,79 @@ def compare_table(
     return html.Table([html.Thead(html.Tr(head)), html.Tbody(body)], className="mt")
 
 
+def code_facts(r: RunRow) -> list[tuple[str, object]]:
+    """Which code produced the run, as recorded at run time (run_provenance.py)."""
+    if r.code_id is None:
+        return [("Code", "not recorded (run made before provenance capture)")]
+    p = r.params
+    dirty = [
+        n
+        for n in ("pipeline", "ifssim")
+        if p.get(f"code.{n}.dirty") in ("True", "true", "1")
+    ]
+    return [
+        ("Code", html.B(r.code_label)),
+        (
+            "Pipeline commit",
+            f"{r.commit} · {r.branch or '–'}"
+            + (f" · {r.message[:70]}" if r.message else ""),
+        ),
+        (
+            "IFSSIM commit",
+            (p.get("code.ifssim.sha") or "?")[:7]
+            + f" · {p.get('code.ifssim.branch') or '–'}",
+        ),
+        (
+            "Uncommitted changes",
+            "none"
+            if not dirty
+            else f"in {' and '.join(dirty)} — saved with the run as "
+            + ", ".join(f"{n}.diff" for n in dirty),
+        ),
+    ] + _unpushed_and_image(p)
+
+
+def _unpushed_and_image(p: dict[str, str]) -> list[tuple[str, object]]:
+    """Commits no remote had at run time, and which benchmark image ran it."""
+    out: list[tuple[str, object]] = []
+    ahead = [
+        f"{n}: {p[f'code.{n}.unpushed']}"
+        for n in ("pipeline", "ifssim")
+        if p.get(f"code.{n}.unpushed") not in (None, "", "0", "None")
+    ]
+    if ahead:
+        out.append(
+            (
+                "Unpushed commits",
+                f"{', '.join(ahead)} — saved with the run as <repo>.unpushed.bundle "
+                "(git fetch <bundle> HEAD)",
+            )
+        )
+    tag = p.get("code.image.tag")
+    if tag:
+        digest = p.get("code.image.digest")
+        out.append(
+            (
+                "Benchmark image",
+                f"{tag} · "
+                + (
+                    f"registry digest {digest.split('@')[-1][:19]}"
+                    if digest and digest != "None"
+                    else "built locally: other machines cannot tell whether theirs matches"
+                )
+                + (
+                    f" · built from {p['code.image.revision'][:7]}"
+                    if p.get("code.image.revision") not in (None, "", "None")
+                    else ""
+                ),
+            )
+        )
+    host = p.get("code.host")
+    if host and host != "None":
+        out.append(("Machine", host))
+    return out
+
+
 def facts(c: Catalog, v: View, r: RunRow) -> html.Div:
     kv = [
         ("Bag / scenario", r.scenario),
@@ -1209,15 +1456,28 @@ def facts(c: Catalog, v: View, r: RunRow) -> html.Div:
             {
                 "onboard_replay": "onboard replay (--report)",
                 "live_replay": "live replay (--live)",
+                "sim_bag": "simulator bag vs ground truth",
             }.get(r.job_type, r.job_type),
         ),
-        (
-            "Pipeline commit",
-            r.commit if r.commit != "?" else "not recorded (imported run)",
-        ),
-        ("Branch", r.branch or "–"),
+        *code_facts(r),
         ("Run", r.name),
     ]
+    if r.job_type == "sim_bag":
+        ran = [t.split(":", 1)[1] for t in sorted(r.tags) if t.startswith("benchmark:")]
+        kv.insert(
+            4,
+            (
+                "Benchmarks",
+                ", ".join(ran) + (" (one missing)" if "partial" in r.tags else ""),
+            ),
+        )
+        if "paired" in r.tags:
+            kv.append(
+                (
+                    "Note",
+                    "Paired from separate perception and SLAM runs of the same bag",
+                )
+            )
     return html.Div(
         [
             html.Table(
@@ -1320,7 +1580,10 @@ def runs_table(c: Catalog, v: View, rows: list[RunRow]) -> html.Div:
                 html.Td(who(v, r.run_id)),
                 html.Td(role.get(r.run_id, "")),
                 html.Td(r.status, className="bad" if r.status != "finished" else ""),
-                html.Td(r.commit),
+                html.Td(
+                    r.code_label if r.code_label != "?" else r.commit,
+                    title="pipeline commit; -dirty.<id> = with uncommitted changes",
+                ),
                 html.Td("baseline ★" if r.run_id in v.base else ""),
                 html.Td(html.A("MLflow ↗", href=c.url(r.run_id), target="_blank")),
             ]
@@ -1332,10 +1595,7 @@ def runs_table(c: Catalog, v: View, rows: list[RunRow]) -> html.Div:
             [
                 html.Thead(
                     html.Tr(
-                        [
-                            html.Th(x)
-                            for x in ("run", "role", "status", "commit", "", "")
-                        ]
+                        [html.Th(x) for x in ("run", "role", "status", "code", "", "")]
                     )
                 ),
                 html.Tbody(body),
@@ -1442,7 +1702,26 @@ def event_tables(v: View, runs: list[RunBundle | None]) -> list:
 
 
 # ---------------------------------------------------------------- trajectory (linked map + timeline)
+SIMBAG_LANES = [
+    "speed",
+    "cones",
+    "recall",
+    "det_err",
+    "det_ms",
+    "slam_err",
+    "slam_yaw_err",
+    "ekf_err",
+]
+BAG_LANES = [
+    la.key
+    for la in R.LANES
+    if la.key not in SIMBAG_LANES or la.key in ("speed", "cones")
+]
+
+
 def default_lanes(v: View) -> list[str]:
+    if v.kind == "simbag":
+        return ["speed", "cones", "recall", "det_err", "slam_err", "ekf_err"]
     lanes = ["events", "speed", "steer", "cones", "map", "gap", "slam_ms"]
     if v.mode == "overlay" and v.ref:
         lanes.insert(4, "cones_delta")
@@ -1457,7 +1736,8 @@ def lane_options(v: View) -> list[dict]:
             "value": la.key,
         }
         for la in R.LANES
-        if la.key != "cones_delta" or (v.mode == "overlay" and v.ref)
+        if la.key in (SIMBAG_LANES if v.kind == "simbag" else BAG_LANES)
+        and (la.key != "cones_delta" or (v.mode == "overlay" and v.ref))
     ]
 
 
@@ -1568,7 +1848,15 @@ def map_box(
                             [
                                 html.H3("Route"),
                                 html.P(
-                                    "● odometry (solid) · ○ SLAM (dotted). Click to jump there."
+                                    (
+                                        "● true pose (solid) · ○ SLAM (dotted). Click to jump there."
+                                        if any(
+                                            "gt_x" in b.series.get("replay_pose").values
+                                            for b in B
+                                            if "replay_pose" in b.series
+                                        )
+                                        else "● odometry (solid) · ○ SLAM (dotted). Click to jump there."
+                                    )
                                 ),
                             ],
                             className="chead-l",
@@ -2510,6 +2798,12 @@ ROW_METRICS = {
         "control/cross_track_rms_m",
         "race/finish_rate_frac",
     ],
+    "simbag": [
+        "perception/recall_frac",
+        "perception/pos_err_mean_m",
+        "slam/pos_err_p95_m",
+        "slam/map_recall_frac",
+    ],
     "sim": [
         "race/finish_rate_frac",
         "race/n_doo",
@@ -2528,6 +2822,10 @@ ROW_LABEL = {
     "race/n_doo": "cones hit",
     "control/cross_track_rms_m": "cross-track",
     "latency/e2e_p95_ms": "latency p95",
+    "perception/recall_frac": "recall",
+    "perception/pos_err_mean_m": "cone error",
+    "slam/pos_err_p95_m": "SLAM err p95",
+    "slam/map_recall_frac": "map found",
     "race/finish_rate_frac": "finished",
 }
 
@@ -2559,6 +2857,11 @@ def browser(
     ms = ROW_METRICS[kind]
     groups: dict[str, list] = {}
     seen = set()
+    # runs of the exact same code on the same bag: newest first, so the first one seen is the latest
+    same_code: dict[tuple[str, str], list[str]] = {}
+    for row in rows:
+        if row.code_id:
+            same_code.setdefault((row.scenario, row.code_id), []).append(row.run_id)
     for row in rows:
         k = keyof(kind, row)
         if k in seen:
@@ -2607,6 +2910,23 @@ def browser(
                 f"{'onboard replay' if row.job_type == 'onboard_replay' else 'live stack'}",
                 f"commit {row.commit}" if row.commit != "?" else "",
             ]
+        elif kind == "simbag":
+            title = [
+                html.B(
+                    row.code_label if row.code_label != "?" else "code not recorded"
+                ),
+                html.Span(f" {row.started:%a %d %b %H:%M}", className="rr-name"),
+            ]
+            ran = [
+                t.split(":", 1)[1]
+                for t in sorted(row.tags)
+                if t.startswith("benchmark:")
+            ]
+            sub = [
+                row.branch,
+                row.message[:60],
+                " + ".join(ran),
+            ]
         elif kind == "sim":
             aggs = [a for a in c.collection("matrix") if a.commit == k]
             title = [html.B(k), html.Span(f" {row.branch}", className="rr-name")]
@@ -2633,8 +2953,31 @@ def browser(
             ]
             sub = [row.scenario, f"{len(c.seeds(row))} seeds"]
         badges = []
+        older = False
         if row.status != "finished":
             badges.append(html.Span(row.status, className="badge bad"))
+        reruns = same_code.get((row.scenario, row.code_id or ""), [])
+        if len(reruns) > 1:
+            i = reruns.index(row.run_id)
+            older = i > 0
+            badges.append(
+                html.Span(
+                    f"earlier run of this code ({len(reruns) - i} of {len(reruns)})"
+                    if older
+                    else f"latest of {len(reruns)} runs of this code",
+                    className="badge",
+                    title="Same commits and same uncommitted changes (code id "
+                    f"{row.code_id}): a rerun, not a code change",
+                )
+            )
+        if "dirty" in row.tags:
+            badges.append(
+                html.Span(
+                    "uncommitted changes",
+                    className="badge",
+                    title="The diff is saved with the run (provenance)",
+                )
+            )
         if k in base:
             badges.append(html.Span("★ baseline", className="badge base"))
         if k == r:
@@ -2672,7 +3015,10 @@ def browser(
                 row.short,
             ]
         )
-        groups.setdefault(f"{row.started:%A %d %B %Y}", []).append(
+        group = (
+            f"Bag {row.scenario}" if kind == "simbag" else f"{row.started:%A %d %B %Y}"
+        )
+        groups.setdefault(group, []).append(
             html.Div(
                 [
                     html.Div(
@@ -2688,7 +3034,8 @@ def browser(
                     html.Div(act, className="rr-act"),
                 ],
                 className="run-row"
-                + (" is-open" if k == r else " is-cmp" if k in vs else ""),
+                + (" is-open" if k == r else " is-cmp" if k in vs else "")
+                + (" older" if older else ""),
                 **{"data-search": search.lower()},
             )
         )
@@ -2840,7 +3187,7 @@ def selection_bar(v: View, c: Catalog, mode_pref: str) -> list:
 
 
 def page(c: Catalog, v: View) -> list:
-    if v.kind in ("bag", "live"):
+    if v.kind in ("bag", "live", "simbag"):
         return bag_page(c, v)
     return sim_page(c, v)
 

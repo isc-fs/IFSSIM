@@ -8,6 +8,9 @@ full-width card.
 Onboard (``--report``) runs have sampled topic streams (``replay_*``). Live runs
 only have what the node logs say (``log_*``). A lane lists its sources in order
 of preference, so a live run still shows up where its logs carry the quantity.
+
+Simulator bag sessions (``sim_bag``) use the same pose family, but their solid
+line is the simulator's true pose (``gt_*``) instead of odometry.
 """
 
 from __future__ import annotations
@@ -31,6 +34,11 @@ def label(b: RunBundle) -> str:
     if shown:
         return shown
     return b.name.split("/")[-1] + (" (live)" if b.job_type == "live_replay" else "")
+
+
+def solid(s) -> tuple[str, str]:
+    """(prefix, name) of the reference line of a pose series: the true pose when there is one."""
+    return ("gt", "true pose") if "gt_x" in s.values else ("odom", "odom")
 
 
 def dec(n: int, max_pts: int) -> np.ndarray:
@@ -76,7 +84,11 @@ LANES: list[Lane] = [
     Lane(
         "cones",
         "Cone detections / scan",
-        [("replay_perception", "n_cones_raw"), ("log_perception_filter", "accepted")],
+        [
+            ("replay_perception", "n_cones_raw"),
+            ("log_perception_filter", "accepted"),
+            ("gt_perception", "n_cones"),
+        ],
         smooth_s=1.0,
         fmt=".1f",
     ),
@@ -94,7 +106,11 @@ LANES: list[Lane] = [
     Lane(
         "speed",
         "Speed [m/s]",
-        [("replay_pose", "odom_speed_mps"), ("log_control_status", "v_mps")],
+        [
+            ("replay_pose", "odom_speed_mps"),
+            ("log_control_status", "v_mps"),
+            ("replay_pose", "gt_speed_mps"),
+        ],
         smooth_s=0.5,
     ),
     Lane(
@@ -116,6 +132,39 @@ LANES: list[Lane] = [
         fmt=".1f",
     ),
     Lane("events", "Pipeline events"),
+    # simulator bags: scored against the simulator's ground truth
+    Lane(
+        "recall",
+        "Recall per scan (detected / true cones in view)",
+        [("gt_perception", "recall_frac")],
+        smooth_s=1.0,
+    ),
+    Lane(
+        "det_err",
+        "Detection position error [m]",
+        [("gt_perception", "match_err_m")],
+        smooth_s=1.0,
+        fmt=".3f",
+    ),
+    Lane(
+        "det_ms",
+        "Cone detection time [ms]",
+        [("gt_perception", "latency_ms")],
+        smooth_s=1.0,
+        fmt=".1f",
+    ),
+    Lane(
+        "slam_err",
+        "SLAM position error vs truth [m]",
+        [("replay_pose", "slam_err_m")],
+        fmt=".3f",
+    ),
+    Lane(
+        "slam_yaw_err",
+        "SLAM heading error vs truth [deg]",
+        [("replay_pose", "slam_yaw_err_deg")],
+    ),
+    Lane("ekf_err", "EKF odometry error vs truth [m]", [("replay_pose", "ekf_err_m")]),
 ]
 LANE = {lane.key: lane for lane in LANES}
 DEFAULT_LANES = [
@@ -348,6 +397,26 @@ def route_map(
     map_src = [b for b in posed if all_maps] or (
         [base] if base is not None and base in posed else posed[:1]
     )
+    truth = next(
+        (b.tables["map_cones"] for b in map_src if "map_cones" in b.tables), None
+    )
+    gt_rows = [r for r in truth.rows if r[2] == "gt"] if truth else []
+    if gt_rows:
+        f.add_trace(
+            go.Scatter(
+                x=[r[0] for r in gt_rows],
+                y=[r[1] for r in gt_rows],
+                mode="markers",
+                name=f"true cones ({len(gt_rows)})",
+                marker=dict(
+                    symbol="circle-open",
+                    size=7,
+                    color=[CONE.get(r[3], CONE["unknown"]) for r in gt_rows],
+                    opacity=0.6,
+                ),
+                hovertemplate="%{x:.1f}, %{y:.1f}<extra>true cone</extra>",
+            )
+        )
     for b in map_src:
         mc = b.tables.get("map_cones")
         if not mc:
@@ -375,13 +444,13 @@ def route_map(
         s = b.series["replay_pose"]
         rid = b.run_id  # type: ignore[attr-defined]
         j = dec(len(s), 2500)
-        for src, dash in (("odom", "solid"), ("slam", "dot")):
+        for src, dash in ((solid(s)[0], "solid"), ("slam", "dot")):
             f.add_trace(
                 go.Scatter(
                     x=s.values[f"{src}_x"][j],
                     y=s.values[f"{src}_y"][j],
                     mode="lines",
-                    name=f"{label(b)} · {src}",
+                    name=f"{label(b)} · {solid(s)[1] if src != 'slam' else 'SLAM'}",
                     legendgroup=rid,
                     showlegend=False,
                     opacity=0.55,
@@ -389,7 +458,8 @@ def route_map(
                         color=col[rid], width=1.6 if b is base else 1.2, dash=dash
                     ),
                     customdata=s.step[j],
-                    hovertemplate=f"{label(b)} {src}<br>t=%{{customdata:.1f}} s<extra></extra>",
+                    hovertemplate=f"{label(b)} {solid(s)[1] if src != 'slam' else 'SLAM'}"
+                    "<br>t=%{customdata:.1f} s<extra></extra>",
                 )
             )
             idx.base.append(len(f.data) - 1)
@@ -404,8 +474,8 @@ def route_map(
                 te = np.array([e.t_s for e in es])
                 f.add_trace(
                     go.Scatter(
-                        x=interp(s.step, s.values["odom_x"], te),
-                        y=interp(s.step, s.values["odom_y"], te),
+                        x=interp(s.step, s.values[f"{solid(s)[0]}_x"], te),
+                        y=interp(s.step, s.values[f"{solid(s)[0]}_y"], te),
                         mode="markers",
                         name=f"{kind}",
                         legendgroup=f"ev:{kind}",
@@ -473,7 +543,11 @@ def route_map(
         hovermode="closest",
         margin=dict(l=40, r=10, t=30, b=30),
         title=dict(
-            text="solid = odom · dotted = SLAM · colour = run",
+            text=(
+                "solid = true pose · dotted = SLAM · ○ true cones · ▲ SLAM map"
+                if any(solid(b.series["replay_pose"])[0] == "gt" for b in posed)
+                else "solid = odom · dotted = SLAM · colour = run"
+            ),
             x=0.01,
             font=dict(size=12),
         ),
@@ -495,9 +569,15 @@ def pose_at(b: RunBundle, t: float) -> dict[str, float] | None:
     s = b.series.get("replay_pose")
     if s is None or t < s.step[0] - 1 or t > s.step[-1] + 1:
         return None
+    ref = solid(s)[0]
     return {
-        k: float(np.interp(t, s.step, s.values[k]))
-        for k in ("odom_x", "odom_y", "slam_x", "slam_y")
+        k: float(np.interp(t, s.step, s.values[v]))
+        for k, v in (
+            ("odom_x", f"{ref}_x"),
+            ("odom_y", f"{ref}_y"),
+            ("slam_x", "slam_x"),
+            ("slam_y", "slam_y"),
+        )
     }
 
 
@@ -508,7 +588,8 @@ def window_xy(b: RunBundle, t0: float, t1: float) -> tuple[list, list]:
     m = (s.step >= t0) & (s.step <= t1)
     j = np.where(m)[0]
     j = j[dec(len(j), 1500)]
-    return s.values["odom_x"][j].tolist(), s.values["odom_y"][j].tolist()
+    ref = solid(s)[0]
+    return s.values[f"{ref}_x"][j].tolist(), s.values[f"{ref}_y"][j].tolist()
 
 
 def value_at(
@@ -1166,13 +1247,14 @@ def pose_payload(runs: list[RunBundle], max_pts: int = 1500) -> dict:
         if s is None:
             continue
         j = dec(len(s), max_pts)
+        ref = solid(s)[0]  # "ox"/"oy" = the solid line: odometry, or the true pose
         out[b.run_id] = {
             "t": _json_list(s.step[j]),  # type: ignore[attr-defined]
             **{
                 k: _json_list(s.values[f"{a}_{c}"][j])
                 for k, a, c in (
-                    ("ox", "odom", "x"),
-                    ("oy", "odom", "y"),
+                    ("ox", ref, "x"),
+                    ("oy", ref, "y"),
                     ("sx", "slam", "x"),
                     ("sy", "slam", "y"),
                 )

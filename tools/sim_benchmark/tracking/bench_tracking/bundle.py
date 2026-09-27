@@ -22,8 +22,7 @@ SCHEMA_VERSION = 1
 JobType = Literal[
     "onboard_replay",  # bag replayed through the live pipeline, --report
     "live_replay",  # bag replayed with --live (Lichtblick), logs only
-    "perception_gt",
-    "slam_gt",
+    "sim_bag",  # a simulator bag: perception + SLAM scored against the sim's ground truth
     "control_gt",
     "sim_e2e",  # simulator-in-the-loop, full pipeline, one seed
     "sim_aggregate",  # N seeds of one scenario at one commit
@@ -138,7 +137,25 @@ class RunBundle:
 
     @property
     def run_key(self) -> str:
-        """Stable id: same source run -> same key, so re-uploads are detectable."""
+        """Same source run -> same key, on every machine, so the tracker can tell it already has a run.
+
+        It names where the run came from, not what the importer made of it: the capture id
+        written at run time (``provenance.json``), else the run's folder relative to the
+        results dir. Absolute paths differ between machines; names and groups change when
+        the importer does.
+        """
+        cid = (self.config.get("code") or {}).get("capture_id")
+        src = cid or (
+            "/".join(self.source_dir.parts[-2:]) if self.source_dir else None
+        )
+        basis = {"job": self.job_type, "src": src}
+        if src is None:  # generated runs (simulator aggregates) have no folder of their own
+            basis.update(name=self.name, group=self.group)
+        return hashlib.sha1(json.dumps(basis, sort_keys=True).encode()).hexdigest()[:12]
+
+    @property
+    def legacy_run_key(self) -> str:
+        """The key before it was machine-independent: finds runs imported with an older state file."""
         basis = json.dumps(
             {
                 "job": self.job_type,

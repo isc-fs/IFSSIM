@@ -28,6 +28,25 @@ shipping pipeline, documentation.
 
   It is an evaluation build: sim data is mock, and nothing is uploaded
   unless you run it. Design and results are in `docs/history/2026-09-23_*`.
+- **Simulator bag benchmarks in one command**
+  (`tools/sim_benchmark/run_sim_bag_benchmark.py`). Runs the perception and
+  SLAM ground-truth benchmarks on one simulator bag and keeps both results
+  in one session folder; `--only` / `--skip` pick benchmarks. `bench-view`
+  shows each session as one report under "Simulator bag benchmarks".
+- **Every benchmark run records its code** (`tools/sim_benchmark/run_provenance.py`).
+  `make_run_dir` writes `provenance.json` with the IFSSIM and `pipeline`
+  commits, plus the uncommitted changes as `.diff` files, and a label such
+  as `a64350a-dirty.3f2c1a9e`. Two runs of the same commit can now be told
+  apart, and reruns of identical code are marked as such in `bench-view`.
+  Commits that no remote has are saved as a git bundle with the run, and
+  the benchmark image is recorded with its registry digest; both warn when
+  another machine could not get the same code.
+- **A central benchmark server for the team**
+  (`tools/sim_benchmark/tracking/DEPLOY.md`). `deploy/central/` runs MLflow
+  with logins on Postgres, plus the hosted `bench-view`, reached over
+  Tailscale, with a backup script. Every benchmark uploads when it finishes
+  (`bench-track sync`). Runs made offline go up with the next one, and a run
+  is uploaded once however many machines see it.
 
 ## [1.0.0] — 2026-09-20
 

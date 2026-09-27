@@ -182,10 +182,15 @@ def load_replay(
     status = "finished" if played and (has_report or replay_dur) else "aborted"
     started = _started_at(run_dir)
     short_bag = (bag.get("name") or "unknown_bag").replace("_indexed", "")
-    code = provenance.unknown_code()
-    group = f"{sid}@{code['pipeline']['sha'] or 'unknown'}"
+    prov = provenance.read_run(run_dir)
+    code = provenance.code_of(prov)
+    group = f"{sid}@{code['id'] or 'unknown'}"
 
-    tags = ["backfill", f"mission:{mission}"]
+    tags = [f"mission:{mission}"] + ([] if code["id"] else ["backfill"])
+    if code["pipeline"].get("dirty") or code["ifssim"].get("dirty"):
+        tags.append("dirty")
+    if code["pipeline"].get("unpushed") or code["ifssim"].get("unpushed"):
+        tags.append("unpushed")
     if live:
         tags.append("live")
     if not has_report:
@@ -197,14 +202,17 @@ def load_replay(
 
     b = RunBundle(
         job_type=job_type,
-        name=f"{'onboard' if has_report else 'live'}/{short_bag}/{started:%m%dT%H%M%S}",
+        name=f"{'onboard' if has_report else 'live'}/{short_bag}/{started:%m%dT%H%M%S}"
+        + (f"/{code['label']}" if code["id"] else ""),
         group=group,
         source_dir=run_dir,
         started_at=started,
         status=status,
         tags=tags,
         notes=(
-            "Imported from an existing run dir: code SHAs, params and image are unknown "
+            f"Code {code['label']} (provenance.json recorded at run time)."
+            if code["id"]
+            else "Imported from an existing run dir: code SHAs, params and image are unknown "
             "(recorded before provenance capture existed)."
         ),
     )
@@ -227,8 +235,9 @@ def load_replay(
             "log_time_base": logs.t0_source if logs else None,
         },
         "provenance": {
-            "complete": False,
-            "missing": ["code", "params", "image"]
+            "complete": bool(code["id"]) and has_report,
+            "missing": (["code", "image"] if not code["id"] else [])
+            + ["params"]
             + ([] if has_report else ["bag (inferred)"]),
         },
     }
@@ -264,6 +273,7 @@ def load_replay(
         b.files.append((p, "log"))
     if (run_dir / "foxglove_params.yaml").is_file():
         b.files.append((run_dir / "foxglove_params.yaml", "config"))
+    b.files += [(p, "provenance") for p in provenance.provenance_files(run_dir)]
     if (run_dir / "report.html").is_file():
         b.html_report = run_dir / "report.html"
         b.files.append((run_dir / "report.html", "report"))

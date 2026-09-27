@@ -22,6 +22,7 @@ from .bundle import RunBundle, Series, Table
 from .geometry import interp
 
 REPLAY_JOBS = {"onboard_replay", "live_replay"}
+SIM_BAG_JOB = "sim_bag"
 SIM_AGG_JOBS = {"sim_aggregate", "sim_sweep_trial"}
 
 
@@ -29,13 +30,18 @@ def choose_baselines(bundles: Iterable[RunBundle]) -> dict[str, RunBundle]:
     """Default convention (open question Q3 — replace when the team decides):
 
     * bag replays: the earliest *finished* ``onboard_replay`` of the scenario;
+    * simulator bag sessions: the earliest finished session of the bag (same gating);
     * sim: the aggregate tagged ``baseline`` (the dev commit of the matrix).
     """
     out: dict[str, RunBundle] = {}
     bl = list(bundles)
     for b in sorted(bl, key=lambda b: b.started_at):
         sid = b.scenario_id
-        if b.job_type == "onboard_replay" and b.status == "finished" and sid not in out:
+        if (
+            b.job_type in ("onboard_replay", SIM_BAG_JOB)
+            and b.status == "finished"
+            and sid not in out
+        ):
             out[sid] = b
     for b in bl:
         if (
@@ -52,6 +58,8 @@ def _comparable(b: RunBundle, base: RunBundle) -> bool:
         return False
     if b.job_type in REPLAY_JOBS:
         return base.job_type in REPLAY_JOBS
+    if b.job_type == SIM_BAG_JOB:
+        return base.job_type == SIM_BAG_JOB
     if b.job_type in SIM_AGG_JOBS or b.job_type == "sim_e2e":
         return base.job_type in SIM_AGG_JOBS
     return False

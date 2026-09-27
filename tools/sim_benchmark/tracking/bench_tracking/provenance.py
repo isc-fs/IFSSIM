@@ -1,7 +1,8 @@
 """Provenance: code state and bag identity.
 
-Captured on the host (the benchmark container has no ``.git``). For runs
-imported after the fact the code state is unknown and recorded as such —
+The code state is recorded when a benchmark runs (``tools/sim_benchmark/run_provenance.py``
+writes ``provenance.json`` into the run dir); this module only reads it. For
+runs made before that existed the code state is unknown and recorded as such —
 never guessed into the ``code.*`` fields.
 """
 
@@ -12,7 +13,7 @@ import hashlib
 import json
 import os
 import socket
-import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,43 +24,75 @@ CACHE = Path(
 )
 
 
-def _git(repo: Path, *args: str) -> str | None:
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(repo), *args], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except Exception:
-        return None
-
-
-def git_state(repo: Path) -> dict[str, Any]:
-    sha = _git(repo, "rev-parse", "HEAD")
-    if sha is None:
-        return {"sha": None, "branch": None, "dirty": None, "diff_sha": None}
-    porcelain = _git(repo, "status", "--porcelain") or ""
-    diff = _git(repo, "diff", "HEAD") or ""
-    return {
-        "sha": sha[:10],
-        "branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
-        "dirty": bool(porcelain),
-        "diff_sha": hashlib.sha1(diff.encode()).hexdigest()[:8] if diff else None,
-    }
-
-
-def capture_code(ifssim_root: Path) -> dict[str, Any]:
-    return {
-        "ifssim": git_state(ifssim_root),
-        "pipeline": git_state(ifssim_root / "pipeline"),
-    }
-
-
 def unknown_code() -> dict[str, Any]:
     blank = {"sha": None, "branch": None, "dirty": None, "diff_sha": None}
     return {
         "ifssim": dict(blank),
         "pipeline": dict(blank),
         "image": {"id": None, "tag": None},
+        "id": None,
+        "label": "unknown",
     }
+
+
+def read_run(run_dir: Path) -> dict[str, Any] | None:
+    """The ``provenance.json`` a benchmark wrote at run time (``run_provenance.py``), if any."""
+    p = Path(run_dir) / "provenance.json"
+    try:
+        return json.loads(p.read_text()) if p.is_file() else None
+    except ValueError:
+        return None
+
+
+def code_of(prov: dict[str, Any] | None) -> dict[str, Any]:
+    """``config.code`` for a run: what was recorded at run time, else explicitly unknown."""
+    if not prov or not prov.get("captured"):
+        return unknown_code()
+    code = unknown_code()
+    for k in ("ifssim", "pipeline", "image"):
+        code[k].update(
+            {
+                kk: vv
+                for kk, vv in (prov.get("code", {}).get(k) or {}).items()
+                if not isinstance(vv, list)
+            }
+        )
+    code["id"] = prov.get("code_id")
+    code["label"] = prov.get("label") or "unknown"
+    # which run this was and where it ran (identifies the run on every machine)
+    code["capture_id"] = prov.get("capture_id")
+    code["host"] = prov.get("host")
+    return code
+
+
+# A run that started but has not written its results for this long is taken as crashed.
+STALE_AFTER_S = 6 * 3600
+
+
+def in_progress(run_dir: Path, finished: bool | None = None) -> bool:
+    """True for a run that is still going: it recorded its code at the start
+    (``provenance.json``, only runs made since that exists), has not finished
+    (``finished``, default: it has no ``results.json`` yet), and something in it
+    changed recently. Uploading it now would upload half a run."""
+    d = Path(run_dir)
+    if finished is None:
+        finished = (d / "results.json").is_file()
+    if finished or not (d / "provenance.json").is_file():
+        return False
+    newest = max((p.stat().st_mtime for p in d.rglob("*")), default=d.stat().st_mtime)
+    return time.time() - newest < STALE_AFTER_S
+
+
+def provenance_files(run_dir: Path) -> list[Path]:
+    return [
+        p
+        for p in (
+            [Path(run_dir) / "provenance.json"]
+            + sorted(Path(run_dir).glob("*.diff"))
+            + sorted(Path(run_dir).glob("*.unpushed.bundle"))
+        )
+        if p.is_file()
+    ]
 
 
 def env_info() -> dict[str, Any]:
@@ -96,7 +129,8 @@ def bag_identity(bag_dir: Path, *, full_hash: bool = True) -> dict[str, Any]:
     files = sorted(
         p for p in bag_dir.iterdir() if p.is_file() and not p.name.startswith(".")
     )
-    stat_key = [(p.name, p.stat().st_size, int(p.stat().st_mtime)) for p in files]
+    # lists, not tuples: the cache goes through JSON and must compare equal when read back
+    stat_key = [[p.name, p.stat().st_size, int(p.stat().st_mtime)] for p in files]
     CACHE.mkdir(parents=True, exist_ok=True)
     cache_file = CACHE / "bag_ids.json"
     cache = json.loads(cache_file.read_text()) if cache_file.is_file() else {}

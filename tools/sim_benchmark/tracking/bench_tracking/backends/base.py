@@ -33,6 +33,8 @@ class UploadResult:
 
 class Backend(ABC):
     name: str
+    # True when find() asks the tracker itself; otherwise only the local state file knows
+    can_find = False
 
     @abstractmethod
     def upload(
@@ -42,6 +44,14 @@ class Backend(ABC):
         figures: dict[str, Any],
         parent: UploadResult | None = None,
     ) -> UploadResult: ...
+
+    def find(self, run_key: str) -> UploadResult | None:
+        """The run the tracker already has for this key, if it can tell (MLflow can)."""
+        return None
+
+    def claim(self, run_id: str, run_key: str) -> bool:
+        """Mark a run uploaded before keys were stored on the tracker. False if it is gone."""
+        return False
 
     def finish(self) -> None:  # flush / close sessions
         pass

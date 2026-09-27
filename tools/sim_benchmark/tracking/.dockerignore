@@ -1,0 +1,10 @@
+# The viewer image needs pyproject.toml, uv.lock and bench_tracking/ only.
+.venv/
+.state/
+tests/
+**/__pycache__/
+.pytest_cache/
+wandb/
+deploy/*/data/
+deploy/central/.env
+deploy/central/backups/

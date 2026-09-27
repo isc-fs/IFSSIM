@@ -6,6 +6,9 @@ outside `pipeline/` so it is not carried into the car submodule.
 ## Scripts
 
 - `capture_benchmark_bag.py` — records simulator-only topics plus a manifest.
+- `run_sim_bag_benchmark.py` — runs every ground-truth benchmark (perception and SLAM) on one simulator bag as one session; `--only` / `--skip` pick benchmarks. See [Simulator bag benchmarks in one command](#simulator-bag-benchmarks-in-one-command).
+- `run_provenance.py` — records which code produced each run (`provenance.json` + diffs). See [Which code produced a run](#which-code-produced-a-run).
+- `auto_upload.py` — uploads finished runs to the team's tracking server after each benchmark. See [Uploading to the team server](#uploading-to-the-team-server).
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
@@ -64,6 +67,73 @@ outside `pipeline/` so it is not carried into the car submodule.
      `python tools/sim_benchmark/generate_report.py`
 
    Bags recorded before `/testing_only/track` was added only get latency charts; re-capture to enable GT plots.
+
+## Simulator bag benchmarks in one command
+
+`run_sim_bag_benchmark.py` runs the perception and SLAM benchmarks on one simulator
+bag and keeps both results together as one session:
+
+```bash
+python tools/sim_benchmark/run_sim_bag_benchmark.py results/capture/<bag>            # everything
+python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --only perception --profile
+python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --skip perception --motion-model imu
+python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --dry-run                   # print the commands
+python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --no-upload                 # keep it off the team server
+```
+
+```text
+results/sim_bag/<bag>_<ts>/
+  session.json              which benchmarks ran, with which options, exit codes, durations
+  provenance.json, *.diff   the code state (next section)
+  perception/base_<ts>/     the perception benchmark's usual output, report.html included
+  slam/trackdrive_<ts>/     the SLAM benchmark's usual output
+```
+
+- The ground-truth gating options (`--gt-range-m`, `--gt-hfov-deg`, `--gt-min-range-m`,
+  `--gt-scan-period-ms`) go to both benchmarks, so they score against the same cones.
+- Common options have their own flags (`--profile`, `--max-frames`, `--strategy`,
+  `--motion-model`, `--resynth-odom`). Anything else goes through `--perception-args "..."` or
+  `--slam-args "..."`.
+- A benchmark that fails does not stop the others (`--stop-on-error` to change that). The
+  session is then marked `partial`.
+- It refuses a bag with no `/testing_only/track` and `/testing_only/odom`: that is a bag from
+  the car, which has no ground truth.
+- When a tracking server is configured, the session is uploaded once, at the end (the two
+  benchmarks do not upload on their own). `bench-view` shows it as one report under
+  **Simulator bag benchmarks** (`tracking/README.md`).
+
+## Which code produced a run
+
+Every run folder made by `common.make_run_dir` gets a `provenance.json`: the IFSSIM and
+`pipeline` commits and branches, whether either tree had uncommitted changes, the Docker image,
+and the command. When there are uncommitted changes (untracked files included, up to 512 KB
+each) they are saved next to it as `ifssim.diff` / `pipeline.diff`, so the run can be rebuilt
+from its commit plus the diff.
+
+- `label` is what people read: `a64350a` for a clean commit, `a64350a-dirty.3f2c1a9e` when
+  something was uncommitted. The suffix is the `code_id`, a hash of both commits and both
+  diffs, so the same code always gets the same id. Two runs with the same id are reruns; a
+  fix, committed or not, gives a new id.
+- The container has no `.git`, so `maybe_reexec_in_docker` records it on the host and hands it
+  over through `IFSSIM_PROVENANCE_DIR` (a staging folder under `results/.provenance/`, removed
+  after the run).
+- Recording never fails a benchmark: what it cannot read is recorded as unknown, and any
+  error is printed as a warning.
+- Commits that no remote has (as of the last `git fetch`) are saved as
+  `<repo>.unpushed.bundle`, and the run warns you to push them. `git fetch <bundle> HEAD`
+  gets them back on any machine.
+- The Docker image is recorded with its registry digest when it was pulled. A pulled image's
+  digest is part of the `code_id`. A locally built image can't be matched across machines,
+  so the run warns about it.
+- `python tools/sim_benchmark/run_provenance.py` prints what a run started now would record.
+
+## Uploading to the team server
+
+When `~/.config/ifssim-bench/tracking.env` (or the environment) names a tracking server,
+every benchmark uploads when it finishes (`auto_upload.py`). It runs `bench-track sync` on
+the host, which uploads every finished run the server does not have yet, so runs made
+offline go up with the next one. `IFSSIM_AUTO_UPLOAD=0` turns it off. Setting up the server
+and a machine: [`tracking/DEPLOY.md`](tracking/DEPLOY.md).
 
 ### SLAM benchmark bag topics
 

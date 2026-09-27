@@ -42,6 +42,7 @@ EXPERIMENTS = [
     "ifssim-bench/sim-matrix",
     "ifssim-bench/sim-nightly",
     "ifssim-bench/sim-sweep",
+    "ifssim-bench/sim-bag",
 ]
 CACHE = Path(
     os.environ.get(
@@ -56,11 +57,17 @@ COLLECTIONS = {
     "matrix": "Sim matrix",
     "nightly": "Nightly",
     "sweep": "Sweep",
+    "simbag": "Simulator bags",
 }
 
 
 def _unkey(k: str) -> str:
     return k.replace("_at_", "@")
+
+
+def _param(params: dict[str, str], k: str) -> str:
+    v = params.get(k)
+    return "" if v in (None, "None") else str(v)
 
 
 @dataclass
@@ -70,7 +77,7 @@ class RunRow:
     run_id: str
     name: str
     job_type: str
-    collection: str | None  # replay | matrix | nightly | sweep | None (seeds)
+    collection: str | None  # replay | simbag | matrix | nightly | sweep | None (seeds)
     group: str
     scenario_id: str
     scenario: str  # human label: bag name or sim scenario name
@@ -81,6 +88,9 @@ class RunRow:
     commit: str  # pipeline sha, or "?" for backfilled replays
     branch: str
     message: str
+    # same id = the same code (commits and uncommitted changes); None = not recorded
+    code_id: str | None
+    code_label: str  # "a64350a", "a64350a-dirty.3f2c1a9e", or "?"
     params: dict[str, str]
     summary: dict[str, float]
     has_bundle: bool
@@ -103,6 +113,8 @@ class RunRow:
             return f"t{self.params.get('sweep.trial', '?')} · la={la} · lat={lat}"
         if self.collection == "matrix":
             return f"{self.scenario} · {self.commit}"
+        if self.collection == "simbag":
+            return f"{self.code_label} · {self.started:%d %b %H:%M}"
         return self.name.split("/", 1)[-1]
 
     @property
@@ -115,6 +127,8 @@ def _collection(job: str, tags: frozenset[str]) -> str | None:
         return "replay"
     if job == "sim_sweep_trial":
         return "sweep"
+    if job == "sim_bag":
+        return "simbag"
     if job == "sim_aggregate":
         return (
             "nightly" if "nightly" in tags else "matrix" if "matrix" in tags else None
@@ -191,8 +205,13 @@ class Catalog:
                     commit=(params.get("code.pipeline.sha") or "?")[:7]
                     if params.get("code.pipeline.sha") not in (None, "", "None")
                     else "?",
-                    branch=params.get("code.pipeline.branch") or "",
-                    message=params.get("code.pipeline.message") or "",
+                    branch=_param(params, "code.pipeline.branch"),
+                    message=_param(params, "code.pipeline.message")
+                    or _param(params, "code.pipeline.subject"),
+                    code_id=_param(params, "code.id") or None,
+                    code_label=_param(params, "code.label")
+                    if _param(params, "code.label") not in ("", "unknown")
+                    else "?",
                     params=params,
                     summary=summary,
                     has_bundle=rec.get("tags.bench.bundle") == "1",

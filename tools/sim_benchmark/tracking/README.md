@@ -1,5 +1,8 @@
 # bench_tracking: experiment tracking for sim_benchmark
 
+> New here? [HOW_IT_WORKS.md](HOW_IT_WORKS.md) explains the whole flow, from a benchmark run to the viewer.
+> Setting up the team server: [DEPLOY.md](DEPLOY.md).
+
 This is an evaluation harness. It pushes the **same** benchmark data into **W&B, MLflow and ClearML**
 and builds the same in-depth dashboards in each, so the trackers can be compared on real
 content. See `docs/history/2026-09-23_benchmark-tracking-design.md` (design) and
@@ -27,12 +30,17 @@ uv run bench-track attach-bundles --replay-root $R --sim-root ../results/sim_moc
 uv run bench-view                                       # http://127.0.0.1:8050  (--uri to point at another MLflow)
 ```
 
+What each page, section and chart shows, and what data is behind it, is in
+[VIEWER_GUIDE.md](VIEWER_GUIDE.md).
+
 The app is organised in three steps:
 
-1. **What kind of report**: the left navigation lists Bag benchmarks, Live runs, Sim benchmarks,
-   Nightly and Parameter sweeps. The sections of the open page appear under it.
+1. **What kind of report**: the left navigation lists Bag benchmarks, Live runs, Simulator bag
+   benchmarks, Sim benchmarks, Nightly and Parameter sweeps. The sections of the open page appear under it. « (or `[`)
+   collapses it to a thin rail so the plots get the full width.
 2. **Which runs**: the selection bar says what is on screen ("Showing report ● Tue 22 Sep 17:38").
-   *Change…* and *+ Compare* open the run browser: runs grouped by day, with their key numbers
+   *Change…* and *+ Compare* open the run browser: runs grouped by day (by bag for simulator
+   bag sessions, where reruns of identical code are marked and dimmed), with their key numbers
    coloured against the baseline, and *Open* / *+ Compare* on each row. Type to filter.
    - One run is one report.
    - Two or more runs are a comparison: the bar shows them as chips (✕ removes one) with an
@@ -82,12 +90,17 @@ uv run wandb login                        # optional: export WANDB_ENTITY=<team>
 ```bash
 R=/path/to/IFSSIM/tools/sim_benchmark/results          # holds onboard/ and capture/
 uv run bench-track mock-sim                             # -> ../results/sim_mock (90 seed runs)
+uv run bench-track import     --backend mlflow --sim-bag-root $R --only sim_bag   # simulator bag sessions
 uv run bench-track summary    --replay-root $R --sim-root ../results/sim_mock
 uv run bench-track import     --backend clearml --replay-root $R --sim-root ../results/sim_mock
 uv run bench-track dashboards --backend clearml --replay-root $R --sim-root ../results/sim_mock
 uv run bench-track purge      --backend clearml --only replay      # delete + forget uploads
 uv run pytest -q tests
 ```
+
+`--sim-bag-root` reads the sessions `run_sim_bag_benchmark.py` writes (`$R/sim_bag/*`). It also
+pairs the perception and SLAM runs made one at a time before that runner existed
+(`$R/perception/*` + `$R/slam/*` of the same bag, started within 5 minutes) into one session each.
 
 The first run hashes each bag once (≈10 s per 7.5 GB, cached in `~/.cache/bench_tracking`).
 `--fast-bag-id` skips that. Upload ids are kept in `.state/<backend>.json`, so a re-import
@@ -102,9 +115,10 @@ bench_tracking/
   metrics.yaml     metric registry: canonical names, unit, direction, tolerance, headline
   registry.py      registry access + delta/regression verdicts
   logparse.py      node logs -> series/events/scalars (CONE_FILTER, SLAM_LAT/PROF/OBS, PATH_RATE, control)
-  provenance.py    git state, bag metadata + content id, scenario id
+  provenance.py    reads provenance.json (code state recorded at run time), bag metadata + content id, scenario id
   geometry.py      interpolation, start-pose / ICP alignment, track loading + s/lateral projection
-  adapters/        replay.py (onboard + live run dirs), sim.py (sim run dirs + seed aggregation)
+  adapters/        replay.py (onboard + live run dirs), sim.py (sim run dirs + seed aggregation),
+                   sim_bag.py (simulator bag sessions: perception + SLAM vs ground truth)
   mock_sim.py      MOCK SIL generator (scenario × commit × seed, nightly, sweep)
   compare.py       baselines, deltas, delta series, bootstrap CIs
   figures.py       plotly figures: per-run deep dives + cross-run comparisons
@@ -112,7 +126,7 @@ bench_tracking/
   backends/        wandb_backend.py, mlflow_backend.py, clearml_backend.py (one upload(bundle) each)
   dashboards/      common.py (shared dashboard content), wandb_dash / mlflow_dash / clearml_dash
   store.py         RunBundle <-> bundle/ dir (Parquet + JSON), the artifact bench-view reads
-  viewer/          bench-view: data.py (MLflow catalog + bundle cache), replay.py / sim.py (figures),
+  viewer/          bench-view: data.py (MLflow catalog + bundle cache), replay.py / sim.py / simbag.py (figures),
                    pages.py (what each page shows per mode, run browser),
                    app.py (shell, selection state, callbacks), assets/ (style.css, sync.js: playhead, zoom, browser)
   cli.py           bench-track
@@ -122,8 +136,10 @@ tests/             backend-free tests
 
 ## What gets logged per run (all backends)
 
-- **config**: code (both repos' SHAs/dirty, image), scenario (bag id or track/seed/noise), params,
-  env, provenance completeness. Imported replays are marked `provenance.complete=false`.
+- **config**: code (both repos' SHAs/dirty, image, `code.id`, `code.label`) from the run's
+  `provenance.json` (`tools/sim_benchmark/run_provenance.py`), scenario (bag id or
+  track/seed/noise), params, env, provenance completeness. Runs made before provenance was
+  recorded are marked `provenance.complete=false` and `code.label=unknown`.
 - **summary**: every registry metric, plus `<metric>.delta` vs the scenario baseline and
   `compare/n_regressions`.
 - **series**: replay-time (`t/replay_s`), log-time (`t/log_s`), track-distance (`track/s_m`,
@@ -132,4 +148,4 @@ tests/             backend-free tests
   events, baseline comparison.
 - **figures**: 10–14 per-run plotly deep dives (route with pipeline events, SLAM compute profile,
   cone funnel, track map with penalties, cross-track heatmap, failure snapshot…).
-- **files**: CSVs, results.json, logs, report.html (never bags).
+- **files**: CSVs, results.json, logs, report.html, provenance.json and its diffs (never bags).

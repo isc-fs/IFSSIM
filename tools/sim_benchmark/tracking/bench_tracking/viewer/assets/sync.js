@@ -7,6 +7,7 @@
 //  * Linked zoom: time charts share their x range; the two charts of a side-by-side pair also share y.
 //    Zooming a time chart lights up that stretch of the route on the map.
 //  * The run browser: open/close, filter, Esc.
+//  * The side panel collapses to a rail (button or "["); remembered in this browser only.
 (function () {
   const S = { zoom: false, t: null, playing: false, speed: 1, last: 0, ver: null, poses: {}, events: [], frame: false, busy: false };
 
@@ -239,8 +240,27 @@
     if (S.playing) requestAnimationFrame(tick);
   }
 
+  // ---------------------------------------------------------------- side panel
+  const NAV_KEY = 'bench-view.nav-min';
+  function setNav(min) {
+    document.documentElement.classList.toggle('nav-min', min);
+    const b = document.querySelector('.nav-toggle');
+    if (b) { b.textContent = min ? '»' : '«'; b.title = (min ? 'Show' : 'Hide') + ' the side panel ( [ )'; }
+    try { localStorage.setItem(NAV_KEY, min ? '1' : '0'); } catch (e) { /* storage blocked: session only */ }
+    // charts size to their container; tell Plotly the container changed
+    requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  }
+  let navMin = false;
+  try { navMin = localStorage.getItem(NAV_KEY) === '1'; } catch (e) { /* default: open */ }
+  document.documentElement.classList.toggle('nav-min', navMin);
+  // the button is rendered by Dash after this script runs: fix its label once it appears
+  new MutationObserver((_, obs) => {
+    if (document.querySelector('.nav-toggle')) { setNav(document.documentElement.classList.contains('nav-min')); obs.disconnect(); }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
   document.addEventListener('click', e => {
     const el = e.target.closest('button, .js-browse, .js-close');
+    if (el && el.classList.contains('nav-toggle')) { setNav(!document.documentElement.classList.contains('nav-min')); return; }
     if (!el) {
       const wrap = document.getElementById('browser-wrap');
       if (wrap && wrap.classList.contains('open') && !e.target.closest('#browser-wrap')) wrap.classList.remove('open');
@@ -272,6 +292,7 @@
     if (e.key === 'Escape') { const w = document.getElementById('browser-wrap'); if (w) w.classList.remove('open'); }
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' && e.target.type !== 'range' || tag === 'textarea' || e.target.isContentEditable) return;
+    if (e.key === '[' && !e.ctrlKey && !e.metaKey && !e.altKey) { setNav(!document.documentElement.classList.contains('nav-min')); return; }
     if (!document.getElementById('player')) return;
     if (e.key === ' ') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {

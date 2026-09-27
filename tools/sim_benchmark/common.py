@@ -57,7 +57,7 @@ def dv_pipeline_ros_setup_shell() -> str:
         "source /opt/ros/humble/setup.bash; "
         "source /dv_pipeline_stack_ws/install/setup.bash; "
         'export AMENT_PREFIX_PATH="/dv_pipeline_stack_ws/install/fs_msgs:'
-        '/dv_pipeline_stack_ws/install/ifssim_bridge:'
+        "/dv_pipeline_stack_ws/install/ifssim_bridge:"
         '/dv_pipeline_stack_ws/install/dv_msgs:${AMENT_PREFIX_PATH:-}"; '
     )
 
@@ -162,7 +162,9 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     cone_slam_src = repo_root() / "pipeline" / "cone_slam"
     image = os.environ.get("IFSSIM_DV_IMAGE", "ifssim-dv_pipeline_stack:latest")
     inner_argv = _translate_argv(argv)
-    if not any(a == "--results-root" or a.startswith("--results-root=") for a in inner_argv):
+    if not any(
+        a == "--results-root" or a.startswith("--results-root=") for a in inner_argv
+    ):
         inner_argv = ["--results-root", "/results", *inner_argv]
     arg_str = " ".join(shlex.quote(a) for a in inner_argv)
 
@@ -200,22 +202,44 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     ]
     if have_native:
         cmd += ["-v", f"{native_dir.resolve()}:/native:ro"]
+    # The container has no .git: record the code state here and let make_run_dir pick it up.
+    import run_provenance
+
+    staged = run_provenance.stage_for_docker(results, image)
     cmd += [
         "-e",
         "IFSSIM_BENCHMARK_IN_DOCKER=1",
+        "-e",
+        f"{run_provenance.ENV_DIR}=/results/{staged.relative_to(results).as_posix()}",
         image,
         "-lc",
         inner,
     ]
     print("Host lacks ROS; running benchmark in Docker:")
     print(" ", " ".join(cmd[:10]), "...")
-    raise SystemExit(subprocess.call(cmd))
+    try:
+        rc = subprocess.call(cmd)
+    finally:
+        run_provenance.unstage(staged)
+    import auto_upload
+
+    # to the team's MLflow, when one is configured (tracking/DEPLOY.md)
+    auto_upload.after_run(results)
+    raise SystemExit(rc)
 
 
 def make_run_dir(root: str | Path, module: str, strategy: str) -> Path:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     out = Path(root) / module / f"{strategy}_{ts}"
     out.mkdir(parents=True, exist_ok=True)
+    import run_provenance
+
+    # provenance.json (+ diffs): which code produced this run
+    run_provenance.record(out)
+    import auto_upload
+
+    # without Docker this is the host: upload once the benchmark exits
+    auto_upload.at_exit(Path(root))
     return out
 
 
@@ -234,7 +258,9 @@ def write_csv(path: str | Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def load_csv_centerline(track_csv: str, rotate_ccw_90: bool = True) -> list[tuple[float, float]]:
+def load_csv_centerline(
+    track_csv: str, rotate_ccw_90: bool = True
+) -> list[tuple[float, float]]:
     path = Path(track_csv)
     if not path.is_file():
         raise FileNotFoundError(f"track csv not found: {track_csv}")

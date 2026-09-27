@@ -3,6 +3,12 @@
     uv run --extra viewer bench-view                      # http://127.0.0.1:8050, MLflow at $MLFLOW_TRACKING_URI
     uv run --extra viewer bench-view --uri http://mlflow.team:5000 --port 8050
 
+The server (and login) come from ``--uri``, the environment, or
+``~/.config/ifssim-bench/tracking.env`` (see :mod:`bench_tracking.config`), so
+the same command shows the team server on any machine that is set up to
+upload to it. The central machine serves it with gunicorn (``wsgi()``, see
+deploy/central/).
+
 MLflow keeps the data (runs, params, metrics, the ``bundle/`` artifact) and its
 own UI. This app is a different way of looking at it:
 
@@ -30,6 +36,7 @@ from urllib.parse import parse_qs
 
 from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html, no_update
 
+from .. import config
 from . import pages as P
 from . import replay as R
 from . import sim as S
@@ -58,8 +65,17 @@ def serve_layout():
                 [
                     html.Div(
                         [
-                            html.Div("IFSSIM Bench", className="brand"),
-                            html.Div("benchmark viewer", className="sub"),
+                            html.Div(
+                                [
+                                    html.Div("IFSSIM Bench", className="brand"),
+                                    html.Div("benchmark viewer", className="sub"),
+                                ]
+                            ),
+                            html.Button(
+                                "«",
+                                className="nav-toggle",
+                                title="Hide the side panel ( [ )",
+                            ),
                         ],
                         className="brand-box",
                     ),
@@ -576,11 +592,18 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=8050)
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args(argv)
+    config.load()
     app = build_app(Catalog(args.uri))
     print(
         f"bench-view on http://{args.host}:{args.port}  (MLflow: {cat().uri}, {len(cat().rows)} runs)"
     )
     app.run(host=args.host, port=args.port, debug=args.debug)
+
+
+def wsgi():
+    """For a WSGI server: ``gunicorn 'bench_tracking.viewer.app:wsgi()'`` (MLflow from the environment)."""
+    config.load()
+    return build_app(Catalog()).server
 
 
 if __name__ == "__main__":

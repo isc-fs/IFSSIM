@@ -15,6 +15,9 @@ Mapping decisions (MLflow has fewer primitives than W&B/ClearML):
 * figures -> ``log_figure`` (plotly HTML artifacts, interactive in the viewer).
 * the whole bundle at full resolution -> ``bundle/`` (Parquet + JSON, see store.py).
   This is what bench-view reads; the metric history above stays for MLflow's own UI.
+* ``bench.run_key`` tag: which source run this is (``RunBundle.run_key``). Uploads
+  check it first, so a run is uploaded once however many machines or state files
+  see it.
 """
 
 from __future__ import annotations
@@ -26,7 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import mlflow
-from mlflow.entities import Metric
+from mlflow.entities import Metric, ViewType
+from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
 from ..bundle import RunBundle, flatten
@@ -44,11 +48,23 @@ STEP_SCALE = {
 def experiment_for(b: RunBundle) -> str:
     if b.job_type in ("onboard_replay", "live_replay"):
         return "ifssim-bench/replay"
+    if b.job_type == "sim_bag":
+        return "ifssim-bench/sim-bag"
     if "sweep" in b.tags:
         return "ifssim-bench/sim-sweep"
     if "nightly" in b.tags:
         return "ifssim-bench/sim-nightly"
     return "ifssim-bench/sim-matrix"
+
+
+EXPERIMENTS = (
+    "ifssim-bench/replay",
+    "ifssim-bench/sim-bag",
+    "ifssim-bench/sim-matrix",
+    "ifssim-bench/sim-nightly",
+    "ifssim-bench/sim-sweep",
+)
+KEY_TAG = "bench.run_key"
 
 
 def _scale(step_name: str) -> float:
@@ -62,14 +78,50 @@ def _key(k: str) -> str:
 
 class MlflowBackend(Backend):
     name = "mlflow"
+    can_find = True
+
+    @staticmethod
+    def default_uri() -> str:
+        return os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5005")
 
     def __init__(self, tracking_uri: str | None = None) -> None:
-        self.uri = tracking_uri or os.environ.get(
-            "MLFLOW_TRACKING_URI", "http://127.0.0.1:5005"
-        )
+        self.uri = tracking_uri or self.default_uri()
         mlflow.set_tracking_uri(self.uri)
         self.client = MlflowClient(self.uri)
         self._exp: dict[str, str] = {}
+
+    def find(self, run_key: str) -> UploadResult | None:
+        ids = [
+            e.experiment_id
+            for n in EXPERIMENTS
+            if (e := self.client.get_experiment_by_name(n)) is not None
+        ]
+        if not ids:
+            return None
+        hits = self.client.search_runs(
+            ids,
+            filter_string=f"tags.`{KEY_TAG}` = '{run_key}'",
+            run_view_type=ViewType.ACTIVE_ONLY,
+            max_results=1,
+        )
+        if not hits:
+            return None
+        r = hits[0]
+        return UploadResult(
+            self.name,
+            r.info.run_id,
+            f"{self.uri}/#/experiments/{r.info.experiment_id}/runs/{r.info.run_id}",
+            r.data.tags.get("mlflow.runName", ""),
+        )
+
+    def claim(self, run_id: str, run_key: str) -> bool:
+        try:
+            if self.client.get_run(run_id).info.lifecycle_stage != "active":
+                return False
+            self.client.set_tag(run_id, KEY_TAG, run_key)
+            return True
+        except MlflowException:
+            return False
 
     def _experiment(self, name: str) -> str:
         if name not in self._exp:
@@ -97,6 +149,7 @@ class MlflowBackend(Backend):
             "group": b.group,
             "scenario_id": b.scenario_id,
             "status": b.status,
+            KEY_TAG: b.run_key,
             "mlflow.runName": b.name,
             "mlflow.note.content": b.notes,
             **{f"tag.{t.replace(':', '.')}": "1" for t in b.tags},
@@ -184,9 +237,12 @@ class MlflowBackend(Backend):
         # files
         if b.html_report:
             c.log_artifact(rid, str(b.html_report), "report")
+        # a session holds several benchmarks' report.html / results.json: keep them apart by folder
+        names = [p.name for p, _ in b.files]
         for p, kind in b.files:
             if p.is_file() and p != b.html_report:
-                c.log_artifact(rid, str(p), f"files/{kind}")
+                sub = f"/{p.parent.name}" if names.count(p.name) > 1 else ""
+                c.log_artifact(rid, str(p), f"files/{kind}{sub}")
 
         c.set_terminated(
             rid,
@@ -230,4 +286,6 @@ EXPERIMENT_NOTES = {
     "Aggregate runs are parents; seeds are nested children.",
     "ifssim-bench/sim-nightly": "MOCK nightly regression suite (3 seeds / night).",
     "ifssim-bench/sim-sweep": "MOCK parameter sweep (lookahead gain x max lateral acceleration).",
+    "ifssim-bench/sim-bag": "Simulator bags: perception and SLAM scored against the simulator's ground "
+    "truth (run_sim_bag_benchmark.py). One run per session. Series steps: t/* in ms.",
 }
