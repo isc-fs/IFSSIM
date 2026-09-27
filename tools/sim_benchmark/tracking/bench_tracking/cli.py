@@ -1,14 +1,13 @@
-"""bench-track: import runs into a tracker and build its dashboards.
+"""bench-track: put benchmark runs into MLflow.
 
-    bench-track mock-sim  --out ../results/sim_mock
-    bench-track import    --backend mlflow|clearml|wandb --replay-root <results> --sim-root ../results/sim_mock
-    bench-track import    --backend mlflow --sim-bag-root <results> --only sim_bag   (simulator bag sessions)
     bench-track sync      [--results-root <results>]   (upload every finished run MLflow does not have yet)
+    bench-track import    --replay-root <results> --sim-root ../results/sim_mock
+    bench-track import    --sim-bag-root <results> --only sim_bag   (simulator bag sessions)
     bench-track admin     init | add-user <name> | set-password <name> | remove-user <name>
                           (central server with logins, as its admin; see DEPLOY.md)
-    bench-track dashboards --backend mlflow|clearml|wandb --replay-root ... --sim-root ...
-    bench-track attach-bundles --replay-root ... --sim-root ...   (MLflow: add bundle/ to already-imported runs)
-    bench-track summary   --replay-root ... --sim-root ...        (no tracker; prints what would be logged)
+    bench-track purge     [--only replay|sim|sim_bag]   (delete runs this machine uploaded)
+    bench-track mock-sim  --out ../results/sim_mock
+    bench-track summary   --replay-root ... --sim-root ...   (no upload; prints what would be logged)
 
 Nothing here runs a benchmark. Replays and simulator bag sessions are read
 from existing run dirs, simulator runs from the mock generator's output.
@@ -32,22 +31,15 @@ HERE = Path(__file__).resolve().parent.parent
 REPO = HERE.parent.parent.parent
 STATE_DIR = HERE / ".state"
 DEFAULT_TRACKS = REPO / "Content" / "tracks"
+BACKEND = "mlflow"
 
 
-def get_backend(name: str):
-    if name == "mlflow":
-        from .backends.mlflow_backend import MlflowBackend
+def get_backend(name: str = BACKEND):
+    if name != BACKEND:
+        raise SystemExit(f"unknown backend {name}")
+    from .backends.mlflow_backend import MlflowBackend
 
-        return MlflowBackend()
-    if name == "clearml":
-        from .backends.clearml_backend import ClearMLBackend
-
-        return ClearMLBackend()
-    if name == "wandb":
-        from .backends.wandb_backend import WandbBackend
-
-        return WandbBackend(tracks_dir=DEFAULT_TRACKS)
-    raise SystemExit(f"unknown backend {name}")
+    return MlflowBackend()
 
 
 def state_path(backend: str) -> Path:
@@ -167,7 +159,7 @@ class Uploader:
 def cmd_import(args) -> None:
     suite = _suite(args)
     u = Uploader(
-        args.backend, fresh=args.fresh, force=args.force, figures=not args.no_figures
+        BACKEND, fresh=args.fresh, force=args.force, figures=not args.no_figures
     )
     be, up = u.be, u.up
     only = set(args.only or [])
@@ -189,7 +181,7 @@ def cmd_import(args) -> None:
             up(b)
     be.finish()
     print(", ".join(f"{v} {k}" for k, v in u.counts.items()))
-    print(f"state: {state_path(args.backend)}")
+    print(f"state: {state_path(BACKEND)}")
     if u.counts["failed"]:
         raise SystemExit(1)
 
@@ -222,7 +214,7 @@ def cmd_sync(args) -> None:
             sim_bag_root=root,
             full_bag_hash=not args.fast_bag_id,
         )
-        u = Uploader("mlflow", figures=not args.no_figures)
+        u = Uploader(BACKEND, figures=not args.no_figures)
         for b in sorted(suite.replays + suite.sim_bags, key=lambda b: b.started_at):
             if args.dry_run:
                 hit = u._known(b, claim=False)
@@ -272,8 +264,12 @@ def _unreachable(e: BaseException) -> bool:
 
 
 def cmd_purge(args) -> None:
-    """Delete uploaded runs (by job family) from a tracker and forget them in the state file."""
-    state = load_state(args.backend)
+    """Delete uploaded runs (by job family) from MLflow and forget them in the state file."""
+    from mlflow.tracking import MlflowClient
+
+    from .backends.mlflow_backend import MlflowBackend
+
+    state = load_state(BACKEND)
     fams = {
         "replay": ("onboard_replay", "live_replay"),
         "sim": ("sim_e2e", "sim_aggregate", "sim_sweep_trial"),
@@ -286,34 +282,15 @@ def cmd_purge(args) -> None:
         for k, v in state.items()
         if v.get("job_type") in jobs and v.get("uploaded_here", True)
     }
-    if args.backend == "mlflow":
-        from mlflow.tracking import MlflowClient
-        from .backends.mlflow_backend import MlflowBackend
-
-        c = MlflowClient(MlflowBackend().uri)
-        delete = c.delete_run
-    elif args.backend == "clearml":
-        from .backends.clearml_backend import configure_from_env_file
-
-        configure_from_env_file()
-        from clearml import Task
-
-        delete = lambda rid: Task.get_task(task_id=rid).delete(raise_on_error=False)  # noqa: E731
-    else:
-        import wandb
-        from .backends.wandb_backend import PROJECT
-
-        api = wandb.Api()
-        ent = api.default_entity
-        delete = lambda rid: api.run(f"{ent}/{PROJECT}/{rid}").delete()  # noqa: E731
+    c = MlflowClient(MlflowBackend().uri)
     for k, v in doomed.items():
         try:
-            delete(v["run_id"])
+            c.delete_run(v["run_id"])
         except Exception as e:  # noqa: BLE001
             print(f"  could not delete {v['name']}: {e}")
         state.pop(k)
         print(f"  deleted {v['name']}")
-    save_state(args.backend, state)
+    save_state(BACKEND, state)
 
 
 def cmd_admin(args) -> None:
@@ -370,44 +347,6 @@ def cmd_admin(args) -> None:
         print("Shown once. Give it to them for ~/.config/ifssim-bench/tracking.env.")
 
 
-def cmd_dashboards(args) -> None:
-    suite = _suite(args)
-    state = load_state(args.backend)
-    if not state:
-        raise SystemExit(f"no uploads recorded for {args.backend}; run `import` first")
-    if args.backend == "mlflow":
-        from .dashboards.mlflow_dash import build
-    elif args.backend == "clearml":
-        from .dashboards.clearml_dash import build
-    else:
-        from .dashboards.wandb_dash import build
-    for line in build(suite, state):
-        print(line)
-
-
-def cmd_attach_bundles(args) -> None:
-    """Add the bundle/ artifact to runs imported before it existed (MLflow only)."""
-    from .backends.mlflow_backend import MlflowBackend, attach_bundle
-
-    suite = _suite(args)
-    state = load_state("mlflow")
-    be = MlflowBackend()
-    done = 0
-    for b in suite.all:
-        entry = state.get(b.run_key)
-        if entry is None:
-            continue
-        if (
-            not args.force
-            and be.client.get_run(entry["run_id"]).data.tags.get("bench.bundle") == "1"
-        ):
-            continue
-        attach_bundle(be.client, entry["run_id"], b)
-        done += 1
-        print(f"  bundle -> {b.name}", flush=True)
-    print(f"attached {done} bundles")
-
-
 def cmd_mock(args) -> None:
     from .mock_sim import generate_suite
 
@@ -451,8 +390,7 @@ def main(argv: list[str] | None = None) -> None:
             help="bag id from metadata+sizes, skip full hash",
         )
 
-    p = sub.add_parser("import", help="upload runs to a tracker")
-    p.add_argument("--backend", required=True, choices=["mlflow", "clearml", "wandb"])
+    p = sub.add_parser("import", help="upload runs from given result dirs to MLflow")
     data_args(p)
     p.add_argument("--only", nargs="*", choices=["replay", "sim", "sim_bag"])
     p.add_argument(
@@ -500,28 +438,10 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser(
         "purge",
-        help="delete runs this machine uploaded, of a family, from a tracker",
+        help="delete runs this machine uploaded, of a family, from MLflow",
     )
-    p.add_argument("--backend", required=True, choices=["mlflow", "clearml", "wandb"])
     p.add_argument("--only", nargs="*", choices=["replay", "sim", "sim_bag"])
     p.set_defaults(fn=cmd_purge)
-
-    p = sub.add_parser(
-        "dashboards", help="build the comparison dashboards for a tracker"
-    )
-    p.add_argument("--backend", required=True, choices=["mlflow", "clearml", "wandb"])
-    data_args(p)
-    p.set_defaults(fn=cmd_dashboards)
-
-    p = sub.add_parser(
-        "attach-bundles",
-        help="add the full-resolution bundle/ artifact to imported MLflow runs",
-    )
-    data_args(p)
-    p.add_argument(
-        "--force", action="store_true", help="re-attach even if the run already has one"
-    )
-    p.set_defaults(fn=cmd_attach_bundles)
 
     p = sub.add_parser("mock-sim", help="generate MOCK simulator benchmark run dirs")
     p.add_argument("--out", default=str(HERE.parent / "results" / "sim_mock"))

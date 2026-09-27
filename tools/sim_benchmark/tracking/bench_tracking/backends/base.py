@@ -1,10 +1,8 @@
 """Backend interface: one call uploads one RunBundle.
 
-The harness in the design doc sketches a fine-grained Tracker API
-(log_config / log_series / ...). Here each backend implements the same
-steps as private helpers behind ``upload(bundle)``. That keeps the backend-specific
-decisions (int steps in MLflow, iterations in ClearML, step metrics in W&B)
-in one readable place per tracker.
+MLflow (``mlflow_backend.py``) is the only tracker. The interface stays so
+the uploader can be tested against a fake server (tests/test_sync.py), and
+so a tracker's decisions (e.g. MLflow's integer steps) stay in one place.
 """
 
 from __future__ import annotations

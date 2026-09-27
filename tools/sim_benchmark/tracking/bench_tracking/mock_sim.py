@@ -2,8 +2,8 @@
 
 There is no closed-loop SIL runner yet (tools/scenario_runner doesn't drive
 the car). This writes run dirs in the layout that runner is expected to
-produce, so the tracking backends and dashboards can be built and judged
-against realistic-looking data today:
+produce, so the tracker and the viewer's simulator tabs can be built and
+tried against realistic-looking data today:
 
     <out>/<scenario>/<commit>/seed<k>/
         manifest.json      provenance + scenario + params + referee state

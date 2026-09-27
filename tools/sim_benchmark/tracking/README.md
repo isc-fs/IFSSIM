@@ -3,21 +3,21 @@
 > New here? [HOW_IT_WORKS.md](HOW_IT_WORKS.md) explains the whole flow, from a benchmark run to the viewer.
 > Setting up the team server: [DEPLOY.md](DEPLOY.md).
 
-This is an evaluation harness. It pushes the **same** benchmark data into **W&B, MLflow and ClearML**
-and builds the same in-depth dashboards in each, so the trackers can be compared on real
-content. See `docs/history/2026-09-23_benchmark-tracking-design.md` (design) and
-`docs/history/2026-09-23_tracker-evaluation.md`
-(what each tracker could and couldn't do).
+It puts benchmark runs into **MLflow** and shows them in **bench-view**. MLflow was chosen after
+the same data was tried in W&B, MLflow and ClearML. See
+`docs/history/2026-09-23_benchmark-tracking-design.md` (design) and
+`docs/history/2026-09-23_tracker-evaluation.md` (the comparison).
 
-Nothing here runs a benchmark:
+Nothing here runs a benchmark. It reads the results folders the benchmarks write:
 
 | Data | Source | Kind |
 |---|---|---|
 | Bag benchmarks | existing `results/onboard/<mission>_<ts>/` with `--report` (results.json, CSVs, samples.json, report.html, logs) | real, `job_type=onboard_replay` |
 | Live run reports | existing `results/onboard/…` from `--live` without `--report`: node logs only | real, `job_type=live_replay` |
+| Simulator bag benchmarks | `results/sim_bag/<bag>_<ts>/` from `run_sim_bag_benchmark.py`, and older `results/perception/…` + `results/slam/…` runs | real, `job_type=sim_bag` |
 | Simulator benchmarks | `bench-track mock-sim`: point-mass lap model on real track CSVs | **MOCK**, `sim_e2e` / `sim_aggregate` / `sim_sweep_trial` |
 
-## bench-view: the viewer on top of MLflow (prototype)
+## bench-view: the viewer on top of MLflow
 
 MLflow stores the runs; `bench-view` is the UI for looking at them. It is a Dash app that reads
 straight from the MLflow server: `search_runs` for the catalog, and each run's `bundle/` artifact
@@ -26,7 +26,6 @@ alongside it.
 
 ```bash
 ./deploy/mlflow/run_server.sh &                         # if not running
-uv run bench-track attach-bundles --replay-root $R --sim-root ../results/sim_mock   # runs imported before bundle/ existed
 uv run bench-view                                       # http://127.0.0.1:8050  (--uri to point at another MLflow)
 ```
 
@@ -72,29 +71,23 @@ and its `tables/*.json` artifacts. That takes ≈6 s per replay run instead of <
 
 ```bash
 cd tools/sim_benchmark/tracking
-uv sync --extra all --extra dev          # Python 3.12 venv with wandb, mlflow, clearml, dash (viewer)
+uv sync --extra all --extra dev          # Python 3.12 venv with mlflow and dash (viewer)
 
-# MLflow (local): http://127.0.0.1:5005
+# the team server: ~/.config/ifssim-bench/tracking.env (DEPLOY.md)
+# or a private local MLflow: http://127.0.0.1:5005
 ./deploy/mlflow/run_server.sh &
-
-# ClearML (self-hosted, Docker): http://localhost:8090
-cp deploy/clearml/.env.example deploy/clearml/.env      # set random keys
-docker compose -f deploy/clearml/docker-compose.yml --env-file deploy/clearml/.env up -d
-
-# W&B (hosted): needs an account
-uv run wandb login                        # optional: export WANDB_ENTITY=<team>
 ```
 
 ## Commands
 
 ```bash
 R=/path/to/IFSSIM/tools/sim_benchmark/results          # holds onboard/ and capture/
-uv run bench-track mock-sim                             # -> ../results/sim_mock (90 seed runs)
-uv run bench-track import     --backend mlflow --sim-bag-root $R --only sim_bag   # simulator bag sessions
-uv run bench-track summary    --replay-root $R --sim-root ../results/sim_mock
-uv run bench-track import     --backend clearml --replay-root $R --sim-root ../results/sim_mock
-uv run bench-track dashboards --backend clearml --replay-root $R --sim-root ../results/sim_mock
-uv run bench-track purge      --backend clearml --only replay      # delete + forget uploads
+uv run bench-track sync --results-root $R             # upload every finished run the server lacks
+uv run bench-track sync --results-root $R --dry-run   # what is on the server, what would go up
+uv run bench-track mock-sim                           # -> ../results/sim_mock (90 seed runs)
+uv run bench-track import  --sim-root ../results/sim_mock   # mock simulator runs (sync does not read them)
+uv run bench-track summary --replay-root $R --sim-root ../results/sim_mock   # print, upload nothing
+uv run bench-track purge   --only replay              # delete runs this machine uploaded
 uv run pytest -q tests
 ```
 
@@ -103,8 +96,9 @@ pairs the perception and SLAM runs made one at a time before that runner existed
 (`$R/perception/*` + `$R/slam/*` of the same bag, started within 5 minutes) into one session each.
 
 The first run hashes each bag once (≈10 s per 7.5 GB, cached in `~/.cache/bench_tracking`).
-`--fast-bag-id` skips that. Upload ids are kept in `.state/<backend>.json`, so a re-import
-skips runs that are already there. `--write-records` also writes `tracking.json` into each run dir
+`--fast-bag-id` skips that. Before uploading, each run is looked up on the server by its run key
+(the `bench.run_key` tag), so nothing is uploaded twice. `.state/mlflow*.json` (one per server)
+remembers what this machine uploaded. `--write-records` also writes `tracking.json` into each run dir
 (off by default, because imports read run dirs from other checkouts).
 
 ## Layout
@@ -121,20 +115,20 @@ bench_tracking/
                    sim_bag.py (simulator bag sessions: perception + SLAM vs ground truth)
   mock_sim.py      MOCK SIL generator (scenario × commit × seed, nightly, sweep)
   compare.py       baselines, deltas, delta series, bootstrap CIs
-  figures.py       plotly figures: per-run deep dives + cross-run comparisons
+  figures.py       plotly per-run deep dives, uploaded with each run for MLflow's own UI
   suite.py         load everything, aggregate, attach baselines
-  backends/        wandb_backend.py, mlflow_backend.py, clearml_backend.py (one upload(bundle) each)
-  dashboards/      common.py (shared dashboard content), wandb_dash / mlflow_dash / clearml_dash
+  backends/        base.py (the interface), mlflow_backend.py (bundle -> MLflow run, run-key lookup)
+  config.py        reads ~/.config/ifssim-bench/tracking.env (server, login)
   store.py         RunBundle <-> bundle/ dir (Parquet + JSON), the artifact bench-view reads
   viewer/          bench-view: data.py (MLflow catalog + bundle cache), replay.py / sim.py / simbag.py (figures),
                    pages.py (what each page shows per mode, run browser),
                    app.py (shell, selection state, callbacks), assets/ (style.css, sync.js: playhead, zoom, browser)
   cli.py           bench-track
-deploy/            mlflow/run_server.sh, clearml/docker-compose.yml
-tests/             backend-free tests
+deploy/            central/ (the team server, DEPLOY.md), mlflow/run_server.sh (a private local MLflow)
+tests/             tests that need no server
 ```
 
-## What gets logged per run (all backends)
+## What gets logged per run
 
 - **config**: code (both repos' SHAs/dirty, image, `code.id`, `code.label`) from the run's
   `provenance.json` (`tools/sim_benchmark/run_provenance.py`), scenario (bag id or

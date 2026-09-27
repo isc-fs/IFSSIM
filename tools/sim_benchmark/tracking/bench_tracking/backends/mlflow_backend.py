@@ -1,9 +1,6 @@
-"""MLflow backend.
+"""MLflow backend: how a RunBundle is written to MLflow.
 
-Mapping decisions (MLflow has fewer primitives than W&B/ClearML):
-
-* experiments: ``ifssim-bench/<family>``: replay, sim-matrix, sim-nightly, sim-sweep
-  (+ ``ifssim-bench/dashboards`` written by dashboards/mlflow_dash.py).
+* experiments: ``ifssim-bench/<family>``: replay, sim-bag, sim-matrix, sim-nightly, sim-sweep.
 * seeds are **nested child runs** of their aggregate run (``mlflow.parentRunId``).
   That's MLflow's only grouping primitive, and it gives the collapsible tree in the UI.
 * params: flattened config (values truncated at MLflow's 6000-char limit).

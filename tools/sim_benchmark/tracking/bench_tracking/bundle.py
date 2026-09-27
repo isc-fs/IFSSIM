@@ -1,9 +1,8 @@
 """Backend-neutral description of one benchmark run.
 
-Adapters turn a run directory into a :class:`RunBundle`; backends turn a
-RunBundle into tracker calls. Nothing in here knows about W&B, MLflow or
-ClearML, so the same bundle is what every backend receives — the comparison
-between trackers is apples to apples.
+Adapters turn a run directory into a :class:`RunBundle`; the backend turns
+it into MLflow calls, and bench-view reads it back (``store.py``). Nothing in
+here knows about MLflow.
 """
 
 from __future__ import annotations
@@ -145,11 +144,11 @@ class RunBundle:
         the importer does.
         """
         cid = (self.config.get("code") or {}).get("capture_id")
-        src = cid or (
-            "/".join(self.source_dir.parts[-2:]) if self.source_dir else None
-        )
+        src = cid or ("/".join(self.source_dir.parts[-2:]) if self.source_dir else None)
         basis = {"job": self.job_type, "src": src}
-        if src is None:  # generated runs (simulator aggregates) have no folder of their own
+        if (
+            src is None
+        ):  # generated runs (simulator aggregates) have no folder of their own
             basis.update(name=self.name, group=self.group)
         return hashlib.sha1(json.dumps(basis, sort_keys=True).encode()).hexdigest()[:12]
 
