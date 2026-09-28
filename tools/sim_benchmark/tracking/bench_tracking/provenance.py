@@ -80,6 +80,26 @@ def code_of(prov: dict[str, Any] | None) -> dict[str, Any]:
     return code
 
 
+def launch_of(run_dir: Path | None) -> dict[str, Any]:
+    """``config.launch``: how the run was launched, from its ``spec.json`` (bench-run and
+    the worker write it). Runs started by hand have none: ``{"trigger": "manual"}``."""
+    try:
+        spec = (
+            json.loads((Path(run_dir) / "spec.json").read_text()) if run_dir else None
+        )
+    except (OSError, ValueError):
+        spec = None
+    if not isinstance(spec, dict):
+        return {"trigger": "manual"}
+    return {
+        "job_id": spec.get("job_id"),
+        "batch_id": spec.get("batch_id"),
+        "trigger": spec.get("trigger") or "local",
+        "requested_by": spec.get("requested_by"),
+        "name": spec.get("name"),
+    }
+
+
 # A run that started but has not written its results for this long is taken as crashed.
 STALE_AFTER_S = 6 * 3600
 

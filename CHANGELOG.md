@@ -50,6 +50,15 @@ shipping pipeline, documentation.
   `--pipeline-overrides` and reject misspelled parameters. They record the
   values in effect (`params/`), and the spec with its `spec_id`. The viewer
   no longer shows runs with other settings as reruns of the same code.
+- **Launching benchmarks from the web** (bench-view's *Launch* pages,
+  `bench-worker`). *New run* picks benchmarks, bags and code (branch, PR or
+  commit, pinned to commits at launch), takes a YAML with settings and
+  parameter overrides, and shows the jobs before they are queued. A worker on
+  the central machine runs them one at a time in a fresh checkout, with the
+  published image of the code's base (or one it builds when the code changes
+  the image), and uploads the results. *Queue* and job pages show progress
+  and logs, and jobs can be cancelled. The benchmarks now accept bags and
+  results outside `tools/sim_benchmark/`.
 - **A central benchmark server for the team**
   (`tools/sim_benchmark/tracking/DEPLOY.md`). `deploy/central/` runs MLflow
   with logins on Postgres, plus the hosted `bench-view`, reached over

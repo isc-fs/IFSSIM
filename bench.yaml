@@ -8,13 +8,29 @@ schema: 1
 results: tools/sim_benchmark/results # where runs are written; bench-track sync reads it
 presets: tools/sim_benchmark/specs # starting points for a spec
 
-repos: # what a spec's `code:` can pin
-  ifssim: .
-  pipeline: pipeline
+repos: # what a spec's `code:` can pin; `default` is where the web form starts
+  ifssim:
+    path: .
+    default: dev
+  pipeline: pipeline # a submodule: by default, the commit IFSSIM pins
+
+# The image the benchmarks run in (they read it from IFSSIM_DV_IMAGE). With
+# `code.image: auto` the worker uses the published image of the newest `dev`
+# commit the tested code starts from (publish-pipeline-image.yml tags each one
+# sha-<short>), unless the code changes `paths`: then it builds one. Pipeline
+# Python changes don't need a new image: the benchmarks mount
+# pipeline/cone_detection and pipeline/cone_slam over it.
+image:
+  env: IFSSIM_DV_IMAGE
+  registry: ghcr.io/isc-fs/ifssim-dv_pipeline_stack
+  tag: sha-{short}
+  base_branch: dev
+  paths: [docker/dv_pipeline_stack, ros2/src]
+  build: [docker, build, -f, docker/dv_pipeline_stack/Dockerfile, -t, "{tag}", .]
 
 bags:
-  # Bags must be under tools/sim_benchmark/ for the Docker re-run of the
-  # benchmarks to see them. capture_benchmark_bag.py records here.
+  # Folders of bag directories. capture_benchmark_bag.py records here; the
+  # central machine points this at its own bag folder (bench-worker --bags).
   simulator: tools/sim_benchmark/results/capture
 
 benchmarks:

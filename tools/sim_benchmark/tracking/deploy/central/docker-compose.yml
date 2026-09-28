@@ -1,5 +1,7 @@
-# The central benchmark server: MLflow (with logins) on Postgres, and bench-view.
-# Both listen on 127.0.0.1 only; Tailscale serves them to the team (DEPLOY.md).
+# The central benchmark server: MLflow (with logins) on Postgres, and bench-view
+# (results and the Launch pages). All listen on 127.0.0.1 only; Tailscale serves
+# them to the team (DEPLOY.md). The worker that runs launched benchmarks runs on
+# the host, not here (bench-worker.service): it needs Docker, git and the bags.
 #
 #   cp .env.example .env    # then fill it in
 #   ./setup.sh              # first time: start, create experiments and the viewer's login
@@ -17,6 +19,8 @@ services:
     volumes:
       - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro # also creates the login database
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432" # the job queue, for bench-worker on the host
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
       interval: 5s
@@ -61,5 +65,15 @@ services:
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_TRACKING_USERNAME: viewer
       MLFLOW_TRACKING_PASSWORD: ${VIEWER_PASSWORD:?set VIEWER_PASSWORD in .env}
+      # the Launch pages: the queue, and (read-only) the worker's clone, bags and job logs
+      BENCH_QUEUE_URL: postgresql+psycopg://mlflow:${POSTGRES_PASSWORD}@postgres:5432/bench
+      BENCH_REPO: ${BENCH_REPO:?set BENCH_REPO in .env}
+      BENCH_BAGS: simulator=${BENCH_BAGS:?set BENCH_BAGS in .env}
+      BENCH_ADMINS: ${BENCH_ADMINS:-}
+    volumes:
+      # same paths inside as outside: the queue stores host paths (job logs)
+      - ${BENCH_REPO}:${BENCH_REPO}:ro
+      - ${BENCH_RESULTS:?set BENCH_RESULTS in .env}:${BENCH_RESULTS}:ro
+      - ${BENCH_BAGS}:${BENCH_BAGS}:ro
     ports:
       - "127.0.0.1:${VIEWER_PORT:-8050}:8050"

@@ -19,10 +19,20 @@ Nothing here runs a benchmark. It reads the results folders the benchmarks write
 
 ## bench-view: the viewer on top of MLflow
 
-MLflow stores the runs; `bench-view` is the UI for looking at them. It is a Dash app that reads
-straight from the MLflow server: `search_runs` for the catalog, and each run's `bundle/` artifact
-(full-resolution Parquet, written by `store.py`) for the plots. MLflow's own UI keeps working
-alongside it.
+MLflow stores the runs; `bench-view` is the UI for looking at them, and for launching new ones.
+It is a Dash app that reads straight from the MLflow server: `search_runs` for the catalog, and
+each run's `bundle/` artifact (full-resolution Parquet, written by `store.py`) for the plots.
+MLflow's own UI keeps working alongside it.
+
+The site has two halves, switched at the top of the side panel:
+
+- **Results** (`/bag`, `/simbag`, …): everything below.
+- **Launch** (`/launch`): *New run* (benchmarks, bags, code, a YAML with settings and
+  parameter overrides; the jobs it makes are shown before launching), *Queue* (running,
+  waiting, finished; cancel), and a page per job with its log and links to its results.
+  Jobs go to a queue that `bench-worker` works through (`bench_tracking/launch/`,
+  DEPLOY.md "Launching benchmarks"). Locally the queue is a SQLite file, so a laptop can run
+  the page and a worker when the central machine is down.
 
 ```bash
 ./deploy/mlflow/run_server.sh &                         # if not running
@@ -90,6 +100,8 @@ uv run bench-track summary --replay-root $R --sim-root ../results/sim_mock   # p
 uv run bench-track purge   --only replay              # delete runs this machine uploaded
 uv run bench-run --list                               # what bench.yaml offers (see ../README.md)
 uv run bench-run sim-bag --dry-run                    # a spec's jobs and commands
+uv run bench-run sim-bag --queue                      # queue them for bench-worker instead
+uv run bench-worker                                   # run queued jobs here (the central machine: DEPLOY.md)
 uv run pytest -q tests
 ```
 
@@ -123,10 +135,13 @@ bench_tracking/
   config.py        reads ~/.config/ifssim-bench/tracking.env (server, login)
   store.py         RunBundle <-> bundle/ dir (Parquet + JSON), the artifact bench-view reads
   viewer/          bench-view: data.py (MLflow catalog + bundle cache), replay.py / sim.py / simbag.py (figures),
+                   launch.py (the Launch pages: new run, queue, job),
                    pages.py (what each page shows per mode, run browser),
                    app.py (shell, selection state, callbacks), assets/ (style.css, sync.js: playhead, zoom, browser)
   launch/          running benchmarks: manifest.py (the repo's bench.yaml), spec.py (run specs: merge,
-                   validate, spec_id, jobs), run.py (bench-run). Knows the benchmarks only through bench.yaml
+                   validate, spec_id, jobs), run.py (bench-run), queue.py (the job queue), submit.py
+                   (spec -> pinned code -> jobs), checkout.py (refs, worktrees, image), worker.py
+                   (bench-worker). Knows the benchmarks only through bench.yaml
   cli.py           bench-track
 deploy/            central/ (the team server, DEPLOY.md), mlflow/run_server.sh (a private local MLflow)
 tests/             tests that need no server

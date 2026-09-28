@@ -86,26 +86,64 @@ def resolve_benchmark_path(host: str | Path) -> Path:
     return under_bench
 
 
-def _translate_host_path(host: str) -> str:
-    p = resolve_benchmark_path(host)
+class DockerPaths:
+    """Host paths in a benchmark's arguments -> where the container sees them.
 
-    results_mount = results_dir().resolve()
-    bench_mount = sim_benchmark_dir().resolve()
+    ``tools/sim_benchmark`` is ``/bench`` and the results dir is ``/results``.
+    ``--results-root`` outside ``tools/sim_benchmark/results`` becomes the
+    ``/results`` mount itself; any other path outside both (a bag in a shared
+    bag folder, an overrides file) gets its folder mounted read-only under
+    ``/ext``. The central machine keeps bags and results outside the checkout
+    it is testing, so both must work.
+    """
+
+    def __init__(self, argv: list[str]) -> None:
+        self.bench = sim_benchmark_dir().resolve()
+        self.results = results_dir().resolve()
+        root = _flag_value(argv, "--results-root")
+        if root is not None:
+            r = resolve_benchmark_path(root)
+            if not _is_under(r, self.results) and not _is_under(r, self.bench):
+                self.results = r
+        self.extra: dict[Path, str] = {}
+
+    def container(self, host: str) -> str:
+        p = resolve_benchmark_path(host)
+        for base, mount in ((self.results, "/results"), (self.bench, "/bench")):
+            if _is_under(p, base):
+                rel = p.relative_to(base).as_posix()
+                return mount if rel == "." else f"{mount}/{rel}"
+        folder = p.parent
+        if folder not in self.extra:
+            self.extra[folder] = f"/ext/{len(self.extra)}"
+        return f"{self.extra[folder]}/{p.name}"
+
+    def volumes(self) -> list[str]:
+        out: list[str] = []
+        for host, mount in self.extra.items():
+            out += ["-v", f"{host}:{mount}:ro"]
+        return out
+
+
+def _is_under(p: Path, base: Path) -> bool:
     try:
-        return "/results/" + p.relative_to(results_mount).as_posix()
+        p.relative_to(base)
+        return True
     except ValueError:
-        pass
-    try:
-        return "/bench/" + p.relative_to(bench_mount).as_posix()
-    except ValueError:
-        pass
-    raise RuntimeError(
-        f"Path must be under tools/sim_benchmark (got {p}). "
-        "Move the bag/results under that tree or pass --no-docker with a sourced ROS shell."
-    )
+        return False
 
 
-def _translate_argv(argv: list[str]) -> list[str]:
+def _flag_value(argv: list[str], flag: str) -> str | None:
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def _translate_argv(argv: list[str], paths: DockerPaths | None = None) -> list[str]:
+    paths = paths or DockerPaths(argv)
     path_flags = {"--results-root", "--output-dir", "--pipeline-overrides"}
     out: list[str] = []
     i = 0
@@ -117,7 +155,7 @@ def _translate_argv(argv: list[str]) -> list[str]:
         if token.startswith("--") and "=" in token:
             key, value = token.split("=", 1)
             if key in path_flags:
-                out.append(f"{key}={_translate_host_path(value)}")
+                out.append(f"{key}={paths.container(value)}")
             else:
                 out.append(token)
             i += 1
@@ -127,11 +165,11 @@ def _translate_argv(argv: list[str]) -> list[str]:
             i += 1
             if i >= len(argv):
                 raise RuntimeError(f"missing value for {token}")
-            out.append(_translate_host_path(argv[i]))
+            out.append(paths.container(argv[i]))
             i += 1
             continue
         if not out and not token.startswith("-"):
-            out.append(_translate_host_path(token))
+            out.append(paths.container(token))
             i += 1
             continue
         out.append(token)
@@ -156,12 +194,13 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         )
 
     bench = sim_benchmark_dir()
-    results = results_dir()
+    paths = DockerPaths(argv)
+    results = paths.results
     results.mkdir(parents=True, exist_ok=True)
     cone_detection_src = repo_root() / "pipeline" / "cone_detection"
     cone_slam_src = repo_root() / "pipeline" / "cone_slam"
     image = os.environ.get("IFSSIM_DV_IMAGE", "ifssim-dv_pipeline_stack:latest")
-    inner_argv = _translate_argv(argv)
+    inner_argv = _translate_argv(argv, paths)
     if not any(
         a == "--results-root" or a.startswith("--results-root=") for a in inner_argv
     ):
@@ -200,6 +239,7 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         "-v",
         f"{results.resolve()}:/results",
     ]
+    cmd += paths.volumes()  # bags / files outside the two trees above
     if have_native:
         cmd += ["-v", f"{native_dir.resolve()}:/native:ro"]
     # The container has no .git: record the code state here and let make_run_dir pick it up.

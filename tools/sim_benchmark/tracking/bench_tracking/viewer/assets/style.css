@@ -290,3 +290,56 @@ details.fold[open] > summary::before { content: "▾ "; }
   .linked, .sum-top, .pair { grid-template-columns: 1fr; }
   .linked .left { position: static; }
 }
+
+/* ------------------------------------------------------------------ Results | Launch */
+.app-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: #1e293b; border-radius: 8px;
+  padding: 3px; margin: 0 0 10px; }
+.app-switch a { text-align: center; padding: 6px 0; border-radius: 6px; color: #94a3b8; font-weight: 600; font-size: 13px; }
+.app-switch a:hover { color: #fff; text-decoration: none; }
+.app-switch a.on { background: #334155; color: #fff; }
+.selbar:empty { display: none; }
+
+/* ------------------------------------------------------------------ Launch: new run */
+.lf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.lf h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 18px 0 8px; }
+.lf-card { padding: 14px 16px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 10px; }
+.lf-title label { cursor: pointer; font-size: 14.5px; }
+.lf-field { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; align-items: start; }
+.lf-label { color: var(--ink2); font-weight: 600; font-size: 13px; padding-top: 7px; }
+.lf-text, .lf-num { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+.lf-num { width: 90px; }
+.lf-notes { width: 100%; min-height: 56px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+.lf-inline label { margin-right: 14px; padding-top: 6px; display: inline-block; }
+.lf-yaml-bar { display: flex; gap: 8px; align-items: center; }
+.lf-preset { flex: 1; }
+.lf-yaml { width: 100%; min-height: 260px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.lf-pre { background: #f8fafc; border: 1px solid var(--line2); border-radius: 6px; padding: 8px 10px; margin: 6px 0 0;
+  font-size: 12px; white-space: pre-wrap; overflow-x: auto; }
+.lf-errors { margin: 6px 0 0; padding-left: 18px; color: var(--bad); }
+.lf-errors li { margin: 2px 0; }
+.lf-jobs { max-height: 320px; overflow-y: auto; display: block; }
+.lf-go-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 10px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.bad-callout { background: var(--badbg); border-color: #f5c2c2; color: var(--bad); }
+
+/* ------------------------------------------------------------------ Launch: queue and job */
+.lq td:first-child { width: 48px; }
+.badge.st-good { background: var(--goodbg); color: var(--good); }
+.badge.st-bad { background: var(--badbg); color: var(--bad); }
+.badge.st-warn { background: var(--warnbg); color: var(--warn); }
+.badge.st-run { background: var(--accentbg); color: var(--accent); }
+.lf-log { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 12px 14px; font-size: 12px; line-height: 1.45;
+  max-height: 480px; overflow: auto; white-space: pre-wrap; }
+
+@media (max-width: 1100px) {
+  .lf { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .lf-field { grid-template-columns: 1fr; gap: 4px; }
+  .lf-label { padding-top: 0; }
+}
+.lj-facts { border-collapse: collapse; font-size: 13.5px; }
+.lj-facts td { padding: 4px 12px 4px 0; vertical-align: top; }
+.lj-facts td.k { color: var(--muted); font-weight: 600; width: 130px; }
+.lf-jobs th, .lf-jobs td { text-align: left; }

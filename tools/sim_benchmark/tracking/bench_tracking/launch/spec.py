@@ -264,10 +264,12 @@ class Job:
         return " ".join(b for b in bits if b) + f" #{self.repeat}"
 
     def record(self, spec: dict[str, Any]) -> dict[str, Any]:
-        """What goes into the run (spec.json): this job, and the spec it came from."""
+        """What goes into the run (spec.json): this job, and the spec it came from. Whoever
+        runs it adds ``job_id``, ``batch_id``, ``trigger`` and ``requested_by``."""
         return {
             "schema": SCHEMA,
             "spec_id": self.spec_id,
+            "label": self.label(),
             "name": spec.get("name"),
             "notes": spec.get("notes"),
             "benchmark": self.benchmark,

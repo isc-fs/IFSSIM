@@ -1,0 +1,28 @@
+# bench-worker: runs the benchmarks launched from bench-view, one at a time (DEPLOY.md).
+# It runs on the host because it needs Docker, git and the bags.
+#
+#   1. Set User= to the account that owns BENCH_REPO and may use Docker,
+#      and the two paths below to this checkout.
+#   2. sudo cp bench-worker.service /etc/systemd/system/
+#      sudo systemctl daemon-reload && sudo systemctl enable --now bench-worker
+#   3. journalctl -u bench-worker -f        (each job also logs to its page)
+[Unit]
+Description=IFSSIM benchmark worker
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=bench
+# written by setup.sh: the queue, the worker's MLflow login, BENCH_REPO / RESULTS / BAGS
+EnvironmentFile=/srv/ifssim-bench/ifssim/tools/sim_benchmark/tracking/deploy/central/worker.env
+WorkingDirectory=/srv/ifssim-bench/ifssim/tools/sim_benchmark/tracking
+ExecStart=/usr/bin/env uv run --frozen --extra launch --extra mlflow bench-worker \
+    --repo ${BENCH_REPO} --results-root ${BENCH_RESULTS} --bags simulator=${BENCH_BAGS}
+Restart=always
+RestartSec=10
+# a running benchmark gets SIGTERM with the worker; the job is marked failed at the next start
+KillMode=control-group
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

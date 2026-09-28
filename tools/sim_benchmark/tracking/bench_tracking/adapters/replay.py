@@ -234,6 +234,7 @@ def load_replay(
             "run_dir": run_dir.name,
             "log_time_base": logs.t0_source if logs else None,
         },
+        "launch": provenance.launch_of(run_dir),
         "provenance": {
             "complete": bool(code["id"]) and has_report,
             "missing": (["code", "image"] if not code["id"] else [])

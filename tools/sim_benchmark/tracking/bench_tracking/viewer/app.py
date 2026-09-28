@@ -37,6 +37,7 @@ from urllib.parse import parse_qs
 from dash import ALL, Dash, Input, Output, Patch, State, ctx, dcc, html, no_update
 
 from .. import config
+from . import launch as L
 from . import pages as P
 from . import replay as R
 from . import sim as S
@@ -220,6 +221,8 @@ def build_app(catalog: Catalog) -> Dash:
     def controller(
         pathname, _ver, _o, _a, _r, _s, _m, _sc, from_plot, search, sel, memory
     ):
+        if L.is_launch(pathname):
+            return no_update, no_update
         c = cat()
         kind, _ = P.parse_path(pathname)
         valid = [o["value"] for o in P.options(c, kind)]
@@ -252,7 +255,7 @@ def build_app(catalog: Catalog) -> Dash:
         State("url", "pathname"),
     )
     def bar(sel, _ver, pathname):
-        if not sel or not sel.get("r"):
+        if L.is_launch(pathname) or not sel or not sel.get("r"):
             return [], []
         c = cat()
         kind, section = P.parse_path(pathname)
@@ -270,6 +273,8 @@ def build_app(catalog: Catalog) -> Dash:
         Input("sel", "data"),
     )
     def render(pathname, sel):
+        if L.is_launch(pathname):
+            return L.page(pathname), None, L.head(pathname)
         c = cat()
         kind, section = P.parse_path(pathname)
         k = P.KINDS[kind]
@@ -312,8 +317,26 @@ def build_app(catalog: Catalog) -> Dash:
     )
     def nav(pathname, _ver):
         c = cat()
+        launching = L.is_launch(pathname)
+        # the two halves of the site: looking at results, and launching benchmarks
+        out = [
+            html.Div(
+                [
+                    dcc.Link("Results", href="/", className="" if launching else "on"),
+                    dcc.Link(
+                        "Launch", href="/launch", className="on" if launching else ""
+                    ),
+                ],
+                className="app-switch",
+            )
+        ]
+        src = [
+            f"{len(c.rows)} runs · read {c.loaded_at:%H:%M} UTC · ",
+            html.A("MLflow ↗", href=c.uri, target="_blank"),
+        ]
+        if launching:
+            return out + L.nav(pathname), src
         kind, section = P.parse_path(pathname)
-        out = []
         for key, k in P.KINDS.items():
             n = len(P.options(c, key))
             active = key == kind
@@ -339,16 +362,12 @@ def build_app(catalog: Catalog) -> Dash:
                         className="nav-secs",
                     )
                 )
-        src = [
-            f"{len(c.rows)} runs · read {c.loaded_at:%H:%M} UTC · ",
-            html.A("MLflow ↗", href=c.uri, target="_blank"),
-        ]
         return out, src
 
     # the URL mirrors the selection (replaceState: picking runs does not flood the back button)
     app.clientside_callback(
         """function(sel, path){
-            if(!sel || !sel.r) return window.dash_clientside.no_update;
+            if(!sel || !sel.r || (path || '').startsWith('/launch')) return window.dash_clientside.no_update;
             const q = new URLSearchParams();
             if(sel.vs && sel.vs.length){ if(sel.mode === 'side') q.set('mode', 'side'); q.set('r', sel.r);
                                          q.set('vs', sel.vs.join(',')); }
@@ -428,6 +447,7 @@ def build_app(catalog: Catalog) -> Dash:
 
     register_replay_callbacks(app)
     register_sim_callbacks(app)
+    L.register(app, cat)
     return app
 
 

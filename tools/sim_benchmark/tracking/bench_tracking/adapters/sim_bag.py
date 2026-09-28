@@ -311,6 +311,7 @@ def load_session(s: Session, *, full_bag_hash: bool = True) -> RunBundle:
             "complete": bool(code["id"]),
             "missing": [] if code["id"] else ["code"],
         },
+        "launch": provenance.launch_of(s.root or next(iter(s.parts.values()), None)),
     }
 
     t0 = time_origin(s.parts)

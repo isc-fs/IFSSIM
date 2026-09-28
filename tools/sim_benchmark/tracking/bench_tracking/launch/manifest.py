@@ -14,8 +14,13 @@ Example (IFSSIM's is ``bench.yaml``)::
     schema: 1
     results: tools/sim_benchmark/results
     presets: tools/sim_benchmark/specs
-    repos: {ifssim: ., pipeline: pipeline}
+    repos: {ifssim: {path: ., default: dev}, pipeline: pipeline}
     bags: {simulator: tools/sim_benchmark/results/capture}
+    image:
+      env: IFSSIM_DV_IMAGE
+      registry: ghcr.io/isc-fs/ifssim-dv_pipeline_stack
+      paths: [docker/dv_pipeline_stack, ros2/src]
+      build: [docker, build, -f, docker/dv_pipeline_stack/Dockerfile, -t, "{tag}", .]
     benchmarks:
       sim_bag:
         title: Simulator bag benchmarks
@@ -33,6 +38,7 @@ Paths are relative to the manifest's folder.
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -101,6 +107,25 @@ class Benchmark:
 
 
 @dataclass(frozen=True)
+class Image:
+    """The image the benchmarks run in, and how the worker picks it (``code.image: auto``):
+    the registry image of the newest published ``base_branch`` commit the tested code
+    starts from, unless the code changes ``paths``, in which case ``build`` makes one."""
+
+    env: str  # the variable the benchmarks read the image from
+    registry: str | None = None  # e.g. ghcr.io/isc-fs/ifssim-dv_pipeline_stack
+    tag: str = "sha-{short}"  # the registry tag of one commit
+    base_branch: str = "dev"
+    paths: tuple[
+        str, ...
+    ] = ()  # a change here needs an image built from the code itself
+    build: tuple[
+        str, ...
+    ] = ()  # command, run in the checkout; {tag} is the image to make
+    local_tag: str = "bench-local:{sha}"
+
+
+@dataclass(frozen=True)
 class Manifest:
     root: Path
     results: Path
@@ -108,6 +133,21 @@ class Manifest:
     repos: dict[str, Path]
     bag_dirs: dict[str, Path]
     benchmarks: dict[str, Benchmark]
+    default_refs: dict[str, str] = field(
+        default_factory=dict
+    )  # what the web form starts from
+    image: Image | None = None
+
+    def with_paths(
+        self, results: Path | None = None, bag_dirs: dict[str, Path] | None = None
+    ) -> Manifest:
+        """The same manifest with results and bags elsewhere (the central machine keeps
+        them outside the checkout it tests)."""
+        return dataclasses.replace(
+            self,
+            results=Path(results) if results else self.results,
+            bag_dirs={**self.bag_dirs, **(bag_dirs or {})},
+        )
 
     def bags(self, kind: str) -> list[str]:
         """Bag folder names of one kind, as they are on disk now."""
@@ -211,11 +251,35 @@ def load(root: Path | str) -> Manifest:
             settings=settings,
             timeout_s=float(b.get("timeout_s", 7200)),
         )
+    repos, default_refs = {}, {}
+    for k, v in (doc.get("repos") or {}).items():
+        if isinstance(v, dict):
+            repos[k] = root / v.get("path", ".")
+            if v.get("default"):
+                default_refs[k] = str(v["default"])
+        else:
+            repos[k] = root / v
+    img = doc.get("image")
+    image = None
+    if img:
+        if not img.get("env"):
+            raise ManifestError(f"{path}: image.env is required")
+        image = Image(
+            env=img["env"],
+            registry=img.get("registry"),
+            tag=img.get("tag", "sha-{short}"),
+            base_branch=img.get("base_branch", "dev"),
+            paths=tuple(img.get("paths") or ()),
+            build=tuple(str(c) for c in img.get("build") or ()),
+            local_tag=img.get("local_tag", "bench-local:{sha}"),
+        )
     return Manifest(
         root=root,
         results=root / doc["results"],
         presets=root / doc["presets"] if doc.get("presets") else None,
-        repos={k: root / v for k, v in (doc.get("repos") or {}).items()},
+        repos=repos,
         bag_dirs=bag_dirs,
         benchmarks=benchmarks,
+        default_refs=default_refs,
+        image=image,
     )

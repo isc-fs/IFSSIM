@@ -386,9 +386,12 @@ routes are the CLI's (`bench-run --remote`) way to queue jobs without the page.
    for local runs, `spec_id` in the tracker and the viewer. Bag replay follows when
    `run_onboard_replay.py` (feat/516) is on this branch.
 3. **Pipeline change**: `cone_detection_node` accepts config overrides (pipeline repo, its own PR).
-4. **Queue + worker**: `bench` database, `bench-worker` (code, image, run, upload), systemd unit,
-   DEPLOY.md.
-5. **Launch tab**: form, merged-spec preview, queue, job page; `Tailscale-User-Login`.
+4. **Queue + worker** *(done)*: `bench` database, `bench-worker` (code, image, run, upload),
+   systemd unit, DEPLOY.md. The queue is SQLAlchemy over Postgres on the central machine and
+   SQLite elsewhere, so the same page and worker run on a laptop as the fallback. The runners
+   now mount bags and results that live outside the checkout under test (`common.DockerPaths`).
+5. **Launch tab** *(done)*: form, merged-spec preview, queue, job page; `Tailscale-User-Login`.
+   The site has a Results | Launch switch; Launch lives under `/launch` in the same app.
 6. **GitHub**: poller, `specs/pr.yaml` and `specs/commit-smoke.yaml`, statuses and the PR comment,
    merge-base baselines.
 

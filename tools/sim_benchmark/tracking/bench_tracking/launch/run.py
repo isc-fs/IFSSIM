@@ -29,7 +29,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -54,42 +54,125 @@ def build_spec(m: mf.Manifest, sources: list[str], sets: list[str]) -> dict[str,
     return sp.validate(sp.merge(*docs), m)
 
 
-def command(m: mf.Manifest, job: sp.Job, workdir: Path) -> list[str]:
-    bench = m.benchmarks[job.benchmark]
+def command(m: mf.Manifest, rec: dict[str, Any], workdir: Path) -> list[str]:
+    """The benchmark's command line for one job (``rec`` = ``Job.record``)."""
+    bench = m.benchmarks[rec["benchmark"]]
+    bag = rec.get("bag")
     subst = {
-        "bag": str(m.bag_path(bench.bags, job.bag)) if bench.bags and job.bag else "",
+        "bag": str(m.bag_path(bench.bags, bag)) if bench.bags and bag else "",
         "results": str(m.results),
         "root": str(m.root),
     }
     cmd = [c.format(**subst) for c in bench.command]
-    for k, v in job.settings.items():
+    for k, v in (rec.get("settings") or {}).items():
         cmd += bench.settings[k].args(v)
-    if job.only and bench.parts_flag:
-        cmd += [bench.parts_flag, *job.only]
-    if job.pipeline:
+    if rec.get("only") and bench.parts_flag:
+        cmd += [bench.parts_flag, *rec["only"]]
+    if rec.get("pipeline"):
         if not bench.overrides_flag:
-            raise sp.SpecError(f"{job.benchmark} takes no pipeline overrides")
+            raise sp.SpecError(f"{rec['benchmark']} takes no pipeline overrides")
         cmd += [bench.overrides_flag, str(workdir / "overrides.json")]
     return cmd
 
 
-def _run(cmd: list[str], cwd: Path, env: dict[str, str], timeout_s: float) -> int:
-    proc = subprocess.Popen(cmd, cwd=cwd, env=env, start_new_session=True)
+def timeout_of(m: mf.Manifest, rec: dict[str, Any]) -> float:
+    per = ((rec.get("spec") or {}).get("benchmarks") or {}).get(rec["benchmark"]) or {}
+    return float(per.get("timeout_s") or m.benchmarks[rec["benchmark"]].timeout_s)
+
+
+def execute(
+    m: mf.Manifest,
+    rec: dict[str, Any],
+    workdir: Path,
+    *,
+    log: Path | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run one job in ``m.root``: write its spec.json (and overrides.json), start the
+    benchmark, and wait. Exit 124 = timed out, 130 = stopped (``should_stop``)."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "spec.json").write_text(json.dumps(rec, indent=2, default=str))
+    if rec.get("pipeline"):
+        (workdir / "overrides.json").write_text(json.dumps(rec["pipeline"], indent=2))
+    cmd = command(m, rec, workdir)
+    full_env = {**os.environ, **(env or {}), ENV_SPEC: str(workdir / "spec.json")}
+    out = log.open("a") if log else None
     try:
-        return proc.wait(timeout=timeout_s)
+        if out:
+            out.write(f"$ {shlex.join(cmd)}\n")
+            out.flush()
+        proc = subprocess.Popen(
+            cmd,
+            cwd=m.root,
+            env=full_env,
+            start_new_session=True,
+            stdout=out,
+            stderr=subprocess.STDOUT if out else None,
+        )
+        return _wait(proc, timeout_of(m, rec), should_stop)
+    finally:
+        if out:
+            out.close()
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    os.killpg(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
-        print(f"!!! timed out after {timeout_s:.0f} s; stopping it", file=sys.stderr)
-        os.killpg(proc.pid, signal.SIGTERM)
-        try:
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-        return 124
-    except KeyboardInterrupt:
-        os.killpg(proc.pid, signal.SIGTERM)
+        os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
+
+
+def _wait(
+    proc: subprocess.Popen, timeout_s: float, should_stop: Callable[[], bool] | None
+) -> int:
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            try:
+                return proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() > deadline:
+                print(
+                    f"!!! timed out after {timeout_s:.0f} s; stopping it",
+                    file=sys.stderr,
+                )
+                _stop(proc)
+                return 124
+            if should_stop is not None and should_stop():
+                _stop(proc)
+                return 130
+    except KeyboardInterrupt:
+        _stop(proc)
         raise
+
+
+def _queue(m: mf.Manifest, spec: dict[str, Any], a: argparse.Namespace) -> int:
+    from . import checkout as co
+    from . import queue as qu
+    from . import submit as su
+
+    try:
+        p = su.plan(m, spec)
+    except co.CodeError as e:
+        print(f"Cannot pin the code: {e}", file=sys.stderr)
+        return 2
+    for name, r in p.code["resolved"].items():
+        print(f"code {name}: {r['ref']} = {r['sha'][:12]}")
+    q = qu.Queue()
+    batch, ids = su.submit(q, p, trigger="cli", requested_by=_me())
+    print(f"queued {len(ids)} job(s) as batch {batch} in {q.url}: {ids}")
+    return 0
+
+
+def _me() -> str:
+    import getpass
+    import socket
+
+    return f"{getpass.getuser()}@{socket.gethostname()}"
 
 
 def print_list(m: mf.Manifest) -> None:
@@ -139,6 +222,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--list", action="store_true", help="what the manifest offers")
     ap.add_argument("--stop-on-error", action="store_true")
+    ap.add_argument(
+        "--queue",
+        action="store_true",
+        help="queue the jobs for bench-worker instead of running them here "
+        "(its queue: $BENCH_QUEUE_URL; the code is pinned to commits now)",
+    )
     a = ap.parse_args(argv)
 
     try:
@@ -169,31 +258,27 @@ def main(argv: list[str] | None = None) -> int:
             f"note: code {spec['code']} is for the central machine; "
             f"this runs the checkout in {m.root} as it is"
         )
-    cmds = []
+    records = []
     for i, job in enumerate(jobs, 1):
-        cmd = command(m, job, work / str(i))
-        cmds.append(cmd)
+        rec = job.record(spec) | {
+            "job_id": f"local:{batch}/{i}",
+            "batch_id": batch,
+            "trigger": "local",
+            "requested_by": _me(),
+        }
+        records.append(rec)
+        cmd = command(m, rec, work / str(i))
         print(f"[{i}] {job.label()}  (spec {job.spec_id})\n    {shlex.join(cmd)}")
     if a.dry_run:
         return 0
+    if a.queue:
+        return _queue(m, spec, a)
 
     results = []
-    for i, (job, cmd) in enumerate(zip(jobs, cmds, strict=True), 1):
-        d = work / str(i)
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "spec.json").write_text(
-            json.dumps(job.record(spec), indent=2, default=str)
-        )
-        if job.pipeline:
-            (d / "overrides.json").write_text(json.dumps(job.pipeline, indent=2))
-        bench = m.benchmarks[job.benchmark]
-        timeout = float(
-            spec["benchmarks"][job.benchmark].get("timeout_s") or bench.timeout_s
-        )
+    for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
         print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
         t0 = time.time()
-        env = {**os.environ, ENV_SPEC: str(d / "spec.json")}
-        rc = _run(cmd, m.root, env, timeout)
+        rc = execute(m, rec, work / str(i))
         results.append((job, rc, time.time() - t0))
         if rc != 0:
             print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)

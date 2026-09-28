@@ -42,10 +42,11 @@ Now:
 You keep running benchmarks the same way you always did, and send the
 results with `bench-track sync` when you want the team to see them.
 
-> **Coming next:** benchmarks will run on the central machine, launched from
-> the viewer, on pull requests and on commits, and upload by themselves
-> there. Running them on your own computer becomes the fallback. The plan is
-> in `docs/history/2026-09-28_benchmark-launcher-design.md`.
+> **New:** benchmarks can now be launched from the viewer's *Launch* pages.
+> The central machine runs them one at a time and uploads them by itself
+> (`DEPLOY.md`, "Launching benchmarks"). PR and commit checks come next.
+> Running benchmarks on your own computer, as below, becomes the fallback.
+> The plan is in `docs/history/2026-09-28_benchmark-launcher-design.md`.
 
 ## 2. Words you will meet
 

@@ -1,13 +1,14 @@
 # Running the benchmark tracker for the team
 
-One central machine keeps every benchmark result. Runs made on any machine are
-sent to it with `bench-track sync`. They show the same way everywhere: in the
-hosted viewer, in a viewer running on your laptop, and in MLflow's own UI.
+One central machine runs the benchmarks and keeps every result. People launch
+benchmarks from the web page (bench-view's *Launch* pages); a worker on the
+central machine runs them one at a time and uploads the results. Results show
+the same way everywhere: in the hosted viewer, in a viewer running on your
+laptop, and in MLflow's own UI.
 
-> Benchmarks are to run on the central machine itself, launched from the web
-> page, on PRs and on commits. That launcher isn't built yet; the design is
-> `docs/history/2026-09-28_benchmark-launcher-design.md`. Until then, and as
-> the fallback afterwards, runs are made on a machine and synced by hand.
+When the central machine is down, a benchmark can still run on a laptop
+(`bench-run`, or the same Launch pages and worker locally) and be sent later
+with `bench-track sync`. Design: `docs/history/2026-09-28_benchmark-launcher-design.md`.
 
 ```
  your machine                                     central machine (Docker, 127.0.0.1 only)
@@ -64,17 +65,20 @@ It needs Docker (with compose) and Tailscale. Everything is in
 
 ```bash
 cd tools/sim_benchmark/tracking/deploy/central
-cp .env.example .env     # fill it in: hostname, three passwords and a secret key (openssl rand -hex 24)
-./setup.sh               # builds, starts, creates the experiments and the viewer's login
+cp .env.example .env     # fill it in: hostname, four passwords, a secret key, the three BENCH_ paths
+./setup.sh               # builds, starts, creates the experiments, the logins and worker.env
 ```
 
 It starts three containers, all on `127.0.0.1` only:
 
 | service | what | port |
 |---|---|---|
-| `postgres` | runs, metrics, params, and the logins (a second database) | internal |
+| `postgres` | runs, metrics, params; the logins and the job queue (databases `mlflow_auth`, `bench`) | `POSTGRES_PORT` (5432), for the worker |
 | `mlflow` | MLflow with logins (`--app-name basic-auth`); artifacts in `DATA_DIR/artifacts` | `MLFLOW_PORT` (5005) |
-| `viewer` | bench-view under gunicorn, reading MLflow as the `viewer` login | `VIEWER_PORT` (8050) |
+| `viewer` | bench-view under gunicorn: the results, reading MLflow as the `viewer` login, and the Launch pages | `VIEWER_PORT` (8050) |
+
+The worker (`bench-worker`) runs on the host, not in a container, because it
+needs Docker, git and the bags. See [Launching benchmarks](#launching-benchmarks).
 
 ### Tailscale
 
@@ -128,9 +132,54 @@ docker compose exec -T postgres pg_restore -U mlflow -d mlflow_auth --clean < ml
 
 Then copy `artifacts/` back into `DATA_DIR/artifacts` and run `docker compose up -d`.
 
+### Launching benchmarks
+
+The Launch pages write jobs to the queue; `bench-worker` takes them one at a
+time. Set it up once:
+
+1. **Folders** (the `BENCH_` paths in `.env`, absolute):
+   - `BENCH_REPO`: a clone of IFSSIM used only by the worker:
+     `git clone --recurse-submodules https://github.com/isc-fs/IFSSIM $BENCH_REPO`.
+     The worker never changes its working tree: each job's commits are checked
+     out in a separate worktree next to the job's log, and removed afterwards.
+     The worker's own code runs from this clone, so `git pull` there (and
+     restart the worker) to update it.
+   - `BENCH_RESULTS`: where runs are written. Keep it: it is where the job logs
+     and the result folders live.
+   - `BENCH_BAGS`: the simulator bags (one folder per bag). Bags never leave
+     this machine.
+2. **`./setup.sh`** creates the `worker` MLflow login and writes `worker.env`
+   (git-ignored, owner-only: it has passwords).
+3. **The service:** edit `User=` and the two paths in `bench-worker.service`,
+   then `sudo cp bench-worker.service /etc/systemd/system/`,
+   `sudo systemctl daemon-reload`, `sudo systemctl enable --now bench-worker`.
+   `journalctl -u bench-worker -f` follows it. The user needs Docker access and
+   `uv`.
+
+How a job runs:
+
+- **Code.** The page pins what you type (branch, `#PR` or commit; the default
+  is `dev`) to commits when you press *Launch*. The pipeline is the commit
+  IFSSIM pins unless you name one.
+- **Image.** `auto` (default): the published `ghcr.io/isc-fs/ifssim-dv_pipeline_stack:sha-<short>`
+  of the newest `dev` commit the code starts from, unless the code changes
+  `docker/dv_pipeline_stack/` or `ros2/src/`, in which case the worker builds
+  one (`bench-local:<sha>`, kept for next time). `build` always builds; a tag
+  uses that image. This is `image:` in `bench.yaml`.
+- **Upload.** When the benchmark ends, the worker uploads the runs it made, as
+  the `worker` login. If MLflow is down, the job waits as *upload pending* and
+  is retried every 5 minutes.
+- **Who.** The page takes the user from Tailscale (`Tailscale-User-Login`,
+  added by `tailscale serve`). Anyone on the tailnet can launch; people cancel
+  their own jobs, and the logins in `BENCH_ADMINS` can cancel any.
+- **Restarts.** A job running when the worker stops is marked failed at the
+  next start; it is never resumed. Launch it again (*Rerun / edit…*).
+
 ### Updating
 
 - **bench-view code:** `docker compose up -d --build viewer`.
+- **The worker:** `git -C $BENCH_REPO pull --recurse-submodules`, then
+  `sudo systemctl restart bench-worker` (between jobs: a running one is lost).
 - **MLflow:** change the version in `tracking/uv.lock` (`uv lock --upgrade-package mlflow`)
   and `MLFLOW_VERSION` in `.env` together, back up first, then
   `docker compose up -d --build mlflow`. MLflow upgrades its database schema on start.
@@ -218,3 +267,7 @@ changing the viewer, or to look at a private local MLflow
 | `MLflow at … cannot be reached` | not on the tailnet, or the server is down; runs stay on disk until the next sync |
 | a run never uploads | `uv run bench-track sync --dry-run` says why (still running, or already on the server) |
 | `image … was built locally` warning | runs on locally built images can't be matched across machines; pull a `sha-` tag for runs to compare |
+| Launch page: "Launching isn't set up here" | `BENCH_REPO` has no `bench.yaml`, or the queue database can't be reached; the message says which |
+| "Cannot pin the code" | the branch/PR doesn't exist on GitHub, or the viewer container can't reach GitHub |
+| jobs stay *queued* | the worker isn't running: `systemctl status bench-worker` |
+| a job failed | its page has the log; the worker's own messages are at the top |
