@@ -239,3 +239,17 @@ def test_a_failed_job_fails_the_run(repo: Path, monkeypatch) -> None:
     (repo / "results").mkdir()
     monkeypatch.setenv("FAKE_RC", "3")
     assert run.main(["base", "--repo", str(repo)]) == 1
+
+
+def test_bags_without_what_the_benchmark_needs_are_refused(repo: Path) -> None:
+    doc = yaml.safe_load((repo / "bench.yaml").read_text())
+    doc["benchmarks"]["sim_bag"]["needs_topics"] = ["/testing_only/track"]
+    (repo / "bench.yaml").write_text(yaml.safe_dump(doc))
+    (repo / "bags" / "bag_b" / "metadata.yaml").write_text(
+        "rosbag2_bagfile_information:\n  topics_with_message_count:\n"
+        "    - topic_metadata: {name: /imu}\n"
+    )
+    with pytest.raises(sp.SpecError, match="bag_b has no /testing_only/track"):
+        sp.validate({"benchmarks": {"sim_bag": {"bags": ["bag_b"]}}}, mf.load(repo))
+    # a bag whose metadata lists no topics is not judged
+    sp.validate({"benchmarks": {"sim_bag": {"bags": ["bag_a"]}}}, mf.load(repo))

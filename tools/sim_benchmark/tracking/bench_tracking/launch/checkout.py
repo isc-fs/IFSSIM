@@ -51,6 +51,14 @@ def resolve_ref(repo: Path, ref: str) -> dict[str, str]:
     ref = ref.strip()
     if not ref:
         raise CodeError("empty ref")
+    if "@" in ref:
+        # "<branch or #PR>@<commit>": that commit, reached through that branch or PR (the
+        # Launch page sends this: the version picked, not whatever the branch is at later)
+        name, sha = ref.rsplit("@", 1)
+        if not SHA.match(sha):
+            raise CodeError(f"{ref!r}: {sha!r} is not a commit id")
+        pr = _pr_ref(name)
+        return {"ref": name, "sha": sha, "fetch": pr or f"refs/heads/{name}"}
     if SHA.match(ref):
         return {"ref": ref, "sha": ref, "fetch": ref}
     url = remote_url(repo)

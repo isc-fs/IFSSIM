@@ -62,6 +62,8 @@ def serve_layout():
             dcc.Store(id="view"),
             dcc.Store(id="url-mirror"),
             dcc.Store(id="open-from-plot"),
+            # the results page last open, for the Results | Launch switch
+            dcc.Store(id="last-results", storage_type="session"),
             html.Nav(
                 [
                     html.Div(
@@ -252,7 +254,8 @@ def build_app(catalog: Catalog) -> Dash:
         Output("browser", "children"),
         Input("sel", "data"),
         Input("cat-ver", "data"),
-        State("url", "pathname"),
+        # an Input, not State: going to /launch must clear the bar the results page left
+        Input("url", "pathname"),
     )
     def bar(sel, _ver, pathname):
         if L.is_launch(pathname) or not sel or not sel.get("r"):
@@ -271,10 +274,11 @@ def build_app(catalog: Catalog) -> Dash:
         Output("page-head", "children"),
         Input("url", "pathname"),
         Input("sel", "data"),
+        State("url", "search"),
     )
-    def render(pathname, sel):
+    def render(pathname, sel, search):
         if L.is_launch(pathname):
-            return L.page(pathname), None, L.head(pathname)
+            return L.page(pathname, search), None, L.head(pathname)
         c = cat()
         kind, section = P.parse_path(pathname)
         k = P.KINDS[kind]
@@ -314,15 +318,20 @@ def build_app(catalog: Catalog) -> Dash:
         Output("src", "children"),
         Input("url", "pathname"),
         Input("cat-ver", "data"),
+        State("last-results", "data"),
     )
-    def nav(pathname, _ver):
+    def nav(pathname, _ver, last_results):
         c = cat()
         launching = L.is_launch(pathname)
         # the two halves of the site: looking at results, and launching benchmarks
         out = [
             html.Div(
                 [
-                    dcc.Link("Results", href="/", className="" if launching else "on"),
+                    dcc.Link(
+                        "Results",
+                        href=last_results or "/",
+                        className="" if launching else "on",
+                    ),
                     dcc.Link(
                         "Launch", href="/launch", className="on" if launching else ""
                     ),
@@ -363,6 +372,16 @@ def build_app(catalog: Catalog) -> Dash:
                     )
                 )
         return out, src
+
+    app.clientside_callback(
+        """function(path, mirrored){
+            if(!path || path.startsWith('/launch')) return window.dash_clientside.no_update;
+            return window.location.pathname + window.location.search;
+        }""",
+        Output("last-results", "data"),
+        Input("url", "pathname"),
+        Input("url-mirror", "data"),
+    )
 
     # the URL mirrors the selection (replaceState: picking runs does not flood the back button)
     app.clientside_callback(

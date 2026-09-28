@@ -60,7 +60,11 @@ def _machine(root: Path, name: str) -> Path:
 
 
 def test_same_run_on_two_machines_is_uploaded_once(tmp_path, server, monkeypatch):
-    _session(tmp_path / "results", "20260925_100000", dict(_prov("1111", False), capture_id="c1"))
+    _session(
+        tmp_path / "results",
+        "20260925_100000",
+        dict(_prov("1111", False), capture_id="c1"),
+    )
     a, b = _machine(tmp_path, "alice"), _machine(tmp_path, "bob")
     (ba,) = sim_bag.load_all(a, full_bag_hash=False)
     (bb,) = sim_bag.load_all(b, full_bag_hash=False)

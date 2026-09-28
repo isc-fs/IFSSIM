@@ -49,6 +49,7 @@ benchmarks:
       slam: slam_node # ConeGraphSlamNode ROS parameters
     parts_flag: --only
     overrides_flag: --pipeline-overrides
+    needs_topics: [/testing_only/track, /testing_only/odom] # the simulator's ground truth
     timeout_s: 7200
     settings:
       gt_range_m:

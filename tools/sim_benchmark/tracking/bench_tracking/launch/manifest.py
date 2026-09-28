@@ -100,6 +100,7 @@ class Benchmark:
     overrides_flag: str | None = None
     settings: dict[str, Setting] = field(default_factory=dict)
     timeout_s: float = 7200.0
+    needs_topics: tuple[str, ...] = ()  # a bag without these can't be used
 
     def components(self, only: list[str] | None = None) -> set[str]:
         """Pipeline components the chosen parts take overrides for."""
@@ -133,9 +134,9 @@ class Manifest:
     repos: dict[str, Path]
     bag_dirs: dict[str, Path]
     benchmarks: dict[str, Benchmark]
-    default_refs: dict[str, str] = field(
-        default_factory=dict
-    )  # what the web form starts from
+    # where the Launch page starts, per repository; and URLs git can't tell
+    default_refs: dict[str, str] = field(default_factory=dict)
+    repo_urls: dict[str, str] = field(default_factory=dict)
     image: Image | None = None
 
     def with_paths(
@@ -175,6 +176,55 @@ class Manifest:
         if self.presets is None or not self.presets.is_dir():
             return []
         return sorted(p.stem for p in self.presets.glob("*.yaml"))
+
+
+@dataclass(frozen=True)
+class BagInfo:
+    name: str
+    duration_s: float | None
+    recorded: float | None  # unix time
+    size_bytes: int
+    topics: frozenset[str]
+
+
+_bag_cache: dict[Path, tuple[float, BagInfo]] = {}
+
+
+def bag_info(path: Path) -> BagInfo:
+    """What a bag's ``metadata.yaml`` says (length, when, topics) and its size; cached."""
+    meta_file = path / "metadata.yaml"
+    mtime = meta_file.stat().st_mtime if meta_file.exists() else 0.0
+    hit = _bag_cache.get(path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    info: dict = {}
+    try:
+        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+        info = (yaml.load(meta_file.read_text(), Loader=loader) or {}).get(
+            "rosbag2_bagfile_information", {}
+        )
+    except (OSError, yaml.YAMLError, AttributeError):
+        pass
+    dur = (info.get("duration") or {}).get("nanoseconds")
+    start = (info.get("starting_time") or {}).get("nanoseconds_since_epoch")
+    topics = frozenset(
+        (t.get("topic_metadata") or {}).get("name", "")
+        for t in info.get("topics_with_message_count") or []
+    )
+    size = (
+        sum(f.stat().st_size for f in path.iterdir() if f.is_file())
+        if path.is_dir()
+        else 0
+    )
+    out = BagInfo(
+        path.name,
+        dur / 1e9 if dur else None,
+        start / 1e9 if start else None,
+        size,
+        topics,
+    )
+    _bag_cache[path] = (mtime, out)
+    return out
 
 
 def find_root(start: Path | None = None) -> Path:
@@ -250,13 +300,16 @@ def load(root: Path | str) -> Manifest:
             overrides_flag=b.get("overrides_flag"),
             settings=settings,
             timeout_s=float(b.get("timeout_s", 7200)),
+            needs_topics=tuple(b.get("needs_topics") or ()),
         )
-    repos, default_refs = {}, {}
+    repos, default_refs, repo_urls = {}, {}, {}
     for k, v in (doc.get("repos") or {}).items():
         if isinstance(v, dict):
             repos[k] = root / v.get("path", ".")
             if v.get("default"):
                 default_refs[k] = str(v["default"])
+            if v.get("url"):
+                repo_urls[k] = str(v["url"])
         else:
             repos[k] = root / v
     img = doc.get("image")
@@ -281,5 +334,6 @@ def load(root: Path | str) -> Manifest:
         bag_dirs=bag_dirs,
         benchmarks=benchmarks,
         default_refs=default_refs,
+        repo_urls=repo_urls,
         image=image,
     )

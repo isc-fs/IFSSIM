@@ -40,7 +40,7 @@ from typing import Any
 
 import yaml
 
-from .manifest import Manifest, ManifestError
+from .manifest import Manifest, ManifestError, bag_info
 
 SCHEMA = 1
 DEFAULT_ID = "default"
@@ -186,6 +186,13 @@ def validate(spec: dict[str, Any], m: Manifest) -> dict[str, Any]:
                     errors.append(
                         f"{where}.bags: not in {m.bag_dirs[bench.bags]}: {', '.join(missing)}"
                     )
+                for x in bags if bench.needs_topics else []:
+                    if x in missing:
+                        continue
+                    topics = bag_info(m.bag_path(bench.bags, x)).topics
+                    lack = [t for t in bench.needs_topics if topics and t not in topics]
+                    if lack:
+                        errors.append(f"{where}.bags: {x} has no {', '.join(lack)}")
         elif b.get("bags"):
             errors.append(f"{where}.bags: this benchmark takes no bags")
 

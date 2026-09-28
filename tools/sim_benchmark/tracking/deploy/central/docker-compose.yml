@@ -70,7 +70,12 @@ services:
       BENCH_REPO: ${BENCH_REPO:?set BENCH_REPO in .env}
       BENCH_BAGS: simulator=${BENCH_BAGS:?set BENCH_BAGS in .env}
       BENCH_ADMINS: ${BENCH_ADMINS:-}
+      # the code pickers: small git mirrors of each repository (refreshed every minute), and
+      # PR titles from the GitHub API (60 requests an hour without a token)
+      BENCH_CACHE: /cache
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
+      - ${DATA_DIR:-./data}/cache:/cache
       # same paths inside as outside: the queue stores host paths (job logs)
       - ${BENCH_REPO}:${BENCH_REPO}:ro
       - ${BENCH_RESULTS:?set BENCH_RESULTS in .env}:${BENCH_RESULTS}:ro

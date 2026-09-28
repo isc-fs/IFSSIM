@@ -259,3 +259,26 @@ def test_image_choice(tmp_path: Path, origin) -> None:
         run=lambda cmd, cwd: built.append(cmd) or 0,
     )
     assert built == [["make", ref]] and ref == f"t:{shas[1][:7]}" and "built" in why
+
+
+def test_a_picked_commit_is_reached_through_its_branch(origin) -> None:
+    src, clone, shas = origin
+    got = co.resolve(mf.load(clone), {"ifssim": f"dev@{shas[0]}"})["ifssim"]
+    assert got == {"ref": "dev", "sha": shas[0], "fetch": "refs/heads/dev"}
+    pr = co.resolve_ref(clone, f"#12@{shas[0]}")
+    assert pr["fetch"] == "refs/pull/12/head" and pr["ref"] == "#12"
+
+
+def test_refs_lists_branches_commits_and_pins(origin, tmp_path, monkeypatch) -> None:
+    from bench_tracking.launch import refs as rf
+
+    src, clone, shas = origin
+    monkeypatch.setenv("BENCH_CACHE", str(tmp_path / "cache"))
+    mi = rf.Mirror(str(src))
+    assert mi.ensure(), mi.error
+    assert [b.name for b in mi.branches()] == ["dev"]
+    assert [c.sha for c in mi.commits("refs/heads/dev")] == shas[::-1]
+    assert mi.resolve(shas[0][:8]).sha == shas[0]
+    assert mi.resolve("zzz") is None
+    assert rf.github_slug("https://github.com/isc-fs/IFSSIM.git") == "isc-fs/IFSSIM"
+    assert rf.github_slug(str(src)) is None

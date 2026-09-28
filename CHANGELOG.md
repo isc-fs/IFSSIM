@@ -51,9 +51,12 @@ shipping pipeline, documentation.
   values in effect (`params/`), and the spec with its `spec_id`. The viewer
   no longer shows runs with other settings as reruns of the same code.
 - **Launching benchmarks from the web** (bench-view's *Launch* pages,
-  `bench-worker`). *New run* picks benchmarks, bags and code (branch, PR or
-  commit, pinned to commits at launch), takes a YAML with settings and
-  parameter overrides, and shows the jobs before they are queued. A worker on
+  `bench-worker`). *New run* picks the code from each repository's
+  branches, open PRs and commits (listed from small git mirrors, with PR
+  titles from GitHub; the pipeline follows the IFSSIM commit that pins it),
+  the benchmarks and their bags (with length, date and size), and optionally
+  a YAML with settings and parameter overrides. It shows the jobs before
+  they are queued, and queues exactly the commits shown. A worker on
   the central machine runs them one at a time in a fresh checkout, with the
   published image of the code's base (or one it builds when the code changes
   the image), and uploads the results. *Queue* and job pages show progress

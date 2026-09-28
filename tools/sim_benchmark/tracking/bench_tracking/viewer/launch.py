@@ -22,7 +22,6 @@ preview says where it overrode the YAML.
 
 from __future__ import annotations
 
-import base64
 import getpass
 import os
 import socket
@@ -32,13 +31,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, ctx, dcc, html
 
-from ..launch import checkout as co
 from ..launch import manifest as mf
 from ..launch import queue as qu
-from ..launch import spec as sp
-from ..launch import submit as su
 
 SECTIONS = (("new", "New run"), ("queue", "Queue"))
 KIND_OF_JOB = {"sim_bag": "simbag", "onboard_replay": "bag", "live_replay": "live"}
@@ -155,8 +151,8 @@ def head(pathname: str | None) -> list:
     title, blurb = {
         "new": (
             "New run",
-            "Pick benchmarks, bags and code, add a YAML with settings and parameter overrides, "
-            "and launch. The central machine runs one job at a time.",
+            "Pick the code to test, the benchmarks and their bags, and launch. "
+            "The central machine runs one job at a time.",
         ),
         "queue": (
             "Queue",
@@ -177,7 +173,7 @@ def head(pathname: str | None) -> list:
     ]
 
 
-def page(pathname: str | None) -> list:
+def page(pathname: str | None, search: str | None = None) -> list:
     problem = setup_problem()
     if problem:
         return [
@@ -197,241 +193,12 @@ def page(pathname: str | None) -> list:
         return queue_page()
     if p == "job":
         return job_page(jid)
-    return new_page()
+    from . import launch_new
+
+    return launch_new.page(search)
 
 
-# ======================================================================== New run
-def new_page() -> list:
-    lz = launcher()
-    m = lz.manifest
-    bench_cards = []
-    for name, b in m.benchmarks.items():
-        bags = m.bags(b.bags) if b.bags else []
-        comps = sorted(b.components())
-        fields = [
-            html.Div(
-                dcc.Checklist(
-                    id={"type": "lf-on", "b": name},
-                    options=[{"label": html.B(f" {b.title}"), "value": "on"}],
-                    value=[],
-                ),
-                className="lf-title",
-            ),
-            html.Div(b.description, className="dim small"),
-        ]
-        if b.bags:
-            fields.append(
-                _field(
-                    "Bags",
-                    dcc.Dropdown(
-                        id={"type": "lf-bags", "b": name},
-                        options=[{"label": "all bags", "value": sp.ALL_BAGS}]
-                        + [{"label": x, "value": x} for x in bags],
-                        multi=True,
-                        placeholder=f"{len(bags)} in {m.bag_dirs[b.bags]}",
-                    ),
-                )
-            )
-        if b.parts:
-            fields.append(
-                _field(
-                    "Parts",
-                    dcc.Checklist(
-                        id={"type": "lf-only", "b": name},
-                        options=[{"label": f" {p}", "value": p} for p in b.parts],
-                        value=[],
-                        inline=True,
-                        className="lf-inline",
-                    ),
-                    "none ticked = all",
-                )
-            )
-        fields.append(
-            _field(
-                "Repeats",
-                dcc.Input(
-                    id={"type": "lf-rep", "b": name},
-                    type="number",
-                    min=1,
-                    step=1,
-                    placeholder="1",
-                    className="lf-num",
-                ),
-            )
-        )
-        hints = [
-            f"settings.{s.name}: {s.type}" + (f" — {s.help}" if s.help else "")
-            for s in b.settings.values()
-        ]
-        if comps:
-            hints.append(f"pipeline: {', '.join(comps)} (see bench.yaml)")
-        fields.append(
-            html.Details(
-                [
-                    html.Summary("What the YAML can set for it"),
-                    html.Pre("\n".join(hints), className="lf-pre"),
-                ],
-                className="small",
-            )
-        )
-        bench_cards.append(html.Div(fields, className="card lf-card"))
-
-    code_fields = [
-        _field(
-            f"{name}",
-            dcc.Input(
-                id={"type": "lf-ref", "r": name},
-                type="text",
-                placeholder=m.default_refs.get(name)
-                or (
-                    f"as pinned by {next(iter(m.default_refs), 'the main repository')}"
-                    if path != m.root
-                    else "branch, #PR or commit"
-                ),
-                className="lf-text",
-                debounce=True,
-            ),
-            "branch, #PR or commit",
-        )
-        for name, path in m.repos.items()
-    ]
-    image = _field(
-        "Image",
-        dcc.Input(
-            id="lf-image",
-            type="text",
-            placeholder="auto",
-            className="lf-text",
-            debounce=True,
-        ),
-        "auto, build, or a tag",
-    )
-    if m.image is None:
-        image.style = {"display": "none"}
-    code_fields.append(image)
-
-    presets = m.preset_names()
-    return [
-        html.Div(
-            [
-                html.Div(
-                    [
-                        html.H3("1 · Benchmarks"),
-                        *bench_cards,
-                        html.H3("2 · Code"),
-                        html.Div(code_fields, className="card lf-card"),
-                        html.H3("3 · Compare and name"),
-                        html.Div(
-                            [
-                                _field(
-                                    "Compare to",
-                                    dcc.Dropdown(
-                                        id="lf-compare",
-                                        options=[
-                                            {
-                                                "label": "the pinned baseline",
-                                                "value": "pinned",
-                                            },
-                                            {
-                                                "label": "the branch point on the base branch",
-                                                "value": "merge-base",
-                                            },
-                                        ],
-                                        placeholder="pinned baseline",
-                                    ),
-                                ),
-                                _field(
-                                    "Name",
-                                    dcc.Input(
-                                        id="lf-name",
-                                        type="text",
-                                        className="lf-text",
-                                        debounce=True,
-                                    ),
-                                ),
-                                _field(
-                                    "Notes",
-                                    dcc.Textarea(id="lf-notes", className="lf-notes"),
-                                ),
-                            ],
-                            className="card lf-card",
-                        ),
-                    ],
-                    className="lf-form",
-                ),
-                html.Div(
-                    [
-                        html.H3("4 · YAML (settings, parameter overrides, sweeps)"),
-                        html.Div(
-                            [
-                                html.Div(
-                                    [
-                                        dcc.Dropdown(
-                                            id="lf-preset",
-                                            options=[
-                                                {"label": f"preset: {p}", "value": p}
-                                                for p in presets
-                                            ],
-                                            placeholder="Start from a preset…",
-                                            className="lf-preset",
-                                        ),
-                                        dcc.Upload(
-                                            html.Button(
-                                                "Upload YAML…", className="btn small"
-                                            ),
-                                            id="lf-upload",
-                                            accept=".yaml,.yml",
-                                        ),
-                                    ],
-                                    className="lf-yaml-bar",
-                                ),
-                                dcc.Textarea(
-                                    id="lf-yaml",
-                                    className="lf-yaml",
-                                    placeholder=_YAML_HINT,
-                                    spellCheck=False,
-                                ),
-                            ],
-                            className="card lf-card",
-                        ),
-                        html.H3("5 · Check and launch"),
-                        html.Div(id="lf-preview", className="card lf-card"),
-                        html.Div(
-                            [
-                                html.Button(
-                                    "Launch",
-                                    id="lf-go",
-                                    className="btn primary",
-                                    disabled=True,
-                                ),
-                                html.Span(
-                                    f"as {current_user()}", className="dim small"
-                                ),
-                            ],
-                            className="lf-go-row",
-                        ),
-                        html.Div(id="lf-result"),
-                    ],
-                    className="lf-side",
-                ),
-            ],
-            className="lf",
-        )
-    ]
-
-
-_YAML_HINT = """# optional; the form's fields win over what is here
-benchmarks:
-  sim_bag:
-    settings: {max_frames: 200}
-pipeline:
-  cone_detection: {residual_gate_mse: 0.05}
-  slam_node: {motion_model: imu}
-sweep:
-  pipeline.cone_detection.residual_gate_mse: [0.02, 0.05]
-"""
-
-
+# ======================================================================== shared form bits
 def _field(label: str, control, hint: str | None = None) -> html.Div:
     return html.Div(
         [
@@ -442,51 +209,6 @@ def _field(label: str, control, hint: str | None = None) -> html.Div:
         ],
         className="lf-field",
     )
-
-
-def form_doc(
-    names: list[str],
-    on: list[list[str]],
-    bags: list[list[str] | None],
-    only: list[list[str] | None],
-    reps: list[int | None],
-    ref_names: list[str],
-    refs: list[str | None],
-    image: str | None,
-    compare: str | None,
-    name: str | None,
-    notes: str | None,
-) -> dict[str, Any]:
-    """The form as a spec: only what was filled in."""
-    doc: dict[str, Any] = {}
-    benches = {}
-    for b, is_on, bg, parts, rep in zip(names, on, bags, only, reps, strict=True):
-        if not is_on:
-            continue
-        entry: dict[str, Any] = {}
-        if bg:
-            entry["bags"] = sp.ALL_BAGS if sp.ALL_BAGS in bg else list(bg)
-        if parts:
-            entry["only"] = list(parts)
-        if rep:
-            entry["repeats"] = int(rep)
-        benches[b] = entry
-    if benches:
-        doc["benchmarks"] = benches
-    code = {
-        r: v.strip() for r, v in zip(ref_names, refs, strict=True) if v and v.strip()
-    }
-    if image and image.strip():
-        code["image"] = image.strip()
-    if code:
-        doc["code"] = code
-    if compare:
-        doc["compare_to"] = compare
-    if name and name.strip():
-        doc["name"] = name.strip()
-    if notes and notes.strip():
-        doc["notes"] = notes.strip()
-    return doc
 
 
 def overridden(yaml_doc: Any, form: Any, prefix: str = "") -> list[str]:
@@ -500,78 +222,6 @@ def overridden(yaml_doc: Any, form: Any, prefix: str = "") -> list[str]:
     if yaml_doc != form:
         out.append(prefix.rstrip("."))
     return out
-
-
-def preview(yaml_text: str | None, form: dict[str, Any]) -> tuple[list, dict | None]:
-    """(what to show, the spec to launch or None when it can't be)."""
-    m = launcher().manifest
-    try:
-        ydoc = yaml.safe_load(yaml_text or "") or {}
-        if not isinstance(ydoc, dict):
-            raise sp.SpecError("the YAML must be a mapping (key: value)")
-    except yaml.YAMLError as e:
-        return [
-            html.Div(["YAML: ", html.Code(str(e))], className="callout bad-callout")
-        ], None
-    except sp.SpecError as e:
-        return [html.Div(str(e), className="callout bad-callout")], None
-    merged = sp.merge(ydoc, form)
-    if not merged.get("benchmarks"):
-        return [
-            html.Div(
-                "Tick a benchmark (or name one in the YAML) to see the jobs.",
-                className="dim",
-            )
-        ], None
-    try:
-        s = sp.validate(merged, m)
-        jobs = sp.expand(s, m)
-    except sp.SpecError as e:
-        return [
-            html.B("The spec has problems:"),
-            html.Ul(
-                [html.Li(line) for line in str(e).splitlines()], className="lf-errors"
-            ),
-        ], None
-    over = overridden(ydoc, form)
-    rows = [
-        html.Tr([html.Td(i), html.Td(j.label()), html.Td(html.Code(j.spec_id))])
-        for i, j in enumerate(jobs[:200], 1)
-    ]
-    body = [
-        html.Div(
-            [
-                html.B(f"{len(jobs)} job(s)"),
-                html.Span(" · run one at a time, in this order", className="dim"),
-            ]
-        ),
-        html.Table(
-            [
-                html.Thead(html.Tr([html.Th("#"), html.Th("job"), html.Th("spec id")])),
-                html.Tbody(rows),
-            ],
-            className="mt compact lf-jobs",
-        ),
-    ]
-    if len(jobs) > 200:
-        body.append(html.Div(f"… and {len(jobs) - 200} more", className="dim small"))
-    if over:
-        body.append(
-            html.Div(
-                ["Overridden by the form: ", ", ".join(over)],
-                className="callout info small",
-            )
-        )
-    body.append(
-        html.Details(
-            [
-                html.Summary("The merged spec"),
-                html.Pre(yaml.safe_dump(s, sort_keys=False), className="lf-pre"),
-            ],
-            open=False,
-        )
-    )
-    return body, s
 
 
 # ======================================================================== Queue
@@ -778,134 +428,9 @@ def _log_tail(j: qu.JobRow) -> str:
 def register(app: Dash, catalog=None) -> None:
     """``catalog()``: the viewer's run catalog, re-read when a job's runs aren't in it yet."""
 
-    @app.callback(
-        Output("lf-yaml", "value"),
-        Input("lf-preset", "value"),
-        Input("lf-upload", "contents"),
-        Input("url", "search"),
-        State("url", "pathname"),
-        prevent_initial_call=False,
-    )
-    def load_yaml(preset, upload, search, pathname):
-        trig = ctx.triggered_id
-        if trig == "lf-upload" and upload:
-            _, data = upload.split(",", 1)
-            return base64.b64decode(data).decode("utf-8", errors="replace")
-        if trig == "lf-preset" and preset:
-            p = launcher().manifest.preset(preset)
-            return p.read_text() if p else no_update
-        # "Rerun / edit…" from a job page: its spec
-        q = dict(
-            x.split("=", 1) for x in (search or "").lstrip("?").split("&") if "=" in x
-        )
-        if q.get("from", "").isdigit():
-            j = launcher().queue.get(int(q["from"]))
-            if j is not None:
-                return yaml.safe_dump((j.job or {}).get("spec") or {}, sort_keys=False)
-        return no_update
+    from . import launch_new
 
-    @app.callback(
-        Output("lf-preview", "children"),
-        Output("lf-go", "disabled"),
-        Input({"type": "lf-on", "b": ALL}, "value"),
-        Input({"type": "lf-bags", "b": ALL}, "value"),
-        Input({"type": "lf-only", "b": ALL}, "value"),
-        Input({"type": "lf-rep", "b": ALL}, "value"),
-        Input({"type": "lf-ref", "r": ALL}, "value"),
-        Input("lf-image", "value"),
-        Input("lf-compare", "value"),
-        Input("lf-name", "value"),
-        Input("lf-notes", "value"),
-        Input("lf-yaml", "value"),
-        State({"type": "lf-on", "b": ALL}, "id"),
-        State({"type": "lf-ref", "r": ALL}, "id"),
-    )
-    def update_preview(
-        on, bags, only, reps, refs, image, compare, name, notes, text, on_ids, ref_ids
-    ):
-        form = form_doc(
-            [i["b"] for i in on_ids],
-            on,
-            bags,
-            only,
-            reps,
-            [i["r"] for i in ref_ids],
-            refs,
-            image,
-            compare,
-            name,
-            notes,
-        )
-        body, spec = preview(text, form)
-        return body, spec is None
-
-    @app.callback(
-        Output("lf-result", "children"),
-        Input("lf-go", "n_clicks"),
-        State({"type": "lf-on", "b": ALL}, "value"),
-        State({"type": "lf-bags", "b": ALL}, "value"),
-        State({"type": "lf-only", "b": ALL}, "value"),
-        State({"type": "lf-rep", "b": ALL}, "value"),
-        State({"type": "lf-ref", "r": ALL}, "value"),
-        State("lf-image", "value"),
-        State("lf-compare", "value"),
-        State("lf-name", "value"),
-        State("lf-notes", "value"),
-        State("lf-yaml", "value"),
-        State({"type": "lf-on", "b": ALL}, "id"),
-        State({"type": "lf-ref", "r": ALL}, "id"),
-        prevent_initial_call=True,
-    )
-    def go(
-        n,
-        on,
-        bags,
-        only,
-        reps,
-        refs,
-        image,
-        compare,
-        name,
-        notes,
-        text,
-        on_ids,
-        ref_ids,
-    ):
-        if not n:
-            return no_update
-        form = form_doc(
-            [i["b"] for i in on_ids],
-            on,
-            bags,
-            only,
-            reps,
-            [i["r"] for i in ref_ids],
-            refs,
-            image,
-            compare,
-            name,
-            notes,
-        )
-        _, spec = preview(text, form)
-        if spec is None:
-            return html.Div("The spec has problems (see above).", className="callout")
-        lz = launcher()
-        try:
-            p = su.plan(lz.manifest, spec)
-        except co.CodeError as e:
-            return html.Div(["Cannot pin the code: ", str(e)], className="callout")
-        batch, ids = su.submit(lz.queue, p, trigger="web", requested_by=current_user())
-        pinned = ", ".join(
-            f"{k} {r['ref']} = {r['sha'][:12]}" for k, r in p.code["resolved"].items()
-        )
-        return html.Div(
-            [
-                html.B(f"Queued {len(ids)} job(s)"),
-                f" ({pinned}). ",
-                dcc.Link("See the queue →", href="/launch/queue"),
-            ],
-            className="callout info",
-        )
+    launch_new.register(app)
 
     @app.callback(
         Output("lq-body", "children"),

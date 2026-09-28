@@ -343,3 +343,82 @@ details.fold[open] > summary::before { content: "▾ "; }
 .lj-facts td { padding: 4px 12px 4px 0; vertical-align: top; }
 .lj-facts td.k { color: var(--muted); font-weight: 600; width: 130px; }
 .lf-jobs th, .lf-jobs td { text-align: left; }
+
+/* ------------------------------------------------------------------ Launch: new run (v2) */
+.lf { grid-template-columns: minmax(0, 1fr) 360px; }
+.lf-form { min-width: 0; }
+.lf-side { position: sticky; top: 16px; align-self: start; }
+.lf-sum { padding: 16px; }
+.lf-sum-title { font-weight: 700; font-size: 15px; margin-bottom: 10px; }
+.lf-sum-codes { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--line2); }
+.lf-sum-code { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.lf-sum-jobs { margin: 4px 0 6px; font-size: 13px; }
+.lf-sum .lf-jobs { max-height: 260px; }
+.lf-go { width: 100%; margin-top: 12px; padding: 9px 12px; font-weight: 600; }
+.lf-as { text-align: center; margin-top: 6px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+.lf-step { display: flex; gap: 12px; align-items: flex-start; margin: 22px 0 10px; }
+.lf-step:first-child { margin-top: 4px; }
+.lf-n { flex: none; width: 24px; height: 24px; border-radius: 999px; background: var(--ink); color: #fff;
+  font-size: 12px; font-weight: 700; display: grid; place-items: center; margin-top: 1px; }
+.lf-st { font-weight: 700; font-size: 15px; }
+
+.lc-block { gap: 8px; }
+.lc-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lc-name { font-weight: 700; font-size: 14px; }
+.seg { display: inline-flex; background: #f1f5f9; border-radius: 8px; padding: 3px; gap: 2px; }
+.seg-opt { padding: 4px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  cursor: pointer; user-select: none; }
+.seg-opt:has(.seg-in:checked) { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.seg-in { display: none; }
+.lc-pick { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 8px; }
+.opt { line-height: 1.25; padding: 2px 0; overflow: hidden; }
+.opt-t { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opt-m { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-card:empty { display: none; }
+.lc-card { background: #f8fafc; border: 1px solid var(--line2); border-radius: 8px; padding: 8px 10px; }
+.lc-line { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.lc-sha { font-weight: 700; }
+.lc-subj { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-meta { display: flex; justify-content: space-between; gap: 10px; margin-top: 2px; }
+.lc-warn { color: var(--warn); font-size: 13px; }
+.lf-adv > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink2); }
+details.lf-adv:not(.card) { margin: 0 0 6px 2px; }
+details.lf-adv:not(.card) > .lf-field { margin-top: 8px; }
+
+.lf-title label { display: flex; gap: 10px; align-items: flex-start; }
+.lf-title label input { margin-top: 3px; }
+.lf-desc { display: block; font-weight: 400; margin-top: 2px; }
+.lf-body { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line2); padding-top: 12px; }
+.bag-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.bag-head .lf-label { padding: 0; margin-right: 4px; }
+.bag-dir { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
+.bag-list { display: flex; flex-direction: column; border: 1px solid var(--line2); border-radius: 8px; max-height: 280px;
+  overflow-y: auto; }
+.bag-list label { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line2);
+  cursor: pointer; }
+.bag-list label:last-child { border-bottom: 0; }
+.bag-list label:hover { background: #fafbff; }
+.bag { display: flex; flex-direction: column; min-width: 0; }
+.bag-n { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; }
+.bag-m { color: var(--muted); font-size: 11.5px; }
+.lf-ref { margin-top: 6px; }
+.lf-ref td { text-align: left !important; }
+
+@media (max-width: 1100px) {
+  .lf { grid-template-columns: 1fr; }
+  .lf-side { position: static; }
+  .lc-pick { grid-template-columns: 1fr; }
+}
+.lf-sum .lf-jobs { display: table; width: 100%; table-layout: fixed; }
+.lf-sum .lf-jobs td:first-child { width: 26px; color: var(--muted); }
+.lf-sum .lf-jobs td:last-child { width: 78px; text-align: right; }
+.lf-job { min-width: 0; }
+.lf-job-t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.lf-job-m { color: var(--muted); font-size: 11.5px; }
+.lf-sum-jobs-wrap { max-height: 300px; overflow-y: auto; }
+/* bag names share long prefixes: cut the front, keep the part that differs */
+.lf-job-t { direction: rtl; text-align: left; }

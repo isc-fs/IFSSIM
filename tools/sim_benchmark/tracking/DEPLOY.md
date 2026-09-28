@@ -158,9 +158,15 @@ time. Set it up once:
 
 How a job runs:
 
-- **Code.** The page pins what you type (branch, `#PR` or commit; the default
-  is `dev`) to commits when you press *Launch*. The pipeline is the commit
-  IFSSIM pins unless you name one.
+- **Code.** For each repository you pick a branch, an open pull request or a
+  commit, and then which commit on it (the latest by default); the page lists
+  them with author, date and subject. The pipeline is the commit the chosen
+  IFSSIM commit pins, unless you pick one; its lists follow the IFSSIM commit,
+  so a PR that moves the submodule (IFS08 to IFS09) lists the new repository.
+  The lists come from small git mirrors (commits and refs only, a few MB)
+  under `DATA_DIR/cache`, refreshed every minute; PR titles come from the
+  GitHub API, which allows 60 requests an hour unless `GITHUB_TOKEN` is set.
+  *Launch* queues exactly the commits shown.
 - **Image.** `auto` (default): the published `ghcr.io/isc-fs/ifssim-dv_pipeline_stack:sha-<short>`
   of the newest `dev` commit the code starts from, unless the code changes
   `docker/dv_pipeline_stack/` or `ros2/src/`, in which case the worker builds
