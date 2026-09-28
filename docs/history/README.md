@@ -11,3 +11,4 @@ Documents in this folder describe work that has either landed (and the planning 
 | `cone_graph_slam_progress.md` | Engineering log captured while building cone-graph SLAM | Shipped — kept for the per-iteration tuning matrix and lessons learned at the end |
 | `2026-09-23_benchmark-tracking-design.md` | Design proposal for experiment tracking of `tools/sim_benchmark` runs (W&B / MLflow / ClearML) | Evaluation build in `tools/sim_benchmark/tracking/` (`feat/517-bench-tracking-viewer`) |
 | `2026-09-23_tracker-evaluation.md` | Results of pushing the same benchmark data into all three trackers, and the follow-up viewer on MLflow (`bench-view`) | Evaluation — tracker choice still open |
+| `2026-09-28_benchmark-launcher-design.md` | Benchmarks run on the central machine, launched from the web page, on PRs and on commits: the run spec (form vs YAML), job queue, worker and GitHub checks | Design proposal |

@@ -22,7 +22,8 @@ a:hover { text-decoration: underline; }
   font: inherit; font-size: 14px; line-height: 1; width: 26px; height: 26px; flex: none; }
 .nav-toggle:hover { border-color: #64748b; color: #fff; }
 /* collapsed: a slim rail with just the toggle; the plots get the room (wide screens only) */
-@media (min-width: 1101px) {
+/* the menu is a collapsible side rail down to 701px; only phones get it on top */
+@media (min-width: 701px) {
   html.nav-min { --navw: 44px; }
   html.nav-min .nav { padding: 14px 8px; overflow: hidden; }
   html.nav-min .nav > :not(.brand-box), html.nav-min .brand-box > :not(.nav-toggle) { display: none; }
@@ -278,11 +279,13 @@ details.fold[open] > summary::before { content: "▾ "; }
   animation: toast 5s forwards; }
 @keyframes toast { 0%, 85% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
 
-@media (max-width: 1100px) {
+@media (max-width: 700px) {
   .app { grid-template-columns: 1fr; }
   .nav-toggle { display: none; }
   .nav { position: static; height: auto; }
   .player { left: 0; }
+}
+@media (max-width: 1100px) {
   .run-row { grid-template-columns: 1fr; }
   .linked, .sum-top, .pair { grid-template-columns: 1fr; }
   .linked .left { position: static; }
