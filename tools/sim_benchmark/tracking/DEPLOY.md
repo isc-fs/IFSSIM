@@ -1,15 +1,19 @@
 # Running the benchmark tracker for the team
 
-One central machine keeps every benchmark result. Anyone can run benchmarks on
-their own machine or on the central one, and every run ends up on the central
-server. It shows the same way everywhere: in the hosted viewer, in a viewer
-running on your laptop, and in MLflow's own UI.
+One central machine keeps every benchmark result. Runs made on any machine are
+sent to it with `bench-track sync`. They show the same way everywhere: in the
+hosted viewer, in a viewer running on your laptop, and in MLflow's own UI.
+
+> Benchmarks are to run on the central machine itself, launched from the web
+> page, on PRs and on commits. That launcher isn't built yet; the design is
+> `docs/history/2026-09-28_benchmark-launcher-design.md`. Until then, and as
+> the fallback afterwards, runs are made on a machine and synced by hand.
 
 ```
  your machine                                     central machine (Docker, 127.0.0.1 only)
  ─────────────                                    ─────────────────────────────────────────
  benchmark ──► results/<run>/ ──► bench-track sync ──►  MLflow (logins) ──► Postgres
-                 provenance.json     (automatic)            │                + artifacts on disk
+                 provenance.json     (by hand)              │                + artifacts on disk
  bench-view (optional) ◄───────────────────────────────────┤
                                                            bench-view (gunicorn)
             ◄──────── Tailscale (tailscale serve, HTTPS) ─────────┘
@@ -147,10 +151,9 @@ Once, ask the admin for a login and write
 MLFLOW_TRACKING_URI=https://<host>.<tailnet>.ts.net:8443
 MLFLOW_TRACKING_USERNAME=alice
 MLFLOW_TRACKING_PASSWORD=<from the admin>
-# IFSSIM_AUTO_UPLOAD=0      # to keep runs local by default
 ```
 
-It's read by the benchmarks, `bench-track` and `bench-view`. Variables set in
+It's read by `bench-track` and `bench-view`. Variables set in
 the environment win over the file. Keep the file out of the repo: the repo is
 public.
 
@@ -161,21 +164,22 @@ cd tools/sim_benchmark/tracking
 uv run bench-track sync --dry-run     # lists what is on the server and what would go up
 ```
 
-From then on **every benchmark uploads when it finishes**. `common.py` runs
-`bench-track sync` on the host after the container exits, and at exit for
-`--no-docker` runs. The sim-bag runner uploads its whole session at the end,
-never half of it. Sync uploads every finished run that the server doesn't have
-yet, not just the last one:
+Then, after running benchmarks, upload them:
 
-- **Offline or server down:** nothing is lost; the next benchmark, or a manual
-  `uv run bench-track sync`, uploads it.
+```bash
+uv run bench-track sync
+```
+
+Benchmarks don't upload on their own. Sync uploads every finished run that the
+server doesn't have yet, not just the last one:
+
+- **Offline or server down:** nothing is lost; the next sync uploads it.
 - **Runs still going** (started, no results yet, changed in the last 6 hours):
   left for next time.
 - **Duplicates:** each run has a key, stored on the server as the
   `bench.run_key` tag. It is built from the capture id or the run folder's
   name, never from an absolute path. A run seen from two machines, or from two
   copies of the results, goes up once.
-- **No uv on the machine:** the run says so and prints the command to use later.
 
 The central machine itself works the same way. Give it its own login (e.g.
 `central`) and point it at `https://…:8443` or `http://127.0.0.1:5005`.

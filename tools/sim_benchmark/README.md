@@ -8,7 +8,6 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `capture_benchmark_bag.py` — records simulator-only topics plus a manifest.
 - `run_sim_bag_benchmark.py` — runs every ground-truth benchmark (perception and SLAM) on one simulator bag as one session; `--only` / `--skip` pick benchmarks. See [Simulator bag benchmarks in one command](#simulator-bag-benchmarks-in-one-command).
 - `run_provenance.py` — records which code produced each run (`provenance.json` + diffs). See [Which code produced a run](#which-code-produced-a-run).
-- `auto_upload.py` — uploads finished runs to the team's tracking server after each benchmark. See [Uploading to the team server](#uploading-to-the-team-server).
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
@@ -78,7 +77,6 @@ python tools/sim_benchmark/run_sim_bag_benchmark.py results/capture/<bag>       
 python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --only perception --profile
 python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --skip perception --motion-model imu
 python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --dry-run                   # print the commands
-python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --no-upload                 # keep it off the team server
 ```
 
 ```text
@@ -129,11 +127,15 @@ from its commit plus the diff.
 
 ## Uploading to the team server
 
-When `~/.config/ifssim-bench/tracking.env` (or the environment) names a tracking server,
-every benchmark uploads when it finishes (`auto_upload.py`). It runs `bench-track sync` on
-the host, which uploads every finished run the server does not have yet, so runs made
-offline go up with the next one. `IFSSIM_AUTO_UPLOAD=0` turns it off. Setting up the server
-and a machine: [`tracking/DEPLOY.md`](tracking/DEPLOY.md).
+Benchmarks don't upload anything themselves. Upload finished runs by hand with
+`bench-track sync` (in `tracking/`), which sends every finished run the server does not
+have yet, once. The server and login come from `~/.config/ifssim-bench/tracking.env`.
+Setting up the server and a machine: [`tracking/DEPLOY.md`](tracking/DEPLOY.md).
+
+Benchmarks are meant to run on the central machine, launched from the web page, on PRs
+and on commits (not built yet; design in
+[`docs/history/2026-09-28_benchmark-launcher-design.md`](../../docs/history/2026-09-28_benchmark-launcher-design.md)).
+Running them on your own machine is the fallback.
 
 ### SLAM benchmark bag topics
 

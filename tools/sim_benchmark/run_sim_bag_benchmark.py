@@ -11,13 +11,13 @@ on the bag and puts both results in one folder:
         perception/base_<ts>/   the perception benchmark's usual output (report.html, ...)
         slam/<strategy>_<ts>/   the SLAM benchmark's usual output
 
-Each benchmark still writes its own ``report.html``. When a tracking server is
-configured (tracking/DEPLOY.md), the session is uploaded when it ends and
-``bench-view`` shows it as one report under "Simulator bag benchmarks".
+Each benchmark still writes its own ``report.html``. Once uploaded
+(``bench-track sync``, tracking/README.md), ``bench-view`` shows the session as
+one report under "Simulator bag benchmarks".
 
     python tools/sim_benchmark/run_sim_bag_benchmark.py results/capture/<bag>
     python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --only slam --motion-model imu
-    python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --skip slam --profile --no-upload
+    python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --skip slam --profile
     python tools/sim_benchmark/run_sim_bag_benchmark.py <bag> --dry-run   (print the commands)
 
 Anything a single benchmark accepts can be passed with ``--perception-args``
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
 import subprocess
 import sys
@@ -39,7 +38,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import auto_upload  # noqa: E402
 import run_provenance  # noqa: E402
 from common import bag_topic_names, resolve_benchmark_path  # noqa: E402
 
@@ -127,11 +125,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--stop-on-error",
         action="store_true",
         help="stop at the first benchmark that fails (default: run the rest)",
-    )
-    run.add_argument(
-        "--no-upload",
-        action="store_true",
-        help="keep the session on disk only (default: upload it to the tracking server, if one is configured)",
     )
     run.add_argument(
         "--dry-run", action="store_true", help="print the commands, run nothing"
@@ -235,10 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         before = set(run_dirs(session, sub))
         print(f"\n=== {n}: {shlex.join(cmds[n])}", flush=True)
         t0 = time.time()
-        # the benchmarks do not upload on their own: half a session would go up
-        rc = subprocess.call(
-            cmds[n], cwd=HERE.parent.parent, env={**os.environ, auto_upload.ENV_OFF: "0"}
-        )
+        rc = subprocess.call(cmds[n], cwd=HERE.parent.parent)
         new = [p for p in run_dirs(session, sub) if p not in before]
         ok = rc == 0 and bool(new) and (new[-1] / "results.json").is_file()
         doc["benchmarks"][n] = {
@@ -273,15 +263,6 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"  {n:<11} {b['status']:<9} {b['duration_s']:>7.1f} s  {rep if rep and rep.is_file() else ''}"
         )
-
-    if not args.no_upload:
-        if auto_upload.enabled():
-            auto_upload.after_run(session.parent.parent)
-        else:
-            print(
-                "\nNot uploaded: no tracking server configured (tracking/DEPLOY.md), "
-                "or IFSSIM_AUTO_UPLOAD=0."
-            )
     return 1 if failed else 0
 
 

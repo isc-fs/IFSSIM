@@ -44,9 +44,11 @@ shipping pipeline, documentation.
 - **A central benchmark server for the team**
   (`tools/sim_benchmark/tracking/DEPLOY.md`). `deploy/central/` runs MLflow
   with logins on Postgres, plus the hosted `bench-view`, reached over
-  Tailscale, with a backup script. Every benchmark uploads when it finishes
-  (`bench-track sync`). Runs made offline go up with the next one, and a run
-  is uploaded once however many machines see it.
+  Tailscale, with a backup script. `bench-track sync` uploads every
+  finished run the server lacks, once however many machines see it.
+  Benchmarks don't upload on their own: they are to be launched on the
+  central machine (design:
+  `docs/history/2026-09-28_benchmark-launcher-design.md`).
 
 ## [1.0.0] — 2026-09-20
 

@@ -35,12 +35,17 @@ Before this system:
 Now:
 
 - **every run records exactly which code produced it**, automatically;
-- **every run is sent to one shared server**, automatically;
+- **every run can be sent to one shared server** with one command;
 - **anyone on the team can open, compare and discuss any run** in one web
   page, the viewer.
 
-You keep running benchmarks the same way you always did; the rest happens
-by itself.
+You keep running benchmarks the same way you always did, and send the
+results with `bench-track sync` when you want the team to see them.
+
+> **Coming next:** benchmarks will run on the central machine, launched from
+> the viewer, on pull requests and on commits, and upload by themselves
+> there. Running them on your own computer becomes the fallback. The plan is
+> in `docs/history/2026-09-28_benchmark-launcher-design.md`.
 
 ## 2. Words you will meet
 
@@ -71,7 +76,7 @@ by itself.
         │
   ③ it does its work and saves a results folder on your computer
         │
-  ④ when it finishes, the results are sent to the central server
+  ④ you send the results to the central server (sync)
         │
   ⑤ anyone on the team opens them in the viewer
 ```
@@ -127,22 +132,29 @@ The benchmark runs as it always has and writes its results under
 `tools/sim_benchmark/results/` on your computer: numbers, CSV files, an HTML
 report. Nothing about this part changed.
 
-### ④ The results are sent to the central server
+### ④ You send the results to the central server
 
-When the benchmark ends, the results are uploaded to the team's server by
-themselves. The upload step is called **sync**. It is careful:
+Benchmarks don't upload anything on their own. When you want the team to see
+your results, run the upload step, called **sync**:
+
+```bash
+cd tools/sim_benchmark/tracking
+uv run bench-track sync
+```
+
+It sends every finished run the server doesn't have yet, and it is careful:
 
 - **Nothing is sent twice.** If the server already has a run, it is skipped,
   even if it was uploaded from someone else's computer.
 - **Nothing is lost when you are offline.** If the server cannot be reached,
-  the results stay on your computer, and the next benchmark you run (or a
-  manual sync) sends everything that is missing.
+  the results stay on your computer, and the next sync sends everything that
+  is missing.
 - **Nothing half-finished is sent.** A run that is still going waits for the
   next sync.
 - **Bags are never sent**, only results.
 
-If your computer isn't set up for uploading yet (section 4), benchmarks still
-work; the results simply stay on your computer.
+If your computer isn't set up for uploading (section 4), benchmarks work the
+same; the results simply stay on your computer.
 
 ### ⑤ Anyone opens them in the viewer
 
@@ -192,7 +204,8 @@ What every tab and chart shows is explained in
 
 ### Every day
 
-- **Run benchmarks as usual.** They upload when they finish.
+- **Run benchmarks as usual**, then `uv run bench-track sync` in
+  `tools/sim_benchmark/tracking` to send the results.
 - **To look at results**, open the viewer at the team address, or run it
   locally:
 
@@ -205,9 +218,8 @@ What every tab and chart shows is explained in
 
 | you want to… | do this |
 |---|---|
-| send results made while offline, right now | `uv run bench-track sync` in `tools/sim_benchmark/tracking` |
-| keep one simulator bag session off the server | add `--no-upload` to `run_sim_bag_benchmark.py` |
-| stop uploading altogether for a while | add `IFSSIM_AUTO_UPLOAD=0` to your `tracking.env` |
+| see what would be sent, without sending it | `uv run bench-track sync --dry-run` in `tools/sim_benchmark/tracking` |
+| keep a run off the server | don't sync it, or move its folder out of `results/` first |
 
 Setting up the central machine itself (for the admin) is in
 [`DEPLOY.md`](DEPLOY.md).
@@ -269,7 +281,7 @@ not built yet.
 Only the admin. Everyone else can upload runs and set baselines.
 
 **What if the server is down?**
-Your results wait on your computer. The next benchmark or sync sends them.
+Your results wait on your computer. The next sync sends them.
 
 **Are bags uploaded?**
 Never. Only results.
@@ -313,10 +325,7 @@ tracker itself.
   else one tagged at import, else the earliest finished run of the scenario.
   It also computes the deltas.
 - **Upload.**
-  - `auto_upload.py` runs `bench-track sync` on the host after each
-    benchmark, but only if a server is configured and `IFSSIM_AUTO_UPLOAD` is
-    not `0`. The simulator bag runner switches it off for its child
-    benchmarks and uploads the session at the end.
+  - Benchmarks never upload themselves; `bench-track sync` is run by hand.
   - `sync` checks the server's health endpoint first, and skips runs still in
     progress (no results yet, changed in the last 6 hours).
   - It then asks MLflow for each run's **run key**: the capture id from
@@ -347,9 +356,8 @@ tracker itself.
 
 | file | job |
 |---|---|
-| `tools/sim_benchmark/common.py` | creates run folders; hooks for provenance and upload |
+| `tools/sim_benchmark/common.py` | creates run folders; records provenance |
 | `tools/sim_benchmark/run_provenance.py` | records the code: commits, diffs, unpushed bundles, image |
-| `tools/sim_benchmark/auto_upload.py` | decides whether to upload, runs `bench-track sync` |
 | `tools/sim_benchmark/run_sim_bag_benchmark.py` | runs a simulator bag session |
 | `tracking/bench_tracking/adapters/` | results folder → bundle, one module per kind of run |
 | `tracking/bench_tracking/bundle.py`, `store.py` | the bundle, the run key, the Parquet format |

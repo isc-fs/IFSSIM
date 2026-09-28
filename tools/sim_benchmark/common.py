@@ -221,10 +221,6 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         rc = subprocess.call(cmd)
     finally:
         run_provenance.unstage(staged)
-    import auto_upload
-
-    # to the team's MLflow, when one is configured (tracking/DEPLOY.md)
-    auto_upload.after_run(results)
     raise SystemExit(rc)
 
 
@@ -236,10 +232,6 @@ def make_run_dir(root: str | Path, module: str, strategy: str) -> Path:
 
     # provenance.json (+ diffs): which code produced this run
     run_provenance.record(out)
-    import auto_upload
-
-    # without Docker this is the host: upload once the benchmark exits
-    auto_upload.at_exit(Path(root))
     return out
 
 

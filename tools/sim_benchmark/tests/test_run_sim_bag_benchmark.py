@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -85,19 +86,15 @@ class MainTest(unittest.TestCase):
         self.assertIn("[slam]", out)
         self.assertFalse((self.tmp / "res").exists())
 
-    def test_benchmarks_do_not_upload_half_a_session(self) -> None:
+    def test_failed_benchmarks_make_a_failed_session(self) -> None:
         bag = fake_bag(self.tmp)
-        with (
-            mock.patch.object(rs.subprocess, "call", return_value=1) as call,
-            mock.patch.object(rs.auto_upload, "enabled", return_value=True),
-            mock.patch.object(rs.auto_upload, "after_run") as after,
-        ):
+        with mock.patch.object(rs.subprocess, "call", return_value=1):
             rc, _, _ = self.run_main(str(bag), "--results-root", str(self.tmp / "res"))
         self.assertEqual(rc, 1)
-        for c in call.call_args_list:
-            self.assertEqual(c.kwargs["env"][rs.auto_upload.ENV_OFF], "0")
-        # the session is uploaded once, at the end, from the results dir
-        after.assert_called_once_with(self.tmp.resolve() / "res")
+        (session,) = (self.tmp / "res" / "sim_bag").iterdir()
+        doc = json.loads((session / "session.json").read_text())
+        self.assertEqual(doc["status"], "failed")
+        self.assertEqual({b["status"] for b in doc["benchmarks"].values()}, {"failed"})
 
     def test_refuses_a_bag_without_ground_truth(self) -> None:
         bag = fake_bag(self.tmp, topics=("/imu", "/lidar/Lidar1"))
