@@ -6,7 +6,9 @@ Every run dir made by ``common.make_run_dir`` gets a ``provenance.json``, plus
   committed (untracked files included);
 * ``ifssim.unpushed.bundle`` / ``pipeline.unpushed.bundle`` when HEAD has
   commits that no remote has (as far as the last ``git fetch`` knows): a git
-  bundle of exactly those commits, so someone else can check the code out.
+  bundle of exactly those commits, so someone else can check the code out;
+* ``spec.json`` when ``bench-run`` started the run (``$BENCH_SPEC``): the run
+  spec, with its ``spec_id`` (which settings and parameter overrides it used).
 
 Two runs of the same commit can then be told apart, and any run can be rebuilt
 on another machine::
@@ -47,6 +49,9 @@ from typing import Any
 
 SCHEMA = 1
 ENV_DIR = "IFSSIM_PROVENANCE_DIR"
+# the run spec bench-run launched this with (a JSON file); copied into the run as spec.json
+ENV_SPEC = "BENCH_SPEC"
+SPEC_FILE = "spec.json"
 FILE = "provenance.json"
 STAGING = ".provenance"  # under the results dir (git-ignored with the rest of results/)
 # Untracked files bigger than this are listed, not copied into the diff.
@@ -283,6 +288,14 @@ def capture(image: str | None = None) -> tuple[dict[str, Any], dict[str, str]]:
         if text
     }
     diffs.update(bundles)
+    spec = os.environ.get(ENV_SPEC)
+    if spec and Path(spec).is_file():
+        text = Path(spec).read_text()
+        diffs[SPEC_FILE] = text
+        try:
+            meta["spec_id"] = json.loads(text).get("spec_id")
+        except ValueError:
+            meta["spec_id"] = None
     for line in warnings(code):
         print(f"warning: {line}", file=sys.stderr)
     return meta, diffs

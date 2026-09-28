@@ -8,6 +8,8 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `capture_benchmark_bag.py` — records simulator-only topics plus a manifest.
 - `run_sim_bag_benchmark.py` — runs every ground-truth benchmark (perception and SLAM) on one simulator bag as one session; `--only` / `--skip` pick benchmarks. See [Simulator bag benchmarks in one command](#simulator-bag-benchmarks-in-one-command).
 - `run_provenance.py` — records which code produced each run (`provenance.json` + diffs). See [Which code produced a run](#which-code-produced-a-run).
+- `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-bench-run).
+- `specs/` — preset run specs for `bench-run`.
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
@@ -124,6 +126,43 @@ from its commit plus the diff.
   digest is part of the `code_id`. A locally built image can't be matched across machines,
   so the run warns about it.
 - `python tools/sim_benchmark/run_provenance.py` prints what a run started now would record.
+
+## Running from a spec (`bench-run`)
+
+A **run spec** is a YAML file that says which benchmarks to run, on which bags, with which
+settings and pipeline parameter overrides. `bench-run` (in `tracking/`) runs one on this
+machine, one job at a time. What it can run is listed in `bench.yaml` at the repository root.
+Presets are in `specs/`.
+
+```bash
+cd tools/sim_benchmark/tracking
+uv run bench-run --list                                   # benchmarks, settings, bags, presets
+uv run bench-run sim-bag --dry-run                        # the merged spec and the commands
+uv run bench-run sim-bag-quick --set benchmarks.sim_bag.bags=<bag>
+uv run bench-run sim-bag --set pipeline.cone_detection.residual_gate_mse=0.05 \
+                         --set pipeline.slam_node.motion_model=imu
+```
+
+```yaml
+benchmarks:
+  sim_bag:
+    bags: all                 # or a list of folder names under results/capture/
+    only: [perception, slam]
+    repeats: 1
+    settings: {gt_range_m: 20.0, max_frames: 200}
+pipeline:                     # parameter overrides, checked against the pipeline's own names
+  cone_detection: {residual_gate_mse: 0.05}   # ConeDetectionConfig fields
+  slam_node: {motion_model: imu}              # ConeGraphSlamNode ROS parameters
+sweep:                        # one job per value
+  pipeline.cone_detection.residual_gate_mse: [0.02, 0.05, 0.1]
+```
+
+The benchmarks take the overrides as `--pipeline-overrides <file.json>`
+(`pipeline_overrides.py`). A misspelled parameter stops the run before it starts. Each run
+folder gets `params/<component>.json` (every value in effect, and which were overridden), and
+`spec.json` when `bench-run` started it. Runs with the same code but other settings get another
+**spec id**, so the viewer doesn't show them as reruns. The format:
+`tracking/bench_tracking/launch/spec.py`.
 
 ## Uploading to the team server
 

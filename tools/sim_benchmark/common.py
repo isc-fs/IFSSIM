@@ -106,7 +106,7 @@ def _translate_host_path(host: str) -> str:
 
 
 def _translate_argv(argv: list[str]) -> list[str]:
-    path_flags = {"--results-root", "--output-dir"}
+    path_flags = {"--results-root", "--output-dir", "--pipeline-overrides"}
     out: list[str] = []
     i = 0
     while i < len(argv):

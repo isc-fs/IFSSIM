@@ -1383,26 +1383,43 @@ def code_facts(r: RunRow) -> list[tuple[str, object]]:
         for n in ("pipeline", "ifssim")
         if p.get(f"code.{n}.dirty") in ("True", "true", "1")
     ]
+    return (
+        [
+            ("Code", html.B(r.code_label)),
+            (
+                "Pipeline commit",
+                f"{r.commit} · {r.branch or '–'}"
+                + (f" · {r.message[:70]}" if r.message else ""),
+            ),
+            (
+                "IFSSIM commit",
+                (p.get("code.ifssim.sha") or "?")[:7]
+                + f" · {p.get('code.ifssim.branch') or '–'}",
+            ),
+            (
+                "Uncommitted changes",
+                "none"
+                if not dirty
+                else f"in {' and '.join(dirty)} — saved with the run as "
+                + ", ".join(f"{n}.diff" for n in dirty),
+            ),
+        ]
+        + _unpushed_and_image(p)
+        + _spec(r)
+    )
+
+
+def _spec(r: RunRow) -> list[tuple[str, object]]:
+    """Settings and parameter overrides the run was launched with (bench-run)."""
+    if r.spec_id == "default":
+        return [("Settings", "defaults (no spec, or one that changed nothing)")]
     return [
-        ("Code", html.B(r.code_label)),
         (
-            "Pipeline commit",
-            f"{r.commit} · {r.branch or '–'}"
-            + (f" · {r.message[:70]}" if r.message else ""),
-        ),
-        (
-            "IFSSIM commit",
-            (p.get("code.ifssim.sha") or "?")[:7]
-            + f" · {p.get('code.ifssim.branch') or '–'}",
-        ),
-        (
-            "Uncommitted changes",
-            "none"
-            if not dirty
-            else f"in {' and '.join(dirty)} — saved with the run as "
-            + ", ".join(f"{n}.diff" for n in dirty),
-        ),
-    ] + _unpushed_and_image(p)
+            "Settings",
+            f"spec {r.spec_id} — its settings and parameter overrides are in "
+            "files/provenance/spec.json, the values in effect in files/params/",
+        )
+    ]
 
 
 def _unpushed_and_image(p: dict[str, str]) -> list[tuple[str, object]]:
@@ -2857,11 +2874,14 @@ def browser(
     ms = ROW_METRICS[kind]
     groups: dict[str, list] = {}
     seen = set()
-    # runs of the exact same code on the same bag: newest first, so the first one seen is the latest
-    same_code: dict[tuple[str, str], list[str]] = {}
+    # runs of the exact same code and spec on the same bag: newest first, so the first one seen
+    # is the latest
+    same_code: dict[tuple[str, str, str], list[str]] = {}
     for row in rows:
         if row.code_id:
-            same_code.setdefault((row.scenario, row.code_id), []).append(row.run_id)
+            same_code.setdefault((row.scenario, row.code_id, row.spec_id), []).append(
+                row.run_id
+            )
     for row in rows:
         k = keyof(kind, row)
         if k in seen:
@@ -2956,7 +2976,7 @@ def browser(
         older = False
         if row.status != "finished":
             badges.append(html.Span(row.status, className="badge bad"))
-        reruns = same_code.get((row.scenario, row.code_id or ""), [])
+        reruns = same_code.get((row.scenario, row.code_id or "", row.spec_id), [])
         if len(reruns) > 1:
             i = reruns.index(row.run_id)
             older = i > 0
@@ -2966,8 +2986,18 @@ def browser(
                     if older
                     else f"latest of {len(reruns)} runs of this code",
                     className="badge",
-                    title="Same commits and same uncommitted changes (code id "
-                    f"{row.code_id}): a rerun, not a code change",
+                    title="Same commits, same uncommitted changes (code id "
+                    f"{row.code_id}) and same settings (spec {row.spec_id}): "
+                    "a rerun, not a change",
+                )
+            )
+        if row.spec_id != "default":
+            badges.append(
+                html.Span(
+                    f"spec {row.spec_id}",
+                    className="badge",
+                    title="Ran with its own settings or parameter overrides "
+                    "(bench-run); the run's spec.json has them",
                 )
             )
         if "dirty" in row.tags:

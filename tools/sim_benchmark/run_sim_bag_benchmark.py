@@ -38,6 +38,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import pipeline_overrides  # noqa: E402
 import run_provenance  # noqa: E402
 from common import bag_topic_names, resolve_benchmark_path  # noqa: E402
 
@@ -54,6 +55,8 @@ BENCHMARKS = {
         ("/testing_only/track", "/testing_only/odom", "/imu"),
     ),
 }
+# which --pipeline-overrides section each benchmark applies (pipeline_overrides.py)
+COMPONENT = {"perception": "cone_detection", "slam": "slam_node"}
 # Options both benchmarks take, forwarded to each so their ground truth is gated the same way.
 SHARED = ("gt_range_m", "gt_hfov_deg", "gt_min_range_m", "gt_scan_period_ms")
 
@@ -109,6 +112,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--slam-args", default="", help="anything else for run_slam_benchmark.py"
     )
 
+    ap.add_argument(
+        "--pipeline-overrides",
+        metavar="FILE",
+        help="JSON parameter overrides per component (pipeline_overrides.py); each benchmark "
+        "gets its own section: perception cone_detection, SLAM slam_node",
+    )
+
     run = ap.add_argument_group("running")
     run.add_argument(
         "--name", help="short label for the session folder (default: the bag name)"
@@ -137,9 +147,21 @@ def selected(args: argparse.Namespace) -> list[str]:
     return [n for n in BENCHMARKS if n in names and n not in args.skip]
 
 
-def command(name: str, args: argparse.Namespace, bag: Path, session: Path) -> list[str]:
+def overrides_file(session: Path, name: str) -> Path:
+    return session / "overrides" / f"{name}.json"
+
+
+def command(
+    name: str,
+    args: argparse.Namespace,
+    bag: Path,
+    session: Path,
+    overrides: dict | None = None,
+) -> list[str]:
     script = BENCHMARKS[name][0]
     cmd = [sys.executable, str(HERE / script), str(bag), "--results-root", str(session)]
+    if (overrides or {}).get(COMPONENT[name]):
+        cmd += ["--pipeline-overrides", str(overrides_file(session, name))]
     for k in SHARED:
         if getattr(args, k) is not None:
             cmd += [f"--{k.replace('_', '-')}", str(getattr(args, k))]
@@ -181,6 +203,12 @@ def main(argv: list[str] | None = None) -> int:
     if not bag.is_dir():
         print(f"Bag not found: {bag}", file=sys.stderr)
         return 2
+    try:
+        overrides = pipeline_overrides.load(args.pipeline_overrides)
+        pipeline_overrides.only(overrides, *(COMPONENT[n] for n in names))
+    except pipeline_overrides.OverrideError as e:
+        print(f"--pipeline-overrides: {e}", file=sys.stderr)
+        return 2
     topics = bag_topic_names(bag)
     if topics and not {"/testing_only/track", "/testing_only/odom"} <= topics:
         print(
@@ -198,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         / "sim_bag"
         / f"{label}_{started:%Y%m%d_%H%M%S}"
     )
-    cmds = {n: command(n, args, bag, session) for n in names}
+    cmds = {n: command(n, args, bag, session, overrides) for n in names}
     if args.dry_run:
         print(f"session: {session}")
         for n, c in cmds.items():
@@ -206,6 +234,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     session.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        if overrides.get(COMPONENT[n]):
+            f = overrides_file(session, n)
+            f.parent.mkdir(exist_ok=True)
+            f.write_text(json.dumps({COMPONENT[n]: overrides[COMPONENT[n]]}, indent=2))
     # the session's own record; each benchmark also writes one
     run_provenance.record(session)
     doc = {
@@ -214,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         "bag": str(bag),
         "started_at": started.isoformat(timespec="seconds"),
         "requested": names,
+        "pipeline_overrides": overrides,
         "options": {k: v for k, v in vars(args).items() if k not in ("bag", "dry_run")},
         "benchmarks": {},
         "status": "running",

@@ -96,6 +96,40 @@ class MainTest(unittest.TestCase):
         self.assertEqual(doc["status"], "failed")
         self.assertEqual({b["status"] for b in doc["benchmarks"].values()}, {"failed"})
 
+    def test_each_benchmark_gets_its_own_overrides(self) -> None:
+        bag = fake_bag(self.tmp)
+        o = self.tmp / "o.json"
+        o.write_text(json.dumps({"slam_node": {"motion_model": "imu"}}))
+        with mock.patch.object(rs.subprocess, "call", return_value=1) as call:
+            self.run_main(
+                str(bag),
+                "--results-root",
+                str(self.tmp / "res"),
+                "--pipeline-overrides",
+                str(o),
+            )
+        perception, slam = (c.args[0] for c in call.call_args_list)
+        self.assertNotIn("--pipeline-overrides", perception)
+        f = Path(slam[slam.index("--pipeline-overrides") + 1])
+        self.assertEqual(
+            json.loads(f.read_text()), {"slam_node": {"motion_model": "imu"}}
+        )
+
+    def test_overrides_no_selected_benchmark_uses_are_refused(self) -> None:
+        bag = fake_bag(self.tmp)
+        o = self.tmp / "o.json"
+        o.write_text(json.dumps({"slam_node": {"motion_model": "imu"}}))
+        rc, _, err = self.run_main(
+            str(bag),
+            "--only",
+            "perception",
+            "--pipeline-overrides",
+            str(o),
+            "--dry-run",
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("does not use slam_node", err)
+
     def test_refuses_a_bag_without_ground_truth(self) -> None:
         bag = fake_bag(self.tmp, topics=("/imu", "/lidar/Lidar1"))
         rc, _, err = self.run_main(str(bag), "--dry-run")

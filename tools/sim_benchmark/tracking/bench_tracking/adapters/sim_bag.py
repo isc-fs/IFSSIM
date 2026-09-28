@@ -255,11 +255,13 @@ def load_session(s: Session, *, full_bag_hash: bool = True) -> RunBundle:
         tags.append("paired")
     if missing:
         tags.append("partial")
+    if code["spec_id"] != provenance.DEFAULT_SPEC:
+        tags.append(f"spec:{code['spec_id']}")
 
     b = RunBundle(
         job_type=JOB,  # type: ignore[arg-type]
         name=f"simbag/{bag_name}/{code['label']}/{started:%m%dT%H%M%S}",
-        group=f"{sid}@{code['id'] or 'unknown'}",
+        group=f"{sid}@{provenance.variant_of(code)}",
         source_dir=s.key_dir,
         started_at=started,
         status=status,  # type: ignore[arg-type]
@@ -325,6 +327,8 @@ def load_session(s: Session, *, full_bag_hash: bool = True) -> RunBundle:
             if p.is_file() and p.suffix in (".html", ".json", ".csv", ".jsonl"):
                 kind = "report" if p.suffix == ".html" else "data"
                 b.files.append((p, kind))
+        # the parameters in effect (pipeline_overrides.py)
+        b.files += [(p, "params") for p in sorted((d / "params").glob("*.json"))]
     if s.root is not None:
         b.files.append((s.root / "session.json", "config"))
     prov_dir = s.root or next(iter(s.parts.values()), None)

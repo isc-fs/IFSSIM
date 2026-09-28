@@ -184,7 +184,7 @@ def load_replay(
     short_bag = (bag.get("name") or "unknown_bag").replace("_indexed", "")
     prov = provenance.read_run(run_dir)
     code = provenance.code_of(prov)
-    group = f"{sid}@{code['id'] or 'unknown'}"
+    group = f"{sid}@{provenance.variant_of(code)}"
 
     tags = [f"mission:{mission}"] + ([] if code["id"] else ["backfill"])
     if code["pipeline"].get("dirty") or code["ifssim"].get("dirty"):

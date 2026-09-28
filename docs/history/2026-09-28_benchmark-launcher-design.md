@@ -42,7 +42,7 @@ Decisions not reopened here:
 |---|---|
 | Three runners, each a CLI: `run_onboard_replay.py` (feat/516), `run_sim_bag_benchmark.py` (which calls `run_perception_benchmark.py` and `run_slam_benchmark.py`), and `bench-track mock-sim`. There is no real simulator-in-the-loop runner yet. | The launcher drives the existing CLIs. It doesn't reimplement them. A "benchmark" in the form is one runner. Simulator benchmarks appear once a real runner exists. |
 | The runners re-exec themselves in Docker (`maybe_reexec_in_docker`, `common.py`) and mount the host's `pipeline/` over the image. | The worker needs Docker, the bags and a checkout of the code. It runs **on the host**, not in the compose stack (§6). |
-| **Pipeline parameters reach the code in three different ways:** (1) Replay starts real nodes with `ros2 run … --ros-args -p use_sim_time:=true` (`_start_nodes`). (2) The SLAM benchmark builds `ConeGraphSlamNode` in-process and calls `set_parameters` (`slam_metrics.py:751`). (3) Perception uses the `ConeDetectionConfig` dataclass (45 fields). It has no ROS parameters, and `cone_detection` declares none. | The YAML can't just be "a ROS params file". §4 defines one `pipeline:` section and says how each runner applies it. Perception needs a small change in the pipeline repo to take overrides in the replay path. |
+| **Pipeline parameters reach the code in three different ways:** (1) Replay starts real nodes with `ros2 run … --ros-args -p use_sim_time:=true` (`_start_nodes`). (2) The SLAM benchmark builds `ConeGraphSlamNode` in-process and calls `set_parameters` (`slam_metrics.py:751`). (3) Perception uses the `ConeDetectionConfig` dataclass (26 fields). It has no ROS parameters, and `cone_detection` declares none. | The YAML can't just be "a ROS params file". §4 defines one `pipeline:` section and says how each runner applies it. The perception benchmark can take overrides without touching the pipeline (§4). Only the replay node needs a small change in the pipeline repo. |
 | ROS parameters with defaults in code: control 24, cone_slam 26, odometry filter 17. No parameter files exist. | Every override is a difference from code defaults. A run's parameters are fully described by `code_id` + the overrides. |
 | `publish-pipeline-image.yml` publishes `ghcr.io/isc-fs/ifssim-dv_pipeline_stack:sha-<short>` only on pushes to `dev`/`main`, and only when `docker/`, `ros2/src/` or `pipeline` changed. | A PR commit usually has **no image of its own**. Most PRs only change `pipeline/` Python, which is mounted from the host, so the image of the branch point is correct for them. §6 says when to build instead. |
 | `provenance.code_id` hashes both commits, both diffs and the image digest. The viewer marks runs with equal `code_id` as reruns of identical code. | Two web runs with the same code but different gains would be wrongly shown as reruns. Runs need a **`spec_id`** too, and the viewer groups by `(code_id, spec_id)` (§3.4). |
@@ -174,8 +174,26 @@ sweep:                                  # YAML, optional: one job per combinatio
 `settings`. Today `run_sim_bag_benchmark.py --motion-model` sets `slam_node`'s `motion_model`. In
 the spec that is `pipeline.slam_node.motion_model`, and the runner flag is filled in from it.
 
-The schema lives in the repo as `tools/sim_benchmark/specs/spec.schema.json`. The page, the worker
-and `bench-run` validate against the same file.
+The spec is validated in one place, `bench_tracking/launch/spec.py`, against the repository's
+manifest (§3.5). The page, the worker and `bench-run` all call it. *(Built: this replaced the
+`spec.schema.json` first planned here, because most checks need the manifest: which bags exist,
+which settings a benchmark takes.)*
+
+### 3.5 The manifest: what the launcher knows about a repository
+
+*(Added while building step 2.)* The launcher is going to move to a repository of its own, so it
+must not know how IFSSIM lays out its benchmarks. Everything it needs is in **`bench.yaml` at the
+repository root**:
+
+- where results go, where preset specs are, which folders hold bags;
+- which repositories `code:` can pin;
+- per benchmark: the command, its settings (name, type, flag), its parts, and which pipeline
+  component each part takes overrides for.
+
+The boundary between the two sides is: a command line, the `--pipeline-overrides` JSON file
+(`tools/sim_benchmark/pipeline_overrides.py` describes it), `$BENCH_SPEC` (the job's `spec.json`,
+copied into the run folder with `provenance.json`), and the results folders the tracker already
+reads. The format is in `bench_tracking/launch/manifest.py`.
 
 ### 3.4 Identity: `spec_id`
 
@@ -363,8 +381,10 @@ routes are the CLI's (`bench-run --remote`) way to queue jobs without the page.
 ## 12. Order of work
 
 1. **Removals** (§10) and doc updates. One commit.
-2. **Spec**: `spec.schema.json`, the merge/validate module, `spec_id`, the overrides in the three
-   runners (§4), `params/` dumps, `bench-run` for local runs. Testable with no server.
+2. **Spec** *(done)*: the manifest (`bench.yaml`), the merge/validate module, `spec_id`, the
+   overrides in the perception, SLAM and simulator-bag runners (§4), `params/` dumps, `bench-run`
+   for local runs, `spec_id` in the tracker and the viewer. Bag replay follows when
+   `run_onboard_replay.py` (feat/516) is on this branch.
 3. **Pipeline change**: `cone_detection_node` accepts config overrides (pipeline repo, its own PR).
 4. **Queue + worker**: `bench` database, `bench-worker` (code, image, run, upload), systemd unit,
    DEPLOY.md.

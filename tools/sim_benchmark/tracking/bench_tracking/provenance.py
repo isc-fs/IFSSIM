@@ -24,6 +24,11 @@ CACHE = Path(
 )
 
 
+# spec_id of a run that set no settings or overrides (bench_tracking/launch/spec.py), and of
+# every run made without bench-run
+DEFAULT_SPEC = "default"
+
+
 def unknown_code() -> dict[str, Any]:
     blank = {"sha": None, "branch": None, "dirty": None, "diff_sha": None}
     return {
@@ -32,7 +37,16 @@ def unknown_code() -> dict[str, Any]:
         "image": {"id": None, "tag": None},
         "id": None,
         "label": "unknown",
+        "spec_id": DEFAULT_SPEC,
     }
+
+
+def variant_of(code: dict[str, Any]) -> str:
+    """What makes two runs of a scenario reruns of each other: the same code and the
+    same spec (settings and parameter overrides, ``default`` when there were none)."""
+    key = code.get("id") or "unknown"
+    spec = code.get("spec_id") or DEFAULT_SPEC
+    return key if spec == DEFAULT_SPEC else f"{key}+{spec}"
 
 
 def read_run(run_dir: Path) -> dict[str, Any] | None:
@@ -62,6 +76,7 @@ def code_of(prov: dict[str, Any] | None) -> dict[str, Any]:
     # which run this was and where it ran (identifies the run on every machine)
     code["capture_id"] = prov.get("capture_id")
     code["host"] = prov.get("host")
+    code["spec_id"] = prov.get("spec_id") or DEFAULT_SPEC
     return code
 
 
@@ -87,7 +102,7 @@ def provenance_files(run_dir: Path) -> list[Path]:
     return [
         p
         for p in (
-            [Path(run_dir) / "provenance.json"]
+            [Path(run_dir) / "provenance.json", Path(run_dir) / "spec.json"]
             + sorted(Path(run_dir).glob("*.diff"))
             + sorted(Path(run_dir).glob("*.unpushed.bundle"))
         )

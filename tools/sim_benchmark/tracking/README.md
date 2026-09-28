@@ -88,6 +88,8 @@ uv run bench-track mock-sim                           # -> ../results/sim_mock (
 uv run bench-track import  --sim-root ../results/sim_mock   # mock simulator runs (sync does not read them)
 uv run bench-track summary --replay-root $R --sim-root ../results/sim_mock   # print, upload nothing
 uv run bench-track purge   --only replay              # delete runs this machine uploaded
+uv run bench-run --list                               # what bench.yaml offers (see ../README.md)
+uv run bench-run sim-bag --dry-run                    # a spec's jobs and commands
 uv run pytest -q tests
 ```
 
@@ -123,6 +125,8 @@ bench_tracking/
   viewer/          bench-view: data.py (MLflow catalog + bundle cache), replay.py / sim.py / simbag.py (figures),
                    pages.py (what each page shows per mode, run browser),
                    app.py (shell, selection state, callbacks), assets/ (style.css, sync.js: playhead, zoom, browser)
+  launch/          running benchmarks: manifest.py (the repo's bench.yaml), spec.py (run specs: merge,
+                   validate, spec_id, jobs), run.py (bench-run). Knows the benchmarks only through bench.yaml
   cli.py           bench-track
 deploy/            central/ (the team server, DEPLOY.md), mlflow/run_server.sh (a private local MLflow)
 tests/             tests that need no server
@@ -142,4 +146,7 @@ tests/             tests that need no server
   events, baseline comparison.
 - **figures**: 10–14 per-run plotly deep dives (route with pipeline events, SLAM compute profile,
   cone funnel, track map with penalties, cross-track heatmap, failure snapshot…).
-- **files**: CSVs, results.json, logs, report.html, provenance.json and its diffs (never bags).
+- **files**: CSVs, results.json, logs, report.html, provenance.json and its diffs, `spec.json`
+  and `params/` when the run had a spec (never bags).
+- **code.spec_id**: `default`, or the id of the settings and parameter overrides it ran with.
+  Reruns are runs with the same code id *and* spec id.

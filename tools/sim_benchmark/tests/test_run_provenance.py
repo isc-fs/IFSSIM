@@ -135,7 +135,9 @@ class ImageTest(unittest.TestCase):
         plain = rp.code_id(code)
         local = rp.code_id(dict(code, image={"id": "sha256:1", "digest": None}))
         pulled = rp.code_id(dict(code, image={"digest": "ghcr.io/x@sha256:2"}))
-        self.assertEqual(plain, local)  # a local build's id says nothing across machines
+        self.assertEqual(
+            plain, local
+        )  # a local build's id says nothing across machines
         self.assertNotEqual(plain, pulled)
 
     def test_local_build_warns(self) -> None:
@@ -198,6 +200,19 @@ class RecordTest(unittest.TestCase):
                 os.environ.pop(rp.ENV_DIR, None)
                 os.environ.pop("IFSSIM_BENCHMARK_IN_DOCKER", None)
                 rp.record(self.run)  # prints a warning, does not fail the benchmark
+
+    def test_the_run_spec_travels_with_the_code(self) -> None:
+        spec = self.tmp / "spec.json"
+        spec.write_text(json.dumps({"spec_id": "3f2c1a9e", "pipeline": {}}))
+        state = {"sha": "a" * 40, "dirty": False}
+        with (
+            mock.patch.object(rp, "git_state", return_value=(state, "")),
+            mock.patch.object(rp, "unpushed_bundle", return_value=None),
+            mock.patch.dict(os.environ, {rp.ENV_SPEC: str(spec)}),
+        ):
+            meta, files = rp.capture()
+        self.assertEqual(meta["spec_id"], "3f2c1a9e")
+        self.assertEqual(files[rp.SPEC_FILE], spec.read_text())
 
     def test_written_file_lists_the_diffs(self) -> None:
         rp.write(self.run, {"captured": True}, {"ifssim.diff": "x"})

@@ -1,0 +1,10 @@
+# Perception and SLAM on every simulator bag, with the pipeline's defaults.
+# Start from this and change what you need:
+#   bench-run sim-bag --set pipeline.cone_detection.residual_gate_mse=0.05
+# The format: tools/sim_benchmark/tracking/bench_tracking/launch/spec.py
+schema: 1
+name: simulator bags, defaults
+benchmarks:
+  sim_bag:
+    bags: all
+    repeats: 1

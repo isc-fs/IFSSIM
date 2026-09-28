@@ -1,0 +1,69 @@
+# What the benchmark launcher (bench-run, and later the web page and the
+# central machine) can run in this repository. The launcher reads only this
+# file, so it doesn't depend on how the benchmarks are laid out here.
+# Format: tools/sim_benchmark/tracking/bench_tracking/launch/manifest.py
+# Run specs: tools/sim_benchmark/specs/ and docs/history/2026-09-28_benchmark-launcher-design.md
+schema: 1
+
+results: tools/sim_benchmark/results # where runs are written; bench-track sync reads it
+presets: tools/sim_benchmark/specs # starting points for a spec
+
+repos: # what a spec's `code:` can pin
+  ifssim: .
+  pipeline: pipeline
+
+bags:
+  # Bags must be under tools/sim_benchmark/ for the Docker re-run of the
+  # benchmarks to see them. capture_benchmark_bag.py records here.
+  simulator: tools/sim_benchmark/results/capture
+
+benchmarks:
+  sim_bag:
+    title: Simulator bag benchmarks
+    description: Perception and SLAM on one simulator bag, scored against the simulator's ground truth.
+    command:
+      - python3
+      - tools/sim_benchmark/run_sim_bag_benchmark.py
+      - "{bag}"
+      - --results-root
+      - "{results}"
+    bags: simulator
+    parts: # part -> the pipeline component it takes overrides for
+      perception: cone_detection # ConeDetectionConfig fields
+      slam: slam_node # ConeGraphSlamNode ROS parameters
+    parts_flag: --only
+    overrides_flag: --pipeline-overrides
+    timeout_s: 7200
+    settings:
+      gt_range_m:
+        type: number
+        flag: --gt-range-m
+        help: ground-truth cones within this radius (m)
+      gt_hfov_deg:
+        type: number
+        flag: --gt-hfov-deg
+        help: ground-truth horizontal half field of view (deg)
+      gt_min_range_m:
+        type: number
+        flag: --gt-min-range-m
+        help: ground-truth cones closer than this are left out (m)
+      gt_scan_period_ms:
+        type: number
+        flag: --gt-scan-period-ms
+        help: LiDAR period used to time ground-truth cones (ms)
+      max_frames:
+        type: integer
+        flag: --max-frames
+        help: perception on the first N LiDAR frames only
+      profile:
+        type: boolean
+        flag: --profile
+        help: perception per-stage timings
+      strategy:
+        type: string
+        flag: --strategy
+        help: SLAM strategy (default trackdrive)
+      resynth_odom:
+        type: boolean
+        flag: --resynth-odom
+        help: SLAM re-synthesises /odom from the bag's sensors

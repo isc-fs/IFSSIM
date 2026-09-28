@@ -91,6 +91,8 @@ class RunRow:
     # same id = the same code (commits and uncommitted changes); None = not recorded
     code_id: str | None
     code_label: str  # "a64350a", "a64350a-dirty.3f2c1a9e", or "?"
+    # settings and parameter overrides it ran with (bench-run); "default" = none
+    spec_id: str
     params: dict[str, str]
     summary: dict[str, float]
     has_bundle: bool
@@ -209,6 +211,7 @@ class Catalog:
                     message=_param(params, "code.pipeline.message")
                     or _param(params, "code.pipeline.subject"),
                     code_id=_param(params, "code.id") or None,
+                    spec_id=_param(params, "code.spec_id") or "default",
                     code_label=_param(params, "code.label")
                     if _param(params, "code.label") not in ("", "unknown")
                     else "?",

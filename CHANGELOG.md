@@ -41,6 +41,15 @@ shipping pipeline, documentation.
   Commits that no remote has are saved as a git bundle with the run, and
   the benchmark image is recorded with its registry digest; both warn when
   another machine could not get the same code.
+- **Run specs and `bench-run`** (`tools/sim_benchmark/tracking/bench_tracking/launch/`).
+  A YAML spec says which benchmarks run on which bags, with which settings
+  and pipeline parameter overrides (`cone_detection`, `slam_node`), with
+  sweeps and repeats. `bench-run` runs it locally. `bench.yaml` at the repo
+  root lists what can be run, so the launcher doesn't depend on this repo's
+  layout. The perception, SLAM and simulator-bag benchmarks take
+  `--pipeline-overrides` and reject misspelled parameters. They record the
+  values in effect (`params/`), and the spec with its `spec_id`. The viewer
+  no longer shows runs with other settings as reruns of the same code.
 - **A central benchmark server for the team**
   (`tools/sim_benchmark/tracking/DEPLOY.md`). `deploy/central/` runs MLflow
   with logins on Postgres, plus the hosted `bench-view`, reached over

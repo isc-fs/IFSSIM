@@ -154,6 +154,28 @@ def test_reruns_share_a_group_and_code_changes_do_not(tmp_path: Path) -> None:
     assert only.started_at == min(b.started_at for b in bs)
 
 
+def test_same_code_other_settings_is_not_a_rerun(tmp_path: Path) -> None:
+    _session(tmp_path, "20260925_100000", _prov("1111", False))
+    tuned = _session(
+        tmp_path, "20260925_110000", {**_prov("1111", False), "spec_id": "5eed5eed"}
+    )
+    (tuned / "spec.json").write_text(json.dumps({"spec_id": "5eed5eed"}))
+    (slam_run,) = (tuned / "slam").iterdir()
+    params = slam_run / "params"
+    params.mkdir()
+    (params / "slam_node.json").write_text("{}")
+    plain, spec = sorted(
+        sim_bag.load_all(tmp_path, full_bag_hash=False), key=lambda b: b.started_at
+    )
+    assert plain.group.endswith("@1111") and spec.group.endswith("@1111+5eed5eed")
+    assert plain.config["code"]["spec_id"] == "default"
+    assert "spec:5eed5eed" in spec.tags
+    files = {(p.name, kind) for p, kind in spec.files}
+    assert {("spec.json", "provenance"), ("slam_node.json", "params")} <= files
+    # the same scenario: compared against the same baseline
+    assert plain.scenario_id == spec.scenario_id
+
+
 def test_legacy_runs_are_paired_by_bag_and_time(tmp_path: Path) -> None:
     _perception(tmp_path, "20260923_170906")
     _slam(tmp_path, "20260923_170908")
