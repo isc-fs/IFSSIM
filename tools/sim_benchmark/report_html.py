@@ -255,6 +255,12 @@ def write_run_report(
         from slam_report import render_slam_html
 
         html = render_slam_html(summary, run_dir)
+    elif summary.get("module") == "onboard":
+        from onboard_report import render_onboard_html
+
+        samples_path = run_dir / "samples.json"
+        samples = json.loads(samples_path.read_text()) if samples_path.is_file() else {}
+        html = render_onboard_html(summary, samples)
     else:
         html = render_run_html(summary, csv_path)
     out.write_text(html, encoding="utf-8")
