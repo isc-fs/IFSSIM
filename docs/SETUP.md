@@ -71,7 +71,7 @@ skipped this line.
 The `git submodule update --init --recursive` is **not optional** —
 there are two submodules and skipping it breaks the build:
 
-- **`pipeline/`** → [`isc-fs/IFS08-DV-PIPELINE`](https://github.com/isc-fs/IFS08-DV-PIPELINE),
+- **`pipeline/`** → [`isc-fs/IFS09-DV-PIPELINE`](https://github.com/isc-fs/IFS09-DV-PIPELINE),
   the driverless autonomy pipeline (cone detection, SLAM, planning,
   control, EKF, mission/mode management). The `dv_pipeline_stack`
   Docker image builds the whole ROS 2 workspace from it; without it
@@ -81,9 +81,11 @@ there are two submodules and skipping it breaks the build:
   track generation 500 at runtime.
 
 Pre-v0.1.2 the pipeline lived in-tree under `pipeline/`; it was
-extracted to its own repo so the real-car stack (IFS08-DV) can share
-the same autonomy code. `pipeline/` is pinned to a specific
-`IFS08-DV-PIPELINE` commit on its `dev` branch — bump it deliberately
+extracted to its own repo so the real-car stack can share the same
+autonomy code. It tracked `IFS08-DV-PIPELINE` until the 2026/27 season
+import; that repo is now frozen and `IFS09-DV-PIPELINE` (which carries
+its full history) is the live one. `pipeline/` is pinned to a specific
+`IFS09-DV-PIPELINE` commit on its `dev` branch — bump it deliberately
 with `git -C pipeline fetch && git -C pipeline checkout <sha>` then
 commit the new gitlink.
 
