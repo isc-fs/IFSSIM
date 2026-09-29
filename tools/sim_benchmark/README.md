@@ -8,6 +8,7 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `capture_benchmark_bag.py` — records simulator-only topics plus a manifest.
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
+- `perception_sanity_plots.py` — visual check of one scan per bag (sim or real): interactive 3D ground removal, DBSCAN clusters with per-cluster gate verdicts, and a single-cluster cone-fit view. `python tools/sim_benchmark/perception_sanity_plots.py --bag <sim_bag> --bag <real_bag>`
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
 - `slam_metrics.py` / `slam_report.py` — GT cone injection, trajectory and error plots.
 - `control_benchmark_node.py` — online GT control error harness.
