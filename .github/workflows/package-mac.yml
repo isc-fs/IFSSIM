@@ -44,19 +44,59 @@ jobs:
             -build \
             -stage \
             -pak \
-            -archive \
-            -archivedirectory="$GITHUB_WORKSPACE/Packaged" \
             -noP4 \
             -utf8output
 
-      - name: Zip artifact
-        id: zip
+      # DO NOT PACKAGE Packaged/Mac. On Mac with Modern Xcode, BuildCookRun's
+      # archive step copies the app from Binaries/Mac -- the bare link output,
+      # with NO cooked content. It is ~220 MB, it builds and signs cleanly, and
+      # it is useless: no .pak, no .ucas, nothing to load. The complete app is
+      # the one the STAGE step assembles under Saved/StagedBuilds/Mac, at
+      # ~1 GB. Windows does not have this split, which is why package-windows
+      # can archive its output directly and this cannot.
+      - name: Assemble the shippable app
+        id: assemble
         run: |
+          set -euo pipefail
+          STAGED="$GITHUB_WORKSPACE/Saved/StagedBuilds/Mac/IFSSIM-Mac-Shipping.app"
+          OUT="$GITHUB_WORKSPACE/dist"
+          APP="$OUT/IFSSIM.app"
+          rm -rf "$OUT"; mkdir -p "$OUT"
+
+          # Fail loudly rather than shipping a contentless bundle.
+          test -d "$STAGED/Contents/UE/IFSSIM/Content/Paks" \
+            || { echo "::error::staged app has no Paks -- cook/stage did not complete"; exit 1; }
+
+          # ditto, not cp -r: preserves symlinks, resource forks and xattrs. cp
+          # can flatten a framework symlink into a bundle that runs on the
+          # build machine and nowhere else.
+          ditto "$STAGED" "$APP"
+
+          # settings.json at ProjectDir and tracks at ProjectDir/Content/tracks
+          # are the first candidate each loader checks (FSDSSettings.cpp,
+          # FSDSConeSpawner.cpp). Inside the bundle they resolve however the
+          # app is launched; a double-clicked .app has an unreliable LaunchDir.
+          PROJ="$APP/Contents/UE/IFSSIM"
+          cp "$GITHUB_WORKSPACE/settings.json" "$PROJ/settings.json"
+          mkdir -p "$PROJ/Content/tracks"
+          cp "$GITHUB_WORKSPACE/Content/tracks/"*.csv "$PROJ/Content/tracks/"
+
+          # Editing the bundle invalidates its seal; re-sign ad-hoc or
+          # Gatekeeper refuses to launch it.
+          codesign --force --deep --sign - "$APP"
+          codesign -v "$APP"
+
           VERSION="${{ github.ref_name }}"
-          ZIPNAME="IFSSIM-${VERSION}-mac.zip"
-          cd "$GITHUB_WORKSPACE/Packaged/Mac"
-          zip -r "$GITHUB_WORKSPACE/$ZIPNAME" .
+          ZIPNAME="IFSSIM-${VERSION}-macOS-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$GITHUB_WORKSPACE/$ZIPNAME"
           echo "name=$ZIPNAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(shasum -a 256 "$GITHUB_WORKSPACE/$ZIPNAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Report artifact
+        run: |
+          echo "### macOS artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`${{ steps.assemble.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sha256 \`${{ steps.assemble.outputs.sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v3
@@ -64,6 +104,6 @@ jobs:
           # Creates the release if triggered by a tag push;
           # attaches to the existing release if triggered by release creation.
           tag_name: ${{ github.ref_name }}
-          files: ${{ steps.zip.outputs.name }}
+          files: ${{ steps.assemble.outputs.name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
