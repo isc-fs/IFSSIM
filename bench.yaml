@@ -1,0 +1,86 @@
+# What the benchmark launcher (bench-run, and later the web page and the
+# central machine) can run in this repository. The launcher reads only this
+# file, so it doesn't depend on how the benchmarks are laid out here.
+# Format: bench_tracking/launch/manifest.py in IFS-DV-BENCHWEB (the launcher's repository)
+# Run specs: tools/sim_benchmark/specs/ and docs/history/2026-09-28_benchmark-launcher-design.md
+schema: 1
+
+results: tools/sim_benchmark/results # where runs are written; bench-track sync reads it
+presets: tools/sim_benchmark/specs # starting points for a spec
+
+repos: # what a spec's `code:` can pin; `default` is where the web form starts
+  ifssim:
+    path: .
+    default: dev
+  pipeline: pipeline # a submodule: by default, the commit IFSSIM pins
+
+# The image the benchmarks run in (they read it from IFSSIM_DV_IMAGE). With
+# `code.image: auto` the worker uses the published image of the newest `dev`
+# commit the tested code starts from (publish-pipeline-image.yml tags each one
+# sha-<short>), unless the code changes `paths`: then it builds one. Pipeline
+# Python changes don't need a new image: the benchmarks mount
+# pipeline/cone_detection and pipeline/cone_slam over it.
+image:
+  env: IFSSIM_DV_IMAGE
+  registry: ghcr.io/isc-fs/ifssim-dv_pipeline_stack
+  tag: sha-{short}
+  base_branch: dev
+  paths: [docker/dv_pipeline_stack, ros2/src]
+  build: [docker, build, -f, docker/dv_pipeline_stack/Dockerfile, -t, "{tag}", .]
+
+bags:
+  # Folders of bag directories. capture_benchmark_bag.py records here; the
+  # central machine points this at its own bag folder (bench-worker --bags).
+  simulator: tools/sim_benchmark/results/capture
+
+benchmarks:
+  sim_bag:
+    title: Simulator bag benchmarks
+    description: Perception and SLAM on one simulator bag, scored against the simulator's ground truth.
+    command:
+      - python3
+      - tools/sim_benchmark/run_sim_bag_benchmark.py
+      - "{bag}"
+      - --results-root
+      - "{results}"
+    bags: simulator
+    parts: # part -> the pipeline component it takes overrides for
+      perception: cone_detection # ConeDetectionConfig fields
+      slam: slam_node # ConeGraphSlamNode ROS parameters
+    parts_flag: --only
+    overrides_flag: --pipeline-overrides
+    needs_topics: [/testing_only/track, /testing_only/odom] # the simulator's ground truth
+    timeout_s: 7200
+    settings:
+      gt_range_m:
+        type: number
+        flag: --gt-range-m
+        help: ground-truth cones within this radius (m)
+      gt_hfov_deg:
+        type: number
+        flag: --gt-hfov-deg
+        help: ground-truth horizontal half field of view (deg)
+      gt_min_range_m:
+        type: number
+        flag: --gt-min-range-m
+        help: ground-truth cones closer than this are left out (m)
+      gt_scan_period_ms:
+        type: number
+        flag: --gt-scan-period-ms
+        help: LiDAR period used to time ground-truth cones (ms)
+      max_frames:
+        type: integer
+        flag: --max-frames
+        help: perception on the first N LiDAR frames only
+      profile:
+        type: boolean
+        flag: --profile
+        help: perception per-stage timings
+      strategy:
+        type: string
+        flag: --strategy
+        help: SLAM strategy (default trackdrive)
+      resynth_odom:
+        type: boolean
+        flag: --resynth-odom
+        help: SLAM re-synthesises /odom from the bag's sensors

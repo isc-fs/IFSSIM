@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import time
 from pathlib import Path
@@ -32,6 +33,7 @@ from perception_metrics import (
     summarize_match_bias,
     world_cones_to_body,
 )
+import pipeline_overrides
 from report_html import write_run_report
 
 
@@ -68,11 +70,15 @@ def _pointcloud_to_xyz(msg):
 
     floats_per_point = msg.point_step // 4
     num_points = msg.width * msg.height
-    raw = np.frombuffer(msg.data, dtype=np.float32).reshape(num_points, floats_per_point)
+    raw = np.frombuffer(msg.data, dtype=np.float32).reshape(
+        num_points, floats_per_point
+    )
     return np.ascontiguousarray(raw[:, :3])
 
 
-def _read_bag_by_topic(bag: str, topics: set[str]) -> dict[str, list[tuple[int, object]]]:
+def _read_bag_by_topic(
+    bag: str, topics: set[str]
+) -> dict[str, list[tuple[int, object]]]:
     from rclpy.serialization import deserialize_message
 
     reader = _open_bag(bag)
@@ -112,7 +118,9 @@ def _cluster_centroids(xyz, cfg) -> list[Cone2D]:
         pts = clean_data[labels == lab]
         if pts.shape[0] == 0:
             continue
-        out.append(Cone2D(x=float(pts[:, 0].mean()), y=float(pts[:, 1].mean()), color=4))
+        out.append(
+            Cone2D(x=float(pts[:, 0].mean()), y=float(pts[:, 1].mean()), color=4)
+        )
     return out
 
 
@@ -131,7 +139,8 @@ def _frame_sample_dict(fm) -> dict:
         "gt": [_cone_dict(c) for c in fm.gt_cones],
         "pred": [_cone_dict(c) for c in fm.pred_cones],
         "matches": [
-            {"pred_idx": m.pred_idx, "gt_idx": m.gt_idx, "err_m": m.err_m} for m in fm.matches
+            {"pred_idx": m.pred_idx, "gt_idx": m.gt_idx, "err_m": m.err_m}
+            for m in fm.matches
         ],
     }
 
@@ -199,8 +208,12 @@ def main() -> None:
         default=0,
         help="Process only the first N LiDAR frames (0 = all). Useful for quick GT-alignment checks.",
     )
-    ap.add_argument("--sync-ms", type=float, default=50.0, help="(unused) kept for CLI compat.")
-    ap.add_argument("--bev-samples", type=int, default=8, help="Frames shown in BEV report plots.")
+    ap.add_argument(
+        "--sync-ms", type=float, default=50.0, help="(unused) kept for CLI compat."
+    )
+    ap.add_argument(
+        "--bev-samples", type=int, default=8, help="Frames shown in BEV report plots."
+    )
     ap.add_argument(
         "--profile",
         action="store_true",
@@ -224,10 +237,24 @@ def main() -> None:
         help="Frames used for --ransac-ablation (evenly spaced through the bag).",
     )
     ap.add_argument("--results-root", default=default_results_root())
+    ap.add_argument(
+        "--pipeline-overrides",
+        help="JSON file of parameter overrides (pipeline_overrides.py); uses cone_detection",
+    )
     args = ap.parse_args()
     bag_path = resolve_benchmark_path(args.bag)
+    overrides = pipeline_overrides.load(args.pipeline_overrides)
+    pipeline_overrides.only(overrides, "cone_detection")
 
+    from cone_detection.cone_detection import ConeDetectionConfig
     from cone_detection.strategies.base_cone_detection import BaseConeDetection
+
+    detection_overrides = overrides.get("cone_detection", {})
+    detection_config = pipeline_overrides.apply_dataclass(
+        BaseConeDetection.CONE_DETECTION_CONFIG or ConeDetectionConfig(),
+        detection_overrides,
+        "cone_detection",
+    )
 
     need = {args.lidar_topic, args.odom_topic, args.track_topic}
     buckets = _read_bag_by_topic(str(bag_path), need)
@@ -237,8 +264,7 @@ def main() -> None:
 
     has_gt = bool(buckets[args.odom_topic] and buckets[args.track_topic])
     odom_msgs = sorted(
-        ((msg_time_ns(bag_t, msg), msg)
-         for bag_t, msg in buckets[args.odom_topic]),
+        ((msg_time_ns(bag_t, msg), msg) for bag_t, msg in buckets[args.odom_topic]),
         key=lambda item: item[0],
     )
     world_track = latch_track_layout(buckets[args.track_topic]) if has_gt else None
@@ -259,6 +285,13 @@ def main() -> None:
         )
     scan_period_ns = int(args.gt_scan_period_ms * 1e6)
 
+    if detection_overrides:
+        # the strategy reads its config from the class; a subclass keeps the pipeline untouched
+        BaseConeDetection = type(
+            "BaseConeDetection",
+            (BaseConeDetection,),
+            {"CONE_DETECTION_CONFIG": detection_config},
+        )
     strategy = BaseConeDetection(logger=_NullLogger())
     strategy.configure()
 
@@ -334,6 +367,12 @@ def main() -> None:
         csv_rows.append(row)
 
     run_dir = make_run_dir(args.results_root, "perception", args.strategy)
+    pipeline_overrides.write_effective(
+        run_dir,
+        "cone_detection",
+        dataclasses.asdict(detection_config),
+        detection_overrides,
+    )
     summary: dict = {
         "module": "perception",
         "strategy": args.strategy,
@@ -342,8 +381,12 @@ def main() -> None:
         "mean_latency_ms": mean(lat_ms) if lat_ms else 0.0,
         "median_latency_ms": median(lat_ms) if lat_ms else 0.0,
         "max_latency_ms": max(lat_ms) if lat_ms else 0.0,
-        "mean_cones_per_frame": (n_cones_total / len(frame_metrics)) if frame_metrics else 0.0,
-        "median_cones_per_frame": median([fm.n_pred for fm in frame_metrics]) if frame_metrics else 0.0,
+        "mean_cones_per_frame": (n_cones_total / len(frame_metrics))
+        if frame_metrics
+        else 0.0,
+        "median_cones_per_frame": median([fm.n_pred for fm in frame_metrics])
+        if frame_metrics
+        else 0.0,
         "gt_eval": has_gt,
         "match_gate_m": args.match_gate_m,
         "gt_range_m": args.gt_range_m,
@@ -438,16 +481,16 @@ def main() -> None:
                     "with_subsample_5000": {
                         "mean_ms": mean(sub_ms),
                         "median_ms": med_sub,
-                        "p95_ms": max(sub_ms) if len(sub_ms) < 20 else sorted(sub_ms)[
-                            int(0.95 * len(sub_ms))
-                        ],
+                        "p95_ms": max(sub_ms)
+                        if len(sub_ms) < 20
+                        else sorted(sub_ms)[int(0.95 * len(sub_ms))],
                     },
                     "without_subsample": {
                         "mean_ms": mean(full_ms),
                         "median_ms": med_full,
-                        "p95_ms": max(full_ms) if len(full_ms) < 20 else sorted(full_ms)[
-                            int(0.95 * len(full_ms))
-                        ],
+                        "p95_ms": max(full_ms)
+                        if len(full_ms) < 20
+                        else sorted(full_ms)[int(0.95 * len(full_ms))],
                     },
                     "median_speedup_x": (med_full / med_sub) if med_sub > 0 else 0.0,
                 }
@@ -503,11 +546,7 @@ def main() -> None:
     print(f"Wrote {run_dir / 'results.json'}")
     print(f"Wrote {report}")
     if not has_gt:
-        missing = [
-            t
-            for t in (args.odom_topic, args.track_topic)
-            if not buckets[t]
-        ]
+        missing = [t for t in (args.odom_topic, args.track_topic) if not buckets[t]]
         print(
             f"Note: bag missing {', '.join(missing)} — "
             "GT vs prediction plots need both odom and track."
