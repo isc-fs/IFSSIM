@@ -12,6 +12,33 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **Simulator bag benchmarks in one command**
+  (`tools/sim_benchmark/run_sim_bag_benchmark.py`). Runs the perception and
+  SLAM ground-truth benchmarks on one simulator bag and keeps both results in
+  one session folder; `--only` / `--skip` pick benchmarks.
+- **Every benchmark run records its code** (`tools/sim_benchmark/run_provenance.py`).
+  `make_run_dir` writes `provenance.json` with the IFSSIM and `pipeline`
+  commits, the uncommitted changes as `.diff` files, and a label such as
+  `a64350a-dirty.3f2c1a9e`, so two runs of the same commit can be told apart.
+  Commits no remote has are saved as a git bundle, and the benchmark image is
+  recorded with its registry digest.
+- **Pipeline parameter overrides** (`tools/sim_benchmark/pipeline_overrides.py`).
+  The perception, SLAM and simulator-bag benchmarks take
+  `--pipeline-overrides <file.json>` (`cone_detection` config fields,
+  `slam_node` ROS parameters), reject misspelled names, and record the values
+  in effect in `params/`. A run started from a spec also records the spec
+  (`spec.json`, with its `spec_id`).
+- **`bench.yaml`**: what the benchmark launcher can run in this repository
+  (commands, settings, bag folders, image), with preset run specs in
+  `tools/sim_benchmark/specs/`. The launcher itself (`bench-run`, the job
+  worker and the web pages) lives in
+  [IFS-DV-BENCHWEB](https://github.com/isc-fs/IFS-DV-BENCHWEB) and reads only
+  this file.
+- The benchmarks accept bags and results outside `tools/sim_benchmark/`
+  (`common.DockerPaths`), as the central machine keeps them elsewhere.
+
 ### Changed
 
 - **The `pipeline/` submodule now tracks

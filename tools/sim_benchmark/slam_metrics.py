@@ -12,7 +12,6 @@ from perception_metrics import (
     aligned_time_ns,
     compute_bag_sim_offset_ns,
     header_at_ns,
-    latch_track_layout,
     msg_time_ns,
     odom_at_time,
     odom_for_lidar_scan,
@@ -128,6 +127,7 @@ class ReplayResult:
     n_odom: int = 0
     n_cone_updates: int = 0
     wheel_steer_units: str = "radians"
+    params: dict = field(default_factory=dict)  # the SLAM node's parameters in effect
 
 
 def estimate_imu_time_scale(odom_msgs: list[tuple[int, object]]) -> tuple[float, dict]:
@@ -513,7 +513,9 @@ def _extract_maps(
     return gt_map, slam_map
 
 
-def map_to_rows(points: list[MapPoint], source: str) -> list[dict[str, float | int | str]]:
+def map_to_rows(
+    points: list[MapPoint], source: str
+) -> list[dict[str, float | int | str]]:
     """Fixed columns so GT and SLAM rows can be written in one CSV."""
     rows: list[dict[str, float | int | str]] = []
     for p in points:
@@ -640,7 +642,10 @@ def _append_pose_step(
     if filt is not None and filt.is_calibrated() and filter_sync_pose is not None:
         st = filt.state
         fx, fy, fyaw = odom_frame_to_gt_aligned(
-            filter_sync_pose, st.x, st.y, st.yaw,
+            filter_sync_pose,
+            st.x,
+            st.y,
+            st.yaw,
         )
         step.filter_x = fx
         step.filter_y = fy
@@ -662,7 +667,10 @@ def _append_pose_step(
     ):
         st_io = imu_only_filt.state
         ix, iy, iyaw = odom_frame_to_gt_aligned(
-            imu_only_sync_pose, st_io.x, st_io.y, st_io.yaw,
+            imu_only_sync_pose,
+            st_io.x,
+            st_io.y,
+            st_io.yaw,
         )
         step.imu_only_x = ix
         step.imu_only_y = iy
@@ -683,7 +691,10 @@ def _append_pose_step(
     ):
         st_w = wheel_filt.state
         wx, wy, wyaw = odom_frame_to_gt_aligned(
-            wheel_sync_pose, st_w.x, st_w.y, st_w.yaw,
+            wheel_sync_pose,
+            st_w.x,
+            st_w.y,
+            st_w.yaw,
         )
         step.wheel_x = wx
         step.wheel_y = wy
@@ -733,6 +744,7 @@ def replay_slam(
     gt_hfov_deg: float = 60.0,
     gt_scan_period_ns: int = 100_000_000,
     motion_model: str = "odom",
+    param_overrides: dict | None = None,
 ) -> ReplayResult:
     import numpy as np
     import rclpy
@@ -755,6 +767,11 @@ def replay_slam(
     # "odom" (default) = EKF /odom delta is the primary motion constraint;
     # "imu" = legacy IMU-preintegration path. Lets the benchmark A/B the two.
     node.set_parameters([Parameter("motion_model", value=str(motion_model))])
+    # --pipeline-overrides (slam_node), after the flag so it wins; unknown names fail here
+    import pipeline_overrides
+
+    pipeline_overrides.ros_parameters(node, param_overrides or {}, "slam_node")
+    params = pipeline_overrides.ros_values(node)
     node.on_configure(stub)
     node.on_activate(stub)
 
@@ -787,9 +804,7 @@ def replay_slam(
     )
     steer_series = _scalar_series_from_bucket(
         {
-            "/steering_angle": [
-                (b, m) for b, t, m in events if t == "/steering_angle"
-            ],
+            "/steering_angle": [(b, m) for b, t, m in events if t == "/steering_angle"],
         },
         "/steering_angle",
         offset_ns,
@@ -807,7 +822,7 @@ def replay_slam(
     # the filter integrates on the same clock the physics ran on — no
     # wall-vs-sim clock-stretch to undo. (estimate_imu_time_scale is kept as a
     # standalone diagnostic: run it on a fresh bag to confirm scale ~ 1.0.)
-    out = ReplayResult(wheel_steer_units=steer_units)
+    out = ReplayResult(wheel_steer_units=steer_units, params=params)
     use_lidar_trigger = any(t == GT_CONE_TRIGGER_TOPIC for _, t, _ in events)
     imu_idx = 0
     prev_filter_err: float | None = None
@@ -883,11 +898,7 @@ def replay_slam(
                     else:
                         rv = _sample_latest_before(rpm_series, event_t_ns)
                         sv = _sample_latest_before(steer_series, event_t_ns)
-                        rpm = (
-                            rv
-                            if rv is not None
-                            else wheel_filt.latest_rpm
-                        )
+                        rpm = rv if rv is not None else wheel_filt.latest_rpm
                         if sv is None:
                             steer = wheel_filt.latest_steering_rad
                             steer_units_for_sample = "radians"
@@ -1021,8 +1032,7 @@ def replay_slam(
                     stamp = msg.header.stamp
                 else:
                     odom = odom_at_time(odom_msgs, event_t_ns)
-                    stamp = getattr(
-                        getattr(odom, "header", None), "stamp", None)
+                    stamp = getattr(getattr(odom, "header", None), "stamp", None)
                     if stamp is None:
                         stamp = header_at_ns(event_t_ns).stamp
                 if odom is not None:
@@ -1064,7 +1074,9 @@ def replay_slam(
         except Exception:
             min_obs = 3
         out.gt_map, out.slam_map = _extract_maps(
-            node, world_track, min_observations=min_obs,
+            node,
+            world_track,
+            min_observations=min_obs,
         )
         out.map_stats = aggregate_map_match(out.gt_map, out.slam_map)
     finally:
@@ -1094,7 +1106,9 @@ def samples_to_rows(samples: list[SlamSample]) -> list[dict[str, float]]:
     return rows
 
 
-def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | str | bool]]:
+def pose_steps_to_rows(
+    steps: list[PoseStepSample],
+) -> list[dict[str, float | str | bool]]:
     rows: list[dict[str, float | str | bool]] = []
     for s in steps:
         rows.append(
@@ -1106,7 +1120,9 @@ def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | st
                 "gt_yaw": s.gt_yaw,
                 "filter_x": s.filter_x if s.filter_x is not None else float("nan"),
                 "filter_y": s.filter_y if s.filter_y is not None else float("nan"),
-                "filter_yaw": s.filter_yaw if s.filter_yaw is not None else float("nan"),
+                "filter_yaw": s.filter_yaw
+                if s.filter_yaw is not None
+                else float("nan"),
                 "filter_err_m": s.filter_err_m
                 if s.filter_err_m is not None
                 else float("nan"),
@@ -1121,8 +1137,12 @@ def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | st
                 "filter_yaw_rate": s.filter_yaw_rate
                 if s.filter_yaw_rate is not None
                 else float("nan"),
-                "imu_only_x": s.imu_only_x if s.imu_only_x is not None else float("nan"),
-                "imu_only_y": s.imu_only_y if s.imu_only_y is not None else float("nan"),
+                "imu_only_x": s.imu_only_x
+                if s.imu_only_x is not None
+                else float("nan"),
+                "imu_only_y": s.imu_only_y
+                if s.imu_only_y is not None
+                else float("nan"),
                 "imu_only_yaw": s.imu_only_yaw
                 if s.imu_only_yaw is not None
                 else float("nan"),
@@ -1144,7 +1164,9 @@ def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | st
                 "wheel_x": s.wheel_x if s.wheel_x is not None else float("nan"),
                 "wheel_y": s.wheel_y if s.wheel_y is not None else float("nan"),
                 "wheel_yaw": s.wheel_yaw if s.wheel_yaw is not None else float("nan"),
-                "wheel_err_m": s.wheel_err_m if s.wheel_err_m is not None else float("nan"),
+                "wheel_err_m": s.wheel_err_m
+                if s.wheel_err_m is not None
+                else float("nan"),
                 "wheel_yaw_err_rad": s.wheel_yaw_err_rad
                 if s.wheel_yaw_err_rad is not None
                 else float("nan"),
@@ -1167,7 +1189,9 @@ def pose_steps_to_rows(steps: list[PoseStepSample]) -> list[dict[str, float | st
                 "slam_x": s.slam_x if s.slam_x is not None else float("nan"),
                 "slam_y": s.slam_y if s.slam_y is not None else float("nan"),
                 "slam_yaw": s.slam_yaw if s.slam_yaw is not None else float("nan"),
-                "slam_err_m": s.slam_err_m if s.slam_err_m is not None else float("nan"),
+                "slam_err_m": s.slam_err_m
+                if s.slam_err_m is not None
+                else float("nan"),
                 "slam_yaw_err_rad": s.slam_yaw_err_rad
                 if s.slam_yaw_err_rad is not None
                 else float("nan"),
