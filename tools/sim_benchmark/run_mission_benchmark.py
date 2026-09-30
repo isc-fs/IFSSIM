@@ -472,6 +472,14 @@ class Stack:
             CONTAINER,
             "--network",
             "host",
+            # as docker-compose.yml: Fast DDS's shared-memory transport needs more than the
+            # default 64 MB /dev/shm (else it falls back to UDP, much slower for the LiDAR)
+            "--shm-size",
+            "1g",
+            "--memory",
+            "8g",
+            "--memory-swap",
+            "8g",
             "-e",
             "IFSSIM_HOST=127.0.0.1",
             "-e",

@@ -390,6 +390,9 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     assert rc == 0
     run = docker.run_args()
     assert "ifssim-dv:abc1234" in run and "DV_REBUILD_ON_STARTUP=true" in run
+    assert (
+        run[run.index("--shm-size") + 1] == "1g"
+    )  # Fast DDS shared memory, as compose
     mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
     targets = sorted(m.split(":", 1)[1] for m in mounts if "/src/" in m)
     assert targets == [
