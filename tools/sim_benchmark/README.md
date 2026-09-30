@@ -10,6 +10,7 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `run_provenance.py` — records which code produced each run (`provenance.json` + diffs). See [Which code produced a run](#which-code-produced-a-run).
 - `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-bench-run).
 - `specs/` — preset run specs for `bench-run`.
+- `run_mission_benchmark.py` — the pipeline drives the missions in the simulator, scored by the referee; defaults in `missions.yaml`. See [Mission benchmarks](#mission-benchmarks).
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
@@ -126,6 +127,54 @@ from its commit plus the diff.
   digest is part of the `code_id`. A locally built image can't be matched across machines,
   so the run warns about it.
 - `python tools/sim_benchmark/run_provenance.py` prints what a run started now would record.
+
+## Mission benchmarks
+
+`run_mission_benchmark.py` runs acceleration, skidpad, autocross and trackdrive with the pipeline
+driving, scored by the sim's referee: per mission, each track, each repeat (seed). It drives each run
+the way the Mission Control panel does (load the track, `resetScenario <seed>`, start the event,
+follow the referee, stop), over Mission Control's HTTP API and the sim's RPC, so it needs no ROS.
+
+**Which pipeline** (`--stack`): by default (`own`) the benchmark starts its own pipeline container,
+`bench-dv-stack`, with a copy of this checkout's `pipeline/` mounted in and rebuilt at start-up
+(`DV_REBUILD_ON_STARTUP`), so the runs use this checkout's pipeline commit, whatever the image was
+built from. The image is `$IFSSIM_DV_IMAGE` (the launcher's worker sets it), else `--image`, else the
+one `docker compose build` makes. The first start takes a few minutes (colcon build, Numba warm-up);
+the container is removed at the end and its log kept as `results/mission/stack_*.log`.
+`--stack running` uses the `dv_pipeline_stack` already running instead (quick tries; the recorded
+commit is then only this checkout's, which may not be what that container runs).
+
+Only one pipeline may drive the sim: with `--stack own` the benchmark refuses while a compose
+`dv_pipeline_stack` runs, or stops it for the benchmark and starts it again after with
+`--replace-stack`.
+
+**Where the pipeline runs** (`--pipeline-on`):
+
+- `bench_pc` (default): on this computer. To try it on any computer, without the latte panda:
+  start the sim and Mission Control, then
+  ```bash
+  python3 tools/sim_benchmark/run_mission_benchmark.py --missions acceleration
+  python3 tools/sim_benchmark/run_mission_benchmark.py --missions trackdrive --laps 3 --repeats 3 --start-noise
+  ```
+- `latte_panda`: the benchmark's container runs only the sim bridge here, and the latte panda runs
+  the autonomy against it (`ros2 launch bringup sim_pipeline.launch.py`). Give the commands that
+  start and stop it there, e.g. over ssh: `--panda-start`, `--panda-stop`, and `--panda-sha` to
+  record which commit it runs. Without them it refuses to start.
+
+Each run is a folder under `results/mission/<mission>_<track>/<commit>/seed<k>/` (`manifest.json`
+with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `telemetry.csv`), the
+layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
+noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
+
+**Pipeline parameter overrides** (`--pipeline-overrides <file.json>`, `{node: {param: value}}`; the
+`pipeline:` section of a run spec): checked against the pipeline's `bringup/config/params.yaml`
+(an unknown node or parameter, or a wrong type, stops the benchmark before anything runs), merged
+into the copy mounted into the stack, and recorded in each run's `manifest.json` (`params`).
+`cone_detection` is `cone_detection_node`; a dotted name is a nested parameter. They need
+`--stack own` on the bench PC, and a pipeline commit with `params.yaml` (IFS09-DV-PIPELINE #8).
+
+**Which code ran:** each run records where the pipeline ran and how its commit is known: this
+checkout's (`--stack own`), the latte panda's (`--panda-sha`), or unsure (`--stack running`).
 
 ## Running from a spec (`bench-run`)
 
