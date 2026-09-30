@@ -12,6 +12,18 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **Perception sanity plots** (`tools/sim_benchmark/perception_sanity_plots.py`):
+  one interactive HTML page per run that puts a single LiDAR scan from each
+  bag (sim or real) through the production cone detector and shows ground
+  removal, DBSCAN clusters with each cluster's gate verdict, and the cone fit
+  against both templates. It is for checking by eye what the numeric
+  benchmarks can't show.
+  `diagnose_cone_shape.py` measures the simulator's real cone shape per type.
+  Both need the ground-at-z=0 pipeline from
+  [IFS09 `fix/2-perception-ground-z0`](https://github.com/isc-fs/IFS09-DV-PIPELINE/issues/13).
+
 ### Changed
 
 - **The `pipeline/` submodule now tracks
