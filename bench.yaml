@@ -84,3 +84,62 @@ benchmarks:
         type: boolean
         flag: --resynth-odom
         help: SLAM re-synthesises /odom from the bag's sensors
+  missions:
+    title: Mission benchmarks
+    description: >-
+      The pipeline drives acceleration, skidpad, autocross and trackdrive in the simulator, scored by
+      the referee (run_mission_benchmark.py; defaults in tools/sim_benchmark/missions.yaml). The sim
+      and Mission Control must be running. The pipeline runs on this computer (bench_pc) or on the
+      latte panda.
+    command:
+      - python3
+      - tools/sim_benchmark/run_mission_benchmark.py
+      - --results-root
+      - "{results}"
+    overrides_flag: --pipeline-overrides
+    timeout_s: 14400
+    settings:
+      missions:
+        type: string
+        flag: --missions
+        help: comma separated (acceleration, skidpad, autocross, trackdrive) or all
+      pipeline_on:
+        type: string
+        flag: --pipeline-on
+        help: where the pipeline runs, bench_pc (this computer) or latte_panda
+      repeats:
+        type: integer
+        flag: --repeats
+        help: runs per track (repeat i uses seed i)
+      laps:
+        type: integer
+        flag: --laps
+        help: laps, for every mission
+      timeout_s:
+        type: number
+        flag: --timeout-s
+        help: per run, for every mission
+      start_noise:
+        type: boolean
+        flag: --start-noise
+        help: start each repeat from a seeded random offset
+      tracks:
+        type: string
+        flag: --tracks
+        help: these tracks instead of each mission's (comma separated CSVs)
+      panda_start:
+        type: string
+        flag: --panda-start
+        help: command that starts the pipeline on the latte panda (pipeline_on latte_panda)
+      panda_stop:
+        type: string
+        flag: --panda-stop
+        help: command that stops it
+      panda_sha:
+        type: string
+        flag: --panda-sha
+        help: command that prints the pipeline commit on the latte panda
+      mc_url:
+        type: string
+        flag: --mc-url
+        help: Mission Control's backend (default http://127.0.0.1:8000)

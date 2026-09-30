@@ -10,6 +10,7 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `run_provenance.py` — records which code produced each run (`provenance.json` + diffs). See [Which code produced a run](#which-code-produced-a-run).
 - `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-bench-run).
 - `specs/` — preset run specs for `bench-run`.
+- `run_mission_benchmark.py` — the pipeline drives the missions in the simulator, scored by the referee; defaults in `missions.yaml`. See [Mission benchmarks](#mission-benchmarks).
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
@@ -126,6 +127,34 @@ from its commit plus the diff.
   digest is part of the `code_id`. A locally built image can't be matched across machines,
   so the run warns about it.
 - `python tools/sim_benchmark/run_provenance.py` prints what a run started now would record.
+
+## Mission benchmarks
+
+`run_mission_benchmark.py` runs acceleration, skidpad, autocross and trackdrive with the pipeline
+driving, scored by the sim's referee: per mission, each track, each repeat (seed). It drives each run
+the way the Mission Control panel does (load the track, `resetScenario <seed>`, start the event,
+follow the referee, stop), over Mission Control's HTTP API and the sim's RPC, so it needs no ROS.
+
+**Where the pipeline runs** (`--pipeline-on`):
+
+- `bench_pc` (default): on this computer, in `dv_pipeline_stack`. To try it on any computer, without
+  the latte panda: start the sim, then `PIPELINE_ENABLED=true docker compose up -d`, then
+  ```bash
+  python3 tools/sim_benchmark/run_mission_benchmark.py --missions acceleration
+  python3 tools/sim_benchmark/run_mission_benchmark.py --missions trackdrive --laps 3 --repeats 3 --start-noise
+  ```
+- `latte_panda`: the pipeline runs on the latte panda (`PIPELINE_ENABLED=false` here). Give the
+  commands that start and stop it there, e.g. over ssh: `--panda-start`, `--panda-stop`, and
+  `--panda-sha` to record which commit it runs. Without them it refuses to start.
+
+Each run is a folder under `results/mission/<mission>_<track>/<commit>/seed<k>/` (`manifest.json`
+with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `telemetry.csv`), the
+layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
+noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
+
+**Which code ran:** the pipeline that is already running (the container or the latte panda); the
+script doesn't check code out or build it. Each run records where the pipeline ran and how its
+commit is known. Pipeline parameter overrides aren't supported yet for this benchmark.
 
 ## Running from a spec (`bench-run`)
 

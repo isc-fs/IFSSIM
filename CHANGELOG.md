@@ -14,6 +14,13 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Mission benchmarks** (`tools/sim_benchmark/run_mission_benchmark.py`,
+  defaults in `missions.yaml`). The pipeline drives acceleration, skidpad,
+  autocross and trackdrive in the sim, scored by the referee, per track and
+  seed, optionally from a seeded random start offset. The pipeline runs on
+  this computer (`--pipeline-on bench_pc`, so it can be tried without the
+  latte panda) or on the latte panda (with the commands that start and stop
+  it there). In `bench.yaml` as `missions`, so the launcher can queue it.
 - **Simulator bag benchmarks in one command**
   (`tools/sim_benchmark/run_sim_bag_benchmark.py`). Runs the perception and
   SLAM ground-truth benchmarks on one simulator bag and keeps both results in
