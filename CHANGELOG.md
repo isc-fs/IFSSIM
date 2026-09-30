@@ -14,6 +14,41 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Mission benchmarks** (`tools/sim_benchmark/run_mission_benchmark.py`,
+  defaults in `missions.yaml`). The pipeline drives acceleration, skidpad,
+  autocross and trackdrive in the sim, scored by the referee, per track and
+  seed, optionally from a seeded random start offset. It starts its own
+  pipeline container from the checkout's `pipeline/` (so a job runs its own
+  pipeline commit), with parameter overrides merged into the pipeline's
+  `params.yaml`. The pipeline runs on this computer (`--pipeline-on
+  bench_pc`, so it can be tried without the latte panda) or on the latte
+  panda (with the commands that start and stop it there; the container then
+  runs only the bridge). In `bench.yaml` as `missions`, so the launcher can
+  queue it.
+- **Simulator bag benchmarks in one command**
+  (`tools/sim_benchmark/run_sim_bag_benchmark.py`). Runs the perception and
+  SLAM ground-truth benchmarks on one simulator bag and keeps both results in
+  one session folder; `--only` / `--skip` pick benchmarks.
+- **Every benchmark run records its code** (`tools/sim_benchmark/run_provenance.py`).
+  `make_run_dir` writes `provenance.json` with the IFSSIM and `pipeline`
+  commits, the uncommitted changes as `.diff` files, and a label such as
+  `a64350a-dirty.3f2c1a9e`, so two runs of the same commit can be told apart.
+  Commits no remote has are saved as a git bundle, and the benchmark image is
+  recorded with its registry digest.
+- **Pipeline parameter overrides** (`tools/sim_benchmark/pipeline_overrides.py`).
+  The perception, SLAM and simulator-bag benchmarks take
+  `--pipeline-overrides <file.json>` (`cone_detection` config fields,
+  `slam_node` ROS parameters), reject misspelled names, and record the values
+  in effect in `params/`. A run started from a spec also records the spec
+  (`spec.json`, with its `spec_id`).
+- **`bench.yaml`**: what the benchmark launcher can run in this repository
+  (commands, settings, bag folders, image), with preset run specs in
+  `tools/sim_benchmark/specs/`. The launcher itself (`bench-run`, the job
+  worker and the web pages) lives in
+  [IFS-DV-BENCHWEB](https://github.com/isc-fs/IFS-DV-BENCHWEB) and reads only
+  this file.
+- The benchmarks accept bags and results outside `tools/sim_benchmark/`
+  (`common.DockerPaths`), as the central machine keeps them elsewhere.
 - **Perception sanity plots** (`tools/sim_benchmark/perception_sanity_plots.py`):
   one interactive HTML page per run that puts a single LiDAR scan from each
   bag (sim or real) through the production cone detector and shows ground
