@@ -89,14 +89,17 @@ benchmarks:
     description: >-
       The pipeline drives acceleration, skidpad, autocross and trackdrive in the simulator, scored by
       the referee (run_mission_benchmark.py; defaults in tools/sim_benchmark/missions.yaml). The sim
-      and Mission Control must be running. The pipeline runs on this computer (bench_pc) or on the
-      latte panda.
+      and Mission Control must be running. By default the benchmark starts its own pipeline stack
+      from the job's pipeline commit, with the job's parameter overrides; the pipeline runs on this
+      computer (bench_pc) or on the latte panda.
     command:
       - python3
       - tools/sim_benchmark/run_mission_benchmark.py
       - --results-root
       - "{results}"
     overrides_flag: --pipeline-overrides
+    # no parts: the overrides go into the pipeline's params.yaml, for these nodes
+    overrides_for: [cone_detection, slam_node, control_node, odometry_filter_node, pipeline_watchdog_node]
     timeout_s: 14400
     settings:
       missions:
@@ -107,6 +110,14 @@ benchmarks:
         type: string
         flag: --pipeline-on
         help: where the pipeline runs, bench_pc (this computer) or latte_panda
+      stack:
+        type: string
+        flag: --stack
+        help: own (default, the job's pipeline commit) or running (the dv_pipeline_stack already up)
+      replace_stack:
+        type: boolean
+        flag: --replace-stack
+        help: stop a running dv_pipeline_stack for the benchmark, and start it again after
       repeats:
         type: integer
         flag: --repeats

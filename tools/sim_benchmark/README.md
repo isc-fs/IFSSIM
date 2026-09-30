@@ -135,26 +135,46 @@ driving, scored by the sim's referee: per mission, each track, each repeat (seed
 the way the Mission Control panel does (load the track, `resetScenario <seed>`, start the event,
 follow the referee, stop), over Mission Control's HTTP API and the sim's RPC, so it needs no ROS.
 
+**Which pipeline** (`--stack`): by default (`own`) the benchmark starts its own pipeline container,
+`bench-dv-stack`, with a copy of this checkout's `pipeline/` mounted in and rebuilt at start-up
+(`DV_REBUILD_ON_STARTUP`), so the runs use this checkout's pipeline commit, whatever the image was
+built from. The image is `$IFSSIM_DV_IMAGE` (the launcher's worker sets it), else `--image`, else the
+one `docker compose build` makes. The first start takes a few minutes (colcon build, Numba warm-up);
+the container is removed at the end and its log kept as `results/mission/stack_*.log`.
+`--stack running` uses the `dv_pipeline_stack` already running instead (quick tries; the recorded
+commit is then only this checkout's, which may not be what that container runs).
+
+Only one pipeline may drive the sim: with `--stack own` the benchmark refuses while a compose
+`dv_pipeline_stack` runs, or stops it for the benchmark and starts it again after with
+`--replace-stack`.
+
 **Where the pipeline runs** (`--pipeline-on`):
 
-- `bench_pc` (default): on this computer, in `dv_pipeline_stack`. To try it on any computer, without
-  the latte panda: start the sim, then `PIPELINE_ENABLED=true docker compose up -d`, then
+- `bench_pc` (default): on this computer. To try it on any computer, without the latte panda:
+  start the sim and Mission Control, then
   ```bash
   python3 tools/sim_benchmark/run_mission_benchmark.py --missions acceleration
   python3 tools/sim_benchmark/run_mission_benchmark.py --missions trackdrive --laps 3 --repeats 3 --start-noise
   ```
-- `latte_panda`: the pipeline runs on the latte panda (`PIPELINE_ENABLED=false` here). Give the
-  commands that start and stop it there, e.g. over ssh: `--panda-start`, `--panda-stop`, and
-  `--panda-sha` to record which commit it runs. Without them it refuses to start.
+- `latte_panda`: the benchmark's container runs only the sim bridge here, and the latte panda runs
+  the autonomy against it (`ros2 launch bringup sim_pipeline.launch.py`). Give the commands that
+  start and stop it there, e.g. over ssh: `--panda-start`, `--panda-stop`, and `--panda-sha` to
+  record which commit it runs. Without them it refuses to start.
 
 Each run is a folder under `results/mission/<mission>_<track>/<commit>/seed<k>/` (`manifest.json`
 with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `telemetry.csv`), the
 layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
 noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
 
-**Which code ran:** the pipeline that is already running (the container or the latte panda); the
-script doesn't check code out or build it. Each run records where the pipeline ran and how its
-commit is known. Pipeline parameter overrides aren't supported yet for this benchmark.
+**Pipeline parameter overrides** (`--pipeline-overrides <file.json>`, `{node: {param: value}}`; the
+`pipeline:` section of a run spec): checked against the pipeline's `bringup/config/params.yaml`
+(an unknown node or parameter, or a wrong type, stops the benchmark before anything runs), merged
+into the copy mounted into the stack, and recorded in each run's `manifest.json` (`params`).
+`cone_detection` is `cone_detection_node`; a dotted name is a nested parameter. They need
+`--stack own` on the bench PC, and a pipeline commit with `params.yaml` (IFS09-DV-PIPELINE #8).
+
+**Which code ran:** each run records where the pipeline ran and how its commit is known: this
+checkout's (`--stack own`), the latte panda's (`--panda-sha`), or unsure (`--stack running`).
 
 ## Running from a spec (`bench-run`)
 

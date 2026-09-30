@@ -16,24 +16,35 @@ For each mission, track and repeat (in that order), one run:
 
 WHERE THE PIPELINE RUNS (``--pipeline-on``):
 
-  bench_pc     The pipeline runs on this computer, in the ``dv_pipeline_stack`` container
-               (``docker compose up`` with ``PIPELINE_ENABLED=true``). Nothing else is needed, so
-               this is how to try the benchmark on any of our computers, without the latte panda.
-  latte_panda  The pipeline runs on the latte panda; this computer runs the sim, the bridge and
-               the fake uDV (``PIPELINE_ENABLED=false``). ``--panda-start`` / ``--panda-stop`` are
-               the commands that start and stop it there (e.g. over ``ssh``); they are required,
-               because how the latte panda is reached isn't settled yet (docs/PLAN.md in
-               IFS-DV-BENCHWEB, "To discuss"). ``--panda-sha`` prints the commit it runs, recorded
-               with every run.
+  bench_pc     On this computer. With ``--stack own`` (the default) the benchmark starts its own
+               pipeline container (``bench-dv-stack``) from THIS checkout's ``pipeline/``: a copy of
+               it is mounted into the image (``$IFSSIM_DV_IMAGE``, else the one ``docker compose``
+               builds) and rebuilt at start-up, so the runs use exactly this checkout's pipeline
+               commit, which is what gets recorded. This is how to try the benchmark on any of our
+               computers, without the latte panda.
+  latte_panda  On the latte panda. The benchmark's container runs only the sim bridge here; the
+               pipeline (``ros2 launch bringup sim_pipeline.launch.py``: the autonomy against a
+               bridge elsewhere) runs there, started and stopped by ``--panda-start`` /
+               ``--panda-stop`` (e.g. over ``ssh``), which are required because how the latte panda
+               is reached isn't settled yet (docs/PLAN.md in IFS-DV-BENCHWEB). ``--panda-sha``
+               prints the commit it runs, recorded with every run.
 
-WHICH CODE RAN: the pipeline is the one already running (the container, or the latte panda); this
-script doesn't check code out or build it. Each run records where the pipeline ran and, when
-known, its commit; with ``bench_pc`` that is the running container's code, not necessarily the
-checkout this script runs from.
+``--stack running`` uses the ``dv_pipeline_stack`` that is already running instead (quick tries):
+the code is then whatever that container has, and each run says so. Only one pipeline may drive
+the sim, so ``--stack own`` refuses while another stack runs, unless ``--replace-stack`` (it stops
+that one for the benchmark and starts it again at the end).
+
+PARAMETER OVERRIDES (``--pipeline-overrides FILE``, JSON ``{node: {param: value}}``; the launcher
+writes it from a spec's ``pipeline:`` section): checked against this checkout's
+``pipeline/bringup/config/params.yaml`` (unknown node, unknown parameter or wrong type: refused
+before anything runs), merged into it, and loaded by every launch of the benchmark's own stack.
+``cone_detection`` means ``cone_detection_node`` (the same settings the simulator bag benchmark
+calls ``cone_detection``). Needs ``--stack own`` on the bench PC, and a pipeline commit that has
+``params.yaml``; each run records what was overridden.
 
 The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451),
 Mission Control's backend on ``--mc-url`` (default http://127.0.0.1:8000, ``--mc-key`` if it has an
-API key). No ROS is needed here: it's HTTP and the sim's line protocol.
+API key). This script itself needs no ROS: it's HTTP, the sim's line protocol and ``docker``.
 
 Progress (mission, track, lap) goes to ``$BENCH_PROGRESS_FILE`` when the launcher's worker sets it.
 
@@ -51,9 +62,11 @@ import json
 import math
 import os
 import random
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -301,6 +314,266 @@ class PipelineHost:
                 log(f"warning: {e}")
 
 
+# ------------------------------------------------------------------ the pipeline stack
+CONTAINER = "bench-dv-stack"
+WS = "/dv_pipeline_stack_ws"
+DEFAULT_IMAGE = "ifssim-dv_pipeline_stack:latest"  # what `docker compose build` makes
+STACK_READY = (
+    "IFSSIM ROS stack starting"  # the entrypoint says it after the rebuild and warmup
+)
+STACK_UP_TIMEOUT_S = 1200.0  # rebuild (C++ too) + a cold Numba cache
+PARAMS = Path("bringup") / "config" / "params.yaml"
+COMPONENT_ALIASES = {"cone_detection": "cone_detection_node"}
+
+
+def docker(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
+    """Run ``docker`` (tests replace this)."""
+    try:
+        return subprocess.run(
+            ["docker", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise BenchmarkError(f"docker {args[0]}: {e}") from None
+
+
+def running_stacks() -> list[str]:
+    """Other pipeline stack containers running now (docker compose's dv_pipeline_stack)."""
+    r = docker("ps", "--format", "{{.Names}}")
+    return [n for n in r.stdout.split() if "dv_pipeline_stack" in n and n != CONTAINER]
+
+
+def _kind(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true/false"
+    if isinstance(v, int):
+        return "an integer"
+    if isinstance(v, float):
+        return "a number"
+    return (
+        "a list"
+        if isinstance(v, list)
+        else "a string"
+        if isinstance(v, str)
+        else type(v).__name__
+    )
+
+
+def merged_params(
+    params_file: Path, overrides: dict[str, dict]
+) -> tuple[str, dict[str, Any]]:
+    """``params.yaml`` with ``overrides`` applied. Returns (the file's new text, {"node.param": value}
+    of what changed). Every problem is reported at once."""
+    if not params_file.is_file():
+        raise BenchmarkError(
+            f"parameter overrides need the pipeline's {PARAMS} (added in IFS09-DV-PIPELINE #8); "
+            f"this checkout's pipeline commit predates it"
+        )
+    doc = yaml.safe_load(params_file.read_text()) or {}
+    errors, changed = [], {}
+    for comp, values in overrides.items():
+        node = COMPONENT_ALIASES.get(comp, comp)
+        params = (doc.get(node) or {}).get("ros__parameters")
+        if not isinstance(params, dict):
+            errors.append(f"{comp}: not a node in {PARAMS} ({', '.join(doc)})")
+            continue
+        if not isinstance(values, dict):
+            errors.append(f"{comp}: must be a mapping of parameter to value")
+            continue
+        for key, value in values.items():
+            # a dotted name is a nested parameter: "ekf.q_pos" is ekf: {q_pos: ...}
+            *parents, name = str(key).split(".")
+            target = params
+            for part in parents:
+                target = target.get(part) if isinstance(target, dict) else None
+            if not isinstance(target, dict) or name not in target:
+                errors.append(f"{comp}.{key}: not a parameter of {node}")
+                continue
+            old = target[name]
+            if _kind(old) == "a number" and _kind(value) == "an integer":
+                value = float(
+                    value
+                )  # 1 for a double parameter is 1.0 (ROS refuses an int)
+            if _kind(value) != _kind(old):
+                errors.append(
+                    f"{comp}.{key}: must be {_kind(old)} like its default {old!r}, not {value!r}"
+                )
+                continue
+            target[name] = value
+            changed[f"{node}.{key}"] = value
+    if errors:
+        raise BenchmarkError("pipeline overrides:\n  " + "\n  ".join(errors))
+    note = "# params.yaml with the benchmark's overrides applied (run_mission_benchmark.py)\n"
+    return note + yaml.safe_dump(doc, sort_keys=False), changed
+
+
+@dataclass
+class Stack:
+    """The pipeline stack the runs drive: the benchmark's own container, or the running one."""
+
+    mode: str  # own | running
+    where: str  # bench_pc | latte_panda
+    image: str
+    checkout: Path
+    sim_port: int = 41451
+    overrides: dict[str, dict] = field(default_factory=dict)
+    replace: bool = False
+    changed: dict[str, Any] = field(default_factory=dict)
+    stopped: list[str] = field(default_factory=list)
+    started: bool = False
+    tmp: Path | None = None
+    log_file: Path | None = None
+
+    def check(self) -> None:
+        if self.mode not in ("own", "running"):
+            raise BenchmarkError(f"--stack: own or running, not {self.mode!r}")
+        if self.mode == "running" and self.where == "latte_panda":
+            raise BenchmarkError(
+                "--pipeline-on latte_panda needs --stack own: the running dv_pipeline_stack has its "
+                "own pipeline, and two pipelines can't drive one sim"
+            )
+        if self.overrides and (self.mode != "own" or self.where != "bench_pc"):
+            raise BenchmarkError(
+                "pipeline overrides need --stack own and --pipeline-on bench_pc (they go into the "
+                "benchmark's own stack; not yet to the running one or the latte panda)"
+            )
+        if self.overrides:  # before anything starts: a typo fails the job here
+            _, self.changed = merged_params(
+                self.checkout / "pipeline" / PARAMS, self.overrides
+            )
+
+    def up(self, log, wait_s: float = STACK_UP_TIMEOUT_S, poll_s: float = 5.0) -> None:
+        if self.mode == "running":
+            if not running_stacks():
+                raise BenchmarkError(
+                    "--stack running: no dv_pipeline_stack is running (docker compose up -d), "
+                    "or leave --stack own to start one from this checkout"
+                )
+            return
+        others = running_stacks()
+        if others and not self.replace:
+            raise BenchmarkError(
+                f"another pipeline stack is running ({', '.join(others)}), and only one may drive the "
+                "sim: stop it (docker compose stop dv_pipeline_stack), or pass --replace-stack to "
+                "stop it for the benchmark and start it again after"
+            )
+        for name in others:
+            log(f"stopping {name} for the benchmark (started again at the end)")
+            docker("stop", name, timeout=120)
+            self.stopped.append(name)
+        docker("rm", "-f", CONTAINER)
+        run = [
+            "run",
+            "-d",
+            "--name",
+            CONTAINER,
+            "--network",
+            "host",
+            "-e",
+            "IFSSIM_HOST=127.0.0.1",
+            "-e",
+            f"IFSSIM_PORT={self.sim_port}",
+            "-e",
+            f"ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '0')}",
+            "-e",
+            "NUMBA_CACHE_DIR=/numba_cache",
+            "-v",
+            "bench_numba_cache:/numba_cache",
+            "-e",
+            f"FASTRTPS_DEFAULT_PROFILES_FILE={WS}/fastdds_profile.xml",
+        ]
+        for var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
+            run += [
+                "-e",
+                f"{var}={os.environ.get(var, '2')}",
+            ]  # as docker-compose.yml (#247)
+        if self.where == "bench_pc":
+            # a copy of this checkout's pipeline: the container builds into it, never into the checkout
+            self.tmp = Path(tempfile.mkdtemp(prefix="bench-dv-stack-"))
+            src = self.tmp / "pipeline"
+            shutil.copytree(
+                self.checkout / "pipeline", src, ignore=shutil.ignore_patterns(".git")
+            )
+            if self.overrides:
+                text, self.changed = merged_params(src / PARAMS, self.overrides)
+                (src / PARAMS).write_text(text)
+                log(
+                    "pipeline overrides: "
+                    + ", ".join(f"{k}={v!r}" for k, v in self.changed.items())
+                )
+            for pkg in sorted(
+                p for p in src.iterdir() if (p / "package.xml").is_file()
+            ):
+                run += ["-v", f"{pkg}:{WS}/src/{pkg.name}"]
+            run += ["-e", "DV_REBUILD_ON_STARTUP=true", self.image]
+            ready = STACK_READY
+        else:  # the latte panda runs the pipeline: here only the sim bridge
+            launch = (
+                f"source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && "
+                f"exec ros2 launch {WS}/bridge.launch.py host:=127.0.0.1 port:={self.sim_port}"
+            )
+            run += ["--entrypoint", "bash", self.image, "-c", launch]
+            ready = None
+        log(
+            f"starting the pipeline stack ({'pipeline from this checkout' if ready else 'bridge only'}, {self.image})"
+        )
+        r = docker(*run, timeout=600)
+        self.started = (
+            True  # a failed run may still leave a container: down() removes it
+        )
+        if r.returncode != 0:
+            raise BenchmarkError(
+                f"docker run {self.image}: {(r.stderr or r.stdout).strip()[:300]}"
+            )
+        t0 = time.monotonic()
+        while True:
+            state = docker(
+                "inspect", "-f", "{{.State.Running}}", CONTAINER
+            ).stdout.strip()
+            logs = docker("logs", CONTAINER, timeout=60)
+            text = (logs.stdout or "") + (logs.stderr or "")
+            if state != "true":
+                tail = "\n".join(text.strip().splitlines()[-15:])
+                raise BenchmarkError(
+                    f"the pipeline stack stopped while starting:\n{tail}"
+                )
+            if ready is None or ready in text:
+                break
+            if time.monotonic() - t0 > wait_s:
+                raise BenchmarkError(
+                    f"the pipeline stack didn't come up within {wait_s:.0f} s"
+                )
+            time.sleep(poll_s)
+        log(f"pipeline stack up ({time.monotonic() - t0:.0f} s)")
+
+    def down(self, log, results: Path | None = None) -> None:
+        if not self.started:
+            for name in self.stopped:  # stopped, then failed before our stack ran
+                docker("start", name)
+            return
+        if results is not None:
+            logs = docker("logs", CONTAINER, timeout=60)
+            try:
+                results.mkdir(parents=True, exist_ok=True)
+                self.log_file = (
+                    results / f"stack_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.log"
+                )
+                self.log_file.write_text((logs.stdout or "") + (logs.stderr or ""))
+            except OSError:
+                pass
+        docker("rm", "-f", CONTAINER)
+        for name in self.stopped:
+            log(f"starting {name} again")
+            docker("start", name)
+        if self.tmp is not None:
+            shutil.rmtree(
+                self.tmp, ignore_errors=True
+            )  # the container's build files are root's
+
+
 # ------------------------------------------------------------------ one run
 def yaw_of(q: dict) -> float:
     qw, qx, qy, qz = (float(q.get(k, 0.0)) for k in ("qw", "qx", "qy", "qz"))
@@ -489,19 +762,34 @@ def _write_csv(path: Path, rows: list[dict], cols: list[str]) -> None:
         w.writerows(rows)
 
 
-def code_state(host: PipelineHost) -> dict[str, Any]:
+def code_state(
+    host: PipelineHost, stack: Stack | None = None, repo: Path = REPO
+) -> dict[str, Any]:
     def git(*args: str) -> str | None:
         r = subprocess.run(
-            ["git", "-C", str(REPO), *args], capture_output=True, text=True, check=False
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
         )
         return r.stdout.strip() if r.returncode == 0 else None
 
     sub = (
         git("-C", "pipeline", "rev-parse", "--short", "HEAD")
-        if (REPO / "pipeline").exists()
+        if (repo / "pipeline").exists()
         else None
     )
-    pipe_sha = host.sha[:7] if host.sha else (sub or "unknown")
+    own = stack is not None and stack.mode == "own" and host.where == "bench_pc"
+    if host.where == "latte_panda":
+        pipe_sha = host.sha[:7] if host.sha else "unknown"
+        source = (
+            "the latte panda (--panda-sha)" if host.sha else "unknown (no --panda-sha)"
+        )
+    elif own:
+        pipe_sha, source = (
+            sub or "unknown",
+            "this checkout, run in the benchmark's own stack",
+        )
+    else:
+        pipe_sha = sub or "unknown"
+        source = "this checkout's pipeline submodule; the running stack may differ (--stack running)"
     return {
         "ifssim": {
             "sha": (git("rev-parse", "--short", "HEAD") or "unknown"),
@@ -511,19 +799,22 @@ def code_state(host: PipelineHost) -> dict[str, Any]:
         "pipeline": {
             "sha": pipe_sha,
             "branch": "",
-            "dirty": False,
-            # where it ran, and how sure the sha is (see the module docstring, WHICH CODE RAN)
+            "dirty": bool(git("-C", "pipeline", "status", "--porcelain"))
+            if own
+            else False,
+            # where it ran, and how sure the sha is (see the module docstring)
             "ran_on": host.where,
-            "sha_source": "the latte panda (--panda-sha)"
-            if host.sha
-            else "this checkout's pipeline submodule (the running stack may differ)",
+            "sha_source": source,
         },
         "sim_build": {"id": "running sim", "plugin_sha": ""},
     }
 
 
 def write_run(
-    results: Path, res: RunResult, code: dict[str, Any], tracks_dir: Path
+    results: Path,
+    res: RunResult,
+    code: dict[str, Any],
+    params: dict[str, Any] | None = None,
 ) -> Path:
     r, m = res.run, res.run.settings
     track = Path(r.track).stem
@@ -552,7 +843,9 @@ def write_run(
             },
         },
         "code": code,
-        "params": {},
+        "params": dict(
+            params or {}
+        ),  # the pipeline overrides in effect, "node.param": value
         "referee": {
             "Laps": ref.get("lap_times") or [],
             "DooCounter": int(ref.get("doo_counter") or 0),
@@ -624,6 +917,21 @@ def run(
         args.pipeline_on, args.panda_start, args.panda_stop, args.panda_sha
     )
     host.check()
+    pipeline_overrides = (
+        json.loads(Path(args.pipeline_overrides).read_text() or "{}")
+        if args.pipeline_overrides
+        else {}
+    )
+    stack = Stack(
+        args.stack,
+        args.pipeline_on,
+        args.image or os.environ.get("IFSSIM_DV_IMAGE") or DEFAULT_IMAGE,
+        Path(getattr(args, "checkout", None) or REPO),
+        int(args.sim.rsplit(":", 1)[1]),
+        pipeline_overrides,
+        args.replace_stack,
+    )
+    stack.check()
     sim = sim or Sim(*(args.sim.rsplit(":", 1)[0], int(args.sim.rsplit(":", 1)[1])))
     mc = mc or MissionControl(args.mc_url, args.mc_key or os.environ.get("MC_API_KEY"))
     status = mc.get("/api/sim/status") or {}
@@ -635,10 +943,15 @@ def run(
     log(f"{len(runs)} run(s); pipeline on {host.where}")
     progress = Progress(runs)
     results = Path(args.results_root)
-    host.up(log)
-    code = code_state(host)
+    code = code_state(host, stack, stack.checkout)
     worst = 0
     try:
+        stack.up(log)
+        host.up(log)
+        if host.where == "latte_panda":
+            code = code_state(
+                host, stack, stack.checkout
+            )  # now with the latte panda's commit
         for r in runs:
             try:
                 res = run_one(r, sim, mc, progress, log, poll_s=args.poll_s)
@@ -646,7 +959,7 @@ def run(
                 res = RunResult(
                     r, "error", datetime.now(timezone.utc), 0.0, error=str(e)
                 )
-            d = write_run(results, res, code, REPO / "Content" / "tracks")
+            d = write_run(results, res, code, stack.changed)
             laps = res.referee.get("lap_times") or []
             log(
                 f"{r.mission} · {Path(r.track).stem} · seed {r.seed}: {res.outcome}"
@@ -657,6 +970,7 @@ def run(
             worst = max(worst, 0 if res.outcome == "finished" else 1)
     finally:
         host.down(log)
+        stack.down(log, results / "mission")
     return worst
 
 
@@ -709,21 +1023,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--poll-s", type=float, default=POLL_S, help=argparse.SUPPRESS)
     ap.add_argument(
         "--pipeline-overrides",
-        help="not supported yet for missions: pipeline params reach the running stack",
+        help="JSON file {node: {param: value}}, merged into params.yaml (see PARAMETER OVERRIDES)",
+    )
+    ap.add_argument(
+        "--stack",
+        default="own",
+        choices=("own", "running"),
+        help="own: start a pipeline stack from this checkout (default); running: use the running one",
+    )
+    ap.add_argument(
+        "--replace-stack",
+        action="store_true",
+        help="stop a running dv_pipeline_stack for the benchmark, and start it again after",
+    )
+    ap.add_argument(
+        "--image",
+        help=f"the stack's image (default $IFSSIM_DV_IMAGE or {DEFAULT_IMAGE})",
     )
     args = ap.parse_args(argv)
-    if args.pipeline_overrides:
-        try:
-            given = json.loads(Path(args.pipeline_overrides).read_text() or "{}")
-        except (OSError, ValueError):
-            given = {"?": 1}
-        if given:
-            print(
-                "error: pipeline parameter overrides aren't supported by the mission benchmark yet "
-                "(the pipeline is the one already running)",
-                file=sys.stderr,
-            )
-            return 2
     try:
         return run(args)
     except BenchmarkError as e:
