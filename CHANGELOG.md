@@ -49,14 +49,17 @@ shipping pipeline, documentation.
   this file.
 - The benchmarks accept bags and results outside `tools/sim_benchmark/`
   (`common.DockerPaths`), as the central machine keeps them elsewhere.
-- **Perception sanity plots** (`tools/sim_benchmark/perception_sanity_plots.py`):
-  one interactive HTML page per run that puts a single LiDAR scan from each
-  bag (sim or real) through the production cone detector and shows ground
-  removal, DBSCAN clusters with each cluster's gate verdict, and the cone fit
-  against both templates. It is for checking by eye what the numeric
-  benchmarks can't show.
-  `diagnose_cone_shape.py` measures the simulator's real cone shape per type.
-  Both need the ground-at-z=0 pipeline from
+- **Perception sanity plots.** The perception benchmark now puts one LiDAR
+  scan (`--sanity-scan`, the first by default) through the production cone
+  detector with every stage recorded (`tools/sim_benchmark/perception_sanity.py`)
+  and writes it as `perception_sanity.json`. IFS-DV-BENCHWEB shows it as three
+  charts in a simulator bag's perception section: ground removal, DBSCAN
+  clusters with each cluster's gate verdict, and the cone fit against both
+  templates. They are for checking by eye what the numeric benchmarks can't
+  show. `perception_sanity_plots.py` makes the same plots as a standalone page
+  for any bag, including real ones, and `diagnose_cone_shape.py` measures the
+  simulator's real cone shape per type. All of them need the ground-at-z=0
+  pipeline from
   [IFS09 `fix/2-perception-ground-z0`](https://github.com/isc-fs/IFS09-DV-PIPELINE/issues/13).
 
 ### Changed

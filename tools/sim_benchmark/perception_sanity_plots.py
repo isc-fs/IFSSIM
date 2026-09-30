@@ -18,9 +18,11 @@ Sim bags: compare against one recorded at the datasheet LiDAR rate
 (``PointsPerSecond`` 1740000, ~95k points per scan); the 300k default gives
 ~8k points per scan and is not representative of the real Hesai.
 
-Nothing is re-implemented: the stage functions ``detect`` calls are wrapped to
-record their inputs and outputs, so the plots show exactly what production
-computed. Everything is drawn in the frame the fit runs in: sensor xy origin,
+Nothing is re-implemented: ``perception_sanity.capture`` wraps the stage functions
+``detect`` calls to record their inputs and outputs, so the plots show exactly what
+production computed. Sim bag benchmarks record the same capture
+(``perception_sanity.json``), which IFS-DV-BENCHWEB shows in the perception section;
+this script is for any bag, including real ones. Everything is drawn in the frame the fit runs in: sensor xy origin,
 rotated so the RANSAC ground plane is horizontal and shifted so it is z = 0.
 
 Example (from the repo root; re-execs in ifssim-dv_pipeline_stack when the host
@@ -42,11 +44,16 @@ import os
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from common import _in_ros_env, dv_pipeline_ros_setup_shell, repo_root, results_dir
+from perception_sanity import StageCapture
+from perception_sanity import capture as run_instrumented
+from perception_sanity import pipeline_path as _pipeline_path
+from perception_sanity import rows_not_in as _rows_not_in
+from perception_sanity import template_fits as _template_fits
+from perception_sanity import to_ground_frame as _to_ground_frame
 
 PLOTLY_JS = "https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.0/plotly.min.js"
 
@@ -148,180 +155,6 @@ def read_scan(bag: str, topic_override: str | None, scan_index: int):
 
 
 # ---------------------------------------------------------------------------
-# Instrumented detection run
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ClusterInfo:
-    label: int
-    points: object  # (N, 3) rotated frame, before the floor cull
-    fate: str
-    accepted: bool = False
-    fit: dict | None = None
-
-
-@dataclass
-class StageCapture:
-    cropped: object = None  # (N, 3) sensor frame, what RANSAC saw
-    ground_mask: object = None  # (N,) bool over ``cropped``
-    rotation: object = None  # 3x3
-    plane: object = None
-    floor_z: float = 0.0  # ground z in the rotated SENSOR frame (−sensor height)
-    vetoed: object = None  # (M, 3) rotated, removed by the tall-column veto
-    guard_dropped: object = None  # (K, 3) rotated, removed by the DBSCAN guard
-    labels: object = None
-    clustered: object = None  # rotated points DBSCAN labelled
-    fits: list = field(default_factory=list)  # [(clean_cone, result tuple)]
-    clusters: list = field(default_factory=list)
-    cones: list = field(default_factory=list)
-    n_raw: int = 0
-    n_nonfinite: int = 0
-
-
-def _rows_not_in(big, small):
-    """Rows of ``big`` absent from ``small`` (exact float match; both float arrays)."""
-    import numpy as np
-
-    if len(small) == len(big):
-        return big[:0]
-    small_set = {r.tobytes() for r in np.ascontiguousarray(small)}
-    keep = [r.tobytes() not in small_set for r in np.ascontiguousarray(big)]
-    return big[np.asarray(keep, dtype=bool)]
-
-
-def run_instrumented(xyz) -> StageCapture:
-    import numpy as np
-
-    import cone_detection.cone_detection as cd
-
-    cap = StageCapture(n_raw=len(xyz), n_nonfinite=int((~np.isfinite(xyz).all(axis=1)).sum()))
-    cfg = cd.ConeDetectionConfig()
-    orig = {
-        name: getattr(cd, name)
-        for name in ("ransac2", "_tall_column_veto_mask", "_bound_dbscan_input", "_fit_cluster")
-    }
-    veto_in: dict = {}
-
-    def ransac2(A, **kw):
-        inliers, coefs = orig["ransac2"](A, **kw)
-        mask = np.zeros(len(A), dtype=bool)
-        mask[inliers] = True
-        cap.cropped = np.asarray(A[:, 1:4])
-        cap.ground_mask = mask
-        return inliers, coefs
-
-    def veto(xy, height, c):
-        keep = orig["_tall_column_veto_mask"](xy, height, c)
-        veto_in["keep"] = keep
-        return keep
-
-    def guard(data, c):
-        out = orig["_bound_dbscan_input"](data, c)
-        cap.guard_dropped = _rows_not_in(data, out)
-        return out
-
-    def fit(clean_cone, c, **kw):
-        res = orig["_fit_cluster"](clean_cone, c, **kw)
-        cap.fits.append((np.array(clean_cone), res))
-        return res
-
-    cd.ransac2, cd._tall_column_veto_mask = ransac2, veto
-    cd._bound_dbscan_input, cd._fit_cluster = guard, fit
-    real_sep = cd.clustering_separation_rt
-
-    def sep(data, config=None, **kw):
-        labels, clean, coefs = real_sep(data, config, **kw)
-        cap.labels, cap.clustered, cap.plane = np.asarray(labels), np.asarray(clean), coefs
-        return labels, clean, coefs
-
-    cd.clustering_separation_rt = sep
-    try:
-        # Warmup runs detect() on a synthetic scan through the same hooks;
-        # drop what it recorded so a stage the real scan skips stays empty.
-        cd.warmup_numba_functions(cfg)
-        cap.fits.clear()
-        veto_in.clear()
-        cap.cropped = cap.ground_mask = cap.guard_dropped = None
-        cap.labels = cap.clustered = cap.plane = None
-        cap.cones = cd.RealtimeConeDetector(cfg).detect(xyz)
-    finally:
-        for name, fn in orig.items():
-            setattr(cd, name, fn)
-        cd.clustering_separation_rt = real_sep
-
-    if cap.cropped is None:
-        return cap  # empty scan after the range crop
-    cap.rotation = cd.ground_rotation_matrix(cap.plane)
-    w = np.asarray(cap.plane[1:], dtype=np.float64)
-    cap.floor_z = float(np.dot([0.0, 0.0, -cap.plane[0]], w) / np.linalg.norm(w))
-    outliers_rot = _to_ground_frame(cap, cap.cropped[~cap.ground_mask])
-    keep = veto_in.get("keep")
-    cap.vetoed = outliers_rot[~keep] if keep is not None else outliers_rot[:0]
-    if cap.guard_dropped is None:
-        cap.guard_dropped = outliers_rot[:0]
-    _classify_clusters(cap, cfg)
-    return cap
-
-
-def _to_ground_frame(cap: StageCapture, pts):
-    """Sensor-frame points → the frame clustering runs in (ground plane = z=0)."""
-    out = pts @ cap.rotation
-    out[:, 2] -= cap.floor_z
-    return out
-
-
-def _classify_clusters(cap: StageCapture, cfg) -> None:
-    """Replay detect()'s per-cluster gates to label each cluster's fate.
-
-    Fits are matched to clusters in loop order; the count check below fails
-    loudly if this replay ever drifts from ``RealtimeConeDetector.detect``.
-    """
-    import numpy as np
-
-    if cap.labels is None or len(cap.labels) == 0:
-        return
-    fits = iter(cap.fits)
-    n_fitted = 0
-    accepted_xy = {(round(c[0], 6), round(c[1], 6)) for c in cap.cones}
-    for label in np.unique(cap.labels):
-        pts = cap.clustered[cap.labels == label]
-        info = ClusterInfo(label=int(label), points=pts, fate="")
-        clean = pts[pts[:, 2] > cfg.floor_margin_m]
-        if len(pts) < cfg.min_cluster_points:
-            info.fate = f"dropped: {len(pts)} pts < min {cfg.min_cluster_points}"
-        elif len(clean) == 0:
-            info.fate = "dropped: all points below floor margin"
-        else:
-            height = float(clean[:, 2].max() - clean[:, 2].min())
-            rng = float(np.hypot(clean[:, 0].mean(), clean[:, 1].mean()))
-            if not cfg.cluster_height_min_m <= height <= cfg.cluster_height_max_m:
-                info.fate = f"dropped: height {height:.2f} m outside [{cfg.cluster_height_min_m}, {cfg.cluster_height_max_m}]"
-            elif rng > cfg.range_gate_max_m:
-                info.fate = f"dropped: range {rng:.1f} m > {cfg.range_gate_max_m}"
-            else:
-                clean_cone, (a, b, c, d, res_min, res_other, is_big) = next(fits)
-                n_fitted += 1
-                info.accepted = (round(a, 6), round(b, 6)) in accepted_xy
-                info.fit = {
-                    "a": a, "b": b, "c": c, "d": d, "res_min": res_min,
-                    "res_other": res_other, "is_big": is_big, "clean": clean_cone,
-                    "range": rng, "height": height,
-                }
-                rmse_mm = 1000.0 * float(np.sqrt(res_min)) if np.isfinite(res_min) else float("inf")
-                info.fate = (
-                    f"accepted ({'big' if is_big else 'small'}, RMSE {rmse_mm:.0f} mm)"
-                    if info.accepted
-                    else f"dropped: residual RMSE {rmse_mm:.0f} mm > gate {1000 * cfg.residual_gate_mse ** 0.5:.0f} mm"
-                )
-        cap.clusters.append(info)
-    if n_fitted != len(cap.fits):
-        raise RuntimeError(
-            f"gate replay drifted from detect(): matched {n_fitted} fits, detect ran {len(cap.fits)}"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Plotly figure JSON
 # ---------------------------------------------------------------------------
 
@@ -420,34 +253,6 @@ def _cone_surface(a, b, c, d, z0, n_theta: int = 40, n_z: int = 12) -> dict:
 
 
 TEMPLATE_COLORS = {"small": "#1f77b4", "big": "#ff7f0e", "pipeline": "#2ca02c"}
-
-
-def _template_fits(clean) -> list[dict]:
-    """Fit both FSAE templates to ``clean`` with the production solver settings."""
-    import numpy as np
-
-    import cone_detection.cone_fit as cf
-    from cone_detection.cone_detection import ConeDetectionConfig
-
-    cfg = ConeDetectionConfig()
-    out = []
-    for kind, c_fix, d_fix in (("small", cf._CONE_SMALL_C, cf._CONE_SMALL_D), ("big", cf._CONE_BIG_C, cf._CONE_BIG_D)):
-        a, b, c, d, mse = cf.cone_fit_template(
-            clean, c_fix, d_fix, solver=cfg.cone_fit_solver, maxiter=cfg.template_fit_maxiter
-        )
-        out.append({"kind": kind, "a": a, "b": b, "c": c, "d": d, "mse": mse})
-    return out
-
-
-def _pipeline_path(f: dict) -> str:
-    """Which branch of ``_fit_cluster`` produced the pipeline's result."""
-    import numpy as np
-
-    if np.isnan(f["res_other"]):
-        return "collinear closed-form fit"
-    if np.isinf(f["res_other"]):
-        return f"early exit on height {f['height']:.2f} m, one template tried"
-    return "both templates tried"
 
 
 def fig_cone_fit(cap: StageCapture, max_clusters: int) -> dict | None:

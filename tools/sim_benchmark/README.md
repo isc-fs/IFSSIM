@@ -13,7 +13,8 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `run_mission_benchmark.py` — the pipeline drives the missions in the simulator, scored by the referee; defaults in `missions.yaml`. See [Mission benchmarks](#mission-benchmarks).
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
-- `perception_sanity_plots.py` — visual check of one scan per bag (sim or real): interactive 3D ground removal, DBSCAN clusters with per-cluster gate verdicts, and a single-cluster cone-fit view. `python tools/sim_benchmark/perception_sanity_plots.py --bag <sim_bag> --bag <real_bag>`
+- `perception_sanity.py` — records what each cone-detection stage did to one scan (ground removal, DBSCAN clusters with each cluster's gate verdict, cone fits with both templates). `run_perception_benchmark.py` writes it as `perception_sanity.json` for the first scan (`--sanity-scan N` for another, `-1` for none), and IFS-DV-BENCHWEB shows it as the three "Sanity check" charts in a simulator bag's perception section.
+- `perception_sanity_plots.py` — the same capture as a standalone HTML page, for any bag including real ones: `python tools/sim_benchmark/perception_sanity_plots.py --bag <sim_bag> --bag <real_bag>`
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
 - `slam_metrics.py` / `slam_report.py` — GT cone injection, trajectory and error plots.
 - `control_benchmark_node.py` — online GT control error harness.
