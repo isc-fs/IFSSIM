@@ -577,9 +577,19 @@ class Stack:
             log(f"starting {name} again")
             docker("start", name)
         if self.tmp is not None:
-            shutil.rmtree(
-                self.tmp, ignore_errors=True
-            )  # the container's build files are root's
+            # the stack ran as root and left root-owned files (__pycache__) in the copy
+            docker(
+                "run",
+                "--rm",
+                "--entrypoint",
+                "rm",
+                "-v",
+                f"{self.tmp}:/copy",
+                self.image,
+                "-rf",
+                "/copy/pipeline",
+            )
+            shutil.rmtree(self.tmp, ignore_errors=True)
 
 
 # ------------------------------------------------------------------ one run

@@ -199,7 +199,7 @@ class FakeDocker:
             out = "\n".join(["mission_control", *self.others])
         elif args[0] == "stop":
             self.others.remove(args[1])
-        elif args[0] == "run":
+        elif args[0] == "run" and "--rm" not in args:
             for i, a in enumerate(args):
                 if a == "-v" and args[i + 1].endswith(
                     ":/dv_pipeline_stack_ws/src/bringup"
@@ -217,7 +217,7 @@ class FakeDocker:
         return subprocess.CompletedProcess(["docker", *args], code, out, "")
 
     def run_args(self):
-        [r] = [c for c in self.calls if c[0] == "run"]
+        [r] = [c for c in self.calls if c[0] == "run" and "--rm" not in c]
         return r
 
 
@@ -401,7 +401,9 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     ]
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
-    assert docker.calls[-1] == ["rm", "-f", rmb.CONTAINER]
+    assert ["rm", "-f", rmb.CONTAINER] in docker.calls
+    # root-owned files in the copy are removed from a container, as root
+    assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
     assert list((tmp_path / "results" / "mission").glob("stack_*.log"))
     assert not Path(mounts[-1].split(":")[0]).exists()  # the copy is cleaned up
 
@@ -490,7 +492,11 @@ def test_another_stack_is_refused_or_replaced_and_started_again(
     docker.calls.clear()
     rc, _ = _run(tmp_path / "b", world, replace_stack=True)
     assert rc == 0
-    kinds = [c[:2] for c in docker.calls if c[0] in ("stop", "run", "start")]
+    kinds = [
+        c[:2]
+        for c in docker.calls
+        if c[0] in ("stop", "run", "start") and "--rm" not in c
+    ]
     assert kinds[0] == ["stop", "ifssim-dv_pipeline_stack-1"] and kinds[1][0] == "run"
     assert kinds[-1] == ["start", "ifssim-dv_pipeline_stack-1"]
 
@@ -502,7 +508,7 @@ def test_a_stack_that_dies_while_starting_shows_its_log(tmp_path, world, monkeyp
         rmb.BenchmarkError, match="stopped while starting:\ncolcon build"
     ):
         _run(tmp_path, world)
-    assert fake.calls[-1] == ["rm", "-f", rmb.CONTAINER]
+    assert ["rm", "-f", rmb.CONTAINER] in fake.calls
     assert not any(c.startswith("POST /api/event/start") for c in world.calls)
 
 
