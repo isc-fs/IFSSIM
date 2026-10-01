@@ -78,6 +78,18 @@ shipping pipeline, documentation.
   After pulling, run `git submodule sync --recursive && git submodule
   update --init --recursive`. Otherwise your checkout keeps fetching
   from the old URL.
+- **The start pose follows the ground.** `ComputeStartGatePose` used to
+  set the car at `HeightOffset + 50` cm, level, whatever was underneath. On
+  the 8° test ramp that put the car 15 cm inside the ramp. It now takes Z
+  from the ground under the spawn point and pitch/roll from a plane fitted
+  to a 4-ray cross ±0.8 m around it, keeping the heading. On the flat floor
+  the pose is bit-identical on every shipped track. The cone ground snap
+  shares the same trace, which now asks for WorldStatic *objects* (the
+  ground) rather than the WorldStatic *channel* (which a cone or the car
+  also blocks), over a ±200 m window (`GroundSearchHalfHeightCm`). Cones
+  cache where they landed after the snap. Checked by
+  `tools/smoke/test_start_pose.py` against a running sim. First C++ step
+  of `docs/ENVIRONMENT_ROADMAP.md`.
 
 ### Fixed
 
