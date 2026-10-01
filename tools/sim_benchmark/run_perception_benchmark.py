@@ -21,8 +21,14 @@ from perception_profiling import (
     write_profile_stages_csv,
 )
 from perception_metrics import (
+    FS_CONE_ORANGE_BIG,
     Cone2D,
+    StopLatchReplay,
     aggregate_metrics,
+    aggregate_scan_stats,
+    aligned_time_ns,
+    classify_detections,
+    compute_bag_sim_offset_ns,
     evaluate_frame,
     filter_cones_in_fov,
     gt_cone_range_m,
@@ -30,8 +36,12 @@ from perception_metrics import (
     msg_time_ns,
     DEFAULT_LIDAR_SCAN_PERIOD_NS,
     odom_for_lidar_scan,
+    reference_deltas,
+    scan_stats,
     summarize_match_bias,
+    track_at_or_before,
     world_cones_to_body,
+    yaw_from_odom,
 )
 import pipeline_overrides
 from report_html import write_run_report
@@ -66,14 +76,62 @@ def _topic_classes(reader) -> dict[str, object]:
 
 
 def _pointcloud_to_xyz(msg):
-    import numpy as np
+    """Decode exactly as the car does, with cone_detection_node's own reader.
 
-    floats_per_point = msg.point_step // 4
-    num_points = msg.width * msg.height
-    raw = np.frombuffer(msg.data, dtype=np.float32).reshape(
-        num_points, floats_per_point
-    )
-    return np.ascontiguousarray(raw[:, :3])
+    It reads x/y/z at their declared byte offsets, so the Hesai ATX's packed
+    26-byte point decodes as well as the sim's layout. The previous local copy
+    reshaped by ``point_step // 4`` and could not read real-car bags.
+    """
+    from cone_detection.cone_detection_node import ConeDetectionNode
+
+    return ConeDetectionNode.pointcloud2_to_xyz(msg)
+
+
+DEFAULT_STOP_LATCH_MIN_TRAVEL_M = 30.0
+
+
+def _stop_latch_min_travel(script: Path | None = None) -> tuple[float, str]:
+    """``control_node.stop_latch_min_travel`` and where it came from.
+
+    This checkout's params.yaml when it is reachable (host / --local-ros);
+    inside the benchmark container only the bench folder and the detector
+    sources are mounted, so fall back to the bringup package installed in the
+    image, then to the pipeline default. The source is recorded in the summary
+    so an image value can never pass for the checkout's.
+    """
+    import yaml
+
+    here = (script or Path(__file__)).resolve()
+    candidates: list[tuple[Path, str]] = []
+    # In the container the script is /bench/<name>: there is no checkout above it.
+    if len(here.parents) > 2:
+        candidates.append(
+            (here.parents[2] / "pipeline/bringup/config/params.yaml", "checkout params.yaml")
+        )
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        candidates.append(
+            (Path(get_package_share_directory("bringup")) / "config/params.yaml",
+             "bringup share (image)")
+        )
+    except Exception:
+        pass
+    for path, source in candidates:
+        try:
+            params = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            value = params["control_node"]["ros__parameters"]["stop_latch_min_travel"]
+            return float(value), f"{source}: {path}"
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+    return DEFAULT_STOP_LATCH_MIN_TRAVEL_M, "default"
+
+
+def _load_reference(path: str) -> dict:
+    p = Path(path)
+    if p.is_dir():
+        p = p / "results.json"
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _read_bag_by_topic(
@@ -236,6 +294,29 @@ def main() -> None:
         default=30,
         help="Frames used for --ransac-ablation (evenly spaced through the bag).",
     )
+    ap.add_argument(
+        "--final-lap-topic",
+        default="/slam/final_lap",
+        help="std_msgs/Bool the stop latch is gated on in trackdrive; true when absent from the bag.",
+    )
+    ap.add_argument(
+        "--stop-latch-min-travel-m",
+        type=float,
+        default=None,
+        help="control_node stop_latch_min_travel (default: read from params.yaml).",
+    )
+    ap.add_argument(
+        "--latch-finish-tol-m",
+        type=float,
+        default=3.0,
+        help="A replayed stop latch is premature when its anchor is farther than this "
+        "from every ground-truth big-orange cone.",
+    )
+    ap.add_argument(
+        "--reference",
+        help="results.json (or its run directory) of a reference run, e.g. the flat-world "
+        "baseline; the summary then reports deltas against it.",
+    )
     ap.add_argument("--results-root", default=default_results_root())
     ap.add_argument(
         "--pipeline-overrides",
@@ -256,7 +337,7 @@ def main() -> None:
         "cone_detection",
     )
 
-    need = {args.lidar_topic, args.odom_topic, args.track_topic}
+    need = {args.lidar_topic, args.odom_topic, args.track_topic, args.final_lap_topic}
     buckets = _read_bag_by_topic(str(bag_path), need)
     lidar_msgs = buckets[args.lidar_topic]
     if not lidar_msgs:
@@ -285,6 +366,28 @@ def main() -> None:
         )
     scan_period_ns = int(args.gt_scan_period_ms * 1e6)
 
+    # /slam/final_lap is a header-less Bool, so its bag time is wall clock while
+    # the LiDAR is stamped in sim time; map it onto the sim clock first.
+    sim_offset_ns = compute_bag_sim_offset_ns(lidar_msgs)
+    final_lap_msgs = sorted(
+        (aligned_time_ns(bag_t, msg, sim_offset_ns), msg)
+        for bag_t, msg in buckets[args.final_lap_topic]
+    )
+
+    if args.stop_latch_min_travel_m is not None:
+        min_travel_m, min_travel_source = args.stop_latch_min_travel_m, "--stop-latch-min-travel-m"
+    else:
+        min_travel_m, min_travel_source = _stop_latch_min_travel()
+    latch = (
+        StopLatchReplay(
+            min_travel_m=min_travel_m,
+            gt_big_world=[(c.x, c.y) for c in world_track if c.color == FS_CONE_ORANGE_BIG],
+            finish_tol_m=args.latch_finish_tol_m,
+        )
+        if has_gt and world_track is not None
+        else None
+    )
+
     if detection_overrides:
         # the strategy reads its config from the class; a subclass keeps the pipeline untouched
         BaseConeDetection = type(
@@ -294,8 +397,10 @@ def main() -> None:
         )
     strategy = BaseConeDetection(logger=_NullLogger())
     strategy.configure()
+    big_orange_threshold_m = strategy.big_orange_height_threshold_m()
 
     csv_rows: list[dict[str, float]] = []
+    scan_rows: list[dict[str, float]] = []
     frame_metrics = []
     lat_ms: list[float] = []
     n_cones_total = 0
@@ -330,9 +435,11 @@ def main() -> None:
             res = strategy.detect_cones(xyz)
             dt_ms = decode_ms + (time.perf_counter() - t0) * 1000.0
         lat_ms.append(dt_ms)
-        pred = [Cone2D(x=c.x, y=c.y, color=4) for c in res.cones]
-        pred = filter_cones_in_fov(pred, **gt_gate)
+        all_pred = classify_detections(res.cones, big_orange_threshold_m)
+        pred = filter_cones_in_fov(all_pred, **gt_gate)
         n_cones_total += len(pred)
+        stats = scan_stats(res)
+        scan_rows.append(stats)
 
         gt: list[Cone2D] = []
         if has_gt and world_track is not None:
@@ -343,6 +450,18 @@ def main() -> None:
             )
             if odom is not None:
                 gt = world_cones_to_body(world_track, odom, **gt_gate, **vfov_gate)
+                if latch is not None:
+                    fl = track_at_or_before(final_lap_msgs, scan_t_ns)
+                    pos = odom.pose.pose.position
+                    # Unfiltered: the node latches on everything /Conos_Orange carries.
+                    latch.update(
+                        t_s=scan_t_ns * 1e-9,
+                        x=float(pos.x),
+                        y=float(pos.y),
+                        yaw=yaw_from_odom(odom),
+                        big_cones_body=[c for c in all_pred if c.color == FS_CONE_ORANGE_BIG],
+                        final_lap=bool(fl.data) if fl is not None else True,
+                    )
 
         fm = evaluate_frame(
             t_s=scan_t_ns * 1e-9,
@@ -363,6 +482,10 @@ def main() -> None:
             "n_fp": float(fm.n_fp),
             "n_fn": float(fm.n_fn),
             "mean_match_err_m": fm.mean_match_err_m,
+            "n_pred_big": float(fm.n_pred_big),
+            "n_false_big": float(fm.n_false_big),
+            "n_missed_big": float(fm.n_missed_big),
+            **stats,
         }
         csv_rows.append(row)
 
@@ -410,6 +533,23 @@ def main() -> None:
             summary["gt_metrics"].update(bias)
     else:
         summary["gt_metrics"] = None
+
+    summary["big_orange_height_threshold_m"] = big_orange_threshold_m
+    summary["scan_stats"] = aggregate_scan_stats(scan_rows)
+    if latch is not None:
+        summary["stop_latch"] = latch.summary()
+        summary["stop_latch"]["min_travel_source"] = min_travel_source
+        summary["stop_latch"]["final_lap_topic_present"] = bool(final_lap_msgs)
+    else:
+        summary["stop_latch"] = {
+            "evaluated": False,
+            "reason": "needs ground-truth odom and track in the bag",
+        }
+    if args.reference:
+        summary["reference"] = {
+            "path": args.reference,
+            "deltas": reference_deltas(summary, _load_reference(args.reference)),
+        }
 
     if args.profile and profile_rows:
         # Drop first profile frame (Numba/scipy cold-start on the hot path).
@@ -513,6 +653,8 @@ def main() -> None:
                         "n_tp": fm.n_tp,
                         "n_fp": fm.n_fp,
                         "n_fn": fm.n_fn,
+                        "n_false_big": fm.n_false_big,
+                        "n_missed_big": fm.n_missed_big,
                         "mean_match_err_m": fm.mean_match_err_m,
                         "match_errs": [m.err_m for m in fm.matches],
                         "match_ranges_m": [
