@@ -22,6 +22,7 @@
 
 #include "lws_steering_sensor.h"
 #include "sim_clock_gate.h"
+#include "stamp_guard.h"
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
 
@@ -249,13 +250,12 @@ private:
     // sensor and lidar publish threads can race occasionally — at 400 Hz
     // IMU we observed ~5-10 ms rewinds in 2026-04-26 step-2 verification,
     // which caused GLIM to reject every subsequent IMU sample after one
-    // outlier-future sample landed first. Clamp each stream's published
-    // stamp to be strictly greater than the previous one (bump by 1 ns
-    // when the natural `now()` would regress). Same clock domain for both
-    // streams (wall-clock from container), so no cross-stream alignment
-    // is needed beyond per-stream monotonicity.
-    rclcpp::Time last_imu_stamp_   = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    rclcpp::Time last_lidar_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    // outlier-future sample landed first. Each guard keeps its stream's
+    // stamps strictly increasing within a sim session and follows a new
+    // session (stamp_guard.h). imu_stamp_guard_ is touched only by the
+    // sensor thread, lidar_stamp_guard_ only by the LiDAR publish thread.
+    ifssim_bridge::StampGuard imu_stamp_guard_;
+    ifssim_bridge::StampGuard lidar_stamp_guard_;
 
     // Subscribers
     rclcpp::Subscription<fs_msgs::msg::ControlCommand>::SharedPtr control_cmd_sub_;

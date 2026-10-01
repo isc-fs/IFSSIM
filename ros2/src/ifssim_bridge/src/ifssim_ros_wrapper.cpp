@@ -919,15 +919,15 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
     // IMU
     {
-        // Monotonic guard — see last_imu_stamp_ comment in the header. GLIM
-        // rejects any IMU sample whose stamp ≤ the previously-accepted one;
-        // bump by 1 ns when node_->now() would regress so the publish stream
-        // is strictly increasing.
-        rclcpp::Time imu_stamp = now;
-        if (last_imu_stamp_.nanoseconds() > 0 && imu_stamp <= last_imu_stamp_) {
-            imu_stamp = last_imu_stamp_ + rclcpp::Duration::from_nanoseconds(1);
-        }
-        last_imu_stamp_ = imu_stamp;
+        // Monotonic guard — see imu_stamp_guard_ in the header. GLIM rejects
+        // any IMU sample whose stamp ≤ the previously-accepted one, so a
+        // repeated tick stamp is bumped by 1 ns. A new sim session restarts
+        // the sequence instead of staying pinned to the old one.
+        const rclcpp::Time imu_stamp(
+            imu_stamp_guard_.next(
+                now.nanoseconds(),
+                clock_step == ifssim_bridge::SimClockGate::Step::kNewSession),
+            RCL_ROS_TIME);
 
         sensor_msgs::msg::Imu msg;
         msg.header.stamp = imu_stamp;
@@ -1108,11 +1108,10 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
         }
     }
     // Monotonic guard — same rationale as the IMU clamp in onSensorFrame.
-    // GLIM expects strictly increasing timestamps on /lidar_points.
-    if (last_lidar_stamp_.nanoseconds() > 0 && lidar_stamp <= last_lidar_stamp_) {
-        lidar_stamp = last_lidar_stamp_ + rclcpp::Duration::from_nanoseconds(1);
-    }
-    last_lidar_stamp_ = lidar_stamp;
+    // GLIM expects strictly increasing timestamps on /lidar_points. This
+    // thread cannot see the sensor stream's reconnect, so a new session is
+    // recognised by its stamp alone (more than 1 s behind the last scan).
+    lidar_stamp = rclcpp::Time(lidar_stamp_guard_.next(lidar_stamp.nanoseconds()), RCL_ROS_TIME);
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = lidar_stamp;
