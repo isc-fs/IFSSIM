@@ -120,6 +120,18 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`getImuData` and `simGetGroundTruthKinematics` reported the yaw rate with
+  the wrong sign.** `FSDSCoord::UEAngularVelocityToENU` swapped the axes like
+  a position, but angular velocity is an axial vector, so the swap between a
+  left- and a right-handed frame also flips its sign. `getImuData` also put
+  its body-frame readings through that world-frame swap, which reported the
+  sideways acceleration as forward. In a steady 4.2 m/s right turn, both RPCs
+  reported +0.325 rad/s where `/imu` reported −0.325, and `getImuData`
+  reported `ay` ≈ 0 for a 1.39 m/s² turn. Both now agree with `/imu` to
+  0.001 rad/s and 0.01 m/s². `getImuData` returns REP-103 body-frame values,
+  the same as `/imu`. ROS topics were not affected: the bridge and the sensor
+  stream already converted these correctly. Covered by the new automation
+  tests `FSDS.Coordinates.AngularVelocity` and `FSDS.Coordinates.BodyVector`.
 - **Pitch and roll were wrong in every orientation the sim sent to ROS**
   ([#638](https://github.com/isc-fs/IFSSIM/issues/638)).
   `FSDSCoord::UEQuatToENU` was correct only for yaw: it swapped the ENU x and
