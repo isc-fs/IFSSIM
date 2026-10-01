@@ -43,8 +43,10 @@ calls ``cone_detection``). Needs ``--stack own`` on the bench PC, and a pipeline
 ``params.yaml``; each run records what was overridden.
 
 The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451),
-Mission Control's backend on ``--mc-url`` (default http://127.0.0.1:8000, ``--mc-key`` if it has an
-API key). This script itself needs no ROS: it's HTTP, the sim's line protocol and ``docker``.
+Mission Control on ``--mc-url`` (default http://127.0.0.1:3000, ``--mc-key`` if it has an API key):
+the UI's address, whose ``/api`` reaches the backend on every OS (its own port 8000 is not
+published on Docker Desktop for Windows). This script itself needs no ROS: it's HTTP, the sim's
+line protocol and ``docker``.
 
 Progress (mission, track, lap) goes to ``$BENCH_PROGRESS_FILE`` when the launcher's worker sets it.
 
@@ -87,6 +89,7 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 
 
 class BenchmarkError(Exception):
@@ -211,7 +214,7 @@ class Sim:
 class MissionControl:
     def __init__(
         self,
-        url: str = "http://127.0.0.1:8000",
+        url: str = MC_URL,
         key: str | None = None,
         timeout: float = 30.0,
     ) -> None:
@@ -1030,7 +1033,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--sim", default="127.0.0.1:41451", help="the sim's RPC host:port")
     ap.add_argument(
-        "--mc-url", default="http://127.0.0.1:8000", help="Mission Control's backend"
+        "--mc-url",
+        default=MC_URL,
+        help="Mission Control: its UI's address, whose /api reaches the backend",
     )
     ap.add_argument("--mc-key", help="Mission Control's API key (default $MC_API_KEY)")
     ap.add_argument(

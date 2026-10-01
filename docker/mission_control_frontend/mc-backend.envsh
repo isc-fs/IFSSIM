@@ -1,0 +1,18 @@
+#!/bin/sh
+# Where nginx reaches mission_control_backend. Sourced by the nginx
+# image's entrypoint (as /docker-entrypoint.d/19-mc-backend.envsh)
+# just before 20-envsubst-on-templates.sh renders nginx.conf.template
+# with it.
+#
+# The backend runs with `network_mode: host`, so it listens wherever
+# this container's network has its gateway: the host on Linux, Docker's
+# Linux VM on Docker Desktop. host.docker.internal is not that on Docker
+# Desktop for Windows: it is the Windows host, where host-network ports
+# are not published, so every /api and /ws request was refused (the
+# "disconnected" UI). Set MC_BACKEND (host:port) to override.
+if [ -z "${MC_BACKEND:-}" ]; then
+    gateway=$(ip route | awk '/^default/ { print $3; exit }')
+    MC_BACKEND="${gateway:-host.docker.internal}:8000"
+fi
+export MC_BACKEND
+entrypoint_log "mc-backend.envsh: Mission Control backend at $MC_BACKEND"
