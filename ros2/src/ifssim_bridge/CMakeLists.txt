@@ -50,7 +50,7 @@ install(DIRECTORY launch config
 )
 
 # -----------------------------------------------------------------------------
-# Unit tests — header-only LWS sensor model (no ROS plumbing required).
+# Unit tests — header-only models (no ROS plumbing required).
 # -----------------------------------------------------------------------------
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -58,6 +58,13 @@ if(BUILD_TESTING)
     test/test_lws_steering_sensor.cpp
   )
   target_include_directories(test_lws_steering_sensor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_sim_clock_gate
+    test/test_sim_clock_gate.cpp
+  )
+  target_include_directories(test_sim_clock_gate PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 endif()
