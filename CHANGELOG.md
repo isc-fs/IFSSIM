@@ -14,6 +14,25 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Track environment sidecars**, the first plumbing step of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
+  A track can carry a `<track>.env.json` next to its CSV: the ground extent
+  and the trackside props, generated in Python from a seed and a profile
+  (`docs/environment_sidecar.md`). The cone spawner loads it before the
+  cones, for the boot track and for `loadTrack`; the `loadTrack` reply
+  reports `environment` (`off`, `none`, `loaded` or `invalid`), and the new
+  `getEnvironment` RPC returns what was loaded. The loader is strict:
+  unknown keys and wrongly typed values are errors, and an invalid sidecar
+  is not loaded while the track still is. Nothing is spawned yet; that
+  comes with the builder in P2a.
+  - Off unless `settings.json` sets `"Environment": { "Enabled": true }`.
+    With it off, every shipped track's start pose is unchanged to 0.000 mm.
+  - `tools/validate_tracks.py` applies the same rules to every sidecar
+    under `Content/tracks/` in CI, with unit tests (`tools/tests/`).
+  - Packaging copies `*.env.json` next to the track CSVs.
+  - Covered by the automation tests `FSDS.Environment.*` and
+    `tools/smoke/test_environment.py`.
+
 - **Perception stress metrics** in the offline perception benchmark
   (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
   `docs/ENVIRONMENT_ROADMAP.md`. It now scores:

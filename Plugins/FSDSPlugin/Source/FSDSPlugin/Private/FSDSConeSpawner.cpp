@@ -1,6 +1,7 @@
 #include "FSDSConeSpawner.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSRandom.h"
+#include "FSDSSettings.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -357,8 +358,51 @@ void AFSDSConeSpawner::SpawnTestTrack()
 		GroundSnapHits, GroundSnapMisses, GroundSnapHits + GroundSnapMisses);
 }
 
+void AFSDSConeSpawner::LoadEnvironmentSidecar()
+{
+	Environment = FFSDSEnvironment();
+	EnvironmentError.Reset();
+
+	const FString Sidecar = FSDSEnvironment::SidecarPathFor(CSVFilePath);
+	const bool bExists = FPaths::FileExists(Sidecar);
+	if (!FFSDSSettings::Get().bEnvironmentEnabled)
+	{
+		EnvironmentStatus = TEXT("off");
+		if (bExists)
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS Environment: ignoring %s (Environment.Enabled is false)"), *Sidecar);
+		}
+		return;
+	}
+	if (!bExists)
+	{
+		EnvironmentStatus = TEXT("none");
+		UE_LOG(LogTemp, Log, TEXT("FSDS Environment: no sidecar for this track (%s)"), *Sidecar);
+		return;
+	}
+	if (FSDSEnvironment::Load(Sidecar, Environment, EnvironmentError))
+	{
+		EnvironmentStatus = TEXT("loaded");
+		UE_LOG(LogTemp, Log, TEXT("FSDS Environment: loaded %s (profile %s, seed %lld, %d props, ground %s)"),
+			*Sidecar, *Environment.Profile, Environment.Seed, Environment.Props.Num(),
+			Environment.bHasGroundExtent ? TEXT("set") : TEXT("not set"));
+	}
+	else
+	{
+		// Run without it rather than half of it. The error is in the log, in
+		// the loadTrack reply's status and in getEnvironment.
+		EnvironmentStatus = TEXT("invalid");
+		UE_LOG(LogTemp, Error, TEXT("FSDS Environment: %s is invalid: %s. Running without an environment."),
+			*Sidecar, *EnvironmentError);
+	}
+}
+
 void AFSDSConeSpawner::SpawnFromCSV()
 {
+	// The environment a track runs in is settled before its cones spawn
+	// (docs/ENVIRONMENT_ROADMAP.md rule 4).
+	LoadEnvironmentSidecar();
+
 	FString FileContent;
 	if (!FFileHelper::LoadFileToString(FileContent, *CSVFilePath))
 	{

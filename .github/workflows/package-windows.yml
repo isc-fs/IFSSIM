@@ -64,6 +64,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $TracksDst | Out-Null
           Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE "Content\tracks\*.csv") `
                     -Destination $TracksDst -Force
+          # Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+          Get-ChildItem -Path (Join-Path $env:GITHUB_WORKSPACE "Content\tracks") -Filter "*.env.json" |
+            Copy-Item -Destination $TracksDst -Force
           Get-ChildItem $TracksDst
 
       - name: Zip artifact
