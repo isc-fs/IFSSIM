@@ -83,10 +83,35 @@ namespace FSDSCoord
 		return FMath::DegreesToRadians(90.0 - UEYawDegrees);
 	}
 
-	/** Convert UE5 angular velocity (rad/s in UE frame) to ENU (rad/s) */
+	/** Convert a UE5 world-frame angular velocity (rad/s) to ENU (rad/s).
+	 *
+	 *  Angular velocity is an axial vector, so the axis swap between the two
+	 *  worlds (a reflection) also flips its sign: (x, y, z) -> (-y, -x, -z).
+	 *  A car turning left has ENU wz > 0, while its UE yaw decreases (the
+	 *  heading turns from +X towards -Y), so UE wz < 0. The plain swap used
+	 *  for positions and velocities gets the sign of every component wrong.
+	 */
 	inline FVector UEAngularVelocityToENU(const FVector& UE)
 	{
-		return FVector(UE.Y, UE.X, UE.Z);
+		return FVector(-UE.Y, -UE.X, -UE.Z);
+	}
+
+	/** Convert a UE5 body-frame vector (X forward, Y right, Z up) to REP-103
+	 *  FLU (X forward, Y left, Z up). For velocities and accelerations; no unit
+	 *  change.
+	 */
+	inline FVector UEBodyToFLU(const FVector& UE)
+	{
+		return FVector(UE.X, -UE.Y, UE.Z);
+	}
+
+	/** Convert a UE5 body-frame angular velocity (rad/s) to REP-103 FLU.
+	 *  Axial, so the Y reflection flips the other two components instead:
+	 *  (x, y, z) -> (-x, y, -z). The same rule the bridge applies to /imu.
+	 */
+	inline FVector UEBodyAngularVelocityToFLU(const FVector& UE)
+	{
+		return FVector(-UE.X, UE.Y, -UE.Z);
 	}
 
 	/** Scale-only: cm to meters */

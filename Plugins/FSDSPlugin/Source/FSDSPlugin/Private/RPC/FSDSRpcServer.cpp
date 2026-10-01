@@ -542,13 +542,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		if (!VehiclePawn || !VehiclePawn->ImuSensor) return TEXT("{}");
 		auto Imu = VehiclePawn->ImuSensor->GetOutput();
-		// IMU data is already in body frame, convert to ENU body frame
-		FVector AccENU = FSDSCoord::UEVelocityToENU(Imu.LinearAcceleration);
-		FVector GyroENU = FSDSCoord::UEAngularVelocityToENU(Imu.AngularVelocity);
+		// The IMU reports in the UE body frame (X forward, Y right, Z up), with
+		// acceleration in cm/s^2. Return REP-103 FLU body values in m/s^2 and
+		// rad/s, the same as the bridge's /imu. These were put through the
+		// world-frame axis swap before, which mixed up forward and sideways.
+		FVector AccFLU = FSDSCoord::UEBodyToFLU(Imu.LinearAcceleration) / 100.0;
+		FVector GyroFLU = FSDSCoord::UEBodyAngularVelocityToFLU(Imu.AngularVelocity);
 		FQuat OriENU = FSDSCoord::UEQuatToENU(Imu.Orientation);
 		return FString::Printf(TEXT("{\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
-			AccENU.X, AccENU.Y, AccENU.Z,
-			GyroENU.X, GyroENU.Y, GyroENU.Z,
+			AccFLU.X, AccFLU.Y, AccFLU.Z,
+			GyroFLU.X, GyroFLU.Y, GyroFLU.Z,
 			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
 	}
 	else if (Method == TEXT("getGroundSpeedSensorData"))

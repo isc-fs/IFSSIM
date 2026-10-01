@@ -1,4 +1,5 @@
-// Automation tests for FSDSCoord's quaternion conversions (#638).
+// Automation tests for FSDSCoord's orientation (#638) and angular-velocity
+// conversions.
 //
 // Run from an editor build:
 //   UnrealEditor-Cmd.exe IFSSIM.uproject -ExecCmds="Automation RunTests FSDS.Coordinates; Quit"
@@ -108,6 +109,96 @@ bool FFSDSCoordAttitudeTest::RunTest(const FString& Parameters)
 			const FQuat UE = FRotator(0.0, Yaw, 0.0).Quaternion();
 			TestTrue(FString::Printf(TEXT("yaw %.0f unchanged from the previous formula"), Yaw),
 				FSDSCoord::UEQuatToENU(UE).Equals(Q90 * UE.Inverse(), kTol));
+		}
+	}
+	return true;
+}
+
+namespace
+{
+	// The rotation vector (axis * angle) of a small rotation.
+	FVector RotationVector(const FQuat& Q)
+	{
+		FVector Axis;
+		double Angle;
+		(Q.W < 0.0 ? FQuat(-Q.X, -Q.Y, -Q.Z, -Q.W) : Q).ToAxisAndAngle(Axis, Angle);
+		return Axis * Angle;
+	}
+
+	const FVector kRates[] = {
+		FVector(0.0, 0.0, 0.5),     // yaw rate only
+		FVector(0.0, 0.0, -0.5),
+		FVector(0.3, 0.0, 0.0),
+		FVector(0.0, -0.4, 0.0),
+		FVector(0.2, -0.7, 1.1),
+	};
+}
+
+// Angular velocities are checked against the orientation conversion above:
+// turn the car by w*dt in UE, convert both orientations to ENU, and the ENU
+// rotation between them must be the converted w*dt.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFSDSCoordAngularVelocityTest, "FSDS.Coordinates.AngularVelocity",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FFSDSCoordAngularVelocityTest::RunTest(const FString& Parameters)
+{
+	constexpr double Dt = 0.01;
+	for (const FRotator& Rot : kCases)
+	{
+		const FQuat Q0 = Rot.Quaternion();
+		const FQuat Q0Enu = FSDSCoord::UEQuatToENU(Q0);
+		for (const FVector& W : kRates)
+		{
+			const FQuat Step(W.GetSafeNormal(), W.Size() * Dt);
+
+			// World frame: the rotation is applied on the left.
+			const FVector WorldGot = FSDSCoord::UEAngularVelocityToENU(W);
+			const FVector WorldWant =
+				RotationVector(FSDSCoord::UEQuatToENU(Step * Q0) * Q0Enu.Inverse()) / Dt;
+			TestTrue(FString::Printf(TEXT("%s, world w %s: got %s, expected %s"),
+				*Rot.ToString(), *W.ToString(), *WorldGot.ToString(), *WorldWant.ToString()),
+				WorldGot.Equals(WorldWant, 1e-6));
+
+			// Body frame: the rotation is applied on the right.
+			const FVector BodyGot = FSDSCoord::UEBodyAngularVelocityToFLU(W);
+			const FVector BodyWant =
+				RotationVector(Q0Enu.Inverse() * FSDSCoord::UEQuatToENU(Q0 * Step)) / Dt;
+			TestTrue(FString::Printf(TEXT("%s, body w %s: got %s, expected %s"),
+				*Rot.ToString(), *W.ToString(), *BodyGot.ToString(), *BodyWant.ToString()),
+				BodyGot.Equals(BodyWant, 1e-6));
+		}
+	}
+
+	// By hand: a car turning left decreases its UE yaw, and turns
+	// counter-clockwise (wz > 0) in ENU and in its own FLU frame.
+	TestTrue(TEXT("UE yaw rate -0.5 -> ENU wz +0.5"),
+		FSDSCoord::UEAngularVelocityToENU(FVector(0.0, 0.0, -0.5)).Equals(FVector(0.0, 0.0, 0.5), kTol));
+	TestTrue(TEXT("UE body yaw rate -0.5 -> FLU wz +0.5"),
+		FSDSCoord::UEBodyAngularVelocityToFLU(FVector(0.0, 0.0, -0.5)).Equals(FVector(0.0, 0.0, 0.5), kTol));
+	return true;
+}
+
+// A body-frame vector: UE body -> UE world -> ENU world -> FLU body must equal
+// the direct UE body -> FLU conversion.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFSDSCoordBodyVectorTest, "FSDS.Coordinates.BodyVector",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FFSDSCoordBodyVectorTest::RunTest(const FString& Parameters)
+{
+	const FVector Vectors[] = { FVector(1.0, 0.0, 0.0), FVector(0.0, 1.0, 0.0), FVector(0.0, 0.0, 1.0),
+	                            FVector(2.5, -1.5, 9.81) };
+	for (const FRotator& Rot : kCases)
+	{
+		const FQuat Q = Rot.Quaternion();
+		for (const FVector& V : Vectors)
+		{
+			const FVector WorldUE = Q.RotateVector(V);
+			const FVector Want = FSDSCoord::UEQuatToENU(Q).Inverse()
+				.RotateVector(FVector(WorldUE.Y, WorldUE.X, WorldUE.Z));
+			const FVector Got = FSDSCoord::UEBodyToFLU(V);
+			TestTrue(FString::Printf(TEXT("%s, UE body %s: got %s, expected %s"),
+				*Rot.ToString(), *V.ToString(), *Got.ToString(), *Want.ToString()),
+				Got.Equals(Want, kTol));
 		}
 	}
 	return true;
