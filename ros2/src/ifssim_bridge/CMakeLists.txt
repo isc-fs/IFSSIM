@@ -67,6 +67,13 @@ if(BUILD_TESTING)
   target_include_directories(test_sim_clock_gate PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
+
+  ament_add_gtest(test_stamp_guard
+    test/test_stamp_guard.cpp
+  )
+  target_include_directories(test_stamp_guard PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 ament_package()

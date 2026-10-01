@@ -120,6 +120,18 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
+  The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
+  a repeated or slightly earlier stamp 1 ns past the last one. Like the
+  `/clock` mark fixed in #611, that last stamp outlived the sim session. A
+  restarted sim starts its clock near zero, so every `/imu` and LiDAR stamp
+  after it stayed pinned to the previous session's last stamp (170.6 s, not
+  advancing at all, while `/clock` read 13.5 s). Anything that reads those
+  stamps (GLIM, the EKF, `verify_determinism.py`) got the wrong time until
+  the container restarted. Both guards (`stamp_guard.h`, with unit tests)
+  now follow a new session the way `/clock` does: when a stamp is more than
+  1 s behind the last one, and for `/imu` also on a sensor-stream reconnect.
+  After a restart, `/imu` and `/lidar_points` now track `/clock`.
 - **Two runs reset with the same seed did not get the same IMU noise**
   ([#643](https://github.com/isc-fs/IFSSIM/issues/643)). The seeding itself
   worked; two things around it did not.
