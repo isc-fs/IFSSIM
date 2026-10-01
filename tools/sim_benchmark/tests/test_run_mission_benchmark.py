@@ -181,6 +181,14 @@ def _checkout(tmp_path, params=True):
     return root
 
 
+def _mount(spec: str) -> tuple[str, str]:
+    """A ``-v host:container`` spec as (host, container). The container side is a
+    POSIX path, so the last ':' splits them: a Windows host path has its own, after
+    the drive letter."""
+    host, container = spec.rsplit(":", 1)
+    return host, container
+
+
 class FakeDocker:
     """Stands in for ``docker``: records each call; the stack comes up at once."""
 
@@ -204,7 +212,7 @@ class FakeDocker:
                 if a == "-v" and args[i + 1].endswith(
                     ":/dv_pipeline_stack_ws/src/bringup"
                 ):
-                    f = Path(args[i + 1].split(":")[0]) / "config" / "params.yaml"
+                    f = Path(_mount(args[i + 1])[0]) / "config" / "params.yaml"
                     self.params_seen = f.read_text() if f.exists() else None
         elif args[0] == "inspect":
             out = "false" if self.dies else "true"
@@ -394,18 +402,20 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
         run[run.index("--shm-size") + 1] == "1g"
     )  # Fast DDS shared memory, as compose
     mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
-    targets = sorted(m.split(":", 1)[1] for m in mounts if "/src/" in m)
+    targets = sorted(_mount(m)[1] for m in mounts if "/src/" in m)
     assert targets == [
         "/dv_pipeline_stack_ws/src/bringup",
         "/dv_pipeline_stack_ws/src/slam",
     ]
+    hosts = [Path(_mount(m)[0]) for m in mounts if "/src/" in m]
+    assert all(h.is_absolute() and h.parent.name == "pipeline" for h in hosts)
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
     assert ["rm", "-f", rmb.CONTAINER] in docker.calls
     # root-owned files in the copy are removed from a container, as root
     assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
     assert list((tmp_path / "results" / "mission").glob("stack_*.log"))
-    assert not Path(mounts[-1].split(":")[0]).exists()  # the copy is cleaned up
+    assert not hosts[-1].exists()  # the copy is cleaned up
 
 
 def test_overrides_are_merged_into_params_yaml_and_recorded(tmp_path, world, docker):
