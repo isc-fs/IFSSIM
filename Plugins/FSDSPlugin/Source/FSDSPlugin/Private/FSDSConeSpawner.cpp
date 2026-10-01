@@ -7,6 +7,8 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Blueprint.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
 #include "Misc/FileHelper.h"
 #include "HAL/PlatformProcess.h"
 
@@ -158,19 +160,13 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 	// collision profile from C++ (editor-side asset fix), but we can stop
 	// spawning cones below it.
 	//
-	// Line-trace down from a generous height to find the floor under (X, Y),
-	// then place the cone's mesh-base on the surface plus a small clearance.
-	// Falls back to the configured HeightOffset if no floor is detected
-	// (level edge / hole) — same behaviour as before for that case.
+	// Trace down for the ground under (X, Y), then place the cone's mesh-base
+	// on the surface plus a small clearance. Falls back to the configured
+	// HeightOffset if no ground is found (level edge / hole).
 	FVector AdjustedLocation = Location;
 	{
-		const FVector TraceStart(Location.X, Location.Y, Location.Z + 1000.f);
-		const FVector TraceEnd  (Location.X, Location.Y, Location.Z - 1000.f);
-		FCollisionQueryParams QueryParams;
-		QueryParams.bTraceComplex = true;
-		QueryParams.AddIgnoredActor(this);
 		FHitResult Hit;
-		if (GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_WorldStatic, QueryParams))
+		if (TraceGroundAt(FVector2D(Location.X, Location.Y), Hit))
 		{
 			// Mesh local-space min-Z, scaled, gives the offset from the
 			// cone's pivot to the lowest point of its mesh. We want the
@@ -185,10 +181,9 @@ AActor* AFSDSConeSpawner::SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Locatio
 		else
 		{
 			UE_LOG(LogTemp, Warning,
-				TEXT("FSDS ConeSpawner: ground line-trace missed at (%.1f, %.1f) — "
-				     "spawning at HeightOffset=%.1f. Cone may fall through if floor "
-				     "is below the trace start; check level layout."),
-				Location.X, Location.Y, HeightOffset);
+				TEXT("FSDS ConeSpawner: no ground within ±%.0f cm at (%.1f, %.1f) — "
+				     "spawning at HeightOffset=%.1f; check level layout."),
+				GroundSearchHalfHeightCm, Location.X, Location.Y, HeightOffset);
 			GroundSnapMisses++;
 		}
 	}
@@ -444,18 +439,19 @@ void AFSDSConeSpawner::SpawnFromCSV()
 
 		FVector Location(X, Y, HeightOffset);
 		FRotator Rotation(0.f, ConeYawStream().GetFraction() * 360.f, 0.f);
-		SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
+		const AActor* Cone = SpawnStaticMeshCone(ConeMesh, Location, Rotation, Color);
 
-		// Record positions for the start-gate-pose derivation. We capture
-		// the *post-flip* UE world-space coords so ComputeStartGatePose
-		// returns values directly usable by SetActorLocationAndRotation.
+		// Record positions for the start-gate-pose derivation, in post-flip
+		// UE world-space coords. Use where the cone actually landed after
+		// the ground snap, so the cached Z is right on non-flat ground.
+		const FVector Landed = Cone ? Cone->GetActorLocation() : Location;
 		if (Color == EFSDSConeColor::OrangeLarge)
 		{
-			BigOrangePositions.Add(Location);
+			BigOrangePositions.Add(Landed);
 		}
 		else if (Color == EFSDSConeColor::Blue || Color == EFSDSConeColor::Yellow)
 		{
-			BlueYellowPositions.Add(Location);
+			BlueYellowPositions.Add(Landed);
 		}
 	}
 
@@ -556,11 +552,10 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 			{
 				GateForward.Normalize();
 				OrangeCentroid = GateCentroids[StartG]; // anchor at the START gate
-				OutLocation = OrangeCentroid - GateForward * BackupCm;
-				OutLocation.Z = HeightOffset + 50.f;
+				PlaceStartPoseOnGround(OrangeCentroid - GateForward * BackupCm, GateForward,
+				                       OutLocation, OutRotation);
 				const float MgYaw = FMath::RadiansToDegrees(
 					FMath::Atan2(GateForward.Y, GateForward.X));
-				OutRotation = FRotator(0.f, MgYaw, 0.f).Quaternion();
 				UE_LOG(LogTemp, Log,
 					TEXT("FSDS ConeSpawner: multi-gate start pose — %d gates, "
 						 "start gate (%.1f, %.1f), forward (%.2f, %.2f), "
@@ -652,13 +647,10 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 	const FVector ToNearby = NearbyCentroid - OrangeCentroid;
 	if (FVector::DotProduct(ToNearby, Forward) < 0.f) Forward = -Forward;
 
-	// Back up from the gate along -Forward, lifted slightly above
-	// ground so the wheels settle without clipping into terrain.
-	OutLocation = OrangeCentroid - Forward * BackupCm;
-	OutLocation.Z = HeightOffset + 50.f; // 50 cm above cone base height
+	// Back up from the gate along -Forward, set on the ground there.
+	PlaceStartPoseOnGround(OrangeCentroid - Forward * BackupCm, Forward, OutLocation, OutRotation);
 
 	const float YawDeg = FMath::RadiansToDegrees(FMath::Atan2(Forward.Y, Forward.X));
-	OutRotation = FRotator(0.f, YawDeg, 0.f).Quaternion();
 
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS ConeSpawner: PCA start-gate pose — "
@@ -673,6 +665,74 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 	return true;
 }
 
+
+bool AFSDSConeSpawner::TraceGroundAt(const FVector2D& XY, FHitResult& OutHit) const
+{
+	UWorld* World = GetWorld();
+	if (!World) return false;
+
+	// Object type WorldStatic, not the WorldStatic *channel*: only the ground
+	// answers. A channel trace also hits a cone or the car (both block that
+	// channel), and later any trackside prop.
+	const FCollisionObjectQueryParams ObjectParams(ECC_WorldStatic);
+	FCollisionQueryParams Params(TEXT("FSDSGroundTrace"), /*bTraceComplex=*/true, this);
+	Params.AddIgnoredActors(SpawnedCones);
+	for (TActorIterator<APawn> It(World); It; ++It)
+	{
+		Params.AddIgnoredActor(*It);
+	}
+
+	const FVector Start(XY.X, XY.Y, GroundSearchHalfHeightCm);
+	const FVector End(XY.X, XY.Y, -GroundSearchHalfHeightCm);
+	return World->LineTraceSingleByObjectType(OutHit, Start, End, ObjectParams, Params);
+}
+
+void AFSDSConeSpawner::PlaceStartPoseOnGround(const FVector& FlatLocation, const FVector& Forward,
+                                              FVector& OutLocation, FQuat& OutRotation) const
+{
+	// The flat-world pose (50 cm above cone base height), also the fallback
+	// whenever there is no ground to read.
+	const FVector2D XY(FlatLocation.X, FlatLocation.Y);
+	const FVector F = Forward.GetSafeNormal2D();
+	OutLocation = FVector(XY.X, XY.Y, HeightOffset + 50.f);
+	OutRotation = FRotator(0.f, FMath::RadiansToDegrees(FMath::Atan2(F.Y, F.X)), 0.f).Quaternion();
+
+	FHitResult Centre;
+	if (!TraceGroundAt(XY, Centre))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS ConeSpawner: no ground under the start pose (%.1f, %.1f) — "
+			     "using the flat-world pose"), XY.X, XY.Y);
+		return;
+	}
+	OutLocation.Z = Centre.ImpactPoint.Z + HeightOffset + 50.f;
+
+	// Attitude from the plane through a 4-ray cross ±0.8 m around the spawn
+	// point: for planar ground its normal is the cross product of the two
+	// diagonals. Heading stays along Forward, projected onto that plane.
+	constexpr float ArmCm = 80.f;
+	const FVector2D Along(F.X * ArmCm, F.Y * ArmCm);
+	const FVector2D Across(-F.Y * ArmCm, F.X * ArmCm);
+	FHitResult Front, Back, Right, Left;
+	if (!TraceGroundAt(XY + Along, Front) || !TraceGroundAt(XY - Along, Back) ||
+	    !TraceGroundAt(XY + Across, Right) || !TraceGroundAt(XY - Across, Left))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS ConeSpawner: incomplete ground around the start pose (%.1f, %.1f) — "
+			     "keeping a level attitude"), XY.X, XY.Y);
+		return;
+	}
+	FVector Normal = FVector::CrossProduct(Front.ImpactPoint - Back.ImpactPoint,
+	                                       Right.ImpactPoint - Left.ImpactPoint).GetSafeNormal();
+	if (Normal.Z < 0.f) Normal = -Normal;
+	// Level ground (under ~0.08°) keeps the yaw-only rotation bit-for-bit, so
+	// the flat floor is a true no-op; anything steeper than ~60° is a wall or
+	// a step under the cross, not drivable ground.
+	if (Normal.Z >= 1.f - 1e-6f || Normal.Z < 0.5f) return;
+
+	const FVector ForwardOnGround = (F - FVector::DotProduct(F, Normal) * Normal).GetSafeNormal();
+	OutRotation = FRotationMatrix::MakeFromXZ(ForwardOnGround, Normal).ToQuat();
+}
 
 void AFSDSConeSpawner::OnConeHit(UPrimitiveComponent* /*HitComp*/, AActor* OtherActor,
                                  UPrimitiveComponent* /*OtherComp*/, FVector NormalImpulse,
