@@ -14,6 +14,21 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Perception stress metrics** in the offline perception benchmark
+  (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
+  `docs/ENVIRONMENT_ROADMAP.md`. It now scores:
+  - big-orange classification, using the same height rule that routes cones
+    to `/Conos_Orange`;
+  - false big oranges per frame, and frames with two or more of them;
+  - an offline replay of `control_node`'s permanent stop latch, including
+    the trackdrive `/slam/final_lap` gate, reporting whether the car would
+    have stopped somewhere that is not a gate;
+  - clusters, ground fraction and above-ground points per scan.
+
+  `--reference <run>` reports deltas against a baseline run. The previous
+  benchmark discarded the detector's height, so big orange could not be
+  scored at all.
+
 - **Mission benchmarks** (`tools/sim_benchmark/run_mission_benchmark.py`,
   defaults in `missions.yaml`). The pipeline drives acceleration, skidpad,
   autocross and trackdrive in the sim, scored by the referee, per track and
@@ -63,6 +78,14 @@ shipping pipeline, documentation.
   After pulling, run `git submodule sync --recursive && git submodule
   update --init --recursive`. Otherwise your checkout keeps fetching
   from the old URL.
+
+### Fixed
+
+- **The perception benchmark could not decode real-car LiDAR bags.** It
+  reshaped every cloud by `point_step // 4`, which raises on the Hesai ATX's
+  packed 26-byte point. It now decodes with `cone_detection_node`'s own
+  offset-based reader, so offline scoring reads clouds exactly as the car
+  does.
 
 ## [1.0.0] — 2026-09-20
 

@@ -11,7 +11,7 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-bench-run).
 - `specs/` — preset run specs for `bench-run`.
 - `run_mission_benchmark.py` — the pipeline drives the missions in the simulator, scored by the referee; defaults in `missions.yaml`. See [Mission benchmarks](#mission-benchmarks).
-- `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
+- `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching). Also scores the perception stressors from `docs/ENVIRONMENT_ROADMAP.md`: big-orange classification, an offline replay of the control node's stop latch, and per-scan structure; `--reference <run>` reports deltas against a baseline run. Clouds are decoded with `cone_detection_node`'s own reader, so real-car `/lidar_points` bags (`--lidar-topic /lidar_points`) decode as they do on the car.
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
 - `slam_metrics.py` / `slam_report.py` — GT cone injection, trajectory and error plots.
@@ -61,6 +61,11 @@ outside `pipeline/` so it is not carried into the car submodule.
    - **BEV plots**: GT (blue) vs prediction (red), match lines, ego marker (sample frames)
    - **Histograms / time series**: error distribution, recall and error over time
    - **Performance**: latency and cone counts per frame
+   - **Perception stress**:
+     - big-orange precision/recall, false big oranges per frame, and frames with two or more of them (one such frame can stop the car);
+     - the replayed stop latch: whether it fired, where, and whether that was at a real gate. It mirrors `control_node._on_orange`: two or more big oranges after `stop_latch_min_travel` (read from `params.yaml`), gated on `/slam/final_lap` when the bag has it;
+     - scan structure: clusters per scan, ground fraction and above-ground points inside the detector's 25 m crop;
+     - with `--reference`, a delta table against the reference run.
    - **Pipeline profile** (optional): stage table, stacked bar chart, `profile.json` /
      `profile_stages.csv` via
      `python tools/sim_benchmark/run_perception_benchmark.py <bag> --profile --profile-frames 80`
