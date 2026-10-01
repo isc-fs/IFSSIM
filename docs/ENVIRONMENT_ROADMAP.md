@@ -28,7 +28,7 @@
   - patchy surfaces.
 
   Synthetic runs of the real `cone_detection` code ranked the worst cases:
-  - **Narrow props and low tyre walls.** 0.45–0.75 m narrow props and low tyre walls near the cone line produce 4–5 false big-orange cones per scan. This can trip the stop latch in `control_node._on_orange`, which never releases, and cause a DNF.
+  - **Narrow props and low tyre walls.** 0.45–0.75 m narrow props and low tyre walls near the cone line produce 4–5 false big-orange cones per scan. This can trip the stop latch in `control_node._on_orange`, which never releases, and cause a DNF. The latch never releases. Since the IFS09 pipeline it is gated on `/slam/final_lap` in trackdrive, so there it can only fire on the final lap; autocross, acceleration and skidpad are exposed from `stop_latch_min_travel` (30 m) onwards.
   - **Grade changes and undulation.** These produce 3–7× more clusters, and 20–25% of cones are missed.
   - **Kerbs or walls near the cone line.** Within about 0.5 m of the cone line, 16–36% of cones are missed.
 - **Orography breaks flat-world code on both sides of the bridge.**
@@ -57,7 +57,7 @@ Ranked from synthetic runs of the real `cone_detection` code. P0 re-measures eac
 | — | Tall structure away from the cone line (buildings, grandstands, trees) | almost no effect on cone detection | not planned |
 
 **Deliberately not chased:**
-- **LiDAR range.** `cone_detection` drops every point beyond 25 m before RANSAC and clustering (`input_range_crop_m = 25.0`, `cone_detection.py:78`). The sim's 30 m range already covers everything perception sees, so the range stays at 30 m.
+- **LiDAR range.** `cone_detection` drops every point beyond 25 m before RANSAC and clustering (`input_range_crop_m: 25.0` in `pipeline/bringup/config/params.yaml:119`, default in `cone_detection/config.py:46`). The sim's 30 m range already covers everything perception sees, so the range stays at 30 m.
 - **Far-field structure.** It matters for LiDAR odometry, not for cone detection. LiDAR odometry is a separate workstream and out of scope here (§6).
 
 ### Codebase facts checked for this plan
@@ -117,7 +117,7 @@ Ranked from synthetic runs of the real `cone_detection` code. P0 re-measures eac
    - LFS delta.
 
    Overheads are measured A/B over at least 10 alternating runs, never from a single pair.
-7. **Pipeline fixes go upstream** to IFS08-DV-PIPELINE as issues with bags, in a separate **non-gating lane**. Sim acceptance means *reproducing* the failure, not fixing it.
+7. **Pipeline fixes go upstream** to IFS09-DV-PIPELINE as issues with bags, in a separate **non-gating lane**. Sim acceptance means *reproducing* the failure, not fixing it.
 8. **Licensing.**
    - Allowed: own, CC0 or CC-BY assets, plus CC BY / ODbL geodata.
    - **CARLA** (`carla-simulator/carla`) is the preferred source for trackside props. Its assets are CC-BY (per the CARLA README) and already Unreal Engine 5 content, so walls, barriers, fences, bins and bollards import without a format conversion. Rule 1 still applies: every imported asset has its simple collision audited with `auditPropCollision` and re-authored where it does not match the visual silhouette. Copy only the meshes in use, never the CARLA content package, and give each one an attribution entry in `THIRD_PARTY_ASSETS.md`. CARLA's traffic cones are not FS cones; keep the existing DS 2026 cone meshes.
@@ -172,10 +172,11 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
 - **Deterministic per-ray noise and dropout.**
   - Replace the shared `Noise()` stream with a counter-based hash of (seed, scan index, channel, h-step).
   - Extend `tools/scenario_runner/verify_determinism.py` with the stationary-car scan-hash check.
-- **Run-to-run noise band.**
-  - Matrix: {acceleration, skidpad, one trackdrive} × 3 seeds × N = 5 runs at a fixed `ScenarioSeed`. That is 45 runs, about 4–6 h with `scenario_runner`.
+- **Run-to-run noise band**, measured with the existing mission benchmark (`tools/sim_benchmark/run_mission_benchmark.py`, `missions.yaml`, `bench.yaml`).
+  - Its repeat `i` uses seed `i`, which samples *across* seeds. The noise band needs repeats *at one seed*, so P0 adds a `--fixed-seed K` option: every repeat resets with seed K, and run directories become `seed<K>/rep<i>` so they do not collide.
+  - Matrix: {acceleration, skidpad, one trackdrive} × 3 seeds × N = 5 runs per seed. That is 45 runs, about 4–6 h.
   - Metrics: lap time, DOOs, cone TP/FP/FN, stop-latch events, scan p50/p95, FPS.
-  - Output, committed as `tools/scenario_runner/baselines/noise_band_v1.json`:
+  - Output, committed as `tools/sim_benchmark/baselines/noise_band_v1.json`:
     - per-metric mean and σ;
     - zip MB;
     - LFS MB for a fresh clone.
@@ -315,7 +316,7 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
 - **Cone-fidelity PR (a deliberate default change, kept separate):**
   - per-type mass from DS 2026 Table 1 (0.45 kg small, 1.05 kg big orange), replacing the uniform 1.0 kg at `FSDSReferee.cpp:216`;
   - re-baseline DOO counts and the 2 s settle invariant once, with a CHANGELOG entry.
-- **Scenario matrices** `tools/scenario_runner/scenarios/clutter_{narrow,tripod,tyrewall}.json`: 5 seeds × N=5 runs each, plus the same seeds with props disabled as the control, with stop-latch event detection.
+- **Scenario matrices** as bench run specs `tools/sim_benchmark/specs/clutter-{narrow,tripod,tyrewall}.yaml`, run by the mission benchmark with the environment on and off: 5 seeds × N=5 runs each, plus the same seeds with props disabled as the control, with stop-latch event detection.
 - **Provenance:** `THIRD_PARTY_ASSETS.md`, plus a CI check that every `.uasset` under `Content/Environment` has an entry.
 - **Non-gating upstream issues, each with a bag:**
   - footprint/width and max-neighbourhood-height gates in `cone_detection.py:391-460`;
@@ -360,7 +361,7 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
   - marshal posts;
   - LiDAR-only kerb strips 0.3–1 m outside the cone line (`FSDSPropLidarOnly`, never inside the corridor). Drivable kerbs of ≤ 3 cm belong to P3 terrain.
 - **Ground-truth labels:** `/testing_only/environment` from the bridge, and `perception_metrics.py` scoring false positives per clutter class.
-- **Scenario matrices** `clutter_{wall,kerb,people}.json`: 5 seeds × N=5 runs plus the control.
+- **Scenario matrices** as bench run specs `specs/clutter-{wall,kerb,people}.yaml`: 5 seeds × N=5 runs plus the control.
 - **`.lfsconfig`:** `fetchexclude` for `Content/RaceCourse/Maps` and `Textures/Environment/Terrain`, only after a cook log proves nothing cooked references them.
 - **Non-gating upstream issue:** clutter persistence in cone_slam.
 
@@ -406,7 +407,7 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
   - the `floor` actor and the pad are hidden and their collision disabled while terrain is active;
   - `Build.cs` gains ProceduralMeshComponent/GeometryFramework or Landscape as needed.
 - **`sampleTerrain` and `validateTerrain` RPCs:** road probe and simple Visibility trace against the analytic truth at N corridor points.
-- **Scenarios** `terrain_*.json`. New metrics: EKF accel-bias error, braking distance against flat, ground-removal residual.
+- **Scenarios** as bench run specs `specs/terrain-*.yaml`. New metrics: EKF accel-bias error, braking distance against flat, ground-removal residual.
 - **Non-gating upstream issues:**
   - local/piecewise ground segmentation;
   - gravity-aligned EKF calibration (`odometry_filter.cpp:441-445`);
@@ -481,7 +482,7 @@ Not part of this roadmap. Cone detection drops everything beyond 25 m, so range 
 
 **Deliverables**
 - A golden suite of about 30 scenarios (text, < 3 MB) across all profiles, including the `open_pad` control. Each scenario runs N=3 times.
-- Nightly closed-loop runs on the self-hosted Windows runner, reusing the packaged build rather than re-cloning LFS.
+- Nightly closed-loop runs on the self-hosted Windows runner, driven by the bench launcher (`bench.yaml`, `run_mission_benchmark.py`) and reusing the packaged build rather than re-cloning LFS. Results land in the run layout bench-view already reads.
 - An HTML trend report via `report_html.py`: DNF rate, false big-orange per scan, missed cones per scan, DOOs, lap time, each with its P0 band.
 - Terrain profiles run in a separate, non-gating lane.
 
@@ -547,7 +548,7 @@ Branch off `dev`.
 - `tools/sim_benchmark/perception_metrics.py` today matches detections to ground truth by position only (`FrameMetrics`: TP/FP/FN and match error). `Cone2D.color` is carried through but never scored. Add:
   - **colour scoring:** a per-scan colour-confusion matrix over matched pairs;
   - **false big-orange per scan:** big-orange detections on `/Conos_Orange` with no big-orange ground-truth cone inside the match gate;
-  - **offline stop-latch replay:** apply the `control_node._on_orange` rule to the detections (≥ 2 big-orange cones after `stop_latch_min_travel` metres, never released). Report the time and position of any latch whose anchor is not at the ground-truth finish;
+  - **offline stop-latch replay:** apply the `control_node._on_orange` rule to the detections (≥ 2 big-orange cones after `stop_latch_min_travel` metres, never released). Include the trackdrive lap gate: read `/slam/final_lap` from the bag and default it to true when absent, as the node does; read `stop_latch_min_travel` from `pipeline/bringup/config/params.yaml`. Report the time and position of any latch whose anchor is not at the ground-truth finish;
   - **scan statistics:** ground fraction, above-ground points and clusters per scan at the 25 m crop. PointCloud2 is decoded through `point_step` and the field offsets (cf. pipeline e219322), so real `/lidar_points` bags decode correctly;
   - an optional per-class FP attribution hook. It reads `/testing_only/environment` once that topic exists (P2b) and reports "unattributed" until then.
 - `run_perception_benchmark.py`: `--reference <summary.json>` reports deltas against a reference run (the P0 `flat_ref`).
@@ -598,7 +599,7 @@ Branch off `dev`.
 1. **When and where is the first real-track test of the 2027 season?** The pre-track slice is scheduled backwards from that date, and the venue decides which terrain preset and prop densities come first.
 2. Terrain path after the P3 spike: a runtime mesh generated per seed, or a small library of baked Landscape presets?
 3. Is LiDAR-intensity cone colouring planned? If so, physmat reflectance moves into scope.
-4. Will the IFS08-DV-PIPELINE owners take the hardening issues (big-orange gate, stop latch, piecewise ground, gravity-aligned EKF)? Or should terrain stay within a grade budget the current pipeline tolerates?
+4. Will the IFS09-DV-PIPELINE owners take the hardening issues (big-orange gate, stop latch, piecewise ground, gravity-aligned EKF)? Or should terrain stay within a grade budget the current pipeline tolerates?
 5. **D1 and P5 data:**
    - Can the car team record raw `/lidar_points` with ring and time fields at the test site this autumn, and at every 2027 DV run?
    - Is there an FSS 2026 DV map, any Montmeló photos, walk videos or IFS-08 bags, and measured cone-lane-to-wall distances?
