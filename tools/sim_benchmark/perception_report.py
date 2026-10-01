@@ -447,6 +447,73 @@ def _svg_bev_frame(
     return f"<div class='chart'><p><small>{cap}</small>{''.join(parts)}</div>"
 
 
+_BIG_ORANGE_KEYS = [
+    "big_orange_precision",
+    "big_orange_recall",
+    "false_big_per_frame",
+    "max_false_big_per_frame",
+    "frames_with_false_big",
+    "frames_with_2plus_false_big",
+    "total_missed_big",
+]
+_SCAN_KEYS = [
+    "mean_n_clusters",
+    "p95_n_clusters",
+    "mean_ground_fraction",
+    "mean_above_ground_points",
+]
+
+
+def _stress_html(summary: dict[str, Any], gt: dict[str, Any]) -> str:
+    """Big-orange classification, the replayed stop latch, scan structure and
+    deltas against a reference run."""
+    parts = ["<h2>Perception stress</h2>"]
+    thr = summary.get("big_orange_height_threshold_m")
+    if gt:
+        parts.append(
+            "<p class='caption'>Big orange = detected height above "
+            f"{_fmt(thr)} m, the rule that routes cones to /Conos_Orange. "
+            "A frame with two or more false big oranges can stop the car by itself.</p>"
+        )
+        parts.append(_stats_html(gt, _BIG_ORANGE_KEYS))
+
+    latch = summary.get("stop_latch") or {}
+    if not latch.get("evaluated"):
+        parts.append(f"<p>Stop latch not replayed: {latch.get('reason', 'no data')}.</p>")
+    elif not latch.get("latched"):
+        parts.append(
+            f"<p>Stop latch: did not fire over {_fmt(latch.get('travelled_m'))} m "
+            f"(min travel {_fmt(latch.get('min_travel_m'))} m).</p>"
+        )
+    else:
+        ev = latch.get("event") or {}
+        verdict = {True: "<strong>PREMATURE</strong> — not at a gate", False: "at a gate"}.get(
+            latch.get("premature"), "no big-orange ground truth to judge"
+        )
+        parts.append(
+            f"<p>Stop latch fired at t={_fmt(ev.get('t_s'))} s after "
+            f"{_fmt(ev.get('travelled_m'))} m, anchor ({_fmt(ev.get('anchor_x'))}, "
+            f"{_fmt(ev.get('anchor_y'))}), {_fmt(ev.get('nearest_gt_big_m'))} m from the "
+            f"nearest big-orange cone: {verdict}.</p>"
+        )
+
+    parts.append(_stats_html(summary.get("scan_stats") or {}, _SCAN_KEYS))
+
+    deltas = (summary.get("reference") or {}).get("deltas") or {}
+    if deltas:
+        rows = "".join(
+            f"<tr><td>{k.replace('_', ' ')}</td><td>{_fmt(v['value'])}</td>"
+            f"<td>{_fmt(v['reference'])}</td><td>{_fmt(v.get('delta', '—'))}</td></tr>"
+            for k, v in deltas.items()
+        )
+        parts.append(
+            f"<p class='caption'>Against reference <code>{summary['reference']['path']}</code></p>"
+            "<table><tr><th>metric</th><th>this run</th><th>reference</th><th>delta</th></tr>"
+            f"{rows}</table>"
+        )
+    return "".join(parts)
+
+
 def _frame_from_sample(item: dict[str, Any]) -> FrameMetrics:
     fm = FrameMetrics(
         t_s=item["t_s"],
@@ -626,6 +693,8 @@ def render_perception_html(summary: dict[str, Any], run_dir: Path) -> str:
             "--profile-frames 80</code></div>"
         )
 
+    stress_html = _stress_html(summary, gt if has_gt else {})
+
     title = f"Perception benchmark — {summary.get('strategy', 'base')}"
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>{title}</title>
@@ -639,6 +708,7 @@ def render_perception_html(summary: dict[str, Any], run_dir: Path) -> str:
 <h2>Detection vs sim GT</h2>
 {vfov_note}
 {_stats_html(gt, gt_keys) if has_gt else '<p>—</p>'}
+{stress_html}
 {charts}
 <details><summary>Raw JSON</summary><pre>{json.dumps(summary, indent=2)}</pre></details>
 </body></html>"""
