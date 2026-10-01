@@ -490,7 +490,8 @@ response = s.recv(1024)  # b"true"
 |---|---|---|
 | `getRefereeState` | `doo_counter, oc_counter, cones, laps, required_laps, finished, event, lap_times[], cone_positions[]` | Full competition state |
 | `setEvent <type> <laps>` | `true` | Set event type and required lap count |
-| `loadTrack <filepath>` | `true` | Load a CSV track file at runtime |
+| `loadTrack <filepath>` | `loaded, cones, car_aligned, environment` | Load a CSV track file at runtime; `environment` is `off`, `none`, `loaded` or `invalid` (see [environment_sidecar.md](environment_sidecar.md)) |
+| `getEnvironment` | `enabled, status, error, sidecar, seed, profile, ground_extent, props, classes` | The current track's environment sidecar as loaded |
 
 #### Scene / Object API
 
@@ -795,6 +796,10 @@ client._text_cmd("loadTrack /absolute/path/to/track.csv")
 ```
 
 The cone spawner reads the CSV, destroys existing cones, spawns new ones, and re-registers them with the referee.
+
+### Environment sidecar
+
+A track can have a `<track>.env.json` next to its CSV that describes the ground and the trackside props around it. It is loaded only when `settings.json` has `"Environment": { "Enabled": true }` (off by default). The format and the frame are in [environment_sidecar.md](environment_sidecar.md).
 
 ### Random Track Generation
 

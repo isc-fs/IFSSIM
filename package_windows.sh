@@ -112,6 +112,10 @@ PROJECT_WIN="$(to_win "$SCRIPT_DIR/IFSSIM.uproject")"
 echo "[2/3] Staging track CSVs…"
 mkdir -p "$TRACKS_DST"
 cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
+# Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+for f in "$TRACKS_SRC/"*.env.json; do
+    if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
+done
 N_TRACKS=$(ls "$TRACKS_DST"/*.csv 2>/dev/null | wc -l | tr -d ' ')
 echo "    Tracks staged: $N_TRACKS files"
 
