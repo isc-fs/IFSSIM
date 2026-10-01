@@ -317,6 +317,11 @@ class PipelineHost:
 # ------------------------------------------------------------------ the pipeline stack
 CONTAINER = "bench-dv-stack"
 WS = "/dv_pipeline_stack_ws"
+# the sim, seen from the stack's container, as docker-compose.yml's dv_pipeline_stack sees it:
+# under --network host, 127.0.0.1 is this computer only on Linux; on Docker Desktop for Windows
+# it is the Linux VM's own, and this computer is host.docker.internal
+SIM_HOST = "host.docker.internal"
+NETWORK = ["--network", "host", "--add-host", f"{SIM_HOST}:host-gateway"]
 DEFAULT_IMAGE = "ifssim-dv_pipeline_stack:latest"  # what `docker compose build` makes
 STACK_READY = (
     "IFSSIM ROS stack starting"  # the entrypoint says it after the rebuild and warmup
@@ -460,6 +465,7 @@ class Stack:
                 "sim: stop it (docker compose stop dv_pipeline_stack), or pass --replace-stack to "
                 "stop it for the benchmark and start it again after"
             )
+        self.reach_sim()  # before anything is stopped or started
         for name in others:
             log(f"stopping {name} for the benchmark (started again at the end)")
             docker("stop", name, timeout=120)
@@ -470,8 +476,7 @@ class Stack:
             "-d",
             "--name",
             CONTAINER,
-            "--network",
-            "host",
+            *NETWORK,
             # as docker-compose.yml: Fast DDS's shared-memory transport needs more than the
             # default 64 MB /dev/shm (else it falls back to UDP, much slower for the LiDAR)
             "--shm-size",
@@ -481,7 +486,7 @@ class Stack:
             "--memory-swap",
             "8g",
             "-e",
-            "IFSSIM_HOST=127.0.0.1",
+            f"IFSSIM_HOST={SIM_HOST}",
             "-e",
             f"IFSSIM_PORT={self.sim_port}",
             "-e",
@@ -521,7 +526,7 @@ class Stack:
         else:  # the latte panda runs the pipeline: here only the sim bridge
             launch = (
                 f"source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && "
-                f"exec ros2 launch {WS}/bridge.launch.py host:=127.0.0.1 port:={self.sim_port}"
+                f"exec ros2 launch {WS}/bridge.launch.py host:={SIM_HOST} port:={self.sim_port}"
             )
             run += ["--entrypoint", "bash", self.image, "-c", launch]
             ready = None
@@ -556,6 +561,21 @@ class Stack:
                 )
             time.sleep(poll_s)
         log(f"pipeline stack up ({time.monotonic() - t0:.0f} s)")
+
+    def reach_sim(self) -> None:
+        """Whether the stack's container can reach the sim. Its entrypoint says it is up before
+        the bridge connects, so an unreachable sim would otherwise only show as missions that
+        never start."""
+        probe = f"timeout 5 bash -c '</dev/tcp/{SIM_HOST}/{self.sim_port}'"
+        r = docker(
+            "run", "--rm", *NETWORK, "--entrypoint", "bash", self.image, "-c", probe
+        )
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout).strip()[:300]
+            raise BenchmarkError(
+                f"the pipeline stack's container can't reach the sim at "
+                f"{SIM_HOST}:{self.sim_port}: is the sim running? {detail}".strip()
+            )
 
     def down(self, log, results: Path | None = None) -> None:
         if not self.started:

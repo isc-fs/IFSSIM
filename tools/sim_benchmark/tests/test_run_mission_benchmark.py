@@ -188,6 +188,7 @@ class FakeDocker:
         self.calls: list[list[str]] = []
         self.others = list(others)  # other dv_pipeline_stack containers running
         self.dies = dies
+        self.sim_reachable = True  # what the stack's probe of the sim finds
         self.params_seen = (
             None  # the params.yaml mounted into the stack, read when it starts
         )
@@ -214,6 +215,8 @@ class FakeDocker:
                 if self.dies
                 else "IFSSIM ROS stack starting"
             )
+        elif args[0] == "run" and "/dev/tcp/" in args[-1]:
+            code = 0 if self.sim_reachable else 1
         return subprocess.CompletedProcess(["docker", *args], code, out, "")
 
     def run_args(self):
@@ -336,6 +339,7 @@ def test_the_latte_panda_needs_its_commands_and_runs_them(tmp_path, world, docke
     # here only the bridge: the latte panda runs the pipeline
     run = " ".join(docker.run_args())
     assert "--entrypoint bash" in run and "bridge.launch.py" in run
+    assert "host:=host.docker.internal" in run
     assert "DV_REBUILD_ON_STARTUP" not in run and "/src/slam" not in run
     [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
     code = json.loads((d / "manifest.json").read_text())["code"]["pipeline"]
@@ -390,6 +394,9 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     assert rc == 0
     run = docker.run_args()
     assert "ifssim-dv:abc1234" in run and "DV_REBUILD_ON_STARTUP=true" in run
+    # the sim as compose's stack reaches it: on Docker Desktop, 127.0.0.1 is the VM
+    assert "IFSSIM_HOST=host.docker.internal" in run
+    assert run[run.index("--add-host") + 1] == "host.docker.internal:host-gateway"
     assert (
         run[run.index("--shm-size") + 1] == "1g"
     )  # Fast DDS shared memory, as compose
@@ -499,6 +506,22 @@ def test_another_stack_is_refused_or_replaced_and_started_again(
     ]
     assert kinds[0] == ["stop", "ifssim-dv_pipeline_stack-1"] and kinds[1][0] == "run"
     assert kinds[-1] == ["start", "ifssim-dv_pipeline_stack-1"]
+
+
+def test_a_sim_the_stack_cant_reach_stops_it_before_anything_changes(
+    tmp_path, world, docker
+):
+    docker.others = ["ifssim-dv_pipeline_stack-1"]
+    docker.sim_reachable = False
+    with pytest.raises(
+        rmb.BenchmarkError, match="can't reach the sim at host.docker.internal:1"
+    ):
+        _run(tmp_path, world, replace_stack=True)
+    [probe] = [c for c in docker.calls if c[0] == "run"]
+    assert probe[probe.index("--add-host") + 1] == "host.docker.internal:host-gateway"
+    assert "/dev/tcp/host.docker.internal/1" in probe[-1]
+    assert not any(c[0] in ("stop", "rm", "start") for c in docker.calls)
+    assert docker.others == ["ifssim-dv_pipeline_stack-1"]
 
 
 def test_a_stack_that_dies_while_starting_shows_its_log(tmp_path, world, monkeypatch):
