@@ -21,6 +21,7 @@
 #include <std_msgs/msg/float32_multi_array.hpp>
 
 #include "lws_steering_sensor.h"
+#include "sim_clock_gate.h"
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
 
@@ -182,8 +183,12 @@ private:
     // it's the clock *source*, so it builds rclcpp::Time straight from the wire
     // sim ns and must avoid the chicken-and-egg of waiting on its own /clock.
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_pub_;
-    // Last sim time published on /clock — /clock must be non-decreasing.
-    rclcpp::Time last_clock_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    // Which sim stamps go out on /clock (#611). Touched only by the sensor
+    // thread, in onSensorFrame.
+    ifssim_bridge::SimClockGate clock_gate_;
+    // Set by triggerReconnect when the sensor stream is reopened, consumed
+    // by the first frame on the new stream.
+    std::atomic<bool> sensor_stream_reconnected_{false};
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;

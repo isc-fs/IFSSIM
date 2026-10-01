@@ -120,6 +120,19 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`/clock` stopped for good after the sim restarted**
+  ([#611](https://github.com/isc-fs/IFSSIM/issues/611)). The bridge only
+  publishes a sim stamp on `/clock` if it is later than the last one, and
+  that mark survived a sim restart. A new session starts its clock near
+  zero, so `/clock` went silent for the life of the container and every
+  `use_sim_time` node in the pipeline froze. There was no error: sensors
+  kept streaming and lifecycle nodes still reported `active`. Until now the
+  only cure was restarting `dv_pipeline_stack`. The bridge now follows a new
+  session when the first frame on a reconnected sensor stream is behind the
+  mark, or when a stamp is more than 1 s behind it without a reconnect (that
+  case logs a warning). Repeats and small steps back are still dropped, so
+  `/clock` never goes backwards inside a session. The rules live in
+  `ifssim_bridge/include/sim_clock_gate.h` with unit tests.
 - **The perception benchmark could not decode real-car LiDAR bags.** It
   reshaped every cloud by `point_step // 4`, which raises on the Hesai ATX's
   packed 26-byte point. It now decodes with `cone_detection_node`'s own
