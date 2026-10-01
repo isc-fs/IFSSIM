@@ -153,6 +153,11 @@ Only one pipeline may drive the sim: with `--stack own` the benchmark refuses wh
 `dv_pipeline_stack` runs, or stops it for the benchmark and starts it again after with
 `--replace-stack`.
 
+The benchmark's container reaches the sim as `host.docker.internal`, as compose's
+`dv_pipeline_stack` does: on Docker Desktop for Windows, `127.0.0.1` in a host-network container is
+Docker's Linux VM, not this computer. Before it stops or starts anything, the benchmark checks that
+a container can reach the sim there.
+
 **Where the pipeline runs** (`--pipeline-on`):
 
 - `bench_pc` (default): on this computer. To try it on any computer, without the latte panda:
