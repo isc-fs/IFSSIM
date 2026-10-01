@@ -49,7 +49,8 @@ class CommandTest(unittest.TestCase):
         for n in ("perception", "slam"):
             c = self.cmd(n, "--gt-range-m", "25")
             self.assertEqual(c[c.index("--gt-range-m") + 1], "25.0")
-            self.assertEqual(c[c.index("--results-root") + 1], "/s")
+            # a host path for a benchmark run on the host: in the host's own form
+            self.assertEqual(c[c.index("--results-root") + 1], str(Path("/s")))
 
     def test_options_go_only_where_they_belong(self) -> None:
         p = self.cmd("perception", "--profile", "--motion-model", "imu")
