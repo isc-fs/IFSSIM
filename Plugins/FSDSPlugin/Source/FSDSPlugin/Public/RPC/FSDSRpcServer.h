@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RPC/FSDSUdpBroadcaster.h"  // FFSDSSensorFrame
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -68,6 +69,30 @@ private:
 	void StreamSensors(FSocket* ClientSocket);
 	void StreamLidar(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;
+
+	/** Pack the sensor stream's frame from the current tick's state. Game
+	 *  thread only: it reads the pawn, its sensor components and the referee. */
+	void PackSensorFrame(FFSDSSensorFrame& Frame) const;
+	/** OnWorldPostActorTick: snapshot this tick's frame for StreamSensors. */
+	void CaptureSensorFrame(UWorld* InWorld);
+
+	// The latest tick's sensor frame (#643). Packed on the game thread once
+	// per world tick, after every actor has ticked; each StreamSensors loop
+	// copies it, so a frame never mixes state from two ticks.
+	FCriticalSection LatestSensorFrameLock;
+	FFSDSSensorFrame LatestSensorFrame;
+	bool bHasLatestSensorFrame = false;
+	FDelegateHandle PostActorTickHandle;
+
+	/** Run Fn on the game thread at the start of the next world tick, before
+	 *  any actor ticks, and block up to TimeoutSec for its result. */
+	FString CallAtNextTickStart(TFunction<FString()> Fn, double TimeoutSec,
+		const FString& OnTimeout, const TCHAR* Tag);
+	/** OnWorldPreActorTick: run the work CallAtNextTickStart queued. */
+	void RunTickStartWork(UWorld* InWorld);
+	FCriticalSection TickStartWorkLock;
+	TArray<TFunction<void()>> TickStartWork;
+	FDelegateHandle PreActorTickHandle;
 	uint32 LidarStreamFrameCounter = 0;
 
 	// Cached binary data for thread-safe transfer

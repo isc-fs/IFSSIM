@@ -68,7 +68,7 @@ Ranked from synthetic runs of the real `cone_detection` code. P0 re-measures eac
 - **`FSDSLidarSensor.cpp`:**
   - `Noise()` is one shared `FRandomStream`, called from multiple threads by the scan's `ParallelFor`.
   - Scans run as an `AsyncTask` on `AnyBackgroundThreadNormalTask` against the live Chaos scene (:236-246).
-- **Determinism is unproven.** `verify_determinism.py` verifies only `/imu` noise. Its docstring says the closed-loop determinism claim "was never demonstrated".
+- **Determinism is only partly proven.** Since #643, `verify_determinism.py` shows that the seeded IMU noise repeats tick for tick after `resetScenario`. Physics after the reset teleport is not bit-identical between runs, so closed-loop determinism is still unproven (rule 9).
 - **Unseeded track generation.** `track_generator.py:111` calls `np.random` unseeded, so tracks generated in Mission Control (MC) are not reproducible.
 - **The floor is finite.** It is about 200 m × 250 m (`track_centering.py:4`), while MC generates tracks with `max_bound` up to 150 m (`main.py:356`).
 - **Cone mass is uniform.** `FSDSReferee.cpp:216` sets 1.0 kg for every cone. DS 2026 Table 1 gives 0.45 kg (small) and 1.05 kg (big orange).
