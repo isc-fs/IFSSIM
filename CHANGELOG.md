@@ -14,6 +14,26 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Collision channels for trackside props**, step 1 of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)),
+  with the matrix in `docs/collision_matrix.md`.
+  - Two object channels: `FSDSProp`, a solid prop that stops the car and
+    the cones, and `FSDSPropLidarOnly`, which has no physics and answers
+    only Visibility traces. Both default to Block, so the car, the cones
+    and the CPU LiDAR meet them without any profile edits.
+  - The car's wheel trace ignores both, so a prop is never ground. Neither
+    is `WorldStatic`, so the road probe and the cone snap never take one
+    for ground either.
+  - A documented `FSDSTerrain` profile for ground.
+
+  Nothing spawns props yet; that comes in P2a. The new
+  `validateCollisionMatrix` RPC (`tools/smoke/test_collision_matrix.py`)
+  checks every row with the queries the sim itself makes, on flat ground
+  and on the 8° ramp. `tools/smoke/lidar_sees_test_props.py` checks the
+  default GPU LiDAR: about 1,000-1,200 returns per scan on each prop, and 0
+  once they are removed. Driving over the 15 cm LiDAR-only strip at 10 m/s
+  leaves height (0.09 cm) and pitch (0.15°) the same as a drive without it.
+
 - **Perception stress metrics** in the offline perception benchmark
   (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
   `docs/ENVIRONMENT_ROADMAP.md`. It now scores:

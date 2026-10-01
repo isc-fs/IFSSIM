@@ -23,6 +23,7 @@
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
 #include "Test/FSDSTestTerrain.h"
+#include "Test/FSDSCollisionMatrixCheck.h"
 
 /**
  * Tell the vehicle's plant(s) that the car has been teleported.
@@ -1530,6 +1531,53 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			}
 		});
 		return TEXT("true");
+	}
+
+	else if (Method == TEXT("validateCollisionMatrix"))
+	{
+		// docs/collision_matrix.md checked against the engine, with two test
+		// props spawned in front of the car (FSDSCollisionMatrixCheck.h).
+		//   validateCollisionMatrix [ahead_m]   spawn them and check (default 10 m)
+		//   validateCollisionMatrix clear       remove them
+		// The props stay after a check, so the car can be driven over the
+		// LiDAR-only strip and a LiDAR consumer can look for both.
+		const FString Arg = Args.TrimStartAndEnd();
+		const bool bClear = Arg == TEXT("clear");
+		const double AheadM = (!bClear && !Arg.IsEmpty()) ? FCString::Atod(*Arg) : 10.0;
+		if (!VehiclePawn) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+
+		const FString Timeout = TEXT("{\"ok\":false,\"error\":\"timeout\"}");
+		if (bClear)
+		{
+			return CallOnGameThread<FString>([this]() -> FString
+			{
+				if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+				return FString::Printf(TEXT("{\"ok\":true,\"removed\":%d}"),
+					FSDSCollisionMatrixCheck::Clear(VehiclePawn->GetWorld()));
+			}, 10.0, Timeout, TEXT("validateCollisionMatrix clear"));
+		}
+
+		const FString SpawnError = CallOnGameThread<FString>([this, AheadM]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+			return FSDSCollisionMatrixCheck::Spawn(VehiclePawn, AheadM);
+		}, 10.0, Timeout, TEXT("validateCollisionMatrix spawn"));
+		if (!SpawnError.IsEmpty()) return SpawnError;
+
+		// Chaos adds new bodies to its scene queries on a later tick, so let
+		// the world tick a few frames before querying (see Check()).
+		const uint64 SpawnFrame = GFrameCounter;
+		const double Deadline = FPlatformTime::Seconds() + 10.0;
+		while (GFrameCounter < SpawnFrame + 3 && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Sleep(0.01f);
+		}
+
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+			return FSDSCollisionMatrixCheck::Check(VehiclePawn);
+		}, 10.0, Timeout, TEXT("validateCollisionMatrix check"));
 	}
 
 	else if (Method == TEXT("validateRoadProbe"))
