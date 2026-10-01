@@ -120,6 +120,30 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Two runs reset with the same seed did not get the same IMU noise**
+  ([#643](https://github.com/isc-fs/IFSSIM/issues/643)). The seeding itself
+  worked; two things around it did not.
+  - The TCP sensor stream built each 400 Hz frame on its own thread, reading
+    the sim clock, the IMU, the pose and ground truth from the game thread's
+    live objects while they were being updated. A frame could carry one
+    tick's time with the previous tick's IMU sample. The frame is now packed
+    once per tick on the game thread, after every actor has ticked, and the
+    stream resends the latest one. Every field in a frame now comes from the
+    same tick.
+  - `resetScenario` ran as a game-thread task wherever it landed in a frame,
+    sometimes before the IMU and physics had ticked and sometimes after. The
+    first tick after a reset then got noise sample 0 in one run and sample 1
+    in the next, and physics restarted a tick apart. It now runs at the start
+    of the next tick, before anything ticks, or at once when the sim is
+    paused. Its reply adds `sim_time`, the game time of the first tick with
+    the new seed.
+
+  `tools/scenario_runner/verify_determinism.py` now numbers ticks from the
+  reset and compares the injected yaw-rate noise (`/imu` minus
+  `/testing_only/odom`) tick by tick, instead of raw `/imu` samples. Raw
+  samples also contain the physics, which is not bit-identical after a
+  teleport. It passes 3 runs out of 3: every tick both same-seed runs
+  captured matches exactly, and a different seed matches none.
 - **`getImuData` and `simGetGroundTruthKinematics` reported the yaw rate with
   the wrong sign.** `FSDSCoord::UEAngularVelocityToENU` swapped the axes like
   a position, but angular velocity is an axial vector, so the swap between a
