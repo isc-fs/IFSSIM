@@ -174,6 +174,27 @@ class ScanStatsTest(unittest.TestCase):
         self.assertEqual(agg["mean_ground_fraction"], 0.9)
 
 
+class StopLatchMinTravelTest(unittest.TestCase):
+    def test_reads_this_checkouts_params_yaml(self) -> None:
+        import run_perception_benchmark as rpb
+
+        value, source = rpb._stop_latch_min_travel()
+        params = Path(__file__).resolve().parents[3] / "pipeline/bringup/config/params.yaml"
+        if not params.is_file():
+            self.skipTest("pipeline submodule not checked out")
+        self.assertEqual(value, 30.0)
+        self.assertTrue(source.startswith("checkout params.yaml"), source)
+
+    def test_shallow_container_path_does_not_raise(self) -> None:
+        # In the benchmark container the script is /bench/<name>, with no
+        # checkout above it; this used to raise IndexError on parents[2].
+        import run_perception_benchmark as rpb
+
+        value, source = rpb._stop_latch_min_travel(Path("/bench/run_perception_benchmark.py"))
+        self.assertIsInstance(value, float)
+        self.assertNotIn("checkout", source)
+
+
 class ReferenceDeltasTest(unittest.TestCase):
     def test_numeric_delta_and_skips_missing(self) -> None:
         cur = {"gt_metrics": {"recall": 0.80, "big_orange_recall": None},

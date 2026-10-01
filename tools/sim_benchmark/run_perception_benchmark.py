@@ -90,7 +90,7 @@ def _pointcloud_to_xyz(msg):
 DEFAULT_STOP_LATCH_MIN_TRAVEL_M = 30.0
 
 
-def _stop_latch_min_travel() -> tuple[float, str]:
+def _stop_latch_min_travel(script: Path | None = None) -> tuple[float, str]:
     """``control_node.stop_latch_min_travel`` and where it came from.
 
     This checkout's params.yaml when it is reachable (host / --local-ros);
@@ -101,10 +101,13 @@ def _stop_latch_min_travel() -> tuple[float, str]:
     """
     import yaml
 
-    candidates: list[tuple[Path, str]] = [
-        (Path(__file__).resolve().parents[2] / "pipeline/bringup/config/params.yaml",
-         "checkout params.yaml"),
-    ]
+    here = (script or Path(__file__)).resolve()
+    candidates: list[tuple[Path, str]] = []
+    # In the container the script is /bench/<name>: there is no checkout above it.
+    if len(here.parents) > 2:
+        candidates.append(
+            (here.parents[2] / "pipeline/bringup/config/params.yaml", "checkout params.yaml")
+        )
     try:
         from ament_index_python.packages import get_package_share_directory
 
