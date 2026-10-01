@@ -67,6 +67,33 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
+  points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
+  change assumed the GPU→CPU readback would stall on a discrete GPU over
+  PCIe, and that 300 k points/s was still fine for cone detection. Neither
+  was measured, and both were wrong. Measured on the Windows dev computer
+  (RTX 3080 10 GB) with the same track, the ground-truth driver at 3 m/s
+  for 90 s, and the offline perception benchmark:
+
+  | | CPU, 300 k | CPU, 1.74 M | GPU, 1.74 M |
+  |---|---|---|---|
+  | LiDAR rate | 10.0 Hz | 7.7–8.9 Hz | 10.0 Hz |
+  | Cone recall | 87.3% | 97.4% | 97.6% |
+  | Precision | 99.98% | 99.64% | 99.98% |
+  | Mean / p95 position error | 4.7 / 8.6 cm | 19.5 / 28.4 cm | 4.3 / 6.9 cm |
+  | False big oranges (frames with ≥2) | 517 (109) | 0 | 0 |
+  | Stop latch fires away from a gate | yes, 30 m in | no | no |
+
+  At 300 k the cones are sparse enough at range that the detector picks the
+  big-cone template: 1.7% of small cones at 5–10 m read as big orange,
+  rising to 11% at 15–20 m. That is enough to trip `control_node`'s
+  permanent stop latch. The CPU path at 1.74 M cannot hold 10 Hz, and
+  because each scan is traced while the car moves it places cones 14 cm too
+  far forward. On the GPU path the readback took 17 ms median and 34 ms p95,
+  and the sim held 60 fps in all three runs. `LidarPath: cpu` stays
+  available for comparing the two paths but not for judging perception
+  (`docs/ENVIRONMENT_ROADMAP.md`, design rule 11). Not yet measured on a
+  weaker GPU.
 - **The `pipeline/` submodule now tracks
   [`isc-fs/IFS09-DV-PIPELINE`](https://github.com/isc-fs/IFS09-DV-PIPELINE)**
   instead of the frozen `IFS08-DV-PIPELINE`. 09 was imported with 08's

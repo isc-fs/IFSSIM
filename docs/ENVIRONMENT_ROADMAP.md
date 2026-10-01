@@ -84,13 +84,15 @@ Ranked from synthetic runs of the real `cone_detection` code. P0 re-measures eac
 
 ## 2. Design rules (apply to every phase)
 
-1. **Collision is the LiDAR geometry.**
-   - The CPU LiDAR traces only simple collision (`ECC_Visibility`, `bTraceComplex=false`), so every LiDAR-relevant asset needs authored simple collision.
+1. **What the LiDAR sees must match what the car collides with.**
+   - The default GPU LiDAR (`LidarPath: gpu`) renders scene depth, so it sees the *visual* mesh. The CPU LiDAR traces only simple collision (`ECC_Visibility`, `bTraceComplex=false`).
+   - Every LiDAR-relevant asset therefore needs authored simple collision that follows its visual silhouette. Otherwise the two paths disagree, and the car hits or misses something the default sensor never showed it.
    - Ground must be WorldStatic, QueryAndPhysics and BlockAll, with simple collision identical to complex. That means either a Landscape with `CollisionMipLevel == SimpleCollisionMipLevel == 0`, or a mesh with complex-as-simple.
-2. **Props never count as ground, and wheels never drive on them.** Every collision class is defined against the five queries in this matrix. `docs/collision_matrix.md` (written in P1) documents it per prop class.
+2. **Props never count as ground, and wheels never drive on them.** Every collision class is defined against the six queries in this matrix. `docs/collision_matrix.md` (written in P1) documents it per prop class.
 
    | Query | Mechanism | Ground (floor, `FSDSGroundPad`, `FSDSTerrain`) | `FSDSProp` (solid) | `FSDSPropLidarOnly` |
    |---|---|---|---|---|
+   | GPU LiDAR (default) | scene-depth render of visible primitives | Hit | Hit | Hit |
    | CPU LiDAR | `ECC_Visibility` trace, simple collision | Block | Block | Block |
    | Cone ground snap | object-type WorldStatic (after P1) | Hit | not WorldStatic, so no hit | no hit |
    | Road probe | object-type WorldStatic (`FSDSVehiclePawn.cpp:1815-1841`) | Hit | no hit | no hit |
@@ -133,6 +135,11 @@ Ranked from synthetic runs of the real `cone_detection` code. P0 re-measures eac
      - **Within band** means |Δmean| ≤ 2σ_P0.
      - **Reproduces** means the effect's rate or mean over N runs exceeds that of the same seeds with the feature disabled by more than 2σ_P0.
 10. **Real-band gates are provisional and marked [RB].** A gate that compares against real-car scan statistics is evaluated only once P0 has a real band from bags that contain raw `/lidar_points`. Until then it is recorded as "skipped, no real band" and does not block the phase.
+11. **Perception results count only at the real sensor density.** Every perception gate, baseline and filed detector bug uses the GPU path at the Hesai ATX's 1.74M pts/s. Check the sim log line `FSDS LiDAR: backend=GPU ... 1740000 pts/sec` or the bag's points per scan (about 93k) before reading any result.
+    - Measured on 2026-10-01 (same track and ground-truth driver at 3 m/s, 90 s):
+      - At 300k pts/s the detector read up to 11% of small cones at 15–20 m as big orange. That gave 517 false big oranges and a stop latch fired 30 m into the run, away from any gate. At 1.74M there were none.
+      - The CPU path at 1.74M only reached 7.7–8.9 Hz and smeared cones 14 cm forward.
+    - Both effects are sim artefacts that would look like detector bugs.
 
 ---
 
@@ -158,7 +165,7 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
 - **PR #1:** extend the existing `tools/sim_benchmark/perception_metrics.py`. It already matches detections to ground-truth cones by position (TP/FP/FN, match error, error by range). It does not yet score colour, the big-orange stop logic or clutter. See §5.
 - **Fresh flat-world reference bag `flat_ref`** on current dev.
   - Recording setup:
-    - CPU path at 300k pts/s;
+    - GPU path at 1.74M pts/s, the `dev` default (rule 11);
     - the full `/lidar/Lidar1` topic, not only `/viz`;
     - today's IMU;
     - header stamps rather than `/clock` (#611);
@@ -166,11 +173,12 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
   - Every P2/P3 perception gate is measured against this bag.
 - **LiDAR instrumentation in `FSDSLidarSensor.cpp`:**
   - scan wall time, hits per scan, a skipped-scan counter (on the `bScanInProgress.exchange` reject at :209) and UDP bytes;
+  - the same for the default GPU path: capture time, readback latency (already logged per readback) and skipped readbacks;
   - `TRACE_CPUPROFILER_EVENT_SCOPE` on `PerformScan`;
   - a cvar to switch the instrumentation off for the A/B overhead test;
   - a read-only `getLidarStats` RPC in `FSDSRpcServer.cpp`. It also returns a SHA-256 for each of the last 100 scans, computed inside the plugin before UDP serialisation.
 - **Deterministic per-ray noise and dropout.**
-  - Replace the shared `Noise()` stream with a counter-based hash of (seed, scan index, channel, h-step).
+  - Replace the CPU path's shared `Noise()` stream with a counter-based hash of (seed, scan index, channel, h-step). The default GPU path already does this: `FSDSLidarDecode.usf` hashes the ray index with a per-scan seed from `FSDSRandom::MakeSeed`.
   - Extend `tools/scenario_runner/verify_determinism.py` with the stationary-car scan-hash check.
 - **Run-to-run noise band**, measured with the existing mission benchmark (`tools/sim_benchmark/run_mission_benchmark.py`, `missions.yaml`, `bench.yaml`).
   - Its repeat `i` uses seed `i`, which samples *across* seeds. The noise band needs repeats *at one seed*, so P0 adds a `--fixed-seed K` option: every repeat resets with seed K, and run directories become `seed<K>/rep<i>` so they do not collide.
@@ -264,7 +272,7 @@ Effort is given as base effort and as effort with 1.5–2× contingency. Calenda
 - **Cones on the 5% fixture:** 0 snap misses, settle drift under 2 cm, 0 phantom DOOs across 10 runs.
 - **Props:**
   - An `FSDSProp` box 3 m above a cone does not capture it (error < 1 cm), and the road probe ignores it.
-  - Driving over the `FSDSProp` slab and the `FSDSPropLidarOnly` strip at 10 m/s produces no wheel-trace hit: suspension state stays within the noise band of the run without props. The CPU LiDAR returns points from both.
+  - Driving over the `FSDSProp` slab and the `FSDSPropLidarOnly` strip at 10 m/s produces no wheel-trace hit: suspension state stays within the noise band of the run without props. Both LiDAR paths return points from both.
 - **Finish trigger:** fires on 10/10 crossings with the gate ground at -3 m and at +3 m.
 
 **Depends on:** P0 for the RNG and the noise band; otherwise P1 can run in parallel.
@@ -606,6 +614,6 @@ Branch off `dev`.
 6. GitHub plan and LFS quota (Free is 10 GiB storage and bandwidth). Do you agree to `.lfsconfig` `fetchexclude` and pruning the legacy RaceCourse maps?
 7. Provenance and licence of the RaceCourse kit inherited from FSDS: keep it or replace it? CARLA now covers most of what the kit offered (walls, fences, barriers), so replacing it is cheap; the kit blocks nothing.
 8. Can the self-hosted Windows runner carry both the PR plugin builds (PR #0) and the P6 nightlies? Is "same-repo PRs only" acceptable for the plugin gate?
-9. Must the GPU LiDAR path (ARM Macs) reach parity on dressed worlds, or is a smoke test enough?
+9. Must the CPU LiDAR path reach parity with the default GPU path on dressed worlds, or is a smoke test enough?
 10. Should fixed-venue mode (no MC recentring) coexist with random tracks clipped to a venue pad polygon?
 11. Is the capacity assumption (about 0.6 pw/week combined, with pauses for exams and the season) right? If it is lower, the plan reduces to the pre-track slice.
