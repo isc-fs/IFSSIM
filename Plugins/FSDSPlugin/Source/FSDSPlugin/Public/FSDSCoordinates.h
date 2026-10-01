@@ -41,24 +41,37 @@ namespace FSDSCoord
 		return UEToENU(UE); // Same transform, just different interpretation
 	}
 
-	/** Convert UE5 quaternion to ENU quaternion.
-	 *  UE5 yaw=0 faces North (+X_UE = +Y_ENU), so ENU_yaw = 90° - UE5_yaw.
-	 *  Formula: q_ENU = q_90 * q_UE.Inverse()
-	 *  where q_90 is a 90° CCW rotation around Z.
+	/** Convert a UE5 orientation to ENU, with the body in REP-103 FLU
+	 *  (X forward, Y left, Z up).
+	 *
+	 *  UE5's world (X north, Y east, Z up) and body (X forward, Y right, Z up)
+	 *  are both left-handed, so the rotation that takes a FLU body vector into
+	 *  ENU is R_ENU = P_w * R_UE * P_b, with P_w = swap(x, y) and
+	 *  P_b = diag(1, -1, 1). Both are reflections, so R_ENU is a proper
+	 *  rotation. As a quaternion, with h = 1/sqrt(2):
+	 *
+	 *      q_ENU = h * (w + z,  -(x + y),  y - x,  w - z)    as (w, x, y, z)
+	 *
+	 *  For yaw only (x = y = 0) this is ENU_yaw = 90 deg - UE_yaw. The previous
+	 *  q_90 * q_UE.Inverse() matched it only there: it swapped the ENU x and y
+	 *  components, so a car pitched 8 deg nose-up read 8 deg nose-down (#638).
 	 */
 	inline FQuat UEQuatToENU(const FQuat& UE)
 	{
-		static const FQuat Q90(0.f, 0.f, 0.7071068f, 0.7071068f);
-		return Q90 * UE.Inverse();
+		constexpr double H = 0.70710678118654752;  // 1/sqrt(2)
+		return FQuat(
+			-H * (UE.X + UE.Y),   // X
+			 H * (UE.Y - UE.X),   // Y
+			 H * (UE.W - UE.Z),   // Z
+			 H * (UE.W + UE.Z));  // W
 	}
 
-	/** Convert ENU quaternion to UE5 quaternion (inverse of UEQuatToENU).
-	 *  Formula: q_UE = q_ENU.Inverse() * q_90
+	/** Convert an ENU orientation (FLU body) to UE5. P_w and P_b are their own
+	 *  inverses, so this is the same map as UEQuatToENU.
 	 */
 	inline FQuat ENUQuatToUE(const FQuat& ENU)
 	{
-		static const FQuat Q90(0.f, 0.f, 0.7071068f, 0.7071068f);
-		return ENU.Inverse() * Q90;
+		return UEQuatToENU(ENU);
 	}
 
 	/** Convert UE5 rotator (degrees) to ENU yaw (radians) */

@@ -120,6 +120,21 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Pitch and roll were wrong in every orientation the sim sent to ROS**
+  ([#638](https://github.com/isc-fs/IFSSIM/issues/638)).
+  `FSDSCoord::UEQuatToENU` was correct only for yaw: it swapped the ENU x and
+  y quaternion components, so a car 8° nose-up on a ramp was reported 8°
+  nose-down. That covered the IMU orientation, the ground-truth pose
+  (`/testing_only/odom`), `getStartGatePose`, `simGetVehiclePose` and the
+  other pose RPCs. `ENUQuatToUE` (the `simSetVehiclePose` path) had the same
+  bug. Both now use the conversion derived from the two frames. On flat
+  ground nothing changes: for yaw-only rotations the output is identical, and
+  every shipped track's start pose is unchanged to 0.000 mm and 0.0000°. On
+  the 8° test ramp, `/imu` and `/testing_only/odom` now report pitch −8°
+  (REP-103: positive pitch is nose-down) where they reported +8°. Covered by
+  the new automation tests `FSDS.Coordinates.*` and by
+  `tools/smoke/test_start_pose.py`, which now checks the ENU poses against
+  the plant's pitch.
 - **`/clock` stopped for good after the sim restarted**
   ([#611](https://github.com/isc-fs/IFSSIM/issues/611)). The bridge only
   publishes a sim stamp on `/clock` if it is later than the last one, and
