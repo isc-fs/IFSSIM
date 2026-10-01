@@ -12,6 +12,8 @@ Mission Control, no Docker):
      3 m back-off lands on the ramp's centre (x = 39 m, surface 0.702 m).
      The car must sit 0.55 m above the surface (HeightOffset 5 cm + 50 cm)
      within 1 cm, nose up 8 deg within 0.2 deg, heading along +x.
+  3. Reset: move the car off the ramp, resetScenario, and it must be back on
+     the ramp start pose (the reset path re-derives it the same way).
 
 The flat tracks run first: the test terrain persists once built and would
 otherwise sit under some of them.
@@ -23,6 +25,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -31,6 +34,7 @@ from ifssim.client import IFSSIMClient  # noqa: E402
 
 RAMP_FIXTURE = REPO / "tools" / "smoke" / "fixtures" / "ramp_gate.csv"
 RAMP_SURFACE_Z_M = 0.702   # FSDSTestTerrain "ramp_up" height at its centre (x = 39 m)
+RAMP_START_X_M = 39.0      # the fixture's gate centroid (x = 42 m) minus the 3 m back-off
 RAMP_PITCH_DEG = 8.0
 # The fixture drives along its CSV +x, which is UE +X and therefore ENU north:
 # getStartGatePose reports ENU, so that heading is 90 deg, not 0.
@@ -130,6 +134,21 @@ def main():
             failures.append(f"ramp: pitch {pitch_deg:+.2f} deg, want +{RAMP_PITCH_DEG} ± 0.2")
         if abs((p["heading_deg"] - RAMP_HEADING_DEG + 180) % 360 - 180) > 0.2:
             failures.append(f"ramp: heading {p['heading_deg']:.2f} deg, want {RAMP_HEADING_DEG} ± 0.2")
+
+        # resetScenario is the other caller of ComputeStartGatePose: move the
+        # car off the ramp, reset, and it must be back on it, nose up.
+        rpc(client, "simSetVehiclePose 0 10 0.6")
+        reset = rpc(client, "resetScenario 1")
+        time.sleep(0.5)  # the teleport runs on the game thread
+        plant = rpc(client, "getPlantState")
+        px, py = plant["position"][0], plant["position"][1]
+        pitch_deg = math.degrees(plant["attitude"][1])
+        print(f"after resetScenario: plant xy=({px:.3f},{py:.3f}) (want ({RAMP_START_X_M}, 0)), "
+              f"pitch={pitch_deg:+.2f} (want +{RAMP_PITCH_DEG})  [{json.dumps(reset)[:80]}]")
+        if math.hypot(px - RAMP_START_X_M, py) > 0.05:
+            failures.append(f"reset: car at ({px:.3f}, {py:.3f}), want ({RAMP_START_X_M}, 0) ± 0.05 m")
+        if abs(pitch_deg - RAMP_PITCH_DEG) > 0.2:
+            failures.append(f"reset: pitch {pitch_deg:+.2f} deg, want +{RAMP_PITCH_DEG} ± 0.2")
 
     if failures:
         print("\nFAIL:\n  " + "\n  ".join(failures))
