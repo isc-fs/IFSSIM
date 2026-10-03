@@ -1,8 +1,13 @@
-function R = accel_run(s_target, throttle)
+function R = accel_run(s_target, throttle, overrides)
 %ACCEL_RUN  Standing-start acceleration over a distance, run on the real plant.
 %
 %   R = ACCEL_RUN(75) launches the car from rest at full throttle and reports
 %   when it has covered 75 m -- the Formula Student acceleration event.
+%
+%   R = ACCEL_RUN(75, 1, {'GearRatio', 3.2}) runs a different car: overrides
+%   go to the plant's base workspace and are put back afterwards. Only
+%   parameters the plant reads at RUN time take effect without a rebuild;
+%   pt_study checks that before calling this.
 %
 %   THIS IS THE PATTERN FOR THE MANUAL TEAM. The point of it is not the
 %   number it prints; it is that the number comes from the SAME plant the
@@ -33,13 +38,17 @@ function R = accel_run(s_target, throttle)
 
 if nargin < 1 || isempty(s_target), s_target = 75;  end
 if nargin < 2 || isempty(throttle), throttle = 1.0; end
+if nargin < 3, overrides = {}; end
 
 here  = fileparts(mfilename('fullpath'));
 plant = fullfile(here,'..','plant');
 addpath(plant); addpath(fullfile(plant,'models'));
 addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
-P = ifssim_load_workspace();
+P = ifssim_load_workspace(overrides);
 ifssim_plant_buses;
+if ~isempty(overrides)
+    restore = onCleanup(@() ifssim_load_workspace());   % a study leaves nothing behind
+end
 
 h = 'accel_run_harness';
 if bdIsLoaded(h), close_system(h,0); end
@@ -101,6 +110,15 @@ slip = (omega*P.WheelRadius - vx) ./ max(abs(vx), P.Assumed.SlipRegularisationSp
 
 R = struct();
 R.hist = [t x vx ax rpm slip];
+% What the powertrain was doing, so a disagreement with a design model can be
+% traced to the pack, the motor or the road rather than argued about.
+R.ptrain = struct('motor_torque', pt.motor_torque.Data(:), ...
+                  'motor_power',  pt.motor_power.Data(:), ...
+                  'batt_voltage', pt.batt_voltage.Data(:), ...
+                  'batt_soc',     pt.batt_soc.Data(:), ...
+                  'omega',        w.omega.Data, ...
+                  'fx',           w.fx.Data, ...
+                  'fz',           w.fz.Data);
 
 i = find(x >= s_target, 1, 'first');
 if isempty(i)

@@ -6,10 +6,22 @@ function K = pack_from_cells(C)
 %   how many of them are arranged which way, so changing the arrangement
 %   cannot leave a stale pack value behind somewhere else.
 %
-%   K = PACK_FROM_CELLS(CAR_SPEC).
+%   K = PACK_FROM_CELLS(CAR_SPEC)   the pack as declared
+%   K = PACK_FROM_CELLS(P)          the pack in a parameter set, P from
+%                                   ifssim_params(overrides) -- so a study
+%                                   override of a cell or the arrangement
+%                                   actually reaches the pack
+%
+%   The second form is what makes the accumulator STUDYABLE. Given car_spec
+%   directly, an override of Pack.CurrentLimit could never arrive: the
+%   override path ends at P, and this read past it.
 
 if nargin < 1, C = car_spec(); end
-v = @(n) C.Fields.(strrep(n,'.','_')).value;
+if isfield(C, 'Fields')
+    v = @(n) C.Fields.(strrep(n,'.','_')).value;
+else
+    v = @(n) getdot(C, n);
+end
 
 K.Ns = v('Pack.CellsSeriesPerModule')   * v('Pack.ModulesInSeries');    % cells in series
 K.Np = v('Pack.CellsParallelPerModule') * v('Pack.ModulesInParallel');  % strings in parallel
@@ -62,4 +74,9 @@ K.CellThermal = v('Cell.Mass') * v('Cell.SpecificHeat');    % J/K
 K.CellKperSec = K.CellWatts / K.CellThermal;
 
 K.Mass = K.NCells * v('Cell.Mass');
+end
+
+function x = getdot(S, name)
+x = S;
+for k = strsplit(name, '.'), x = x.(k{1}); end
 end
