@@ -1,8 +1,11 @@
-function G = lap_ggv(P)
+function G = lap_ggv(P, soc)
 %LAP_GGV  The car's g-g-V envelope: lateral grip left at every speed and ax.
 %
 %   G = LAP_GGV()    the car as specified
 %   G = LAP_GGV(P)   a parameter set from ifssim_params(overrides)
+%   G = LAP_GGV(P, soc)  with the pack at this state of charge (default: the
+%                    pack's start, PK.SoC0). Lower charge, lower voltage,
+%                    less drive power -- the endurance runs on this.
 %
 %   What a quasi-steady lap simulation drives on. Built from the two
 %   department models rather than a third copy of the car:
@@ -33,7 +36,8 @@ here = fileparts(mfilename('fullpath'));
 addpath(fullfile(here,'..','vd'), fullfile(here,'..','pt'), fullfile(here,'..','spec'));
 
 M = dualtrack_build(P);
-E = pt_model(P);
+if nargin < 2 || isempty(soc), E = pt_model(P);
+else, E = pt_model(P, struct('soc', soc)); end
 g = 9.81;  m = M.m;  m_eff = E.m_eff;
 rho = P.Assumed.AirDensity;
 

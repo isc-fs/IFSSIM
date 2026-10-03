@@ -18,6 +18,8 @@ function L = lap_sim(G, seg, opts)
 %   L.limit     per point: corner | accel | brake
 %   L.E_pack    pack energy for the lap, net of regen        [kJ]
 %   L.E_drag    energy lost to aero drag                     [kJ]
+%   L.P_elec    electrical power at the pack, per point      [W]
+%   L.dt        time spent at each point                     [s]
 %
 %   What it is not: a driver. No yaw transients, no line optimisation (the
 %   path is the track centreline), no tyre temperature. Use it to RANK
@@ -112,11 +114,22 @@ Fdrg = 0.5*rho*P.CdA*vm.^2;
 Fneed = G.m_eff*axs + Fdrg + P.RollingResistance*(P.Mass*g + Fl);
 eta = P.DrivetrainEfficiency;
 Freg = interp1(E.v, E.F_regen, vm, 'linear', 'extrap');
-Ewheel_drive = sum(max(Fneed,0) .* ds);
+% SLIP COSTS ENERGY. The driven wheels turn (1+kappa) faster than the road,
+% so the power at the axle is F*v*(1+kappa), not F*v. pt_model has kappa at
+% full drive; in between it scales with the force, as it does on the linear
+% part of the curve. Without this the lap drew 31 A a cell on the power limit
+% where the pack's limit is 33.3 -- the slip power was simply missing.
+kap = interp1(E.v, E.kappa, vm, 'linear', 'extrap') .* ...
+      max(Fneed,0) ./ max(interp1(E.v, E.F_drive, vm, 'linear', 'extrap'), eps);
+Ewheel_drive = sum(max(Fneed,0) .* (1 + kap) .* ds);
 Eregen       = sum(min(max(-Fneed,0), Freg) .* ds);      % friction does the rest
 L.time   = sum(dt);
 L.s = s;  L.v = v;  L.vcorner = vcorner;  L.limit = limit;  L.k = k;
 L.E_pack = (Ewheel_drive/eta - Eregen*eta) / 1000;          % eta once, each way
+% The same, point by point, as ELECTRICAL power at the pack: what the
+% accumulator view turns into current, sag and heat.
+L.P_elec = max(Fneed,0).*(1 + kap).*vm/eta - min(max(-Fneed,0), Freg).*vm*eta;   % W
+L.dt     = dt;
 L.E_drag = sum(Fdrg .* ds) / 1000;
 L.length = N*ds;
 L.v_mean = L.length / L.time;

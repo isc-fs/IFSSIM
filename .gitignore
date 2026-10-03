@@ -136,6 +136,7 @@ matlab/vd/figures/
 matlab/pt/figures/
 matlab/aero/figures/
 matlab/tyres/figures/
+matlab/accumulator/figures/
 
 # Third-party vehicle-dynamics literature (theses, course decks). Reference
 # material, not ours to redistribute, and 36 MB of it. Read it in place; the

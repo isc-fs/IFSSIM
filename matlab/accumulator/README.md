@@ -1,0 +1,92 @@
+# Accumulator
+
+The accumulator department's view of the car, built the same way as `vd/`,
+`pt/`, `aero/` and `tyres/`.
+
+```matlab
+cd matlab/accumulator
+acc_parameters   % what each parameter moves; counts step by one cell/string/module
+acc_report       % the pack, the endurance, and the cells against their ratings
+acc_plots        % one lap's cell current; charge and sag across the endurance
+acc_study('Pack.CellsParallelPerModule', 7)
+```
+
+## The endurance
+
+`acc_endurance` drives `lap_track` flat out, lap after lap, over 22 km. The
+pack discharges as it goes:
+
+- each lap is driven at the pack's current state of charge, so a tired pack
+  gives less power;
+- each point's electrical power becomes a current by solving `V·I = P` with
+  `V = Voc − I·R`, so sag is included;
+- charge, cell heat and the lowest cell voltage are accumulated lap by lap.
+
+Laps are run at four states of charge and interpolated between, so the whole
+event costs four laps of compute.
+
+On the car as specified, at the 200 A limit:
+
+| | event | rating |
+|---|---|---|
+| laps completed | **21.3 of 24.6, does not finish** | |
+| peak cell current | 33.4 A | 30 A, the highest characterised rate |
+| rms cell current | 14.4 A | 15 A sustained |
+| lowest cell voltage | 2.67 V | 2.5 V floor |
+| cell heating with no cooling | 138 K | |
+
+All of these are **upper bounds**: every lap is driven at the car's limit,
+with no lift-and-coast, no driver change and no cooling. A real endurance is
+driven slower and costs less. Read them as "the pack copes with the worst
+case" or "it doesn't, by this much". The no-cooling rise is the heat the
+cooling has to take out over the event, not a temperature the cells reach.
+
+## What moves it
+
+From `acc_parameters`. Counts step by one, and the car's mass follows the cells:
+
+- **One more parallel string (6p → 7p) finishes even the flat-out event**,
+  for +4.4 kg of cells.
+- **The cell voltage floor matters as much as capacity.** `Cell.VMin` is
+  ASSUMED at 2.5 V (the datasheet says 2.0). At 2.75 V the event ends 11%
+  sooner, on sag rather than on charge.
+- **`Cell.Rint` is ASSUMED.** It's the DC figure, not the 13 mΩ AC one. Lower
+  resistance means more power, less sag and much less heat.
+- **`Pack.CurrentLimit` is a trade:** +10% is +7.8% power and −0.65% on the
+  75 m, but −4.4% endurance distance and more heat.
+
+`Cell.VMax` does not bind, because the pack's voltage comes from the OCV
+table, whose top entry is the same 4.20 V typed a second time. Change one and
+the other won't follow. `VNom` is a label, and `ICharacterised` and
+`ISustained` are ratings the report compares against, not physics.
+
+## Two things the numbers are built on
+
+- **Mass follows the pack.** car_spec declares the car's total mass, and
+  nothing linked it to the cell count. A study that adds cells for free will
+  always say "add cells". `acc_kpis` adds the change in cell mass to the car.
+  It's cells only: housings, busbars and cooling aren't in car_spec, so a
+  bigger pack is still slightly under-charged for its weight.
+- **Slip costs energy.** The lap's electrical power includes the driven
+  tyres' slip (`(1+κ)·F·v`). Without it, the lap peaked at 31 A a cell where
+  the pack's limit is 33.3 A, and the endurance looked 1.8 laps longer than it
+  is.
+
+## Checks
+
+`test_acc_endurance`:
+
+- energy closes on every lap: `Voc·I = P + I²R`, exactly;
+- on the power limit, the lap draws exactly the pack's current limit, as the
+  plant does;
+- a lossless pack's charge per lap is energy over `Voc`;
+- twice the strings goes at least as far;
+- one more string adds exactly its cells' mass to the car.
+
+## The plant can't run these yet
+
+The plant builds its Simscape accumulator from `car_spec` directly
+(`build_battery_pack`), so no study override reaches it. `acc_study` runs on
+the design model only, and `plant_study` and `pt_study('plant', …)` refuse
+accumulator parameters. Making the plant's pack override-able is a plant
+change that needs a rebuild per study, as the tyre does.

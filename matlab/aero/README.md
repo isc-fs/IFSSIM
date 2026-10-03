@@ -21,10 +21,10 @@ and which direction a concept should go in.
 
 | change | lap | energy |
 |---|---|---|
-| +0.1 m² ClA | −0.094 s | — |
-| +0.1 m² CdA | +0.025 s | +8 kJ |
+| +0.1 m² ClA | −0.092 s | — |
+| +0.1 m² CdA | +0.031 s | +8.1 kJ |
 
-A package change is faster when its *incremental* L/D is above about 0.27.
+A package change is faster when its *incremental* L/D is above about 0.34.
 The straights on an FS endurance track are short, so drag costs little lap
 time. It still costs energy, and endurance is scored on energy too. The
 contours of `aero_trade.png` run nearly vertical, which is the same finding

@@ -1,4 +1,4 @@
-function [moves, K0] = dept_moves(names, kpiFn, KPI, K0)
+function [moves, K0] = dept_moves(names, kpiFn, KPI, K0, steps)
 %DEPT_MOVES  For each parameter: move it 10%, report which KPIs moved and how much.
 %
 %   moves = DEPT_MOVES(names, kpiFn, KPI)
@@ -11,17 +11,24 @@ function [moves, K0] = dept_moves(names, kpiFn, KPI, K0)
 %   *_parameters "+10% MOVES" column, so the departments cannot come to
 %   disagree about what "moves" means.
 %
+%   steps (optional): a struct of name -> perturbed value, for parameters
+%   where 10% means nothing -- a cell count steps by one cell, not by 1.9.
+%   Field names use '_' for '.', as car_spec's Fields do.
+%
 %   A zero-valued parameter is moved to 0.1 instead (10% of zero is zero,
 %   and would wrongly read as "does not bind"). A change under 0.05% of the
 %   KPI is treated as no change.
 
 C = car_spec();
 if nargin < 4 || isempty(K0), K0 = kpiFn(ifssim_params()); end
+if nargin < 5, steps = struct(); end
 moves = cell(numel(names), 1);
 for i = 1:numel(names)
     nm = names{i};
     v0 = C.Fields.(strrep(nm,'.','_')).value;
-    if v0 == 0, v1 = 0.1; else, v1 = 1.1*v0; end
+    key = strrep(nm,'.','_');
+    if isfield(steps, key), v1 = steps.(key);
+    elseif v0 == 0, v1 = 0.1; else, v1 = 1.1*v0; end
     K1 = kpiFn(ifssim_params({nm, v1}));
     c = {};
     for j = 1:size(KPI,1)
