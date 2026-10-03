@@ -148,8 +148,85 @@ add_block(L.uni,[mdl '/ball_tie_out'],'Position',[500 620 560 670]);
 add_line(mdl,'rod_tie/RConn1','ball_tie_out/LConn1','autorouting','on');
 add_line(mdl,'ball_tie_out/RConn1','up_to_tie/RConn1','autorouting','on');
 
+% ---- pushrod and rocker ------------------------------------------------
+% A SECOND closed loop: lower arm -> pushrod -> rocker -> chassis. It is what
+% turns the assumed Susp.MotionRatioFront (0.70) into a computed number: the
+% damper's change in length per unit of wheel travel.
+%
+% DOF bookkeeping, because this is where a linkage gets over-constrained. The
+% rocker on a revolute adds one DOF. A pushrod with a ball joint at EACH end
+% acts as one distance constraint between arm and rocker, plus a free spin
+% about its own axis. Net: the rocker's angle is fixed by the wheel's, and the
+% spin is a trivial DOF nothing excites. Two ball joints rather than a ball
+% and a universal on purpose: a universal also constrains one RELATIVE
+% ROTATION, so the two frames it joins must agree in orientation at assembly
+% -- easy to get wrong across a rocker, and not worth it to remove a DOF that
+% does nothing.
+if isfield(H,'pr_lca')
+    % The pushrod pickup is ON the lower arm, so it hangs off the arm's
+    % rotating frame -- pivot_lca's follower -- expressed in that frame.
+    pf   = H.lca_front;  pr = H.lca_rear;
+    Rl   = frame_with_z((pr - pf) / norm(pr - pf));
+    add_block(L.rt,[mdl '/arm_lca_pr'],'Position',[400 30 460 80]);
+    set_cart([mdl '/arm_lca_pr'], (Rl' * (H.pr_lca - pf)')');
+    add_line(mdl,'pivot_lca/RConn1','arm_lca_pr/LConn1','autorouting','on');
+
+    % Rocker: a body on a chassis revolute. Its two arm-ends are offsets in
+    % the rocker's own rotated frame, exactly as the wishbone arms are.
+    Rr = frame_with_z(H.rk_axis / norm(H.rk_axis));
+    add_block(L.rt,[mdl '/mount_rk'],'Position',[180 820 240 870]);
+    set_param([mdl '/mount_rk'],'TranslationMethod','Cartesian', ...
+        'TranslationCartesianOffset', vec2str(H.rk_pivot), 'TranslationCartesianOffsetUnits','m', ...
+        'RotationMethod','RotationMatrix','RotationMatrix', mat2str(Rr,10));
+    add_line(mdl,'World/RConn1','mount_rk/LConn1','autorouting','on');
+    add_block(L.rev,[mdl '/pivot_rk'],'Position',[300 820 360 870]);
+    add_line(mdl,'mount_rk/RConn1','pivot_rk/LConn1','autorouting','on');
+
+    add_block(L.ine,[mdl '/mass_rk'],'Position',[400 900 460 940]);
+    set_param([mdl '/mass_rk'],'Mass','0.6','MassUnits','kg','InertiaType','Custom', ...
+        'MomentsOfInertia','[0.001 0.001 0.001]','MomentsOfInertiaUnits','kg*m^2', ...
+        'ProductsOfInertia','[0 0 0]','CenterOfMass','[0 0 0]');
+    add_line(mdl,'pivot_rk/RConn1','mass_rk/RConn1','autorouting','on');
+
+    for e = {'rk_pr','rk_dmp'}
+        b = [mdl '/arm_' e{1}];
+        add_block(L.rt, b,'Position',[400 820+50*strcmp(e{1},'rk_dmp') 460 860+50*strcmp(e{1},'rk_dmp')]);
+        set_cart(b, (Rr' * (H.(e{1}) - H.rk_pivot)')');
+        add_line(mdl,'pivot_rk/RConn1',['arm_' e{1} '/LConn1'],'autorouting','on');
+    end
+
+    % Pushrod: ball joint on the arm, rigid rod, ball joint on the rocker.
+    % The rod's direction is expressed in the lower arm's frame, because that
+    % is the frame its base sits in at assembly.
+    add_block(L.sph,[mdl '/ball_pr_lo'],'Position',[500 30 560 80]);
+    add_line(mdl,'arm_lca_pr/RConn1','ball_pr_lo/LConn1','autorouting','on');
+    add_block(L.rt,[mdl '/rod_pr'],'Position',[600 30 660 80]);
+    set_cart([mdl '/rod_pr'], (Rl' * (H.rk_pr - H.pr_lca)')');
+    add_line(mdl,'ball_pr_lo/RConn1','rod_pr/LConn1','autorouting','on');
+    add_block(L.ine,[mdl '/mass_pr'],'Position',[600 100 660 140]);
+    set_param([mdl '/mass_pr'],'Mass','0.25','MassUnits','kg','InertiaType','Custom', ...
+        'MomentsOfInertia','[0.0005 0.0005 0.0005]','MomentsOfInertiaUnits','kg*m^2', ...
+        'ProductsOfInertia','[0 0 0]','CenterOfMass','[0 0 0]');
+    add_line(mdl,'rod_pr/RConn1','mass_pr/RConn1','autorouting','on');
+    add_block(L.sph,[mdl '/ball_pr_hi'],'Position',[700 30 760 80]);
+    add_line(mdl,'rod_pr/RConn1','ball_pr_hi/LConn1','autorouting','on');
+    add_line(mdl,'ball_pr_hi/RConn1','arm_rk_pr/RConn1','autorouting','on');
+
+    % The damper's chassis mount, as a fixed frame. The damper itself is not
+    % modelled as a joint chain -- that would add a third loop to measure one
+    % length. Its length is read as the distance between this frame and the
+    % rocker's damper end, which is all a motion ratio needs.
+    add_block(L.rt,[mdl '/mount_dmp'],'Position',[180 960 240 1010]);
+    set_cart([mdl '/mount_dmp'], H.dmp_chassis);
+    add_line(mdl,'World/RConn1','mount_dmp/LConn1','autorouting','on');
+end
+
 save_system(mdl, fullfile(fileparts(mfilename('fullpath')), [mdl '.slx']));
-fprintf('  linkage built: 2 wishbones, 3 ball joints, track rod, upright\n');
+if isfield(H,'pr_lca')
+    fprintf('  linkage built: 2 wishbones, 3 ball joints, track rod, upright, pushrod, rocker\n');
+else
+    fprintf('  linkage built: 2 wishbones, 3 ball joints, track rod, upright\n');
+end
 end
 
 % -------------------------------------------------------------------------

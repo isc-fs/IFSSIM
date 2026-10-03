@@ -42,6 +42,46 @@ scrub               18.0 mm across the sweep
 
 So this geometry recovers **29%** of body roll where the plant assumes **80%**.
 
+## Motion ratio, from the pushrod and rocker
+
+The corner now carries a pushrod (ball joint at each end) driving a rocker on a
+chassis revolute, with the damper's length read as the distance between the
+rocker's damper end and its chassis mount. Motion ratio is that length's change
+per unit wheel travel:
+
+| travel mm | -53 | -27 | **0** | +13 | +26 | +40 | +53 |
+|---|---|---|---|---|---|---|---|
+| motion ratio | 0.684 | 0.694 | **0.678** | 0.641 | 0.557 | 0.340 | 0.181 |
+
+**0.678 at static** against the 0.700 `car_spec` assumes, giving a wheel rate of
+18 940 N/m from the same spring where the plant uses 20 184 — about 6% softer.
+It was not aimed for: it fell out of laying the rocker to the standard rule.
+
+The curve is strongly **regressive**. That is this placeholder — 60 mm rocker
+arms against ±53 mm of travel, which is wider than a typical FS car's ±25–30 mm,
+so the rocker rotates a long way. Within ±26 mm it is a milder 0.69 → 0.56.
+Replace the hardpoints from CAD rather than tuning these to look like a good
+design.
+
+### The first rocker toggled, and the sweep now refuses that geometry
+
+The first placeholder put the rocker's damper arm at 60° to the damper instead
+of 90°. As the rocker turned, that arm lined up with the damper and the linkage
+went through **toggle**: the motion ratio ran from +0.70 in droop to **−2.54** in
+bump — the damper lengthening as the wheel rose. A reasonable-looking static
+value (0.416) came out of a broken mechanism.
+
+It also leaked. Camber gain drifted 0.293 → 0.291 and scrub 18.0 → 17.3 mm,
+though a pushrod should not touch the wishbone kinematics at all: near a toggle
+the rocker loop stiffens and the assembly solver compromises on the arm angle.
+Fixing the rocker restored both to the decimal.
+
+The sweep now flags any geometry whose motion ratio changes sign inside the
+travel — *"LINKAGE TOGGLES within the travel — geometry is invalid"* — and stops
+rather than report a number. That matters as much for real CAD geometry as for
+placeholders: a design that toggles is a design error, not a characteristic.
+Mutation-tested by restoring the original rocker.
+
 The bump-steer figure is the interesting one. `car_spec` sets
 `BumpSteerFront = 0` as a design TARGET and the plant applies exactly zero,
 because it has no hardpoint from which toe change could emerge. Here it falls

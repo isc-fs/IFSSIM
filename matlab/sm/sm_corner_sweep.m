@@ -42,8 +42,20 @@ set_param([mdl '/UcaSensor'],'MeasurementFrame','World','SenseXYZ','on');
 add_line(mdl,'World/RConn1','UcaSensor/LConn1','autorouting','on');
 add_line(mdl,'up_to_uca/RConn1','UcaSensor/RConn1','autorouting','on');
 
+% Damper length: the distance between the damper's chassis mount and the
+% rocker's damper end, read in the mount's frame. The damper is not modelled
+% as a joint chain -- that would be a third closed loop to measure one length.
+hasRocker = isfield(H,'pr_lca');
+if hasRocker
+    add_block(TS,[mdl '/DamperSensor'],'Position',[760 700 820 780]);
+    set_param([mdl '/DamperSensor'],'MeasurementFrame','Base','SenseXYZ','on');
+    add_line(mdl,'mount_dmp/RConn1','DamperSensor/LConn1','autorouting','on');
+    add_line(mdl,'arm_rk_dmp/RConn1','DamperSensor/RConn1','autorouting','on');
+end
+
 PS2SL = ['nesl_utility/PS-Simulink' newline 'Converter'];
 outs = {'rot','WheelSensor/RConn2'; 'pos','WheelSensor/RConn3'; 'uca','UcaSensor/RConn2'};
+if hasRocker, outs(end+1,:) = {'dmp','DamperSensor/RConn2'}; end
 for k = 1:size(outs,1)
     add_block(PS2SL,[mdl '/c_' outs{k,1}],'Position',[880 400+70*k 940 430+70*k]);
     add_block('simulink/Sinks/To Workspace',[mdl '/w_' outs{k,1}], ...
@@ -60,6 +72,7 @@ set_param(piv,'PositionTargetSpecify','on','PositionTargetPriority','High', ...
 
 n = numel(angles_deg);
 raw = NaN(n,9);
+Ld  = NaN(n,1);
 T = table('Size',[n 7],'VariableTypes',repmat({'double'},1,7), ...
           'VariableNames',{'arm_deg','travel_mm','camber_deg','toe_deg','track_mm','top_y','uca_dy'});
 ref = [];
@@ -75,6 +88,9 @@ for i = 1:n
     rot = squeeze(r.get('LOG_rot').Data);   rot = rot(:)';    % [z y x] radians
     pos = squeeze(r.get('LOG_pos').Data);   pos = pos(:)';    % [x y z] metres
     uca = squeeze(r.get('LOG_uca').Data);   uca = uca(:)';
+    if hasRocker
+        dv = squeeze(r.get('LOG_dmp').Data);  Ld(i) = norm(dv(:)); %#ok<AGROW>
+    end
     raw(i,:) = [pos, rot, uca]; %#ok<AGROW>
     T.arm_deg(i) = angles_deg(i);
 end
@@ -154,6 +170,36 @@ if height(v) > 2
     fprintf('  bump steer          %+.2f deg/m   (car_spec targets 0)\n', ...
             polyval(polyfit(v.travel_mm/1000, v.toe_deg, 1), 0) * 0 + ...
             [1 0] * polyfit(v.travel_mm/1000, v.toe_deg, 1)');
+    if hasRocker && any(isfinite(Ld))
+        % MOTION RATIO = damper travel per unit wheel travel. Positive by
+        % convention: the damper SHORTENS as the wheel goes into bump.
+        tr = T.travel_mm(ok)/1000;  L = Ld(ok);
+        [tr, ix] = sort(tr);  L = L(ix);
+        mr = -gradient(L, tr);                     % local, along the travel
+        mr0 = interp1(tr, mr, 0, 'linear');        % at static ride height
+        T.Properties.UserData.motionRatio = mr0;
+        T.Properties.UserData.mrCurve = [tr*1000, mr];
+        % TOGGLE CHECK. If the motion ratio changes sign anywhere in the
+        % swept travel, an arm has lined up with its link and the damper
+        % reverses direction. That is a broken linkage, not a characteristic,
+        % and every number derived from it is meaningless -- so say so rather
+        % than report a static value that looks reasonable.
+        toggles = any(mr <= 0) || any(diff(sign(mr)) ~= 0);
+        T.Properties.UserData.toggles = toggles;
+        if toggles
+            fprintf('  motion ratio        LINKAGE TOGGLES within the travel -- geometry is invalid\n');
+            fprintf('                      (ranges %.3f to %.3f; a damper must not reverse)\n', min(mr), max(mr));
+            fprintf('  scrub               %+.1f mm over the swept travel\n', max(v.track_mm)-min(v.track_mm));
+            return
+        end
+        fprintf('  motion ratio        %.3f at static  (car_spec assumes %.3f)\n', ...
+                mr0, P.Susp.MotionRatioFront);
+        fprintf('                      %.3f at full droop -> %.3f at full bump  (%s)\n', ...
+                mr(1), mr(end), ternary(mr(end) > mr(1), 'PROGRESSIVE', 'REGRESSIVE'));
+        kw0 = P.Susp.SpringRateFront * mr0^2;
+        fprintf('  wheel rate          %.0f N/m from the same spring  (plant uses %.0f)\n', ...
+                kw0, P.Derived.WheelRateFront);
+    end
     fprintf('  scrub               %+.1f mm over the swept travel\n', ...
             max(v.track_mm) - min(v.track_mm));
     fprintf('\n  Camber is SAE: positive = top of the wheel OUTWARD.\n');

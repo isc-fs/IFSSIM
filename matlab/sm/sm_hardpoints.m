@@ -51,6 +51,28 @@ H.tie_outer = [x0+0.135,  half-0.055, 0.150];
 H.wheel_centre = [x0, half, r];
 H.contact      = [x0, half, 0];
 
+% Pushrod, rocker, damper. These are what turn Susp.MotionRatioFront from an
+% assumed 0.70 into a computed number -- the ratio of damper travel to wheel
+% travel falls out of where these five points are.
+%
+% Pushrod-on-lower-arm, rising inboard to a rocker on the chassis top, with
+% the damper lying across the car. The common FS front layout, and as much a
+% placeholder as everything above.
+%
+% Laid out to the standard rule: at static ride height EACH ROCKER ARM IS
+% PERPENDICULAR TO THE LINK IT DRIVES. That puts the leverage at its maximum
+% and the toggle -- where an arm lines up with its link and the motion ratio
+% passes through zero -- as far from the travel range as the geometry allows.
+% The first placeholder here ignored that: its damper arm sat at 60 deg to
+% the damper, the linkage toggled inside the travel, and the motion ratio
+% went from +0.70 in droop to -2.54 in bump.
+H.pr_lca      = [x0,        half-0.110, 0.135];   % pushrod pickup ON the lower arm
+H.rk_pivot    = [x0,        0.200,      0.420];   % rocker pivot, chassis
+H.rk_axis     = [1, 0, 0];                        % rocker turns about this, chassis frame
+H.rk_pr       = [x0,        0.248,      0.456];   % 60 mm arm, perpendicular to the pushrod
+H.rk_dmp      = [x0,        0.200,      0.480];   % 60 mm arm, straight up
+H.dmp_chassis = [x0,       -0.080,      0.480];   % horizontal damper, perpendicular to that arm
+
 H.axle  = lower(axle);
 H.track = t;
 H.wheel_radius = r;
