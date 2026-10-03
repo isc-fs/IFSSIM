@@ -221,6 +221,13 @@ def maybe_reexec_in_docker(
     if have_native:
         cmd += ["-v", f"{native_dir.resolve()}:/native:ro"]
     cmd += ["-e", "IFSSIM_BENCHMARK_IN_DOCKER=1"]
+    # Fast DDS defaults to ~212 KB socket buffers, which drop 4.5 MB LiDAR
+    # PointCloud2 messages and halve the replay rate (~5 Hz instead of ~9).
+    # docker-compose.yml already sets this for the live stack.
+    cmd += [
+        "-e",
+        "FASTRTPS_DEFAULT_PROFILES_FILE=/dv_pipeline_stack_ws/fastdds_profile.xml",
+    ]
     if extra_env:
         for key, value in extra_env.items():
             cmd += ["-e", f"{key}={value}"]
