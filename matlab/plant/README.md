@@ -70,7 +70,7 @@ is four lines in the `Driver` block; edit `build_drive_harness.m` to change it.
 | `IFSSIM_Steering` | dynamics / controls | implemented — Ackermann |
 | `IFSSIM_Powertrain` | powertrain | implemented — motor, drivetrain, battery |
 | `IFSSIM_Brakes` | braking | implemented — EBS, all four corners |
-| `IFSSIM_Aero` | aero | implemented — body-frame drag and downforce |
+| `IFSSIM_Aero` | aero | implemented — wind-axis drag and downforce |
 
 Each is a **separate referenced model**, so you can work on yours while somebody
 else works on theirs. `.slx` is binary and does not merge — one shared model

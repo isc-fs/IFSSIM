@@ -18,11 +18,20 @@ function ok = test_pt_model()
 %       charged twice; the checks themselves are re-run on every call.)
 %     - acceleration was 7% low until tyre SLIP went in (2-6% at 20-35 m/s;
 %       on the power limit the motor spins that much faster than the road).
-%     - what is left is ~25-40 N the plant body loses that tyre forces minus
-%       drag minus m*a does not explain. The wheel side balances exactly
-%       (drive torque = fx*r + Iw*dw/dt + Crr*Fz*r to 0.01 N.m), so it is on
-%       the body side, and it is UNEXPLAINED. As acceleration falls it grows
-%       as a fraction: 1% at 20 m/s, 4.5% at 35. Hence the check stops at 30.
+%     - then ~25-40 N the plant body lost that tyre forces minus drag minus
+%       m*a did not explain, while the wheel side balanced exactly. It was a
+%       FRAME error, two of them, both scaling with the body's squat pitch
+%       (~0.011-0.016 rad nose-up under acceleration):
+%         tyres  forces applied in the BODY frame, so the ~2700 N normal load
+%                leaned back with the body: +|pitch|*sum(Fz) of drag, and Fx
+%                tilted up, so sum(Fz) sat 14-36 N under m*g + downforce;
+%         aero   downforce on body -z, which tilted 1350 N forward into up to
+%                15 N of thrust, hiding part of the first.
+%       Fixed in build_tiresuspension (road frame) and build_aero (wind
+%       axis). The residual is now ~1 N at 10 and 25-35 m/s (20 m/s sits in
+%       the spin-down below, where smoothed ax is not a balance), sum(Fz)
+%       matches to 0.5 N, and the ax gap that grew with speed (4.5% at 35
+%       m/s) is under 1% -- which is why the checks now run to 35.
 %     - after the efficiency fix (2026-10) the launch wheelspin runs to ~20 m/s,
 %       so the checks start at 22; see section 2.
 %
@@ -58,7 +67,7 @@ ok = check(ok, 'shaft power on the pack limit [kW]', E.shaft_kW, Pshaft, 0.01*Ps
 % this says so instead of failing on ax.
 wr = movmean(mean(Q.omega(:,3:4), 2), 48);
 spin_down = -2*P.Assumed.WheelInertia*(gradient(wr, t) - axp/P.WheelRadius)/P.WheelRadius;
-for vq = [22 25 30]
+for vq = [22 25 30 35]
     i = find(vw >= vq, 1);
     ok = check(ok, sprintf('plant out of wheelspin at %d m/s (spin-down < 20 N)', vq), ...
                abs(spin_down(i)) < 20, true, 0);

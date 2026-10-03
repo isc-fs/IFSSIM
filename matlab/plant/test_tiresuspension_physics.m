@@ -148,6 +148,44 @@ fprintf('        Fy %+.0f N -> roll : model %+.1f N.m = vertical %+.1f + arm %+.
         sum(Wl.fy), Ml(1), Mx_vert, Mx_arm);
 set_param([h '/POSE'],'Value','POSE_REST');
 
+%% 2d. THE ROAD DOES NOT TILT WITH THE BODY.
+%
+% Every check above holds the body level, and at zero attitude the body frame
+% and the road frame coincide -- so a tyre force applied in the wrong one of
+% them passes all of them. It was applied in the wrong one. The normal load
+% leaned with the sprung mass, and under acceleration the squat tilted ~2700 N
+% back by ~0.012 rad: the 25-40 N of "unexplained body-side loss" in
+% test_pt_model, and 14-36 N of load the tyres stopped carrying.
+%
+% So: tilt the body on flat ground, and the wrench the tyres put on it, taken
+% back to the world, must be purely vertical. Before the fix the horizontal
+% part is sum(Fz)*sin(angle), ~54 N here. Then tilt the ROAD instead, body
+% level, and the force must follow the road's normal, which is what keeps a
+% car on a slope feeling the slope.
+th = 0.02;
+for c = {'pitch', [0;sin(th/2);0]; 'roll', [sin(th/2);0;0]}'
+    s = poseStruct(P.CoGHeight, [0;0;0], [0;0;0]);
+    s.quat = [cos(th/2); c{2}];
+    assignin('base','POSE_TILT', s);
+    set_param([h '/POSE'],'Value','POSE_TILT');
+    r = sim(h);  Wt = wheels(r);  Fw = q2r(s.quat) * force(r);
+    ok = check(ok,sprintf('body %s: tyre force stays vertical', c{1}), ...
+               norm(Fw(1:2)), 0, 1e-6*sum(Wt.fz));
+    ok = check(ok,sprintf('body %s: and carries the full load', c{1}), ...
+               Fw(3), sum(Wt.fz), 1e-6*sum(Wt.fz));
+end
+set_param([h '/POSE'],'Value','POSE_REST');
+
+n = [sin(th); 0; cos(th)];
+sl = roadStruct(zeros(4,1), ones(4,1), P.TireMu*ones(4,1));
+sl.normal_x = n(1)*ones(4,1);  sl.normal_z = n(3)*ones(4,1);
+assignin('base','ROAD_SLOPE', sl);
+set_param([h '/ROAD'],'Value','ROAD_SLOPE');
+r = sim(h);  Wt = wheels(r);  F = force(r);
+ok = check(ok,'sloped road: force along the road normal', ...
+           norm(F - sum(Wt.fz)*n), 0, 1e-6*sum(Wt.fz));
+set_param([h '/ROAD'],'Value','ROAD_FLAT');
+
 %% 3. Lateral force opposes lateral slip, and saturates at mu*Fz.
 % Sliding LEFT (+vy in ISO 8855) must produce force to the RIGHT.
 assignin('base','POSE_SLIP', poseStruct(P.CoGHeight, [10;1;0], [0;0;0]));
@@ -280,6 +318,13 @@ s = Simulink.Bus.createMATLABStruct('IFSSIM_PoseBus');
 s.position=[0;0;z]; s.quat=[1;0;0;0];
 s.vel_world=[0;0;0]; s.vel_body=velb; s.omega_body=omegab;
 s.alpha_body=[0;0;0]; s.accel_proper=[0;0;0]; s.attitude=[0;0;0];
+end
+
+function R = q2r(q)
+w=q(1); x=q(2); y=q(3); z=q(4);
+R = [1-2*(y*y+z*z),   2*(x*y-z*w),   2*(x*z+y*w); ...
+       2*(x*y+z*w), 1-2*(x*x+z*z),   2*(y*z-x*w); ...
+       2*(x*z-y*w),   2*(y*z+x*w), 1-2*(x*x+y*y)];
 end
 
 function W = wheels(r)

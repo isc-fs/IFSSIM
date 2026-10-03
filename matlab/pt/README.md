@@ -74,11 +74,20 @@ traction control), and the plant at full throttle has none. The difference in
 could be worth. Since the efficiency fix the plant's launch wheelspin lasts to
 about 20 m/s, so the test compares from 22 m/s and asserts that the spin is over.
 
-One thing is open, and one has been fixed:
+Two things have been fixed:
 
-- **About 25–40 N of unexplained body-side loss in the plant.** The wheel side
-  balances exactly, so the loss is on the body side. It is about 1% of the
-  car's weight, and it is why the agreement gets worse above 30 m/s.
+- **The 25–40 N "body-side loss" was a frame error, fixed 2026-10.** The plant
+  applied the tyre forces in the *body* frame. Under acceleration the body
+  squats about 0.012 rad nose-up, so the road's ~2700 N normal reaction leaned
+  back with it and acted as drag of |pitch|·ΣFz. Fx leaned up by the same
+  angle, which is why ΣFz sat 14–36 N under m·g + downforce. Downforce had the
+  mirror-image error: it acted along body −z and tipped forward into up to
+  15 N of thrust, which hid part of the tyre error. Both scale with pitch and
+  not with ax, which is why they read as a constant plus a per-g term. Tyre
+  forces now act in the road frame (`build_tiresuspension`), and downforce
+  acts across the airflow (`build_aero`). The residual is now about 1 N at 10
+  m/s and from 25 to 35 m/s. The model–plant ax gap, which grew to 4.5% at
+  35 m/s, is under 1% from 22 to 35 m/s, so the test now checks up to 35 m/s.
 - **Drivetrain efficiency was charged twice until 2026-10.** `build_powertrain`
   charged it from pack to shaft and again from shaft to wheel, so road power
   was η² ≈ 0.85 of pack power. Every other model on the branch charged it

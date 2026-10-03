@@ -58,6 +58,17 @@ setv([0;10;0]); r = sim(h); f = F(r);
 ok = check(ok,'pure sideslip is dragged sideways', f(2), -0.5*rho*100*P.CdA, 1e-6);
 ok = check(ok,'sideslip still generates downforce', f(3) < 0, true);
 
+%% 6. PITCHED TO THE FLOW: drag and downforce are WIND-AXIS numbers.
+%    Squatting nose-up under acceleration, the body sees the flow arrive with
+%    a body-z component. The force along the flow must be the drag and nothing
+%    else; downforce resolved along body -z instead leans forward and gives
+%    the car thrust (~15 N at 35 m/s before this was fixed). The roll half of
+%    the claim is test 5: sideslip at zero pitch keeps downforce on body -z.
+th = 0.015; v = 35; q = 0.5*rho*v^2;
+setv(v*[cos(th); 0; sin(th)]); r = sim(h); f = F(r); vh = [cos(th); 0; sin(th)];
+ok = check(ok,'pitched: force along the flow is the drag', f'*vh, -q*P.CdA, 1e-6);
+ok = check(ok,'pitched: downforce is across the flow', norm(f - (f'*vh)*vh), q*P.ClA, 1e-6);
+
 close_system(h,0);
 fprintf('\n%s\n', ternary(ok,'aero checks PASS.','AERO CHECKS FAILED.'));
 

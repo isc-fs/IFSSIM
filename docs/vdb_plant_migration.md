@@ -443,9 +443,11 @@ The block's aero is **drag only** -- one coefficient and a frontal area. Our
 - **downforce** `ClA`, split front to rear by an aero balance `abal`;
 - the pitch couple, from application points at `aF` and `-bR`;
 - the drag moment about the CoP height above the CoG;
-- downforce applied **normal to the floor**, not along world -Z, so a rolled
-  car does not get its downforce pointing 5 degrees wrong exactly when it is
-  cornering hard and downforce matters most.
+- downforce applied **across the airflow in the car's symmetry plane**, not
+  along world -Z, so a rolled car does not get its downforce pointing 5 degrees
+  wrong exactly when it is cornering hard and downforce matters most. (It used
+  to be plain body -Z, which also tilted it with pitch and turned downforce
+  into thrust under squat.)
 
 None of that survives the swap. For a Formula Student car with wings,
 downforce and aero balance are the aero department's primary levers, and the

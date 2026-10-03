@@ -1,14 +1,16 @@
 function build_aero(outdir)
-%BUILD_AERO  Fill in IFSSIM_Aero: drag and downforce, in the BODY frame.
+%BUILD_AERO  Fill in IFSSIM_Aero: drag and downforce, wind-axis, resolved in the BODY frame.
 %
 %   Two things the UE plant gets wrong and this gets right:
 %
-%   1. DOWNFORCE ACTS NORMAL TO THE FLOOR, not along world -Z. A wing makes its
-%      force perpendicular to the car, so when the car rolls or pitches the
-%      force rolls and pitches with it. Applying it along world -Z means a car
-%      at 5 degrees of roll gets its downforce in the wrong direction by
-%      5 degrees, which shows up as a lateral load-transfer error exactly when
-%      the car is cornering hard and downforce matters most.
+%   1. DOWNFORCE ROLLS WITH THE CAR, not along world -Z. It acts across the
+%      airflow in the car's plane of symmetry, so when the car rolls the force
+%      rolls with it. Applying it along world -Z means a car at 5 degrees of
+%      roll gets its downforce in the wrong direction by 5 degrees, which shows
+%      up as a lateral load-transfer error exactly when the car is cornering
+%      hard and downforce matters most. It does NOT pitch with the car: pitch
+%      is relative to the flow, and tilting a wind-axis downforce by it turns
+%      downforce into thrust (see the note in the code).
 %
 %   2. THE MOMENT ARM COMES FROM THE WHEELBASE. In the UE plant it was a literal
 %      813.f labelled "cm" against a comment saying 813 mm — a 10x error in the
@@ -93,19 +95,38 @@ L = {
 "    drag = [0; 0; 0];"
 "end"
 ""
-"% Downforce along BODY -Z: normal to the floor, so it rolls and pitches with"
-"% the car rather than staying vertical in the world."
+"% Downforce PERPENDICULAR TO THE AIRFLOW, in the car's plane of symmetry:"
+"% body -z with its component along the velocity taken out. It rolls with the"
+"% car, because the symmetry plane does, but it does NOT pitch with it."
+"%"
+"% CdA and ClA are wind-axis numbers -- drag along the flow, downforce across"
+"% it. This used to be plain body -z, which is right only while the body is"
+"% level to the flow. Squatting nose-up by ~0.012 rad under acceleration, it"
+"% tipped 1350 N of downforce forward into ~15 N of THRUST at 35 m/s: a drag"
+"% reduction CdA does not contain, and it hid behind the larger tyre-frame"
+"% error until that was fixed. What pitch really does to downforce is change"
+"% its SIZE (ClA vs ride height and rake), which wants map data, not a tilt."
+"ez = [0; 0; 1];"
+"lift = ez;"
+"if v > 0.1"
+"    vh   = velb / v;"
+"    l    = ez - (ez' * vh) * vh;"
+"    nl   = norm(l);"
+"    if nl > 1e-6"
+"        lift = l / nl;"
+"    end"
+"end"
 "Fz_total = q * IFSSIM_ClA;"
 "Ff = Fz_total * IFSSIM_abal;           % front"
 "Fr = Fz_total * (1 - IFSSIM_abal);     % rear"
 ""
-"aero_force = drag + [0; 0; -Fz_total];"
+"aero_force = drag - Fz_total * lift;"
 ""
 "% Pitch couple from the front/rear split. Application points are the axle"
 "% positions from the CoG, so the arm tracks the wheelbase in settings.json"
 "% rather than being a hardcoded number in the wrong unit."
-"Mf = cross([ IFSSIM_aF; 0; 0], [0; 0; -Ff]);"
-"Mr = cross([-IFSSIM_bR; 0; 0], [0; 0; -Fr]);"
+"Mf = cross([ IFSSIM_aF; 0; 0], -Ff * lift);"
+"Mr = cross([-IFSSIM_bR; 0; 0], -Fr * lift);"
 ""
 "% Drag acting above the CoG adds its own pitch couple. hcop defaults to 0 —"
 "% no measurement, so no invented moment."

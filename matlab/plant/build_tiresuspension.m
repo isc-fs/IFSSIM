@@ -63,7 +63,8 @@ set_param(name,'SolverType','Fixed-step','Solver','ode1', ...
 add_block('simulink/Sources/In1',[name '/Road'],'Position',[30 40 60 60], ...
           'OutDataTypeStr','Bus: IFSSIM_RoadBus','BusOutputAsStruct','on');
 add_block('simulink/Signal Routing/Bus Selector',[name '/Road Select'], ...
-          'Position',[130 20 140 120],'OutputSignals','valid,height,mu,residual');
+          'Position',[130 20 140 120], ...
+          'OutputSignals','valid,height,mu,residual,normal_x,normal_y,normal_z');
 add_line(name,'Road/1','Road Select/1','autorouting','on');
 
 add_block('simulink/Sources/In1',[name '/Pose'],'Position',[30 160 60 180], ...
@@ -166,6 +167,7 @@ cpost = S.find('-isa','Stateflow.EMChart','Path',post);
 cpost.Script = post_code();
 set_sizes(cpost, struct( ...
   'Fx_in',4,'Fy_in',4,'Fz_in',4,'Om',4,'steer_in',4,'Vxw',4,'Vyw',4, ...
+  'quat',4,'nx',4,'ny',4,'nz',4, ...
   'omega',4,'fz',4,'fx',4,'fy',4,'slip_ratio',4,'slip_angle',4, ...
   'tyre_force',3,'tyre_torque',3));
 add_params(cpost, {'IFSSIM_aF','IFSSIM_bR','IFSSIM_tF','IFSSIM_tR', ...
@@ -214,7 +216,7 @@ end
 % Indices are written as running offsets, never as literals. The last time
 % they were literals a bus gained a field and the mis-wiring type-checked
 % perfectly, because every port on this boundary is a double.
-nRoad = 4;   % valid, height, mu, residual
+nRoad = 4;   % valid, height, mu, residual -> pre; the normals after them -> post
 nPose = 4;   % position, quat, vel_body, omega_body
 for i = 1:nRoad, add_line(name,sprintf('Road Select/%d',i),sprintf('%s/%d',PRE,i),'autorouting','on'); end
 for i = 1:nPose, add_line(name,sprintf('Pose Select/%d',i),sprintf('%s/%d',PRE,nRoad+i),'autorouting','on'); end
@@ -429,6 +431,12 @@ add_line(name,[TY '/2'],sprintf('%s/4',POST),'autorouting','on');   % Omega
 add_line(name,sprintf('%s/%d',PRE,pOut.steer_o),sprintf('%s/5',POST),'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Vxw),    sprintf('%s/6',POST),'autorouting','on');
 add_line(name,sprintf('%s/%d',PRE,pOut.Vyw),    sprintf('%s/7',POST),'autorouting','on');
+% The body attitude and the road normal, so the tyre force can be applied in
+% the ROAD frame the tyre actually works in. See the note in post_code.
+add_line(name,'Pose Select/2',sprintf('%s/8',POST),'autorouting','on');   % quat
+for i = 1:3
+    add_line(name,sprintf('Road Select/%d',nRoad+i),sprintf('%s/%d',POST,8+i),'autorouting','on');
+end
 
 % Wheels bus: omega, steer, fz, fx, fy, slip_ratio, slip_angle, susp_travel, in_contact
 add_line(name,sprintf('%s/1',POST),'Wheels Bus/1','autorouting','on');   % omega
@@ -700,7 +708,7 @@ end
 function c = post_code()
 L = {
 "function [omega, fz, fx, fy, slip_ratio, slip_angle, tyre_force, tyre_torque] = ..."
-"         tiresusp_post(Fx_in, Fy_in, Fz_in, Om, steer_in, Vxw, Vyw)"
+"         tiresusp_post(Fx_in, Fy_in, Fz_in, Om, steer_in, Vxw, Vyw, quat, nx, ny, nz)"
 "%#codegen"
 "% Four wheel forces, in their own wheel frames, assembled into one body-frame"
 "% wrench -- plus the reported per-wheel state."
@@ -708,6 +716,9 @@ L = {
 "rx = [ IFSSIM_aF;  IFSSIM_aF; -IFSSIM_bR; -IFSSIM_bR];"
 "ry = [ IFSSIM_tF/2; -IFSSIM_tF/2;  IFSSIM_tR/2; -IFSSIM_tR/2];"
 "Rw = IFSSIM_Rw;"
+""
+"q = quat / max(norm(quat), eps);"
+"R = q2r(q);                      % body -> world"
 ""
 "omega = reshape(Om,    4, 1);"
 "fx    = reshape(Fx_in, 4, 1);"
@@ -725,11 +736,37 @@ L = {
 "    slip_ratio(i) = (omega(i)*Rw - Vxw(i)) / vref;"
 "    slip_angle(i) = atan2(Vyw(i), vref);"
 ""
-"    % Wheel frame -> body frame. Fx acts along the wheel, Fy across it, and"
-"    % the wheel is rotated by the steer angle relative to the body."
+"    % Wheel frame -> body frame, THROUGH THE ROAD. The tyre's forces live in"
+"    % the road plane: Fx along the wheel's heading projected onto the road,"
+"    % Fy across it, Fz along the road normal. The road does not tilt when the"
+"    % body squats or rolls on its springs."
+"    %"
+"    % This used to be [fx*cd - fy*sd; fx*sd + fy*cd; fz] straight into the"
+"    % BODY frame, which tilts the road's reaction with the sprung mass. Under"
+"    % acceleration the body squats nose-up by ~0.01-0.015 rad, the ~2700 N of"
+"    % normal load leaned back with it, and the car drove up a hill of its own"
+"    % making: 25-40 N of drag nothing accounted for, and Fx tilted up, so the"
+"    % tyres carried 14-36 N less than m*g + downforce. In a corner the same"
+"    % thing leans Fz sideways by the roll angle. Both are gone at zero"
+"    % attitude, which is every test that held the body level."
+"    %"
+"    % The normal comes from the platform's plane fit (ENU, unit). A normal"
+"    % that is missing or not pointing up is no information, and flat ground"
+"    % is used instead -- the same assumption the suspension pass makes."
 "    d  = steer_in(i);"
 "    cd = cos(d); sd = sin(d);"
-"    Fb = [fx(i)*cd - fy(i)*sd; fx(i)*sd + fy(i)*cd; fz(i)];"
+"    n  = [nx(i); ny(i); nz(i)];"
+"    nn = norm(n);"
+"    if nn < 0.5 || n(3) <= 0"
+"        n = [0; 0; 1];"
+"    else"
+"        n = n / nn;"
+"    end"
+"    hw = R * [cd; sd; 0];                 % wheel heading, world"
+"    xt = hw - (hw' * n) * n;              % ... on the road plane"
+"    xt = xt / max(norm(xt), eps);"
+"    yt = cross(n, xt);"
+"    Fb = R' * (fx(i)*xt + fy(i)*yt + fz(i)*n);"
 "    F_sum = F_sum + Fb;"
 ""
 "    % The tyre force acts at the CONTACT PATCH, on the road, not at the CoG."
@@ -764,6 +801,14 @@ L = {
 ""
 "tyre_force  = F_sum;"
 "tyre_torque = M_sum;"
+"end"
+""
+"function R = q2r(q)"
+"%#codegen"
+"w=q(1); x=q(2); y=q(3); z=q(4);"
+"R = [1-2*(y*y+z*z),   2*(x*y-z*w),   2*(x*z+y*w); ..."
+"       2*(x*y+z*w), 1-2*(x*x+z*z),   2*(y*z-x*w); ..."
+"       2*(x*z-y*w),   2*(y*z+x*w), 1-2*(x*x+y*y)];"
 "end"
 };
 c = char(strjoin(string(L), newline));
