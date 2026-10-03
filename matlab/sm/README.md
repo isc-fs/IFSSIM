@@ -34,11 +34,13 @@ replace from CAD.
 Swept ±53 mm about static:
 
 ```
-camber slope        +27.97 deg/m
-implied camber gain  0.293   (car_spec assumes 0.800)
-bump steer          +7.11 deg/m   (car_spec targets 0)
+camber slope        -27.97 deg/m   (SAE: bump drives camber negative, top in)
+camber gain         +0.293         (car_spec assumes +0.800)
+bump steer          +7.11 deg/m    (car_spec targets 0)
 scrub               18.0 mm across the sweep
 ```
+
+So this geometry recovers **29%** of body roll where the plant assumes **80%**.
 
 The bump-steer figure is the interesting one. `car_spec` sets
 `BumpSteerFront = 0` as a design TARGET and the plant applies exactly zero,
@@ -46,9 +48,27 @@ because it has no hardpoint from which toe change could emerge. Here it falls
 out of the geometry, and the tie-rod inboard position is the hardpoint that
 moves it.
 
-**The gain is reported as a magnitude.** Whether it signs + or - depends on a
-mirroring convention this port has not pinned against the plant's, and
-asserting an unchecked sign is the mistake the camber work already made once.
+## The camber sign is pinned, two ways
+
+Camber is reported **SAE: positive = top of the wheel outward.** For the left
+wheel modelled here, a positive rotation about +x tips the top toward -y, i.e.
+inward, so SAE camber is the negative of the x angle.
+
+That derivation is not taken on trust, because the camber work in this project
+already got a sign wrong once. The sweep checks it two ways:
+
+- **algebra** — the wheel's tilt read off the full rotation matrix. Built from
+  the same sensed angles, so it only confirms the sign derivation has no slip.
+- **independent** — the upper ball joint's world **position**, which never goes
+  through an angle decomposition. Top-in means that point moves toward the car
+  centre. Across the sweep it goes from -75.0 mm at static to -80.0 mm at full
+  bump, and tracks the angle-derived camber at r = +1.0000.
+
+Mutation-tested: flipping the camber sign drives the independent check to
+r = -1.0000 and fails it, and the algebra check with it.
+
+The gain is now **signed in car_spec's own convention** — the fraction of body
+roll the geometry recovers — so the two numbers compare directly.
 
 ## Three things that cost time, so they are written down
 

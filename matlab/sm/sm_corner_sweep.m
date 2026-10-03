@@ -34,8 +34,16 @@ set_param([mdl '/WheelSensor'],'MeasurementFrame','World', ...
 add_line(mdl,'World/RConn1','WheelSensor/LConn1','autorouting','on');
 add_line(mdl,'Upright/RConn1','WheelSensor/RConn1','autorouting','on');
 
+% A second sensor on the UPPER BALL JOINT, reading position only. This is
+% what makes the sign check independent: it never passes through an angle
+% decomposition, so it cannot share an error with the camber extraction.
+add_block(TS,[mdl '/UcaSensor'],'Position',[760 560 820 640]);
+set_param([mdl '/UcaSensor'],'MeasurementFrame','World','SenseXYZ','on');
+add_line(mdl,'World/RConn1','UcaSensor/LConn1','autorouting','on');
+add_line(mdl,'up_to_uca/RConn1','UcaSensor/RConn1','autorouting','on');
+
 PS2SL = ['nesl_utility/PS-Simulink' newline 'Converter'];
-outs = {'rot','WheelSensor/RConn2'; 'pos','WheelSensor/RConn3'};
+outs = {'rot','WheelSensor/RConn2'; 'pos','WheelSensor/RConn3'; 'uca','UcaSensor/RConn2'};
 for k = 1:size(outs,1)
     add_block(PS2SL,[mdl '/c_' outs{k,1}],'Position',[880 400+70*k 940 430+70*k]);
     add_block('simulink/Sinks/To Workspace',[mdl '/w_' outs{k,1}], ...
@@ -51,9 +59,9 @@ set_param(piv,'PositionTargetSpecify','on','PositionTargetPriority','High', ...
               'PositionTargetValueUnits','deg');
 
 n = numel(angles_deg);
-raw = NaN(n,6);
-T = table('Size',[n 5],'VariableTypes',repmat({'double'},1,5), ...
-          'VariableNames',{'arm_deg','travel_mm','camber_deg','toe_deg','track_mm'});
+raw = NaN(n,9);
+T = table('Size',[n 7],'VariableTypes',repmat({'double'},1,7), ...
+          'VariableNames',{'arm_deg','travel_mm','camber_deg','toe_deg','track_mm','top_y','uca_dy'});
 ref = [];
 for i = 1:n
     set_param(piv,'PositionTargetValue', sprintf('%.10g', angles_deg(i)));
@@ -62,11 +70,12 @@ for i = 1:n
     catch ME
         fprintf('  angle %+5.1f deg: did not assemble (%s)\n', angles_deg(i), ...
                 strrep(ME.message(1:min(60,end)),newline,' '));
-        T{i,:} = NaN;  raw(i,:) = NaN(1,6);  continue
+        T{i,:} = NaN;  raw(i,:) = NaN(1,9);  continue
     end
     rot = squeeze(r.get('LOG_rot').Data);   rot = rot(:)';    % [z y x] radians
     pos = squeeze(r.get('LOG_pos').Data);   pos = pos(:)';    % [x y z] metres
-    raw(i,:) = [pos, rot]; %#ok<AGROW>
+    uca = squeeze(r.get('LOG_uca').Data);   uca = uca(:)';
+    raw(i,:) = [pos, rot, uca]; %#ok<AGROW>
     T.arm_deg(i) = angles_deg(i);
 end
 close_system(mdl,0);
@@ -81,9 +90,20 @@ ref = raw(mid,:);
 for i = 1:n
     if isnan(raw(i,1)), T{i,:} = NaN; T.arm_deg(i) = angles_deg(i); continue; end
     T.travel_mm(i)  = (raw(i,3) - ref(3)) * 1000;
-    T.camber_deg(i) = raw(i,6) * 180/pi;    % x rotation: wheel plane lean
+    % SAE camber: POSITIVE when the top of the wheel leans OUTWARD. For this
+    % LEFT wheel, outward is +y. A positive rotation about +x carries the
+    % wheel's vertical axis to [0, -sin, cos], i.e. the top toward -y, i.e.
+    % INWARD -- so SAE camber is the NEGATIVE of the x angle. That derivation
+    % is not trusted on its own: top_y below reads the same fact off the
+    % full rotation matrix, and the two are checked against each other.
+    T.camber_deg(i) = -raw(i,6) * 180/pi;
     T.toe_deg(i)    = raw(i,4) * 180/pi;    % z rotation: steer
     T.track_mm(i)   = (raw(i,2) - ref(2)) * 1000;
+    Rw = rotz_(raw(i,4)) * roty_(raw(i,5)) * rotx_(raw(i,6));   % ZYX
+    T.top_y(i) = Rw(2,3);   % y-component of the wheel vertical axis
+    % Lateral offset of the upper ball joint from the wheel centre, from
+    % POSITIONS alone. When the top of the upright tips inward this shrinks.
+    T.uca_dy(i) = raw(i,8) - raw(i,2);
 end
 
 ok = ~isnan(T.travel_mm);
@@ -103,21 +123,49 @@ if height(v) > 2
     halfTrack = H.track/2;
     % deg of camber per deg of body roll: a roll phi lifts one wheel by
     % (track/2)*phi, so the chain is slope [deg/m] * halfTrack [m] * rad2deg.
-    gain = abs(p(1)) * halfTrack * pi/180;
-    fprintf('  implied camber gain  %.3f  (car_spec assumes %.3f)\n', ...
+    % SIGNED, now that the convention is pinned. car_spec's CamberGain is the
+    % fraction of body roll the geometry RECOVERS. In roll the outer wheel
+    % goes into bump and the body tilts it top-OUT (positive SAE camber); the
+    % geometry recovers that only if bump drives camber NEGATIVE (top in).
+    % So a negative camber-vs-bump slope is positive gain.
+    gain = -p(1) * halfTrack * pi/180;
+    fprintf('  camber gain         %+.3f  (car_spec assumes %+.3f)\n', ...
             gain, P.Susp.CamberGainFront);
+
+    % THE CONVENTION CHECK. Whatever the angle extraction says, the wheel's
+    % top either leans inward or it doesn't, and the rotation matrix knows
+    % which. For a left wheel, top-in means the vertical axis has a NEGATIVE
+    % y-component and SAE camber must be NEGATIVE. Every assembled position
+    % has to agree, or the sign above is wrong.
+    agree = ((v.top_y < 0) == (v.camber_deg < 0)) | abs(v.camber_deg) < 1e-6;
+    fprintf('  algebra check       %s at %d of %d positions (same angles, so this only checks the sign derivation)\n', ...
+            ternary(all(agree),'CONSISTENT','INCONSISTENT'), nnz(agree), numel(agree));
+    % INDEPENDENT CHECK, from positions only. Camber going more negative
+    % (top in) must coincide with the upper ball joint moving TOWARD the car
+    % centre relative to the wheel centre, i.e. uca_dy decreasing. So the two
+    % must rise and fall together across the sweep. This cannot share an
+    % error with the angle extraction, because it never uses an angle.
+    c = corrcoef(v.camber_deg, v.uca_dy);  c = c(1,2);
+    indep = c > 0.99;
+    fprintf('  independent check   %s  (camber vs upper-ball-joint offset, r = %+.4f)\n', ...
+            ternary(indep,'CONFIRMS','CONTRADICTS'), c);
+    T.Properties.UserData.signConsistent = all(agree) && indep;
+    T.Properties.UserData.gain = gain;
     fprintf('  bump steer          %+.2f deg/m   (car_spec targets 0)\n', ...
             polyval(polyfit(v.travel_mm/1000, v.toe_deg, 1), 0) * 0 + ...
             [1 0] * polyfit(v.travel_mm/1000, v.toe_deg, 1)');
     fprintf('  scrub               %+.1f mm over the swept travel\n', ...
             max(v.track_mm) - min(v.track_mm));
-    fprintf('\n  MAGNITUDE ONLY on the gain. Whether it is signed + or - depends\n');
-    fprintf('  on the mirroring convention this port has not yet pinned against\n');
-    fprintf('  the plant''s, and asserting a sign that has not been checked is\n');
-    fprintf('  exactly the mistake the camber work already made once.\n');
+    fprintf('\n  Camber is SAE: positive = top of the wheel OUTWARD.\n');
     fprintf('\n  That comparison is the point of this whole exercise: the gain\n');
     fprintf('  is an OUTPUT of the hardpoints here, and an assumed input there.\n');
     fprintf('  The hardpoints are themselves placeholders, so treat the number\n');
     fprintf('  as a demonstration of the mechanism, not as the IFS-08''s curve.\n');
 end
 end
+
+% -------------------------------------------------------------------------
+function R = rotx_(a), R = [1 0 0; 0 cos(a) -sin(a); 0 sin(a) cos(a)]; end
+function R = roty_(a), R = [cos(a) 0 sin(a); 0 1 0; -sin(a) 0 cos(a)]; end
+function R = rotz_(a), R = [cos(a) -sin(a) 0; sin(a) cos(a) 0; 0 0 1]; end
+function s = ternary(c,a,b), if c, s=a; else, s=b; end, end
