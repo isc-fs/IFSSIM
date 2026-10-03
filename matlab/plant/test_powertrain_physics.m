@@ -52,13 +52,19 @@ wm = wfast * P.GearRatio;
 % and that this is below the motor's own limit. Asserting 80 kW here would be
 % asserting that the accumulator is not part of the car.
 Pmech = B.motor_torque * wm;
-Pelec = Pmech / P.DrivetrainEfficiency;
+Pelec = B.motor_power;     % the block's own report; lossless motor, so = Pmech
 Ipack = Pelec / max(B.batt_voltage, 1);
 ok = check(ok,'power limited below torque limit', B.motor_torque < P.MotorMaxTorque, true, 0);
 ok = check(ok,'accumulator, not motor, is the cap', Pmech < P.MotorMaxPower, true, 0);
 ok = check(ok,'draws exactly the measured current limit', Ipack, PK.IOperating, 1e-3);
 fprintf('        pack-limited: %.1f kW to the shaft at %.0f V, %.0f A\n', ...
         Pmech/1000, B.batt_voltage, Ipack);
+
+%% 2b. EFFICIENCY IS CHARGED ONCE. Pack to road is eta, not eta^2: the block
+%     used to divide by eta at the pack AND multiply by it at the wheels.
+Twheel = sum(wheelT(r));
+ok = check(ok,'drive: wheel power / pack power = eta, once', ...
+           Twheel*wfast / B.motor_power, P.DrivetrainEfficiency, 1e-9);
 
 %% 3. REGEN IS POWER LIMITED. This is what sets the braking capability, and it
 %    binds by a large factor at any real speed.
@@ -68,6 +74,8 @@ wm = wroll * P.GearRatio;
 ok = check(ok,'regen: power limited, not torque limited', B.motor_torque, -P.MaxRegenPower/wm, 1e-6);
 ok = check(ok,'regen torque far below envelope', abs(B.motor_torque) < 0.25*P.MaxRegenTorque, true, 0);
 ok = check(ok,'regen returns power (negative)', B.motor_power < 0, true, 0);
+ok = check(ok,'regen: pack power / wheel power = eta, once', ...
+           B.motor_power / (sum(wheelT(r))*wroll), P.DrivetrainEfficiency, 1e-9);
 
 %% 4. Drive and regen SUM rather than one being discarded.
 drive(1, 1, wroll); r = sim(h); B = bus(r);

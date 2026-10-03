@@ -52,21 +52,7 @@ KPI = {'t_accel','75 m'; 'v_top','v top'; 'launch_g','launch'; 'regen10','regen@
 k0 = kpis(E0);
 
 R = spec_reach(SPEC(:,1));
-binds = cell(n,1);
-for i = 1:n
-    nm = SPEC{i,1};
-    v0 = C.Fields.(strrep(nm,'.','_')).value;
-    if v0 == 0, v1 = 0.1; else, v1 = 1.1*v0; end
-    k1 = kpis(pt_model(ifssim_params({nm, v1})));
-    moved = {};
-    for j = 1:size(KPI,1)
-        a = k0.(KPI{j,1});  b = k1.(KPI{j,1});
-        if abs(b - a) > 5e-4 * max(abs(a), 1e-9)
-            moved{end+1} = sprintf('%s %+.1f%%', KPI{j,2}, 100*(b-a)/a); %#ok<AGROW>
-        end
-    end
-    if isempty(moved), binds{i} = 'DOES NOT BIND'; else, binds{i} = strjoin(moved, ', '); end
-end
+binds = dept_moves(SPEC(:,1), @(P) kpis(pt_model(P)), KPI, k0);
 
 fprintf('\n========================= POWERTRAIN =========================\n');
 fprintf('  %-26s %9s %-6s %-11s %-12s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','GROUP','+10% MOVES');
@@ -95,13 +81,11 @@ if any(strcmp(dead,'GearRatio'))
     fprintf('  hitting the rev limit -- is invisible until one is added. This car\n');
     fprintf('  reaches %.0f rpm at its %.1f m/s top speed in the model.\n\n', E0.top_rpm, E0.v_top);
 end
-fprintf('  DrivetrainEfficiency is charged TWICE on the way to the road: pack to\n');
-fprintf('  shaft (P_elec = P_mech/eta) and shaft to wheel (T*gr*eta), so road\n');
-fprintf('  power is eta^2 = %.3f of pack power -- hence its row above.\n', ...
-        C.Fields.DrivetrainEfficiency.value^2);
-fprintf('  Defensible only if eta stands for motor AND gears; its source says\n');
-fprintf('  "drivetrain", and the plant block''s own comment says the double charge\n');
-fprintf('  was removed. It was not. Mirrored here, so this model agrees with the plant.\n\n');
+fprintf('  DrivetrainEfficiency is charged ONCE, at the gears: road power is\n');
+fprintf('  eta = %.2f of pack power. The motor and inverter are LOSSLESS in the\n', ...
+        C.Fields.DrivetrainEfficiency.value);
+fprintf('  plant -- an assumption; a sourced motor efficiency would be a\n');
+fprintf('  separate parameter. (Until 2026-10 it was charged twice, eta^2.)\n\n');
 fprintf('  The power limit is the PACK: %.1f kW at the shaft at %.0f%% SoC\n', E0.shaft_kW, 100*E0.soc);
 fprintf('  (%.0f V under %.0f A), against a %.0f kW motor.\n', E0.Vterm, ...
         C.Fields.Pack_CurrentLimit.value, C.Fields.MotorMaxPower.value/1000);

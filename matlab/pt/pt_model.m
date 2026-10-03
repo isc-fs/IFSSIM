@@ -11,11 +11,12 @@ function E = pt_model(P, opts)
 %
 %   IT IS THE PLANT'S OWN ENVELOPE, not a second one. The drive limit below is
 %   the line in build_powertrain's MATLAB Function block,
-%       T = min(T_cmd, min(Tmax, min(Pmax, v_pack*Ipk*eta) / w)),
+%       T = min(T_cmd, min(Tmax, min(Pmax, v_pack*Ipk) / w)),
 %   evaluated at the voltage the pack settles to while passing Ipk, and the
-%   regen limit and the directional efficiency are that block's too. The
+%   regen limit and the directional efficiency -- charged ONCE, at the
+%   gears -- are that block's too. The
 %   tyre's longitudinal peak is the plant's Magic Formula peak,
-%   PDX1*(1 + PDX2*dfz)*Fz. If this file and the block disagree, one of them
+%   (PDX1 + PDX2*dfz)*Fz. If this file and the block disagree, one of them
 %   is wrong; test_pt_model checks the envelope against the plant.
 %
 %   WHAT IT LEAVES OUT, so its numbers are not over-trusted:
@@ -68,7 +69,7 @@ m_eff = m + 4*Iw/r^2;          % the wheels have to be spun up too
 % limit the pack delivers Ipk at Voc - Ipk*R.
 Voc    = PK.OCV(opts.soc);
 Vterm  = Voc - PK.IOperating * PK.Rint;
-P_pack = Vterm * PK.IOperating * eta;          % mechanical, at the shaft
+P_pack = Vterm * PK.IOperating;                % electrical = shaft: lossless motor
 P_shaft = min(P.MotorMaxPower, P_pack);
 
 % ---- drive envelope ----------------------------------------------------
@@ -83,7 +84,11 @@ F_resist = 0.5 * rho * P.CdA * v.^2 + P.RollingResistance * (m*g + D);
 % Its load grows with the acceleration it produces, so solve for ax.
 mu0 = P.TireMu;  dfz = P.Assumed.TyreLoadSensitivity;  Fz0 = P.Derived.NominalWheelLoad;
 FzR_static = m*g*(1 - P.WeightDistFront) + D*(1 - P.AeroBalanceFront);
-peak = @(Fz) mu0 .* (1 + dfz .* (Fz - Fz0) ./ Fz0) .* Fz;     % one tyre
+% The plant's MF 6.x peak, Dx = (PDX1 + PDX2*dfz)*Fz with PDX1 = TireMu and
+% PDX2 = TyreLoadSensitivity (build_tyre_paramset). NOT mu*(1 + PDX2*dfz),
+% which an earlier version of this file used: that scales the sensitivity by
+% mu and cost 2% of launch traction at the rear's launch load.
+peak = @(Fz) (mu0 + dfz .* (Fz - Fz0) ./ Fz0) .* Fz;          % one tyre
 
 % SLIP COSTS POWER, and leaving it out was worth 3-5% of drive force. To push,
 % the tyre must turn faster than the road -- 5% faster at 20 m/s on this car,

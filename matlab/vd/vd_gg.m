@@ -13,8 +13,8 @@ function G = vd_gg(M, v)
 %     G.tyre  what the four contact patches could deliver, if every wheel
 %             could be given exactly the longitudinal force it wanted.
 %     G.car   what THIS car can actually use. It is rear-wheel drive, so
-%             traction comes from two tyres and is capped by motor torque and
-%             the 80 kW rule; and it has no modulated service brake, so
+%             traction comes from two tyres and is capped by the motor and the
+%             pack (pt_model); and it has no modulated service brake, so
 %             deceleration is regen on the rear axle plus drag.
 %
 %   Quasi-static, and honest about it: at each point the load transfer is
@@ -31,13 +31,20 @@ if nargin < 1 || isempty(M)
 end
 if nargin < 2 || isempty(v), v = 12; end
 
-P = ifssim_params();
+% The model's own parameter set, so a study's overrides reach the powertrain
+% limits too. This used to call ifssim_params() afresh, which dropped them.
+if isfield(M, 'P'), P = M.P; else, P = ifssim_params(); end
 g = 9.81;
 
-% Longitudinal capability of the car, as opposed to of the tyres.
-Fdrive_max = P.MotorMaxTorque * P.GearRatio * P.DrivetrainEfficiency / P.WheelRadius;
-Fpower_max = P.MotorMaxPower * P.DrivetrainEfficiency / max(v, 1);
-Fregen_max = P.MaxRegenTorque * P.GearRatio / P.WheelRadius;
+% Longitudinal capability of the car, as opposed to of the tyres: pt_model,
+% the powertrain department's envelope, checked against the plant. This used
+% to be min(Tmax, 80 kW motor)/w and Treg alone -- but the PACK caps drive
+% at ~59 kW and regen is POWER-limited, by MaxRegenPower, almost from rest.
+addpath(fullfile(fileparts(mfilename('fullpath')),'..','pt'));
+E = pt_model(P);
+Fdrive_max = interp1(E.v, E.F_motor, v);
+Fpower_max = Fdrive_max;                 % the envelope already holds both limits
+Fregen_max = interp1(E.v, E.F_regen, v);
 Fdrag      = 0.5*P.Assumed.AirDensity*P.CdA*v^2 + P.RollingResistance*M.m*g;
 
 axs = linspace(-2.2*g, 2.2*g, 121);

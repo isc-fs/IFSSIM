@@ -33,6 +33,11 @@ if nargin < 2 || isempty(tyreMat)
 end
 
 M = struct();
+% The parameter set the model was built from, overrides and all. Anything
+% downstream that needs a number the model does not hold -- vd_gg's
+% powertrain limits -- reads it HERE, not from a fresh ifssim_params(),
+% which would silently drop the study's overrides.
+M.P   = P;
 M.m   = P.Mass;
 M.Izz = P.Assumed.Izz;
 M.g   = 9.81;

@@ -14,6 +14,8 @@ function ok = test_pt_model()
 %   prove agreement at that level and nothing about how it was reached. What
 %   that comparison found, so the gap is not rediscovered:
 %     - shaft power matched to 0.3%: same pack, same envelope.
+%       (Numbers here are from the first comparison, when eta was still
+%       charged twice; the checks themselves are re-run on every call.)
 %     - acceleration was 7% low until tyre SLIP went in (2-6% at 20-35 m/s;
 %       on the power limit the motor spins that much faster than the road).
 %     - what is left is ~25-40 N the plant body loses that tyre forces minus
@@ -21,10 +23,12 @@ function ok = test_pt_model()
 %       (drive torque = fx*r + Iw*dw/dt + Crr*Fz*r to 0.01 N.m), so it is on
 %       the body side, and it is UNEXPLAINED. As acceleration falls it grows
 %       as a fraction: 1% at 20 m/s, 4.5% at 35. Hence the check stops at 30.
+%     - after the efficiency fix (2026-10) the launch wheelspin runs to ~20 m/s,
+%       so the checks start at 22; see section 2.
 %
-%   DISCRIMINATION. The gate has to be able to fail. Charging drivetrain
-%   efficiency once instead of twice is the live question about this plant
-%   (see pt_parameters), and a model that did so must fall outside it.
+%   DISCRIMINATION. The gate has to be able to fail. The plant charged
+%   drivetrain efficiency TWICE until 2026-10 (road power eta^2 of pack
+%   power); a model that still did must fall outside the gate.
 
 here = fileparts(mfilename('fullpath'));
 addpath(here, fullfile(here,'..','plant'), fullfile(here,'..','spec'), fullfile(here,'..','vd'));
@@ -45,8 +49,19 @@ Pshaft = median(Q.motor_torque(band) .* wm(band)) / 1000;
 ok = check(ok, 'shaft power on the pack limit [kW]', E.shaft_kW, Pshaft, 0.01*Pshaft);
 
 % ---- 2. acceleration where the pack binds ------------------------------
-for vq = [20 25 30]
+% Only once the plant is OUT OF WHEELSPIN. Spinning wheels store energy, and
+% as they slow back to road speed it pushes the car: 291 N at 20 m/s once
+% the efficiency fix gave the launch more power and the spin lasted longer
+% (slip 0.70 at 16 m/s). pt_model is quasi-steady and cannot have that, so a
+% speed inside the spin-down is a transient, not a disagreement. Asserted
+% rather than assumed: if a change stretches the spin past a checked speed,
+% this says so instead of failing on ax.
+wr = movmean(mean(Q.omega(:,3:4), 2), 48);
+spin_down = -2*P.Assumed.WheelInertia*(gradient(wr, t) - axp/P.WheelRadius)/P.WheelRadius;
+for vq = [22 25 30]
     i = find(vw >= vq, 1);
+    ok = check(ok, sprintf('plant out of wheelspin at %d m/s (spin-down < 20 N)', vq), ...
+               abs(spin_down(i)) < 20, true, 0);
     ok = check(ok, sprintf('ax at %d m/s [g], within 5%%', vq), ...
                interp1(E.v, E.ax, vq)/9.81, axp(i)/9.81, 0.05*axp(i)/9.81);
     ok = check(ok, sprintf('driven slip at %d m/s, within 0.015', vq), ...
@@ -58,13 +73,14 @@ ok = check(ok, 'perfect-TC time is a lower bound on the plant''s', ...
            E.t_accel <= A.t_target, true, 0);
 
 % ---- 4. the gate can fail ----------------------------------------------
-% Efficiency charged ONCE: the same road power from sqrt(eta) per stage.
-Ponce = ifssim_params({'DrivetrainEfficiency', sqrt(P.DrivetrainEfficiency)});
-Eonce = pt_model(Ponce);
+% Efficiency charged TWICE, as the plant used to: road power eta^2. In this
+% model that is the same road power as a single stage of eta^2.
+Ptwice = ifssim_params({'DrivetrainEfficiency', P.DrivetrainEfficiency^2});
+Etwice = pt_model(Ptwice);
 i = find(vw >= 25, 1);
-err = abs(interp1(Eonce.v, Eonce.ax, 25) - axp(i)) / axp(i);
-fprintf('        eta charged once: ax at 25 m/s off by %.1f%%\n', 100*err);
-ok = check(ok, 'discriminates: eta charged once falls outside 5%', err > 0.05, true, 0);
+err = abs(interp1(Etwice.v, Etwice.ax, 25) - axp(i)) / axp(i);
+fprintf('        eta charged twice: ax at 25 m/s off by %.1f%%\n', 100*err);
+ok = check(ok, 'discriminates: eta charged twice falls outside 5%', err > 0.05, true, 0);
 
 fprintf('\n%s\n', tern(ok, 'pt_model PASS.', 'pt_model FAILED.'));
 end
