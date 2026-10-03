@@ -18,6 +18,8 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Onboard replays use the Fast DDS buffer profile.** `maybe_reexec_in_docker` now sets `FASTRTPS_DEFAULT_PROFILES_FILE`, as `docker-compose.yml` already did for the live stack. Without it Fast DDS drops the 4.5 MB LiDAR messages and perception/SLAM ran at ~5 Hz on the real-car bag; with it ~9 Hz. The `dv_pipeline_stack` image also installs PyPI `dbscan` (`--no-deps`) for perception's `cluster_backend=pypi`.
+
 - **The `pipeline/` submodule now tracks
   [`isc-fs/IFS09-DV-PIPELINE`](https://github.com/isc-fs/IFS09-DV-PIPELINE)**
   instead of the frozen `IFS08-DV-PIPELINE`. 09 was imported with 08's
