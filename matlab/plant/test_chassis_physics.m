@@ -110,6 +110,10 @@ pose = last_pose(r);
 ok = check(ok,'sync: x is written',  pose.position(1), target(1), 1e-6);
 ok = check(ok,'sync: y is written',  pose.position(2), target(2), 1e-6);
 ok = check(ok,'sync: velocity is written', pose.vel_body(1), tvel(1), 1e-6);
+% The LATERAL component too. Only x was asserted before, so the y negation in
+% the VDB chassis' frame conversion (ENU body -> the block's y-right frame)
+% could be dropped and this case would still pass.
+ok = check(ok,'sync: lateral velocity is written', pose.vel_body(2), tvel(2), 1e-6);
 
 % And the proof that 4a meant something: the un-synced run must NOT be sitting
 % at the target, or the test above proves nothing.
@@ -120,6 +124,31 @@ assignin('base','SYNC_OFF', syncStruct(0));
 
 %% 4. Quaternion stays unit after a second of rotation.
 ok = check(ok,'quaternion remains unit', norm(pose.quat), 1.0, 1e-9);
+
+%% 5. External wrench is WORLD frame, so it must be rotated into the body.
+%
+% IFSSIM_EnvBus declares ext_force and ext_torque world frame -- they come
+% from the platform's collision solver. The VDB chassis once applied them
+% unrotated and nothing caught it, because every test ran at identity
+% orientation, where a rotated and an unrotated vector are the same vector.
+%
+% So the car is yawed 90 deg first. Body +x then points along world +y, and
+% the two interpretations come apart completely:
+%   rotated correctly   -> a world +x push moves the car along world +x
+%   applied unrotated   -> it acts along body +x and moves the car along world +y
+% There is no tolerance in which one passes for the other.
+[okF, dx, dy, wx, wy] = yawed_push(P);
+a  = 1.0;                         % m/s^2, the push is m*a
+tf = 1.0 - 0.05;                  % free time after the hold releases
+ok = check(ok,'ext_force: moves along world x when yawed 90deg', dx, 0.5*a*tf^2, 0.01);
+ok = check(ok,'ext_force: does not move along world y',           dy, 0,          0.005);
+% A world-x torque on a car yawed 90 deg is a BODY -y torque, i.e. pitch.
+% Applied unrotated it would be body +x, i.e. roll, at roughly 3.7x the rate
+% because Ixx is a quarter of Iyy -- again no overlap between the outcomes.
+My = 11.0;
+ok = check(ok,'ext_torque: pitches (body -y) when yawed 90deg', wy, -My/P.Assumed.Iyy*tf, 0.005);
+ok = check(ok,'ext_torque: does not roll (body x)',              wx, 0,                    0.003);
+if ~okF, ok = false; end
 
 close_system(h,0);
 fprintf('\n%s\n', ternary(ok,'chassis physics checks PASS.','CHASSIS PHYSICS CHECKS FAILED.'));
@@ -173,4 +202,83 @@ function s = chassis_step()
 %   the harness.
 load_system('IFSSIM_Chassis');
 s = get_param('IFSSIM_Chassis','FixedStep');
+end
+
+% -------------------------------------------------------------------------
+function [ok, dx, dy, wx, wy] = yawed_push(P)
+%YAWED_PUSH  Hold the car yawed 90 deg, release it, push it with a world wrench.
+%
+%   Needs a sync bus that CHANGES during the run -- held for the first 50 ms to
+%   place the car, then released so it can move -- which the main harness's
+%   Constant cannot do. Hence its own small harness.
+ok = true;
+h = 'chassis_extforce_harness';
+if bdIsLoaded(h), close_system(h,0); end
+new_system(h,'Model');
+set_param(h,'SolverType','Fixed-step','Solver','ode1', ...
+            'FixedStep',chassis_step(),'StartTime','0','StopTime','1.0', ...
+            'SaveFormat','Dataset');
+add_block('simulink/Ports & Subsystems/Model',[h '/Chassis'], ...
+          'ModelNameDialog','IFSSIM_Chassis.slx','Position',[420 60 580 260]);
+
+for k = 1:4
+    add_block('simulink/Sources/Constant',[h '/z' num2str(k)],'Value','[0;0;0]', ...
+              'Position',[60 20+40*k 120 40+40*k]);
+    add_line(h,['z' num2str(k) '/1'],sprintf('Chassis/%d',k),'autorouting','on');
+end
+
+env = envStruct(-9.81);
+env.ext_force  = [P.Mass * 1.0; 0; 0];     % world +x, 1 m/s^2 worth
+env.ext_torque = [11.0; 0; 0];             % world +x
+assignin('base','ENV_PUSH', env);
+add_block('simulink/Sources/Constant',[h '/ENV'],'Value','ENV_PUSH', ...
+          'OutDataTypeStr','Bus: IFSSIM_EnvBus','Position',[60 220 120 250]);
+add_line(h,'ENV/1','Chassis/5','autorouting','on');
+
+% Sync: enable high for 50 ms, then released.
+psi = pi/2;
+src = { 'enable',     'step'
+        'pos',        '[0;0;0]'
+        'quat',       sprintf('[%.17g;0;0;%.17g]', cos(psi/2), sin(psi/2))
+        'vel_body',   '[0;0;0]'
+        'omega_body', '[0;0;0]' };
+add_block('simulink/Signal Routing/Bus Creator',[h '/SyncB'], ...
+          'Inputs','5','OutDataTypeStr','Bus: IFSSIM_SyncBus','NonVirtualBus','on', ...
+          'Position',[300 280 310 420]);
+for k = 1:size(src,1)
+    b = [h '/s_' src{k,1}];
+    if strcmp(src{k,2},'step')
+        add_block('simulink/Sources/Step', b, 'Time','0.05','Before','1','After','0', ...
+                  'Position',[160 260+30*k 200 280+30*k]);
+    else
+        add_block('simulink/Sources/Constant', b, 'Value', src{k,2}, ...
+                  'Position',[160 260+30*k 200 280+30*k]);
+    end
+    % Bus Creator matches by SIGNAL NAME, so the line carries the element name.
+    lh = add_line(h,['s_' src{k,1} '/1'],sprintf('SyncB/%d',k),'autorouting','on');
+    set_param(lh,'Name',src{k,1});
+end
+add_line(h,'SyncB/1','Chassis/6','autorouting','on');
+
+add_block('simulink/Signal Routing/Bus Selector',[h '/sel'], ...
+          'OutputSignals','position,omega_body','Position',[620 120 630 180]);
+add_line(h,'Chassis/1','sel/1','autorouting','on');
+names = {'P_pos','P_om'};
+for k = 1:2
+    add_block('simulink/Sinks/To Workspace',[h '/w' num2str(k)],'VariableName',names{k}, ...
+              'SaveFormat','Timeseries','Position',[680 90+50*k 740 120+50*k]);
+    add_line(h,sprintf('sel/%d',k),['w' num2str(k) '/1'],'autorouting','on');
+end
+
+try
+    r = sim(h);
+    pos = squeeze(r.get('P_pos').Data);  if size(pos,1) == 3, pos = pos'; end
+    om  = squeeze(r.get('P_om').Data);   if size(om,1)  == 3, om  = om';  end
+    dx = pos(end,1);  dy = pos(end,2);
+    wx = om(end,1);   wy = om(end,2);
+catch ME
+    fprintf('  [FAIL] ext_force harness: %s\n', ME.message);
+    ok = false; dx = NaN; dy = NaN; wx = NaN; wy = NaN;
+end
+close_system(h,0);
 end
