@@ -66,12 +66,13 @@ C = par(C,'RollingResistance',0.020,'-', 'ASSUMED typical for a warm slick. Tyre
 % give 14533, the bars make up the rest, and both bar rates come out positive.
 C = par(C,'HeaveStiffness',  80737.0,'N/m','DERIVED from the recorded 2.9-3.0 Hz ride frequency (IFS-06/07) and the sprung mass. Replaces an unsourced 227600 that implied 4.97 Hz and made the roll stiffnesses below impossible.');
 C = par(C,'PitchStiffness', 155600.0,'N/m','UNKNOWN no source anywhere');
-% These are now LIVE, where before they were read by nothing at all. They are
-% the TOTAL roll stiffness of each axle, springs plus anti-roll bar, and the
-% plant derives the bar rate as this minus what the springs already give. The
-% values are still unsourced -- but their RATIO is the car's balance, and a
-% car with no balance knob cannot understeer or oversteer at all, which is
-% what the plant was before this.
+% DEAD AGAIN, and kept only as a record of the totals the bar rates were sized
+% to reproduce. They were briefly LIVE -- the plant took the bar rate as this
+% minus the springs -- until the suspension got real springs, motion ratios
+% and bars (Susp.* below). Since then the axle stiffness is DERIVED as
+% springs*MR^2 + bar, and nothing reads these two. Overriding them changes
+% nothing; vd_study and plant_study refuse it, and spec_reach shows it. The
+% balance knob is Susp.ArbRateFront/Rear. Their RATIO is still the balance.
 %
 % NOT "55.1%% front is mildly understeering", which this comment used to claim.
 % That is a non-sequitur: roll stiffness distribution alone never sets the SIGN
@@ -80,8 +81,8 @@ C = par(C,'PitchStiffness', 155600.0,'N/m','UNKNOWN no source anywhere');
 % sweep. WeightDistFront 0.438 puts 56.2%% of the mass on the rear, and with
 % load sensitivity the heavier axle gives up first. It takes past 70%% front to
 % approach neutral, so the bars cannot fix this on their own.
-C = par(C,'RollStiffnessFront',27000.0,'N*m/rad','UNKNOWN no source, but now LIVE: with the rear it sets roll stiffness distribution (55.1%% front) and therefore the balance. ARB rate is derived as this minus the springs.');
-C = par(C,'RollStiffnessRear', 22000.0,'N*m/rad','UNKNOWN no source, but now LIVE: see RollStiffnessFront.');
+C = par(C,'RollStiffnessFront',27000.0,'N*m/rad','UNKNOWN no source. DEAD: read by nothing; the models use Derived.RollStiffnessFront = springs*MR^2 + Susp.ArbRateFront. Kept as the total the bar rate was sized to.');
+C = par(C,'RollStiffnessRear', 22000.0,'N*m/rad','UNKNOWN no source. DEAD: see RollStiffnessFront.');
 C = par(C,'RollCenterFront', 0.040, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
 C = par(C,'RollCenterRear',  0.060, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
 C = par(C,'SuspensionDamping',1.5,  '-','ASSUMED damping ratio, never measured');

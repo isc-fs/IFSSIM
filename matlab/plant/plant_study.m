@@ -2,7 +2,7 @@ function R = plant_study(varargin)
 %PLANT_STUDY  Try a setup change on the FULL Simulink plant. No rebuild.
 %
 %   plant_study('HeaveStiffness', 120000)
-%   plant_study('RollStiffnessFront', 32000, 'RollStiffnessRear', 17000)
+%   plant_study('Susp.ArbRateFront', 17467, 'Susp.ArbRateRear', 2467)
 %   plant_study('SuspensionDamping', 0.9)
 %   plant_study('CoGHeight', 0.3441)
 %
@@ -38,6 +38,22 @@ if isempty(varargin)
     error('plant_study:noChange', ...
           ['nothing to study. Give a parameter and a value, e.g.\n' ...
            '   plant_study(''HeaveStiffness'', 120000)']);
+end
+
+% Refuse an override the plant never sees, before spending two minutes on
+% two identical cars. spec_reach's plant column is the static trace, and it
+% is also how an accumulator parameter shows up: wired into the plant, but
+% read from car_spec directly, so no override reaches it.
+addpath(fullfile(here,'..','spec'));
+Rr = spec_reach(varargin(1:2:end));
+bad = Rr.Plant == "-" | startsWith(Rr.Reaches, 'NOT STUDYABLE');
+if any(bad)
+    L = {sprintf('%d of your overrides would not change the plant:', nnz(bad))};
+    for k = find(bad)'
+        L{end+1} = sprintf('  %-26s %s', Rr.Parameter{k}, Rr.Reaches{k}); %#ok<AGROW>
+    end
+    L{end+1} = 'spec_reach lists where every parameter reaches; spec_drivers(''Derived.X'') what drives a derived one.';
+    error('plant_study:noEffect', '%s', strjoin(L, newline));
 end
 
 % Anything the tyre block bakes in at build time. Everything else is live.

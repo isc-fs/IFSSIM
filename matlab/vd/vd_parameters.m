@@ -10,52 +10,60 @@ function T = vd_parameters()
 %   The "reaches" column is the one people are surprised by. A parameter can be
 %   declared in car_spec, exported to settings.json, and still be read by
 %   nothing at all -- which means changing it does exactly nothing and the
-%   engineer has no way to tell. Two of the numbers below are in that state
-%   today, and one of them was in it for months while people assumed the car
-%   had a balance it did not have.
+%   engineer has no way to tell.
+%
+%   THAT COLUMN IS COMPUTED (spec_reach), not written. It used to be a column
+%   of words in the table below, and when it was first checked against the
+%   code 7 of its 34 entries were wrong: both declared roll stiffnesses said
+%   "both" and reached nothing, the bar rates said "design only" and reach the
+%   plant too, and three plant-only parameters claimed the design model. Only
+%   the "what it changes" sentence is still written by hand.
 
 here = fileparts(mfilename('fullpath'));
 addpath(here); addpath(fullfile(here,'..','plant')); addpath(fullfile(here,'..','spec'));
 P = ifssim_params();
 C = car_spec();
 
-% name, reaches, what it changes
+% name, what it changes
 SPEC = {
-'Wheelbase'          'both'        'yaw response, Ackermann, longitudinal transfer'
-'TrackFront'         'both'        'lateral transfer per axle, Ackermann'
-'TrackRear'          'both'        'lateral transfer per axle'
-'WeightDistFront'    'both'        'balance, static loads, longitudinal transfer'
-'CoGHeight'          'both'        'ALL load transfer, linearly'
-'Mass'               'both'        'everything'
-'HeaveStiffness'     'both'        'ride frequency, damper coeff, and the bar rates'
-'RollStiffnessFront' 'both'        'BALANCE. front bar rate = this minus the springs'
-'RollStiffnessRear'  'both'        'BALANCE. rear bar rate = this minus the springs'
-'SuspensionDamping'  'both'        'damper coefficient, transient response only'
-'Susp.SpringRateFront'  'both'        'wheel rate front, as k*MR^2'
-'Susp.SpringRateRear'   'both'        'wheel rate rear -- a front/rear split is now real'
-'Susp.MotionRatioFront' 'both'        'wheel rate goes as the SQUARE of it'
-'Susp.MotionRatioRear'  'both'        'as front'
-'Susp.ArbRateFront'     'design only' 'bar rate. axle roll stiffness = springs + this'
-'Susp.ArbRateRear'      'design only' 'as front. the RATIO of the two is the balance'
-'Susp.StaticCamberFront' 'both'        'INERT for grip: cost is charged vs departure from it'
-'Susp.StaticCamberRear'  'both'        'INERT for grip, same reason'
-'Susp.CamberGainFront'  'both'        'how much roll the geometry takes back out of the tyre'
-'Susp.CamberGainRear'   'both'        'as front'
-'Susp.BumpSteerFront'   'design only' 'roll steer per m of travel. ZERO by design'
-'Susp.BumpSteerRear'    'design only' 'as front'
-'Susp.CamberGripSensitivity' 'design only' 'the ONE part of camber that needs tyre data'
-'RollCenterFront'    'design only' 'geometric share of front transfer'
-'RollCenterRear'     'design only' 'geometric share of rear transfer'
-'PitchStiffness'     'NOTHING'     'nothing. declared, exported, read by no code'
-'MaxSteerAngle'      'both'        'steering range, Ackermann'
-'WheelRadius'        'both'        'speed from rpm, tyre size, gearing'
-'WheelWidth'         'both'        'tyre contact width'
-'TireMu'             'both'        'grip level, cornering stiffness'
-'Tyre.LoadSensitivity' 'both'      'what load transfer COSTS in grip. pairs with balance'
-'Tyre.NominalLoad'   'both'        'the load the tyre data belongs to. NOT the car''s corner load'
-'Tyre.StiffnessPeakLoadRatio' 'both' 'how cornering stiffness varies with load'
-'RollingResistance'  'plant only'  'drag and lap energy; the design model prescribes speed'
+'Wheelbase'          'yaw response, Ackermann, longitudinal transfer'
+'TrackFront'         'lateral transfer per axle, Ackermann'
+'TrackRear'          'lateral transfer per axle'
+'WeightDistFront'    'balance, static loads, longitudinal transfer'
+'CoGHeight'          'ALL load transfer, linearly'
+'Mass'               'everything'
+'HeaveStiffness'     'ride frequency, damper coeff, and the bar rates'
+'RollStiffnessFront' 'DEAD. the declared total; the models read the DERIVED one'
+'RollStiffnessRear'  'DEAD. as front -- change the springs or the bar instead'
+'SuspensionDamping'  'damper coefficient, transient response only'
+'Susp.SpringRateFront'  'wheel rate front, as k*MR^2'
+'Susp.SpringRateRear'   'wheel rate rear -- a front/rear split is now real'
+'Susp.MotionRatioFront' 'wheel rate goes as the SQUARE of it'
+'Susp.MotionRatioRear'  'as front'
+'Susp.ArbRateFront'     'bar rate. axle roll stiffness = springs*MR^2 + this'
+'Susp.ArbRateRear'      'as front. the RATIO of the two is the balance'
+'Susp.StaticCamberFront' 'INERT for grip: cost is charged vs departure from it'
+'Susp.StaticCamberRear'  'INERT for grip, same reason'
+'Susp.CamberGainFront'  'how much roll the geometry takes back out of the tyre'
+'Susp.CamberGainRear'   'as front'
+'Susp.BumpSteerFront'   'roll steer per m of travel. ZERO by design'
+'Susp.BumpSteerRear'    'as front'
+'Susp.CamberGripSensitivity' 'the ONE part of camber that needs tyre data'
+'RollCenterFront'    'geometric share of front transfer'
+'RollCenterRear'     'geometric share of rear transfer'
+'PitchStiffness'     'nothing. declared, exported, read by no code'
+'MaxSteerAngle'      'steering range, Ackermann'
+'WheelRadius'        'speed from rpm, tyre size, gearing'
+'WheelWidth'         'tyre contact width'
+'TireMu'             'grip level, cornering stiffness'
+'Tyre.LoadSensitivity' 'what load transfer COSTS in grip. pairs with balance'
+'Tyre.NominalLoad'   'the load the tyre data belongs to. NOT the car''s corner load'
+'Tyre.StiffnessPeakLoadRatio' 'how cornering stiffness varies with load'
+'RollingResistance'  'drag and lap energy; the design model prescribes speed'
 };
+
+R = spec_reach(SPEC(:,1));
+SPEC = [SPEC(:,1), R.Reaches, SPEC(:,2)];
 
 fprintf('\n================ SUSPENSION & VEHICLE DYNAMICS ================\n');
 fprintf('  %-28s %11s %-7s %-12s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','REACHES');
@@ -74,10 +82,15 @@ for i = 1:size(SPEC,1)
 end
 
 fprintf('\n---- READ THIS BEFORE TRUSTING A RESULT -----------------------\n');
-fprintf('  PitchStiffness reaches NOTHING. It is declared, it is exported to\n');
-fprintf('  settings.json, and no line of code reads it. Changing it does not\n');
-fprintf('  change the car. It is also UNKNOWN -- no source anywhere -- so\n');
-fprintf('  there is nothing to lose by ignoring it until pitch is modelled.\n\n');
+dead = SPEC(startsWith(SPEC(:,2),'NOTHING') | startsWith(SPEC(:,2),'NOT STUDYABLE'), 1);
+if ~isempty(dead)
+    fprintf('  CHANGING THESE DOES NOT CHANGE THE CAR (computed just now):\n');
+    fprintf('    %s\n', strjoin(dead, ', '));
+    fprintf('  vd_study refuses them rather than print two identical cars.\n\n');
+end
+fprintf('  RollStiffnessFront/Rear in car_spec are DECLARED totals that nothing\n');
+fprintf('  reads. The models use the DERIVED axle stiffness, built from the\n');
+fprintf('  springs, motion ratio and bar. Balance moves with Susp.ArbRate*.\n\n');
 fprintf('  RollCenterFront/Rear reach the DESIGN model only. The plant applies\n');
 fprintf('  tyre forces at the contact patch with the roll centre at ground\n');
 fprintf('  level, so all lateral transfer there is elastic. The design model\n');
@@ -88,9 +101,9 @@ fprintf('  charged against DEPARTURE from static, because the static setting\n')
 fprintf('  was presumably chosen near the tyre''s optimum and no data says where\n');
 fprintf('  that optimum is. So these two move the camber CURVE and not the lap\n');
 fprintf('  time. Choosing static camber needs a tyre on a rig.\n\n');
-fprintf('  RollStiffnessFront/Rear have NO SOURCE, and their RATIO is the\n');
-fprintf('  car''s balance -- the single number the whole handling picture turns\n');
-fprintf('  on. Currently %.1f%% front.\n\n', ...
+fprintf('  The roll stiffness SPLIT is the car''s balance -- the single number\n');
+fprintf('  the whole handling picture turns on -- and the bar rates under it are\n');
+fprintf('  DERIVED placeholders, not bars off the car. Currently %.1f%% front.\n\n', ...
         100*P.Derived.RollStiffnessFront/(P.Derived.RollStiffnessFront+P.Derived.RollStiffnessRear));
 fprintf('  CoGHeight is DISPUTED: %.3f here, 0.3441 in the VD department file,\n', P.CoGHeight);
 fprintf('  nobody has measured the IFS-08. Load transfer is LINEAR in it, so a\n');

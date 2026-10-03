@@ -3,7 +3,10 @@ function S = vd_study(varargin)
 %
 %   vd_study('TireMu', 1.65)
 %   vd_study('CoGHeight', 0.3441, 'Assumed.Izz', 200)
-%   vd_study('RollStiffnessFront', 32000, 'RollStiffnessRear', 17000)
+%   vd_study('Susp.ArbRateFront', 17467, 'Susp.ArbRateRear', 2467)
+%
+%   An override that would not change the design model is REFUSED, with the
+%   parameters that would.
 %
 %   Runs the characterisation twice -- the car as built, and the car with your
 %   change -- and prints both side by side. settings.json is NOT touched, so
@@ -36,6 +39,29 @@ P0 = ifssim_params();
 P1 = ifssim_params(varargin);
 M0 = dualtrack_build(P0);
 M1 = dualtrack_build(P1);
+
+% REFUSE AN OVERRIDE THAT REACHES NOTHING THIS STUDY RUNS.
+%
+% This study runs the DESIGN model. An override that does not change that
+% model produces a side-by-side of two identical cars, printed with full
+% confidence -- worse than an error, because it reads as an answer. That is
+% not hypothetical: this README's own headline example,
+%   vd_study('RollStiffnessFront', 32000, 'RollStiffnessRear', 17000)
+% did exactly that for as long as roll stiffness has been DERIVED from the
+% springs and the bar, because the declared total it overrides feeds nothing.
+%
+% Each override is tested ALONE, so a dead one cannot hide behind a live one
+% in the same call: vd_study('TireMu',1.65,'RollStiffnessFront',32000) changes
+% the model, and the second half of it still does nothing.
+addpath(fullfile(here,'..','spec'));
+dead = {};
+for i = 1:2:numel(varargin)
+    Mi = dualtrack_build(ifssim_params(varargin(i:i+1)));
+    if models_equal(M0, Mi), dead{end+1} = varargin{i}; end %#ok<AGROW>
+end
+if ~isempty(dead)
+    error('vd_study:noEffect', '%s', explain_dead(dead));
+end
 
 fprintf('\n================== STUDY ==================\n');
 for i = 1:2:numel(varargin)
@@ -125,4 +151,44 @@ end
 
 function a = ay_at(d, v, M)
 S = dualtrack_trim(v, d, M);  a = S.ay;
+end
+
+% -------------------------------------------------------------------------
+function tf = models_equal(A, B)
+tf = true;
+for f = fieldnames(A)'
+    a = A.(f{1});  b = B.(f{1});
+    if isnumeric(a) && isnumeric(b) && isequal(size(a), size(b))
+        if any(abs(a(:) - b(:)) > 1e-12 * max(1, max(abs(a(:))))), tf = false; return; end
+    end
+end
+end
+
+function msg = explain_dead(dead)
+L = {sprintf(['%d of your overrides would not change the design model this ' ...
+              'study runs, so it would have compared two IDENTICAL cars:'], numel(dead)), ''};
+R = spec_reach(dead);
+for k = 1:numel(dead)
+    nm = dead{k};
+    L{end+1} = sprintf('  %s', nm); %#ok<AGROW>
+    L{end+1} = sprintf('    reaches: %s', R.Reaches{k}); %#ok<AGROW>
+    if ~strcmp(R.Plant{k}, '-')
+        L{end+1} = sprintf(['    it does reach the PLANT (%s) -- use plant_study, ' ...
+                            'or the department view, not vd_study'], R.Plant{k}); %#ok<AGROW>
+    end
+    % A declared value with a DERIVED twin is the common case: the derivation
+    % moved and the declared input was left behind. Name the inputs that do
+    % drive it, computed rather than looked up in a table that would go stale.
+    leaf = regexprep(nm, '^.*\.', '');
+    try
+        drv = spec_drivers(['Derived.' leaf]);
+        drv = setdiff(drv, {nm}, 'stable');
+        if ~isempty(drv)
+            L{end+1} = sprintf('    P.Derived.%s is what the models read, and it is driven by:', leaf); %#ok<AGROW>
+            L{end+1} = sprintf('      %s', strjoin(drv, ', ')); %#ok<AGROW>
+        end
+    catch
+    end
+end
+msg = strjoin(L, newline);
 end

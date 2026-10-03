@@ -16,8 +16,14 @@ vd_plots         % the five standard figures, also saved to figures/
 ```matlab
 vd_study('TireMu', 1.65)
 vd_study('CoGHeight', 0.3441, 'Assumed.Izz', 200)
-vd_study('RollStiffnessFront', 32000, 'RollStiffnessRear', 17000)
+vd_study('Susp.ArbRateFront', 17467, 'Susp.ArbRateRear', 2467)   % 5000 N.m/rad of bar moved rear-to-front
 ```
+
+An override that would not change the model this runs is **refused**, with the
+parameters that would. Overriding the declared `RollStiffnessFront` used to
+print two identical cars: the axle stiffness is derived from the springs and
+the bar, and the declared total feeds nothing. `spec_reach` lists, for every
+parameter, where it actually reaches -- computed by perturbing it, not claimed.
 
 Prints the car as built beside the car with your change, and writes the study's
 figures to `figures/study/`.
@@ -71,7 +77,7 @@ number on the page that does not depend on the unvalidated tyre fit.
 
 ```matlab
 cd matlab/vd
-vd_study('RollStiffnessFront', 32000, 'RollStiffnessRear', 17000)   % seconds
+vd_study('Susp.ArbRateFront', 17467, 'Susp.ArbRateRear', 2467)   % seconds
 ```
 
 That drives the **design model**: balance, understeer gradient, skid pad lap
@@ -79,7 +85,7 @@ time, limit grip. It is what you want most of the time.
 
 ```matlab
 cd matlab/plant
-plant_study('RollStiffnessFront', 32000, 'RollStiffnessRear', 17000)  % ~2 min
+plant_study('Susp.ArbRateFront', 17467, 'Susp.ArbRateRear', 2467)  % ~2 min
 ```
 
 That drives the **full Simulink plant**: roll angle, per-corner loads, whether
