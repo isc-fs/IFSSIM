@@ -28,6 +28,12 @@ function R = plant_study(varargin)
 %   TireMu or a Pacejka number and this rebuilds the tyre first, which takes
 %   about a minute. It will tell you when it does.
 %
+%   THE ACCUMULATOR'S ARRANGEMENT is the other build-time exception: it picks
+%   which generated Simscape Battery pack the powertrain is built around, so
+%   this rebuilds the powertrain for it, and back afterwards. The cell's data
+%   (capacity, resistance, the OCV curve) and Pack.CurrentLimit are runtime
+%   variables and need no rebuild.
+%
 %   To make a change permanent: put it in matlab/spec/car_spec.m with a source
 %   and run build_car. Nothing here touches the spec or settings.json.
 
@@ -58,6 +64,11 @@ end
 
 % Anything the tyre block bakes in at build time. Everything else is live.
 TYRE = {'TireMu','Pacejka','Tyre','WheelRadius','WheelWidth','Mass','WeightDistFront'};
+% The accumulator's ARRANGEMENT selects which generated Simscape Battery pack
+% the powertrain is built around; the cell's data are runtime variables.
+ARRANGEMENT = {'Pack.CellsSeriesPerModule','Pack.CellsParallelPerModule', ...
+               'Pack.ModulesInSeries','Pack.ModulesInParallel'};
+needsPT = any(ismember(varargin(1:2:end), ARRANGEMENT));
 needsBuild = false;
 for i = 1:2:numel(varargin)
     k = varargin{i};
@@ -83,6 +94,11 @@ if needsBuild
     % threads the override through both.
     build_tiresuspension(fullfile(here,'models'), varargin);
 end
+if needsPT
+    fprintf('\n  the accumulator arrangement changed: rebuilding the powertrain around\n');
+    fprintf('  its generated pack (the first time for an arrangement adds ~1 min).\n');
+    build_powertrain(fullfile(here,'models'), varargin);
+end
 B = corner_case(P1, 'study');
 
 fprintf('\n  %-30s %12s %12s %10s\n', '', 'as specified', 'study', 'change');
@@ -107,6 +123,9 @@ R = struct('baseline',A,'study',B,'overrides',{varargin},'rebuilt',needsBuild);
 
 % put the workspace back, so a study leaves nothing behind
 ifssim_load_workspace();
+if needsPT
+    build_powertrain(fullfile(here,'models'));
+end
 if needsBuild
     build_tyre_paramset(fullfile(here,'models'));
     build_tiresuspension(fullfile(here,'models'));

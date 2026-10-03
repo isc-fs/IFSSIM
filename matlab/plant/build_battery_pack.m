@@ -1,78 +1,51 @@
-function info = build_battery_pack(mdl, sysName, pos)
-%BUILD_BATTERY_PACK  A Simscape accumulator, one block per real module.
+function info = build_battery_pack(mdl, sysName, pos, P)
+%BUILD_BATTERY_PACK  The accumulator, as a Simscape Battery pack built from the spec.
 %
-%   info = BUILD_BATTERY_PACK(mdl, sysName, pos) adds a subsystem to mdl
-%   holding the accumulator as Simscape Battery blocks, and returns the names
-%   of its Simulink ports.
+%   info = BUILD_BATTERY_PACK(mdl, sysName, pos)      the car_spec pack
+%   info = BUILD_BATTERY_PACK(mdl, sysName, pos, P)   P = ifssim_params(overrides)
 %
-%   ONE BLOCK PER MODULE, NOT ONE PER CELL. The car has 570 cells and
-%   modelling each one would put 570 states inside a plant that steps at 960
-%   Hz, which is not a trade anyone would take. Each of the five real modules
-%   is one Table-Based battery block, lumped as its own 19s6p: capacity
-%   multiplied by the parallel count, open-circuit voltage by the series
-%   count, resistance by series-over-parallel.
+%   Adds a subsystem to mdl holding the accumulator, and returns its
+%   arrangement. The subsystem takes a current demand in amps and returns
+%   pack terminal voltage (port 1) and each module's state of charge (ports
+%   2..NModules+1).
 %
-%   Five is not an arbitrary compromise -- it is how the accumulator is
-%   actually built and how it is actually instrumented. A per-module SoC
-%   output and a per-module thermal port are exactly the hooks a BMS or a
-%   cooling model needs, and neither exists at cell level on the real car
-%   either.
+%   GENERATED, NOT HAND-WIRED. The pack is built by Simscape Battery's
+%   builder (battery_from_spec -> battery_library -> buildBattery) from
+%   car_spec's cell and four topology integers. The hand-wired version this
+%   replaced placed one Table-Based block per module and chained them in
+%   series in a loop; it could not represent strings in parallel (it wired
+%   Pack.ModulesInParallel > 1 in series regardless), and any other
+%   arrangement meant editing this file. A new accumulator is now a new set
+%   of numbers in car_spec. The cell model is the same Table-Based battery,
+%   lumped per module, so for the IFS-08 the physics is unchanged.
 %
-%   The subsystem takes a current demand in amps and returns pack terminal
-%   voltage and per-module state of charge.
+%   THE CELL'S DATA ARE WORKSPACE VARIABLES, not numbers written into blocks:
+%   IFSSIM_cell_SOC/V0/R0/AH and IFSSIM_SoC0, assigned by
+%   ifssim_load_workspace from P. So a different cell, or a study override
+%   of one, reaches the plant at the next run with no rebuild. Only a change
+%   of ARRANGEMENT needs one (it is a different generated library).
 %
-%   See also PACK_FROM_CELLS, PROBE_SIMSCAPE_BATTERY.
+%   Three things the generated pack does that are not obvious, all found by
+%   driving it against the analytic answer V = Ns*OCV(soc) - I*R:
+%
+%   1. ITS PLACEHOLDER CELL IS NOT OURS. Generated modules carry a default
+%      27 Ah, 8.5 mOhm cell. Every module's cell data are overwritten here.
+%   2. IT STARTS FULL, then asserts every step that charge cannot exceed 1.
+%      Setting socCell alone does nothing: socCell_specify must be on too.
+%   3. ITS TERMINALS ARE NAMED BACKWARDS FOR US. Wired by name -- '+' to the
+%      load -- a discharge demand CHARGES the pack and it reads -416 V. The
+%      terminal named '-' is the one that goes to the current source.
+%      test_battery_pack holds the polarity, so a regenerated library that
+%      fixes the names breaks a test, not the car.
+%
+%   See also BATTERY_FROM_SPEC, BATTERY_LIBRARY, TEST_BATTERY_PACK, PACK_FROM_CELLS.
 
-if nargin < 3, pos = [300 400 460 520]; end
-P = ifssim_params();
-addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
-K = pack_from_cells(car_spec());
-C = car_spec();
-cv = @(n) C.Fields.(strrep(n,'.','_')).value;
+if nargin < 3 || isempty(pos), pos = [300 400 460 520]; end
+if nargin < 4 || isempty(P), P = ifssim_params(); end
+here = fileparts(mfilename('fullpath'));
+addpath(fullfile(here,'..','spec'));
+[~, libBlock, B] = battery_library(P);
 
-nMod = cv('Pack.ModulesInSeries') * cv('Pack.ModulesInParallel');
-ns   = cv('Pack.CellsSeriesPerModule');
-np   = cv('Pack.CellsParallelPerModule');
-
-% Per-module lumped equivalent.
-AH   = np * cv('Cell.CapacityAh');
-Rmod = cv('Cell.Rint') * ns / np;
-
-% OPEN-CIRCUIT VOLTAGE AGAINST STATE OF CHARGE. A real NMC shape, not a
-% straight line between the cell's two limits.
-%
-% The line this replaces ran V = VMin + (VMax-VMin)*soc, which gives 3.35 V
-% per cell at half charge where an 18650 of this chemistry sits near 3.7.
-% Across 95 series that is 24 V of error in the middle of the usable range,
-% and it made the plant and pack_from_cells disagree by 14% about the power
-% of the same pack at the same current, and by 7% about its energy. The line
-% was very nearly right at the 0.9 start point, which is why nothing noticed.
-%
-% Shape is SECONDARY, not datasheet: a standard NMC 18650 open-circuit curve,
-% anchored at the cell's own VMax and at a floor. Murata publish discharge
-% curves at 3-30 A rather than an OCV table, so digitising their lowest-rate
-% curve is the upgrade path -- the breakpoints below already accept any shape.
-%
-% Self-consistency check, which is why these particular numbers: integrating
-% this curve over SoC gives a mean open-circuit voltage of 3.69 V, against a
-% 3.6 V nominal quoted under load. Mean OCV sitting a little above nominal is
-% exactly right, because nominal carries the IR drop and this does not.
-% READ FROM car_spec, not restated here. Writing the table out in this file
-% as well would recreate exactly the fault being fixed: two places describing
-% the same cell, free to drift.
-socv  = cv('Cell.OCV_SoC');
-vcell = cv('Cell.OCV_V');
-if abs(vcell(end) - cv('Cell.VMax')) > 1e-6
-    vcell = vcell * cv('Cell.VMax') / vcell(end);   % honour the cell's own top
-end
-soc0 = P.Assumed.BatteryInitialSoC;
-
-% Per-module tables: series count multiplies voltage, series-over-parallel
-% multiplies resistance.
-V0 = ns * vcell;
-R0 = Rmod * ones(size(socv));
-
-load_system('batt_lib');
 sys = [mdl '/' sysName];
 add_block('simulink/Ports & Subsystems/Subsystem', sys, 'Position', pos);
 delete_line(sys,'In1/1','Out1/1'); delete_block([sys '/In1']); delete_block([sys '/Out1']);
@@ -81,97 +54,114 @@ SOLVER = sprintf('nesl_utility/Solver\nConfiguration');
 PS2S   = sprintf('nesl_utility/PS-Simulink\nConverter');
 S2PS   = sprintf('nesl_utility/Simulink-PS\nConverter');
 
-add_block('simulink/Sources/In1',[sys '/I_demand'],'Position',[30 60 60 80]);
-add_block(S2PS,[sys '/S2PS'],'Position',[110 55 150 85]);
-add_block('fl_lib/Electrical/Electrical Sources/Controlled Current Source', ...
-          [sys '/ISRC'],'Position',[210 40 270 120]);
-add_block('fl_lib/Electrical/Electrical Elements/Electrical Reference', ...
-          [sys '/GND'],'Position',[220 420 260 460]);
-add_block(SOLVER,[sys '/SC'],'Position',[60 420 120 460]);
+% The pack, with its library link BROKEN: the plant then carries the pack's
+% structure itself and needs only the generated Simscape package on the path
+% (ifssim_load_workspace adds it), not the library model as well.
+add_block(libBlock, [sys '/PACK'], 'Position', [320 40 460 300]);
+set_param([sys '/PACK'], 'LinkStatus', 'none');
 
-for m = 1:nMod
-    b = sprintf('%s/MOD%d', sys, m);
-    add_block('batt_lib/Cells/Battery (Table-Based)', b, ...
-              'Position',[360 40+90*(m-1) 440 110+90*(m-1)]);
-    % T_dependence OFF FIRST. It defaults to 'yes', and while it is on the
-    % block reads the temperature-indexed V0_mat and R0_mat and IGNORES
-    % V0_vec and R0_vec entirely -- so the cell data below is written,
-    % accepted, and silently unused. The pack then reports a voltage that
-    % has nothing to do with the numbers you set.
-    set_param(b, 'T_dependence','simscape.enum.tablebattery.temperature_dependence.no');
-    set_param(b, 'SOC_vec', mat2str(socv), 'V0_vec', mat2str(V0,8), ...
-                 'R0_vec', mat2str(R0,8), 'AH', num2str(AH,8), ...
-                 'SOC_port','simscape.enum.tablebattery.enable.yes');
-    % START BELOW FULL. The block defaults to a state of charge of exactly 1
-    % and then asserts, every step, that charge cannot exceed 1 -- so the
-    % smallest rounding in the wrong direction fills the log with warnings
-    % before the car has moved. Specifying it is also just more honest: a car
-    % does not roll to the line on a perfectly full pack.
-    set_param(b, 'stateOfCharge_specify','on', ...
-                 'stateOfCharge', num2str(soc0,6));
-    add_block(PS2S, sprintf('%s/P2S%d',sys,m), 'Position',[500 45+90*(m-1) 540 75+90*(m-1)]);
-    % Port numbers are PINNED, not left to creation order. Left implicit the
-    % SoC outputs take ports 1..n and v_pack lands last, so anything reading
-    % 'Pack/1' expecting a voltage silently gets a state of charge -- which
-    % reads 1.0 at full charge and looks exactly like a plausible bad number.
-    add_block('simulink/Sinks/Out1', sprintf('%s/soc%d',sys,m), ...
-              'Position',[580 50+90*(m-1) 610 70+90*(m-1)], 'Port', num2str(m+1));
+% 1 and 2: our cell, and a start below full.
+mods = find_system([sys '/PACK'], 'LookUnderMasks','all', 'BlockType','SimscapeBlock');
+for k = 1:numel(mods)
+    set_param(mods{k}, 'SOC_vecCell','IFSSIM_cell_SOC', 'V0_vecCell','IFSSIM_cell_V0', ...
+              'R0_vecCell','IFSSIM_cell_R0', 'AHCell','IFSSIM_cell_AH', ...
+              'socCell_specify','on', 'socCell','IFSSIM_SoC0', 'socCell_priority','High');
 end
-add_block('fl_lib/Electrical/Electrical Sensors/Voltage Sensor',[sys '/VS'],'Position',[210 250 270 310]);
-add_block(PS2S,[sys '/P2Sv'],'Position',[120 260 160 300]);
-add_block('simulink/Sinks/Out1',[sys '/v_pack'],'Position',[40 270 70 290],'Port','1');
+if numel(mods) ~= B.NModules
+    error('build_battery_pack:modules', 'generated pack has %d module blocks, expected %d', ...
+          numel(mods), B.NModules);
+end
+
+add_block('simulink/Sources/In1',[sys '/I_demand'],'Position',[30 360 60 380]);
+add_block(S2PS,[sys '/S2PS'],'Position',[110 355 150 385]);
+add_block('fl_lib/Electrical/Electrical Sources/Controlled Current Source', ...
+          [sys '/ISRC'],'Position',[210 340 270 420]);
+add_block('fl_lib/Electrical/Electrical Elements/Electrical Reference', ...
+          [sys '/GND'],'Position',[220 520 260 560]);
+add_block(SOLVER,[sys '/SC'],'Position',[60 520 120 560]);
+add_block('fl_lib/Electrical/Electrical Sensors/Voltage Sensor',[sys '/VS'],'Position',[520 340 580 420]);
+add_block(PS2S,[sys '/P2Sv'],'Position',[620 360 660 390]);
+add_block('simulink/Sinks/Out1',[sys '/v_pack'],'Position',[700 365 730 385],'Port','1');
 
 Pp = @(b) get_param([sys '/' b],'PortHandles');
+% 3: the terminals, by name, reversed.
+[posT, negT] = pack_terminals([sys '/PACK']);
+
+% Current source and voltage sensor, port layout as established in the
+% hand-wired version: LConn(1) terminal, RConn(1) physical signal, RConn(2)
+% terminal; the sensor's positive side is RConn(2).
 add_line(sys,'I_demand/1','S2PS/1');
-% PORT ORDER, established by testing each port rather than guessing. Both the
-% controlled current source and the voltage sensor use the same layout, and
-% it is NOT the one the diagram suggests:
-%
-%   LConn(1) = electrical terminal
-%   RConn(1) = PHYSICAL SIGNAL          <- the one that is easy to get wrong
-%   RConn(2) = electrical terminal
-%
-% Driving a signal into an electrical port fails with a domain-rules message
-% that never names the offending port, so every wrong guess costs a full
-% build cycle to find.
 add_line(sys, Pp('S2PS').RConn(1), Pp('ISRC').RConn(1));
-
-% Modules in series: each one's + to the next one's -.
-prevPlus = Pp('MOD1').RConn(1);
-add_line(sys, Pp('MOD1').LConn(1), Pp('GND').LConn(1));      % pack minus at ground
-for m = 2:nMod
-    add_line(sys, prevPlus, Pp(sprintf('MOD%d',m)).LConn(1));
-    prevPlus = Pp(sprintf('MOD%d',m)).RConn(1);
-end
-% Current source across the stack: pack plus -> source -> ground.
-add_line(sys, prevPlus,            Pp('ISRC').LConn(1));   % pack + to source
-add_line(sys, Pp('ISRC').RConn(2), Pp('GND').LConn(1));   % source to ground
-% Sense the whole stack.
-% POLARITY: RConn(2) is the sensor's positive side, not LConn(1). Wired the
-% other way the pack reads a perfectly plausible -367 V, which is the right
-% magnitude with the wrong sign -- the kind of error that survives a glance
-% at the number and fails later as a negative power draw.
-add_line(sys, Pp('VS').RConn(2), prevPlus);             % across the stack, +
-add_line(sys, Pp('VS').LConn(1), Pp('GND').LConn(1));   % across the stack, -
-add_line(sys, Pp('VS').RConn(1), Pp('P2Sv').LConn(1));  % the reading itself
-add_line(sys,'P2Sv/1','v_pack/1');
-% The solver hangs off the network. Branching, which add_line does for us.
+add_line(sys, negT, Pp('GND').LConn(1));
+add_line(sys, posT, Pp('ISRC').LConn(1));
+add_line(sys, Pp('ISRC').RConn(2), Pp('GND').LConn(1));
+add_line(sys, Pp('VS').RConn(2), posT);
+add_line(sys, Pp('VS').LConn(1), Pp('GND').LConn(1));
+add_line(sys, Pp('VS').RConn(1), Pp('P2Sv').LConn(1));
+add_line(sys, 'P2Sv/1', 'v_pack/1');
 add_line(sys, Pp('SC').RConn(1), Pp('GND').LConn(1));
-for m = 1:nMod
-    add_line(sys, Pp(sprintf('MOD%d',m)).LConn(2), Pp(sprintf('P2S%d',m)).LConn(1));
-    add_line(sys, sprintf('P2S%d/1',m), sprintf('soc%d/1',m));
+
+% Outputs. Per-module state of charge out, one port each, pinned to ports
+% 2..N+1 (left implicit, a reader of 'Accumulator/1' gets a state of charge
+% where it expects a voltage). The rest -- cell current, cell voltage,
+% per-assembly values, cycle counts -- are what a BMS or a thermal model
+% will want; they are terminated here, not deleted, so they are one line away.
+outs = find_system([sys '/PACK'],'SearchDepth',1,'BlockType','Outport');
+onames = get_param(outs,'Name');
+for k = 1:numel(outs)
+    pnum = str2double(get_param(outs{k},'Port'));
+    if strcmp(onames{k}, 'socCell')
+        add_block('simulink/Signal Routing/Demux',[sys '/socDemux'],'Outputs',num2str(B.NModules), ...
+                  'Position',[520 60 525 60+30*B.NModules]);
+        add_line(sys, sprintf('PACK/%d', pnum), 'socDemux/1');
+        for m = 1:B.NModules
+            add_block('simulink/Sinks/Out1', sprintf('%s/soc%d',sys,m), ...
+                      'Position',[600 60+30*(m-1) 630 80+30*(m-1)], 'Port', num2str(m+1));
+            add_line(sys, sprintf('socDemux/%d',m), sprintf('soc%d/1',m));
+        end
+    else
+        t = sprintf('%s_unused', onames{k});
+        add_block('simulink/Sinks/Terminator',[sys '/' t],'Position',[520 320+30*k 540 340+30*k]);
+        add_line(sys, sprintf('PACK/%d', pnum), [t '/1']);
+    end
+end
+if ~any(strcmp(onames,'socCell'))
+    error('build_battery_pack:soc','generated pack has no socCell output');
 end
 
-% LOCAL SOLVER, fixed step, same as the plant. Without it Simscape wants a
-% variable-step DAE solver and the FMU cannot carry one.
+% LOCAL SOLVER, fixed step, same as the plant: the FMU cannot carry
+% Simscape's default variable-step DAE solver.
 set_param([sys '/SC'],'UseLocalSolver','on', ...
           'LocalSolverChoice','NE_BACKWARD_EULER_ADVANCER', ...
           'LocalSolverSampleTime',get_param(mdl,'FixedStep'),'DoFixedCost','on');
 
-info = struct('Subsystem',sysName,'NumModules',nMod,'AH',AH,'Rmod',Rmod, ...
-              'V0',V0,'SOCvec',socv,'Pack',K, ...
+info = struct('Subsystem',sysName,'NumModules',B.NModules,'Library',B.LibraryName, ...
+              'Np',B.Np,'Ns',B.Ns,'NModSeries',B.NModSeries,'NModParallel',B.NModParallel, ...
+              'VFull', B.SeriesCells*P.Cell.OCV_V(end), ...
               'InPorts',{{'I_demand'}}, ...
-              'OutPorts',{[{'v_pack'} arrayfun(@(m) sprintf('soc%d',m),1:nMod,'uni',0)]});
-fprintf('  accumulator: %d modules of %ds%dp, %.1f A*h each, %.3f ohm each\n', ...
-        nMod, ns, np, AH, Rmod);
+              'OutPorts',{[{'v_pack'} arrayfun(@(m) sprintf('soc%d',m),1:B.NModules,'uni',0)]});
+fprintf('  accumulator: %s -- %d string(s) of %d modules, %ds%dp each (Simscape Battery, lumped)\n', ...
+        B.LibraryName, B.NModParallel, B.NModSeries, B.Ns, B.Np);
+end
+
+% -------------------------------------------------------------------------
+function [posT, negT] = pack_terminals(blk)
+%PACK_TERMINALS  The pack's electrically positive and negative terminals.
+%   By the PMIO port NAMES, then swapped -- see note 3 in the header.
+ph = get_param(blk, 'PortHandles');
+io = find_system(blk, 'SearchDepth', 1, 'BlockType', 'PMIOPort');
+h = struct();
+for k = 1:numel(io)
+    side = get_param(io{k}, 'Side');
+    left  = find_system(blk, 'SearchDepth',1, 'BlockType','PMIOPort', 'Side', side);
+    nums  = cellfun(@(x) str2double(get_param(x,'Port')), left);
+    idx   = find(sort(nums) == str2double(get_param(io{k},'Port')));
+    if strcmp(side, 'Left'), handle = ph.LConn(idx); else, handle = ph.RConn(idx); end
+    h.(matlab.lang.makeValidName(get_param(io{k},'Name'), 'ReplacementStyle','hex')) = handle;
+end
+names = fieldnames(h);
+plusName  = names{contains(names, '0x2B')};    % '+'
+minusName = names{contains(names, '0x2D')};    % '-'
+posT = h.(minusName);       % named '-', electrically positive for our wiring
+negT = h.(plusName);
 end

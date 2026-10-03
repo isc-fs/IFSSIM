@@ -89,9 +89,9 @@ fprintf('  separate parameter. (Until 2026-10 it was charged twice, eta^2.)\n\n'
 fprintf('  The power limit is the PACK: %.1f kW at the shaft at %.0f%% SoC\n', E0.shaft_kW, 100*E0.soc);
 fprintf('  (%.0f V under %.0f A), against a %.0f kW motor.\n', E0.Vterm, ...
         C.Fields.Pack_CurrentLimit.value, C.Fields.MotorMaxPower.value/1000);
-fprintf('  The accumulator parameters bind here, in the design model. They do\n');
-fprintf('  NOT reach the plant through a study override: build_battery_pack reads\n');
-fprintf('  car_spec directly. pt_study runs them; plant runs refuse them.\n\n');
+fprintf('  The accumulator binds here and in the plant: its Simscape Battery pack\n');
+fprintf('  reads the cell and the current limit at run time. Its ARRANGEMENT is\n');
+fprintf('  fixed at build time -- plant_study rebuilds for it.\n\n');
 fprintf('  The launch assumes PERFECT traction control (tyre held at its peak).\n');
 fprintf('  The plant at full throttle has none; pt_report shows what that costs.\n');
 fprintf('==============================================================\n');

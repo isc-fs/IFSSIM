@@ -28,8 +28,15 @@ P = ifssim_params(overrides);
 % The accumulator is a cell part number and an arrangement, in
 % matlab/spec/car_spec; everything the plant needs about it is derived.
 addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
-ifssim_workdir();   % keep Simulink's cache out of the repo
-PK = pack_from_cells(car_spec());
+wd = ifssim_workdir();   % keep Simulink's cache out of the repo
+% The pack FROM P, so a study override of the cell or the arrangement reaches
+% it. This read car_spec directly before, which no override could pass.
+PK = pack_from_cells(P);
+% The generated Simscape Battery libraries (battery_library): the committed
+% one for the car_spec arrangement, and the build-folder cache for any other.
+for bd = {fullfile(fileparts(mfilename('fullpath')),'models','battery'), fullfile(wd,'battery')}
+    if isfolder(bd{1}), addpath(bd{1}); end
+end
 assignin('base','IFSSIM_P', P);
 ifssim_plant_buses();
 
@@ -93,13 +100,21 @@ flat = struct( ...
     ... % life. The car has been logged at 200 A, which is above the cells'
     ... % own 30 A -- check_car says so rather than the plant pretending it
     ... % cannot happen.
-    'IFSSIM_Ipk',   PK.IOperating, ...          % A, what the car actually draws
+    'IFSSIM_Ipk',   P.Pack.CurrentLimit, ...    % A, what the car actually draws
     'IFSSIM_Icont', PK.IMaxCont, ...            % A, what the cells are rated to hold
     ... % --- battery (harvested from IFS_Sim, NOT settings.json) ---
     ... % Vmax/Vmin/BAs/Rint are gone: the Simscape pack owns open-circuit
     ... % voltage, capacity and resistance now, and exporting a second set from
     ... % a different car's numbers is how they came to disagree.
     'IFSSIM_SoC0',  P.Assumed.BatteryInitialSoC, ...
+    ... % The CELL, as the generated Simscape Battery modules read it
+    ... % (build_battery_pack). Workspace variables rather than numbers in
+    ... % blocks, so a different cell needs no rebuild -- only a different
+    ... % arrangement does.
+    'IFSSIM_cell_SOC', P.Cell.OCV_SoC, ...     % breakpoints
+    'IFSSIM_cell_V0',  P.Cell.OCV_V, ...       % V, open-circuit, per cell
+    'IFSSIM_cell_R0',  P.Cell.Rint * ones(size(P.Cell.OCV_SoC)), ...  % ohm, DC
+    'IFSSIM_cell_AH',  P.Cell.CapacityAh, ...  % A*h
     ... % --- aero ---
     'IFSSIM_rho',   P.Assumed.AirDensity, ...   % kg/m^3  ASSUMPTION
     'IFSSIM_CdA',   P.CdA, ...                  % m^2

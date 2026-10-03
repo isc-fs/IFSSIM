@@ -12,9 +12,9 @@ function S = acc_study(varargin)
 %   An override that moves none of these numbers is refused, the same as the
 %   other departments' studies.
 %
-%   THIS IS THE DESIGN-LEVEL STUDY ONLY. The plant builds its Simscape
-%   accumulator from car_spec directly (build_battery_pack), so no override
-%   reaches it; plant_study and pt_study('plant',...) refuse these.
+%   THIS IS THE DESIGN-LEVEL STUDY. The plant's Simscape Battery pack takes
+%   the same overrides: the cell's data and the current limit at run time,
+%   the arrangement through plant_study, which rebuilds for it.
 
 here = fileparts(mfilename('fullpath'));
 addpath(here, fullfile(here,'..','plant'), fullfile(here,'..','spec'));

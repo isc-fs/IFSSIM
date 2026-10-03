@@ -279,6 +279,12 @@ C = par(C,'Tyre.StiffnessPeakLoadRatio', 2.0, '-','ASSUMED cornering stiffness p
 C = par(C,'Cell.OCV_SoC', [0 .1 .25 .5 .75 .9 1],        '-','SECONDARY breakpoints for the curve below');
 C = par(C,'Cell.OCV_V',   [2.90 3.40 3.55 3.68 3.88 4.05 4.20],'V','SECONDARY standard NMC 18650 open-circuit shape');
 C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');
+% The cell's SHAPE, which Simscape Battery's builder needs to lay cells out.
+% With the lumped electrical model and no thermal model it changes nothing
+% electrical; it is here for packaging volume and for the thermal model that
+% will need it. The "18650" in the part number IS the geometry: 18 mm by 65.0.
+C = par(C,'Cell.Diameter',        0.0184, 'm',  'DATASHEET 18.4 mm max (an 18650 is nominally 18 mm)');
+C = par(C,'Cell.Height',          0.0650, 'm',  'DATASHEET 65.0 mm');
 
 %% ---- accumulator: the topology ---------------------------------------
 % THIS IS THE PART THAT IS MEANT TO CHANGE. Every pack quantity the plant
@@ -288,6 +294,13 @@ C = par(C,'Cell.Mass',            0.0467, 'kg', 'DATASHEET 46.7 g');
 % were computed once by hand and pasted somewhere.
 %
 % A different cell is the block above. A different arrangement is here.
+%
+% Simscape Battery builds the plant's pack FROM THESE (battery_from_spec):
+% CellsParallelPerModule cells make a parallel assembly; CellsSeriesPerModule
+% of those make a module; ModulesInSeries modules make a string; and
+% ModulesInParallel strings make the pack. A new prototype's accumulator is a
+% new set of these numbers -- the generated pack follows without code changes.
+% Uniform modules only: a pack of DIFFERENT modules is the extension point.
 C = par(C,'Pack.CellsSeriesPerModule',   19, '-','MEASURED accumulator team: each module is 19s6p');
 C = par(C,'Pack.CellsParallelPerModule',  6, '-','MEASURED accumulator team: each module is 19s6p');
 C = par(C,'Pack.ModulesInSeries',         5, '-','MEASURED 5 modules in series -> 95s overall');

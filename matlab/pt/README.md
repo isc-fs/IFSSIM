@@ -47,10 +47,10 @@ binding instead. A side-by-side table of zeroes reads as "it doesn't matter".
 The true answer is "it doesn't matter *because* something else limits first",
 and the something else is the useful part.
 
-`'plant'` refuses accumulator parameters. `build_battery_pack` reads
-`car_spec` directly, so no study override reaches the plant's pack. They do
-reach `pt_model`, because `pack_from_cells` now accepts the override-able
-parameter set.
+The cell's data and `Pack.CurrentLimit` reach the plant at run time, so
+`pt_study('plant', …)` runs them directly. The pack's *arrangement* (cells and
+modules in series and parallel) selects the generated Simscape Battery pack at
+build time, so `'plant'` refuses it and `plant_study` rebuilds for it.
 
 ## The model, and how far to trust it
 

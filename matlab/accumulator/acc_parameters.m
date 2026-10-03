@@ -64,8 +64,8 @@ fprintf('\n---- where each one reaches (spec_reach) ----------------------\n');
 for i = 1:n
     fprintf('  %-27s plant: %s\n', SPEC{i,1}, R.Plant{i});
 end
-fprintf('  (* = wired, but read from car_spec directly: no study override\n');
-fprintf('   reaches the PLANT. They all reach acc_kpis, through pack_from_cells(P).)\n');
+fprintf('  The plant''s pack is Simscape Battery, generated from these: the cell and\n');
+fprintf('  the current limit are read at run time, the arrangement at build time.\n');
 
 fprintf('\n---- READ THIS BEFORE TRUSTING A RESULT -----------------------\n');
 iV = strcmp(SPEC(:,1), 'Cell.VMax');

@@ -146,3 +146,7 @@ docs/Vehicle Dynamics/
 # A/B reference traces — regenerate with plant_ab('capture'); they are a
 # local baseline for a migration, not source.
 matlab/plant/reference/
+
+# Simscape Battery builder object, saved beside each generated pack. The plant
+# needs only the library and its Simscape package; regenerate with battery_library.
+matlab/plant/models/battery/*.mat

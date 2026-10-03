@@ -37,7 +37,7 @@ function T = spec_reach(names)
 %     NOTHING            nothing reads it at all
 %
 %   LIMITS, so the table is not over-trusted. It is a static trace, with
-%   comments stripped, that follows ONE level of calls into project helpers. A field read by dynamic name -- P.(name) -- is invisible
+%   comments stripped, that follows project helpers down to four calls deep. A field read by dynamic name -- P.(name) -- is invisible
 %   to it, and would show as "not reached" when it is. A field that is read
 %   but then multiplied by zero shows as reached when its effect is nil. It
 %   answers "is anything wired to this?", not "how much does it matter?" --
@@ -68,27 +68,40 @@ bf = dir(fullfile(root,'plant','build_*.m'));
 % NOTHING when pack_from_cells consumed every one of them.
 helpers = [dir(fullfile(root,'spec','*.m')); dir(fullfile(root,'plant','*.m'))];
 hname = erase({helpers.name}, '.m');
-builders = struct('name',{},'code',{});
+builders = struct('name',{},'code',{},'own',{});
+skip = @(h, self) strcmp(h, self) || startsWith(h, 'build_') || ...
+       any(strcmp(h, {'ifssim_params','ifssim_load_workspace','car_spec','spec_reach'}));
 for k = 1:numel(bf)
-    code = read_code(fullfile(bf(k).folder, bf(k).name));
+    own  = read_code(fullfile(bf(k).folder, bf(k).name));
     self = erase(bf(k).name,'.m');
-    % one level: inline the source of any project function this builder calls
-    for h = 1:numel(hname)
-        if strcmp(hname{h}, self) || startsWith(hname{h}, 'build_') || ...
-           any(strcmp(hname{h}, {'ifssim_params','ifssim_load_workspace','car_spec','spec_reach'}))
-            continue
+    % Follow project helpers DOWN the call chain, not just one level: the
+    % accumulator's arrangement is read in battery_from_spec, which is reached
+    % only through battery_library. Each helper is inlined once.
+    code = own;  seen = {self};  frontier = own;
+    for depth = 1:4
+        added = '';
+        for h = 1:numel(hname)
+            if skip(hname{h}, self) || any(strcmp(hname{h}, seen)), continue; end
+            if ~isempty(regexp(frontier, ['(?<![\w.])' hname{h} '\s*\('], 'once'))
+                txt = read_code(fullfile(helpers(h).folder, helpers(h).name));
+                added = [added newline txt]; %#ok<AGROW>
+                seen{end+1} = hname{h}; %#ok<AGROW>
+            end
         end
-        if ~isempty(regexp(code, ['(?<![\w.])' hname{h} '\s*\('], 'once'))
-            code = [code newline read_code(fullfile(helpers(h).folder, helpers(h).name))]; %#ok<AGROW>
-        end
+        if isempty(added), break; end
+        code = [code newline added]; %#ok<AGROW>
+        frontier = added;
     end
-    builders(end+1) = struct('name', self, 'code', code); %#ok<AGROW>
+    builders(end+1) = struct('name', self, 'code', code, 'own', own); %#ok<AGROW>
 end
 wsmap = workspace_map(fullfile(root,'plant','ifssim_load_workspace.m'));
-% Consumers that read car_spec() themselves, bypassing the override path.
-specReaders = struct('name',{},'code',{});
+% Consumers that read car_spec() THEMSELVES, bypassing the override path.
+% Their own code only: pack_from_cells has car_spec() as a default argument,
+% and inlining it made every builder that calls pack_from_cells(P) look like
+% a bypass.
+specReaders = struct('name',{},'code',{},'own',{});
 for b = builders
-    if contains(b.code, 'car_spec(')
+    if contains(b.own, 'car_spec(')
         specReaders(end+1) = b; %#ok<AGROW>
     end
 end
@@ -127,7 +140,7 @@ for i = 1:n
     % override cannot reach it.
     bypass = {};
     for b = specReaders
-        if contains(b.code, ['''' nm ''''])
+        if contains(b.own, ['''' nm ''''])
             bypass{end+1} = strrep(b.name,'build_',''); %#ok<AGROW>
         end
     end

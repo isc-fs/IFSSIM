@@ -18,8 +18,9 @@ function S = pt_study(varargin)
 %
 %   'plant' also runs the acceleration event on the full Simulink plant, with
 %   and without the change (~2 min). It refuses what the plant cannot take
-%   without a rebuild, and what never reaches it: the accumulator is read
-%   from car_spec directly by build_battery_pack, so no override arrives.
+%   without a rebuild -- the tyre, and the accumulator's ARRANGEMENT, which
+%   selects the generated pack; plant_study rebuilds for those. The cell's
+%   data and Pack.CurrentLimit are runtime variables and run here directly.
 
 here = fileparts(mfilename('fullpath'));
 addpath(here, fullfile(here,'..','plant'), fullfile(here,'..','spec'), fullfile(here,'..','vd'));
@@ -50,7 +51,9 @@ end
 % ---- refuse a plant run the plant cannot honour ------------------------
 if withPlant
     % baked into blocks at BUILD time; plant_study knows how to rebuild for them
-    BAKED = {'TireMu','Pacejka','Tyre','WheelRadius','WheelWidth','Mass','WeightDistFront'};
+    BAKED = {'TireMu','Pacejka','Tyre','WheelRadius','WheelWidth','Mass','WeightDistFront', ...
+             'Pack.CellsSeriesPerModule','Pack.CellsParallelPerModule', ...
+             'Pack.ModulesInSeries','Pack.ModulesInParallel'};
     R = spec_reach(varargin(1:2:end));
     bad = {};
     for k = 1:height(R)
@@ -58,7 +61,7 @@ if withPlant
         if startsWith(R.Reaches{k}, 'NOT STUDYABLE')
             bad{end+1} = sprintf('  %-26s read from car_spec directly; no override reaches the plant', nm); %#ok<AGROW>
         elseif any(startsWith(nm, BAKED))
-            bad{end+1} = sprintf('  %-26s baked into the tyre block at build time; use plant_study', nm); %#ok<AGROW>
+            bad{end+1} = sprintf('  %-26s fixed at build time (tyre or pack arrangement); use plant_study', nm); %#ok<AGROW>
         elseif strcmp(R.Plant{k}, '-')
             bad{end+1} = sprintf('  %-26s %s', nm, R.Reaches{k}); %#ok<AGROW>
         end
