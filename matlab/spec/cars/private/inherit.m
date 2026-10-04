@@ -17,6 +17,9 @@ C = Parent;
 C.Name = name;
 C.Parent = Parent.Name;
 C.Simulator = false;
+if isfield(C, 'Hardpoints')
+    C.Hardpoints.Source = sprintf('INHERITED from %s -- %s', Parent.Name, C.Hardpoints.Source);
+end
 for i = 1:numel(C.Order)
     k = C.Order{i};
     C.Fields.(k).source = sprintf('INHERITED from %s -- %s', Parent.Name, C.Fields.(k).source);

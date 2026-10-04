@@ -21,10 +21,10 @@ and which direction a concept should go in.
 
 | change | lap | energy |
 |---|---|---|
-| +0.1 m² ClA | −0.092 s | — |
-| +0.1 m² CdA | +0.031 s | +8.1 kJ |
+| +0.1 m² ClA | −0.090 s | — |
+| +0.1 m² CdA | +0.030 s | +9.6 kJ |
 
-A package change is faster when its *incremental* L/D is above about 0.34.
+A package change is faster when its *incremental* L/D is above about 0.33.
 The straights on an FS endurance track are short, so drag costs little lap
 time. It still costs energy, and endurance is scored on energy too. The
 contours of `aero_trade.png` run nearly vertical, which is the same finding
@@ -35,10 +35,14 @@ drawn as a map.
 Aero balance is a handling number, not just a grip number. The downforce split
 is 45% front against 43.8% front weight, so downforce loads the front
 relatively more. The rear axle therefore saturates first, and earlier as speed
-rises: the front/rear capacity ratio goes from 1.010 at 5 m/s to 1.055 at
-30 m/s. That's limit oversteer growing with speed, and it agrees with
-`vd_report`'s negative understeer gradient. `aero_study('AeroBalanceFront',
-0.40)` takes 22 m/s to almost neutral (1.002) and gains 0.16 s a lap.
+rises: the front/rear capacity ratio is 1.004 at 8 m/s and 1.023 at 22 m/s.
+That's limit oversteer growing with speed, and it agrees with `vd_report`'s
+negative understeer gradient. `aero_study('AeroBalanceFront', 0.40)` takes
+22 m/s just past neutral (0.995, front-limited) and gains 0.11 s a lap.
+
+(These figures include the camber loss the real geometry brings: with the
+IFS-08's measured camber gain the lap costs 0.37 s more than it did on the
+assumed one.)
 
 ## The engine, in `../lap/`
 

@@ -1,4 +1,4 @@
-function mdl = build_sm_corner(H, mdl)
+function mdl = build_sm_corner(H, mdl, outdir)
 %BUILD_SM_CORNER  One double-wishbone corner as a Simscape Multibody linkage.
 %
 %   BUILD_SM_CORNER(H) builds the left corner described by the hardpoint set H
@@ -31,6 +31,7 @@ function mdl = build_sm_corner(H, mdl)
 %   than assumed to be along x.
 
 if nargin < 2 || isempty(mdl), mdl = 'IFSSIM_SM_Corner'; end
+if nargin < 3 || isempty(outdir), outdir = fileparts(mfilename('fullpath')); end
 if bdIsLoaded(mdl), close_system(mdl,0); end
 new_system(mdl,'Model');
 set_param(mdl,'SolverType','Variable-step','Solver','ode23t', ...
@@ -221,7 +222,7 @@ if isfield(H,'pr_lca')
     add_line(mdl,'World/RConn1','mount_dmp/LConn1','autorouting','on');
 end
 
-save_system(mdl, fullfile(fileparts(mfilename('fullpath')), [mdl '.slx']));
+save_system(mdl, fullfile(outdir, [mdl '.slx']));
 if isfield(H,'pr_lca')
     fprintf('  linkage built: 2 wishbones, 3 ball joints, track rod, upright, pushrod, rocker\n');
 else

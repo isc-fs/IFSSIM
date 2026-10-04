@@ -20,29 +20,67 @@ replace from CAD.
 
 ## Files
 
-- `sm_hardpoints.m` — the pickup points, one corner. **Placeholders**, built
-  from the car's real track and wheelbase split with a plausible FS layout.
-  Replace wholesale from CAD; a hardpoint set is a geometry, not seven
-  independent knobs.
+- `import_susp_geometry.m` — reads the team workbook's `Susp_Geometry` sheet and
+  writes `spec/cars/ifs08_hardpoints.csv`, keeping the sheet's coordinates and
+  the row of every point. The CSV is committed; the workbook is only needed to
+  regenerate it.
+- `sm_hardpoints.m` — the active car's hardpoints, converted to the car's frame
+  (x forward, y left, z up, origin at the CoG ground projection). Each car's
+  spec says which file and which datum (`C.Hardpoints`).
+- `susp_geometry.m` — static geometry with the workbook's own definitions:
+  kingpin, caster, scrub, trail, instant and roll centres, swing arms,
+  anti-dive, anti-lift and anti-squat.
 - `build_sm_corner.m` — the linkage: two wishbones on revolute chassis pivots,
-  three ball joints, a track rod, an upright.
-- `sm_corner_sweep.m` — sweeps the lower arm and reports camber, toe, track
-  change against wheel travel.
+  three ball joints, a track rod, an upright, pushrod and rocker.
+- `sm_corner_sweep.m` — sweeps the lower arm; reports camber, toe, track change
+  and motion ratio against travel, and checks the model assembles exactly on
+  the hardpoints.
+- `sm_fixed_step_probe.m` — whether a closed-loop corner fits the real-time
+  plant: solver accuracy, the travel limit, and FMU export.
+- `test_susp_geometry.m`, `test_kinematics_feed.m` — the checks below.
 
-## First result, with the placeholder geometry
+## The IFS-08's own geometry
 
-Swept ±53 mm about static:
+The hardpoints are the team workbook's. Two things about the sheet's frame
+were resolved from its own data:
 
-```
-camber slope        -27.97 deg/m   (SAE: bump drives camber negative, top in)
-camber gain         +0.293         (car_spec assumes +0.800)
-bump steer          +7.11 deg/m    (car_spec targets 0)
-scrub               18.0 mm across the sweep
-```
+- **X grows rearward**, whatever the header says. The front wheel centre is at
+  x = 160 and the rear at 1730, and the sheet's +6.2° caster puts the upper
+  ball joint at the larger x.
+- **Z = 0 is not the ground.** Wheel centres sit at z = 310 with the sheet's
+  203.2 mm tyre radius, so the ground is at z = 106.8. With that ground the
+  roll centres are 15.1 mm front and 31.1 mm rear. The workbook's MONO sheet
+  independently gives 12.8 and 31 mm. The `Susp_Geometry` sheet's own 28.2 and
+  58.0 mm are measured from its Z = 0. **Unconfirmed by the suspension team.**
 
-So this geometry recovers **29%** of body roll where the plant assumes **80%**.
+`test_susp_geometry` reproduces all 20 figures the sheet computes, with the
+sheet's own datum, to its last printed digit. That proves the import, the frame
+conversion and the definitions against a calculation somebody else did.
 
-## Motion ratio, from the pushrod and rocker
+The multibody sweep on the same hardpoints, fitted over ±30 mm of travel:
+
+| | front | rear | assumed until 2026-10 |
+|---|---|---|---|
+| camber gain (share of body roll recovered) | 0.125 | 0.253 | 0.80 / 0.60 |
+| bump steer (toe-in per metre of bump) | +2.86 deg/m | +0.02 deg/m | 0 / 0 |
+| motion ratio at static | 0.829 | 0.833 | 0.70 / 0.70 |
+| static camber (from the spindle points) | −2.56° | −2.18° | −1.5° / −1.0° |
+
+The model assembles within 3 nm of the hardpoints at static. The camber slope
+agrees with 1/FVSA to within 2%, two independent methods. These values are now
+`DERIVED` in `spec/cars/ifs08.m`, and `test_kinematics_feed` re-derives them so
+the spec cannot drift from its own geometry. Static camber is sensitive: 1 mm
+of spindle height is 1.5°.
+
+The near-horizontal lower arms give a long front swing arm (4.9 m) and very
+little camber recovery. That is the single largest change from the assumptions.
+
+## History: the placeholder rocker
+
+What follows was found on the placeholder geometry, before the real hardpoints
+were imported. The toggle check it led to now guards the real geometry too.
+
+### Motion ratio, from the pushrod and rocker
 
 The corner now carries a pushrod (ball joint at each end) driving a rocker on a
 chassis revolute, with the damper's length read as the distance between the
@@ -126,10 +164,23 @@ roll the geometry recovers — so the two numbers compare directly.
    may be a singularity"*, which reads like a solver-tolerance problem and
    sends you to the wrong place entirely. Use `Custom` with real moments.
 
-## What is NOT answered
+## Multibody in the real-time plant
 
-The corner is a closed kinematic loop, which makes it a DAE wanting a stiff
-variable-step solver (`ode23t`). That is right for a design study and is **not**
-the fixed-step plant. **Whether any of this exports as a fixed-step FMU is
-open**, and given how much the sample-time negotiation cost on far simpler
-models, it should be prototyped in isolation before anything depends on it.
+`sm_fixed_step_probe` puts one closed-loop corner (the real front hardpoints,
+the car's spring and damper on the rocker) through the plant's pipeline:
+
+- At 600 N on the contact patch (28.7 mm of travel, what the car uses) it runs
+  at the plant's 1/960 s step **with the plant's own solver settings** (explicit
+  ode1 plus a backward-Euler Simscape local solver), 0.09 mm from a tight
+  variable-step reference.
+- Exported as an FMI 3.0 FMU and stepped the way the simulator steps it
+  (`tools/fmu/step_timing`), it runs at about **80× real time**, close to what
+  the whole current plant costs (66×). Four corners fit a frame comfortably.
+- The plant's solver holds the linkage up to **58.5 mm of bump**. Beyond that
+  the linkage itself snaps through: even the reference jumps from 58.5 to
+  92 mm for 200 N more. A bump stop before that is a requirement, in the model
+  and on the car.
+
+The first run of this probe used 1500 N, drove the wheel 90 mm into bump and
+concluded the opposite. The load was unrepresentative; the note stays so
+nobody repeats it.

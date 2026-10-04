@@ -46,8 +46,8 @@ for k = 1:n
     drag = 0.5*rho*P.CdA*v(k)^2 + P.RollingResistance*(m*g + Fl);
     FzF = mf*g + Fl*M.aeroF;
     FzR = mr*g + Fl*(1-M.aeroF);
-    B.ay_front(k) = bisect(@(ay) axle_ok(ay, FzF, latF, 0,    M, m*M.b/M.L));
-    B.ay_rear(k)  = bisect(@(ay) axle_ok(ay, FzR, latR, drag, M, m*M.a/M.L));
+    B.ay_front(k) = bisect(@(ay) axle_ok(ay, FzF, latF, 0,    M, m*M.b/M.L, 1 - M.cgainF));
+    B.ay_rear(k)  = bisect(@(ay) axle_ok(ay, FzR, latR, drag, M, m*M.a/M.L, 1 - M.cgainR));
 end
 B.ay_lim = min(B.ay_front, B.ay_rear);
 B.ratio  = B.ay_front ./ B.ay_rear;
@@ -56,12 +56,16 @@ B.limits(B.ay_rear < B.ay_front) = "rear";
 end
 
 % -------------------------------------------------------------------------
-function ok = axle_ok(ay, Fz_axle, lat, Fx_axle, M, m_share)
+function ok = axle_ok(ay, Fz_axle, lat, Fx_axle, M, m_share, unrecovered)
 %AXLE_OK  Can this axle make its share of ay, with Fx_axle on it as well?
+%   With the design model's camber penalty: the share of body roll the
+%   geometry does not recover tilts the tyres and costs peak grip.
 dW = ay*lat;
 Fz = max([Fz_axle/2 - dW; Fz_axle/2 + dW], 0);
 Fx = [Fx_axle/2; Fx_axle/2];
-mu  = M.PDY1 + M.PDY2*(Fz - M.Fz0)/M.Fz0;
+mf = M.m*M.wdF;  mr = M.m*(1-M.wdF);
+roll = (mf*(M.h - M.hrcF) + mr*(M.h - M.hrcR)) * ay / (M.KrF + M.KrR);
+mu  = (M.PDY1 + M.PDY2*(Fz - M.Fz0)/M.Fz0) * (1 - M.camSens*unrecovered*abs(roll)*180/pi);
 cap = max(mu .* Fz, 0);
 ok = all(abs(Fx) <= cap) && sum(sqrt(max(cap.^2 - Fx.^2, 0))) >= m_share*ay;
 end

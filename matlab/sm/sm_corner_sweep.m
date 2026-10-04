@@ -1,4 +1,4 @@
-function T = sm_corner_sweep(axle, angles_deg)
+function T = sm_corner_sweep(axle, angles_deg, quiet)
 %SM_CORNER_SWEEP  Camber, toe and track change against wheel travel.
 %
 %   T = SM_CORNER_SWEEP('front') sweeps the lower wishbone through its range
@@ -7,7 +7,8 @@ function T = sm_corner_sweep(axle, angles_deg)
 %   because somebody chose 0.80, and here it falls out of the hardpoints.
 %
 %   METHOD. The corner is assembled at a sequence of lower-arm angles and the
-%   wheel frame is read at each one. Assembly, not simulation: a kinematic
+%   wheel frame is read at each one. The hardpoints are the ACTIVE car's
+%   (sm_hardpoints), so ifssim_car('IFS-09') sweeps the IFS-09. Assembly, not simulation: a kinematic
 %   curve is a statement about geometry, and driving the joint with prescribed
 %   motion would need the input's first two derivatives and would mix the
 %   mechanism's dynamics into a measurement that has none. StopTime is zero;
@@ -15,6 +16,7 @@ function T = sm_corner_sweep(axle, angles_deg)
 
 if nargin < 1 || isempty(axle), axle = 'front'; end
 if nargin < 2 || isempty(angles_deg), angles_deg = -10:1:10; end
+if nargin < 3, quiet = false; end
 
 here = fileparts(mfilename('fullpath'));
 addpath(here, fullfile(here,'..','plant'), fullfile(here,'..','spec'));
@@ -103,6 +105,12 @@ close_system(mdl,0);
 mid = ceil(n/2);
 if all(isnan(raw(mid,:))), mid = find(~isnan(raw(:,1)),1); end
 ref = raw(mid,:);
+% THE MODEL IS THE CAR AT STATIC. The middle of the sweep is the lower arm at
+% its hardpoint angle, so the assembled wheel centre and upper ball joint must
+% sit EXACTLY on the hardpoints. If they do not, the linkage built is not the
+% one described, and every curve below is of something else.
+asmErr = max([norm(ref(1:3) - H.wheel_centre), norm(ref(7:9) - H.uca_outer)]);
+T.Properties.UserData.assemblyError_m = asmErr;
 for i = 1:n
     if isnan(raw(i,1)), T{i,:} = NaN; T.arm_deg(i) = angles_deg(i); continue; end
     T.travel_mm(i)  = (raw(i,3) - ref(3)) * 1000;
@@ -145,8 +153,10 @@ if height(v) > 2
     % geometry recovers that only if bump drives camber NEGATIVE (top in).
     % So a negative camber-vs-bump slope is positive gain.
     gain = -p(1) * halfTrack * pi/180;
-    fprintf('  camber gain         %+.3f  (car_spec assumes %+.3f)\n', ...
-            gain, P.Susp.CamberGainFront);
+    sfx = tern(strcmp(axle,'front'), 'Front', 'Rear');
+    fprintf('  camber gain         %+.3f  (car_spec says %+.3f)\n', ...
+            gain, P.Susp.(['CamberGain' sfx]));
+    T.Properties.UserData.camberSlope_degpm = p(1);
 
     % THE CONVENTION CHECK. Whatever the angle extraction says, the wheel's
     % top either leans inward or it doesn't, and the rotation matrix knows
@@ -167,9 +177,10 @@ if height(v) > 2
             ternary(indep,'CONFIRMS','CONTRADICTS'), c);
     T.Properties.UserData.signConsistent = all(agree) && indep;
     T.Properties.UserData.gain = gain;
-    fprintf('  bump steer          %+.2f deg/m   (car_spec targets 0)\n', ...
-            polyval(polyfit(v.travel_mm/1000, v.toe_deg, 1), 0) * 0 + ...
-            [1 0] * polyfit(v.travel_mm/1000, v.toe_deg, 1)');
+    pt = polyfit(v.travel_mm/1000, v.toe_deg, 1);
+    T.Properties.UserData.bumpSteer_degpm = pt(1);
+    fprintf('  bump steer          %+.2f deg/m   (car_spec says %+.2f)\n', ...
+            pt(1), P.Susp.(['BumpSteer' sfx]));
     if hasRocker && any(isfinite(Ld))
         % MOTION RATIO = damper travel per unit wheel travel. Positive by
         % convention: the damper SHORTENS as the wheel goes into bump.
@@ -192,21 +203,19 @@ if height(v) > 2
             fprintf('  scrub               %+.1f mm over the swept travel\n', max(v.track_mm)-min(v.track_mm));
             return
         end
-        fprintf('  motion ratio        %.3f at static  (car_spec assumes %.3f)\n', ...
-                mr0, P.Susp.MotionRatioFront);
+        fprintf('  motion ratio        %.3f at static  (car_spec says %.3f)\n', ...
+                mr0, P.Susp.(['MotionRatio' sfx]));
         fprintf('                      %.3f at full droop -> %.3f at full bump  (%s)\n', ...
                 mr(1), mr(end), ternary(mr(end) > mr(1), 'PROGRESSIVE', 'REGRESSIVE'));
-        kw0 = P.Susp.SpringRateFront * mr0^2;
+        kw0 = P.Susp.(['SpringRate' sfx]) * mr0^2;
         fprintf('  wheel rate          %.0f N/m from the same spring  (plant uses %.0f)\n', ...
-                kw0, P.Derived.WheelRateFront);
+                kw0, P.Derived.(['WheelRate' sfx]));
     end
     fprintf('  scrub               %+.1f mm over the swept travel\n', ...
             max(v.track_mm) - min(v.track_mm));
-    fprintf('\n  Camber is SAE: positive = top of the wheel OUTWARD.\n');
-    fprintf('\n  That comparison is the point of this whole exercise: the gain\n');
-    fprintf('  is an OUTPUT of the hardpoints here, and an assumed input there.\n');
-    fprintf('  The hardpoints are themselves placeholders, so treat the number\n');
-    fprintf('  as a demonstration of the mechanism, not as the IFS-08''s curve.\n');
+    fprintf('  assembled at static %.2g m from the hardpoints  (%s)\n', asmErr, ...
+            tern(asmErr < 1e-6, 'the model IS the described linkage', 'NOT the described linkage'));
+    fprintf('\n  Camber is SAE: positive = top of the wheel OUTWARD. Hardpoints: %s.\n', H.car);
 end
 end
 
@@ -215,3 +224,4 @@ function R = rotx_(a), R = [1 0 0; 0 cos(a) -sin(a); 0 sin(a) cos(a)]; end
 function R = roty_(a), R = [cos(a) 0 sin(a); 0 1 0; -sin(a) 0 cos(a)]; end
 function R = rotz_(a), R = [cos(a) -sin(a) 0; sin(a) cos(a) 0; 0 0 1]; end
 function s = ternary(c,a,b), if c, s=a; else, s=b; end, end
+function s = tern(c,a,b), if c, s=a; else, s=b; end, end

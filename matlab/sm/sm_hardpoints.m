@@ -1,79 +1,94 @@
-function H = sm_hardpoints(axle)
-%SM_HARDPOINTS  Double-wishbone pickup points, one corner, in body coordinates.
+function H = sm_hardpoints(axle, opts)
+%SM_HARDPOINTS  The car's double-wishbone hardpoints, one corner, in the car's frame.
 %
-%   H = SM_HARDPOINTS('front') or SM_HARDPOINTS('rear') returns the hardpoints
-%   for the LEFT corner of that axle. Frame is the car's: x FORWARD, y LEFT,
-%   z UP, origin at the CoG ground projection.
+%   H = SM_HARDPOINTS('front')      the LEFT front corner of the ACTIVE car
+%   H = SM_HARDPOINTS('rear')       the left rear
+%   H = SM_HARDPOINTS(axle, opts)   opts.car       another car ('IFS-09')
+%                                   opts.GroundZ_mm the sheet z taken as the
+%                                                   ground; 0 reproduces the
+%                                                   workbook's own analysis
 %
-%   THESE ARE ASSUMED, and that is the whole point of the file existing.
+%   Frame: the car's. x FORWARD, y LEFT, z UP, origin at the CoG's ground
+%   projection (the plant's). Metres.
 %
-%   The plant we have today does not contain suspension geometry at all -- it
-%   contains its CONSEQUENCES, as three numbers that were chosen rather than
-%   derived: Susp.MotionRatioFront (0.70), Susp.CamberGainFront (0.80) and
-%   Susp.ArbArmRadiusFront (0.20). A multibody corner computes all three from
-%   the geometry instead, so those three assumptions collapse into one set of
-%   coordinates -- which is a set the suspension department can actually
-%   measure, argue about, and replace from CAD.
+%   THESE ARE THE CAR'S, NOT PLACEHOLDERS. They come from the car's hardpoint
+%   file (C.Hardpoints in its spec), which for the IFS-08 is the team
+%   workbook's Susp_Geometry table, row for row. The placeholder set this
+%   replaced gave a camber gain of 0.29 and a motion ratio of 0.68 that were
+%   properties of invented points; the numbers this produces are the car's.
 %
-%   Until the CAD numbers arrive these are a plausible FS-car layout built
-%   from the car's real track and a typical upright. Every value is a
-%   placeholder; none of them came off the IFS-08. Replace them wholesale
-%   rather than tuning them one at a time -- a hardpoint set is a geometry,
-%   not seven independent knobs.
+%   THE CONVERSION, in one place, because the sheet's frame needs it:
+%     x_car = aFront + XSign * (x_sheet - x_front_wheel_centre)
+%             XSign = -1: the sheet's x grows rearward (see ifs08.m);
+%             aFront is the plant's CoG-to-front-axle distance, so the
+%             wheel centres land exactly where the plant puts its axles
+%     y_car = y_sheet                    (left positive in both)
+%     z_car = z_sheet - GroundZ          GroundZ from the car's spec
+%
+%   Fields, as build_sm_corner and sm_corner_sweep use them:
+%     lca_front lca_rear lca_outer   lower wishbone (F1 F2 F3 / R1 R2 R3)
+%     uca_front uca_rear uca_outer   upper wishbone (F4 F5 F6 / R4 R5 R6)
+%     pr_lca rk_pr                   pushrod: on the lower arm, on the rocker (7, 8)
+%     tie_outer tie_inner            track rod / toe link (9, 10)
+%     dmp_chassis rk_dmp             damper: chassis end, rocker end (11, 12)
+%     rk_pivot rk_axis               rocker axis: midpoint and direction of 13 -> 14
+%     wheel_centre spindle contact   15, 16, and the ground under the centre
 
-P = ifssim_load_workspace();
+if nargin < 2, opts = struct(); end
+here = fileparts(mfilename('fullpath'));
+addpath(fullfile(here,'..','plant'), fullfile(here,'..','spec'));
+if ~isfield(opts,'car') || isempty(opts.car), opts.car = ifssim_car(); end
+C = car_spec(opts.car);
+P = ifssim_params([], opts.car);
+if ~isfield(C, 'Hardpoints')
+    error('sm_hardpoints:none', '%s has no hardpoint file in its spec (C.Hardpoints).', opts.car);
+end
+hp = C.Hardpoints;
+groundZ = hp.GroundZ_mm;
+if isfield(opts,'GroundZ_mm'), groundZ = opts.GroundZ_mm; end
+
+T = readtable(fullfile(here,'..','spec','cars', hp.File), 'TextType','string');
+pt = @(id) sheet_point(T, id);
+
 switch lower(axle)
-    case 'front', t = P.TrackFront;  x0 =  P.Derived.aFront;
-    case 'rear',  t = P.TrackRear;   x0 = -P.Derived.bRear;
+    case 'front', p = 'F';
+    case 'rear',  p = 'R';
     otherwise, error('sm_hardpoints:axle','axle must be front or rear');
 end
-half = t/2;
-r    = P.WheelRadius;
+xFrontWC = pt('F15');  xFrontWC = xFrontWC(1);
+conv = @(v) [P.Derived.aFront + hp.XSign*(v(1) - xFrontWC)/1000, v(2)/1000, (v(3) - groundZ)/1000];
+g = @(n) conv(pt(sprintf('%s%d', p, n)));
 
-% Chassis-side pivots. The lower arm sits low and the upper high; the
-% difference in their inboard heights is most of what sets the roll centre.
-H.lca_front = [x0+0.120,  0.180, 0.110];
-H.lca_rear  = [x0-0.120,  0.180, 0.110];
-H.uca_front = [x0+0.100,  0.220, 0.280];
-H.uca_rear  = [x0-0.100,  0.220, 0.280];
+H.lca_front   = g(1);   H.lca_rear = g(2);   H.lca_outer = g(3);
+H.uca_front   = g(4);   H.uca_rear = g(5);   H.uca_outer = g(6);
+H.pr_lca      = g(7);   H.rk_pr    = g(8);
+H.tie_outer   = g(9);   H.tie_inner = g(10);
+H.dmp_chassis = g(11);  H.rk_dmp   = g(12);
+a1 = g(13);  a2 = g(14);
+H.rk_pivot    = (a1 + a2)/2;
+H.rk_axis     = (a2 - a1) / norm(a2 - a1);
+H.wheel_centre = g(15);
+H.spindle      = g(16);
+H.contact      = [H.wheel_centre(1:2), 0];
 
-% Upright-side ball joints. Their y offset from the wheel centreline is the
-% kingpin offset; the z spread is the kingpin length.
-H.lca_outer = [x0,        half-0.045, 0.120];
-H.uca_outer = [x0,        half-0.075, 0.310];
-
-% Track rod. Its inboard y and z are what set bump steer, so this is the
-% hardpoint the department will move first.
-H.tie_inner = [x0+0.145,  0.165, 0.140];
-H.tie_outer = [x0+0.135,  half-0.055, 0.150];
-
-% Wheel centre and contact patch.
-H.wheel_centre = [x0, half, r];
-H.contact      = [x0, half, 0];
-
-% Pushrod, rocker, damper. These are what turn Susp.MotionRatioFront from an
-% assumed 0.70 into a computed number -- the ratio of damper travel to wheel
-% travel falls out of where these five points are.
-%
-% Pushrod-on-lower-arm, rising inboard to a rocker on the chassis top, with
-% the damper lying across the car. The common FS front layout, and as much a
-% placeholder as everything above.
-%
-% Laid out to the standard rule: at static ride height EACH ROCKER ARM IS
-% PERPENDICULAR TO THE LINK IT DRIVES. That puts the leverage at its maximum
-% and the toggle -- where an arm lines up with its link and the motion ratio
-% passes through zero -- as far from the travel range as the geometry allows.
-% The first placeholder here ignored that: its damper arm sat at 60 deg to
-% the damper, the linkage toggled inside the travel, and the motion ratio
-% went from +0.70 in droop to -2.54 in bump.
-H.pr_lca      = [x0,        half-0.110, 0.135];   % pushrod pickup ON the lower arm
-H.rk_pivot    = [x0,        0.200,      0.420];   % rocker pivot, chassis
-H.rk_axis     = [1, 0, 0];                        % rocker turns about this, chassis frame
-H.rk_pr       = [x0,        0.248,      0.456];   % 60 mm arm, perpendicular to the pushrod
-H.rk_dmp      = [x0,        0.200,      0.480];   % 60 mm arm, straight up
-H.dmp_chassis = [x0,       -0.080,      0.480];   % horizontal damper, perpendicular to that arm
+% FRONT-AXLE "FRONT" PIVOT MUST BE THE FORWARD ONE after the conversion: a
+% cheap guard that the x direction is right, since getting it wrong mirrors
+% the whole corner and nothing else would fail.
+if H.lca_front(1) <= H.lca_rear(1)
+    error('sm_hardpoints:mirrored', ['the "front" lower pivot is not forward of the "rear" one: ' ...
+          'the x direction of the hardpoint conversion is wrong.']);
+end
 
 H.axle  = lower(axle);
-H.track = t;
-H.wheel_radius = r;
+H.track = 2 * H.wheel_centre(2);
+H.wheel_radius = H.wheel_centre(3);
+H.car    = opts.car;
+H.groundZ_mm = groundZ;
+H.source = hp.Source;
+end
+
+function v = sheet_point(T, id)
+i = find(T.id == id, 1);
+if isempty(i), error('sm_hardpoints:missing', 'hardpoint %s is not in the file', id); end
+v = [T.x_mm(i), T.y_mm(i), T.z_mm(i)];
 end

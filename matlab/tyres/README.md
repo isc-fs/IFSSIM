@@ -22,8 +22,8 @@ assumption, so read the tables as "which guess matters most".
 
 | question | lap | skid pad |
 |---|---|---|
-| `TireMu` 1.40 (car) or 1.65 (tyres department) | 65.85 → 60.88 s | 5.16 → 4.75 s |
-| `Tyre.LoadSensitivity` −0.15 or −0.4 (likelier for a slick) | 65.85 → 69.16 s | 5.16 → 5.41 s |
+| `TireMu` 1.40 (car) or 1.65 (tyres department) | 66.15 → 61.24 s | 5.19 → 4.78 s |
+| `Tyre.LoadSensitivity` −0.15 or −0.4 (likelier for a slick) | 66.15 → 69.32 s | 5.19 → 5.42 s |
 
 Load sensitivity is the dangerous one. The mild value the car runs
 under-charges every newton of load transfer, so it flatters the car.
@@ -38,9 +38,12 @@ under-charges every newton of load transfer, so it flatters the car.
   is a handling change, not a speed change.
 - **The longitudinal shape (`Pacejka.Lon*`) reaches the 75 m time,** through
   slip on the power limit (`pt_model`).
-- **Camber is invisible here.** The lap engine has no camber loss, and K is
-  taken at low lateral, where the car barely rolls. `vd_skidpad` and
-  `vd_constant_radius` see camber, but slowly.
+- **Camber reaches the lap through roll.** The lap engine charges the design
+  model's camber penalty: the share of body roll the geometry does not recover
+  tilts the tyres and costs peak grip. It was left out at first and did not
+  matter while camber gain was assumed to be 0.80. With the IFS-08's real
+  0.125 at the front it costs 0.37 s a lap, and without it the skid pad drifted
+  1.3% from the full design model.
 
 `Tyre.Pressure`, `Tyre.RimWidth` and `Tyre.RefVelocity` are inert on purpose:
 the terms they feed are zeroed or switched off. `tyre_parameters` checks that
@@ -53,8 +56,8 @@ tests. `test_tyre_kpis` holds each shortcut to the test it replaces:
 
 | | fast | slow |
 |---|---|---|
-| understeer gradient, two trims against an R = 60 m sweep | −0.309 deg/g | −0.317 deg/g |
-| skid pad, lap engine against `vd_skidpad` | 5.162 s | 5.190 s |
+| understeer gradient, two trims against an R = 60 m sweep | −0.357 deg/g | within 0.02 deg/g |
+| skid pad, lap engine against `vd_skidpad` | 5.190 s | 5.223 s |
 
 The test also checks that cornering stiffness at nominal load is exactly the
 declared value, since `PKY1` is solved to put it there.

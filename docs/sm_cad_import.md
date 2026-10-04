@@ -116,11 +116,18 @@ The placeholder result to beat, from `matlab/sm/README.md`, is camber gain
 Those are properties of invented hardpoints and mean nothing about the car;
 the CAD numbers are the first ones that will.
 
-## 8. Still open, and worth knowing before investing
+## 8. What is already answered without CAD
 
-The imported corner will be a DAE on a stiff variable-step solver. That is
-right for a design study and is **not** the fixed-step plant. **Whether any of
-it exports as a fixed-step FMU is unanswered**, and on this project the
-sample-time negotiation has already been expensive on far simpler models. Treat
-the multibody model as a design tool first; the plant question is separate and
-should be prototyped on its own before anything depends on it.
+- **The kinematics.** The workbook's `Susp_Geometry` sheet carries the full
+  IFS-08 hardpoint table, and `matlab/sm` now runs on it: camber gain, bump
+  steer, motion ratio, roll centres and static camber are derived and fed into
+  the spec. CAD would confirm the hardpoints. It is no longer needed to get
+  them.
+- **Whether multibody fits the plant.** It does, within the linkage's travel:
+  a closed-loop corner runs under the plant's own solver settings and, as an
+  FMU, at about 80× real time. See `matlab/sm/README.md`.
+
+What the CAD export still brings is **masses and inertias** for every moving
+part (the corner model assumes them today), the **bump-stop position**, which
+the multibody travel limit needs, and a check of the hardpoints against the
+model the team actually builds from.

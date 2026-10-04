@@ -26,6 +26,9 @@ function G = lap_ggv(P, soc)
 %   G.ay0      lateral grip at ax = 0, the cornering limit       (nv x 1)
 %   G.ay0_pooled  the same, all four tyres pooled (no yaw balance)
 %
+%   Camber loss is charged as the design model charges it: peak grip falls
+%   with the share of body roll the geometry does not recover (camber_factor).
+%
 %   Yaw balance enters once, as a cap: each speed's envelope is scaled to the
 %   axle that saturates first in a steady corner (lap_balance). Otherwise
 %   quasi-static: no transient, no yaw-moment control. A lap time from it is
@@ -116,8 +119,24 @@ Fz = max([FzF/2 - dWf; FzF/2 + dWf; FzR/2 - dWr; FzR/2 + dWr], 0);
 share = Fz ./ max(sum(Fz,1), eps);
 share(:, driving) = repmat([0; 0; 0.5; 0.5], 1, nnz(driving));
 Fx  = share .* Fx_total;
-mu  = M.PDY1 + M.PDY2*(Fz - M.Fz0)/M.Fz0;
+mu  = (M.PDY1 + M.PDY2*(Fz - M.Fz0)/M.Fz0) .* camber_factor(ayq, M);
 cap = max(mu .* Fz, 0);
 Fy  = sqrt(max(cap.^2 - Fx.^2, 0));
 c = all(abs(Fx) <= cap + 1e-9, 1) & (sum(Fy,1)/m >= ayq - 1e-12);
+end
+
+function f = camber_factor(ayq, M)
+%CAMBER_FACTOR  What body roll costs each axle's tyres in peak grip.
+%   The design model's own penalty (dualtrack_rhs, mf_lateral): peak mu
+%   times (1 - CamberGripSensitivity * |camber departure from static| in
+%   degrees), where the departure is the (1 - gain) share of body roll the
+%   geometry does NOT recover. Roll from the same roll-stiffness split.
+%   Left out at first; it did not matter while camber gain was ASSUMED to
+%   be 0.80, and does since the real geometry gave 0.125 at the front:
+%   the skid pad drifted 1.3% from the full design model.
+mf = M.m*M.wdF;  mr = M.m*(1-M.wdF);
+roll = (mf*(M.h - M.hrcF) + mr*(M.h - M.hrcR)) .* ayq ./ (M.KrF + M.KrR);   % rad
+dF = (1 - M.cgainF) * abs(roll) * 180/pi;
+dR = (1 - M.cgainR) * abs(roll) * 180/pi;
+f = [1 - M.camSens*dF; 1 - M.camSens*dF; 1 - M.camSens*dR; 1 - M.camSens*dR];
 end

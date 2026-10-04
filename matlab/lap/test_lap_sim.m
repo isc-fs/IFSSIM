@@ -25,7 +25,8 @@ ok = true;
 fprintf('\n=== lap engine ===\n');
 
 % ---- 1. circle --------------------------------------------------------
-flat = {'Tyre.LoadSensitivity',0, 'ClA',0, 'CdA',0, 'RollingResistance',0};
+flat = {'Tyre.LoadSensitivity',0, 'ClA',0, 'CdA',0, 'RollingResistance',0, ...
+        'Susp.CamberGripSensitivity',0};      % sqrt(mu g R) assumes no camber loss
 Pf = ifssim_params(flat);
 G  = lap_ggv(Pf);
 for R = [9 15 25]

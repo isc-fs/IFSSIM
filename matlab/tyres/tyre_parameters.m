@@ -76,10 +76,9 @@ fprintf('  NOBODY HAS PUT THIS TYRE ON A RIG. TireMu 1.40 is an unvalidated fit\
 fprintf('  (the tyres department says 1.65); every shape coefficient is ASSUMED.\n');
 fprintf('  Load sensitivity is the dangerous one: -0.15 is mild for a slick, and\n');
 fprintf('  mild FLATTERS the car -- it under-charges every newton of transfer.\n\n');
-fprintf('  CAMBER IS INVISIBLE HERE. Susp.CamberGripSensitivity reaches the\n');
-fprintf('  design model, but the lap engine has no camber loss and K is taken at\n');
-fprintf('  low lateral, where the car barely rolls. vd_skidpad and\n');
-fprintf('  vd_constant_radius see it, slowly.\n\n');
+fprintf('  CAMBER reaches the lap through body roll: the share the geometry does\n');
+fprintf('  not recover costs peak grip (Susp.CamberGripSensitivity). K is taken at\n');
+fprintf('  low lateral, where the car barely rolls, so it sees little of it.\n\n');
 fprintf('  The longitudinal shape (Lon*) reaches the car through slip on the\n');
 fprintf('  power limit (pt_model), so it moves the 75 m time and little else.\n\n');
 fprintf('  The lap engine sees only the PEAK of the curve. Shape coefficients\n');

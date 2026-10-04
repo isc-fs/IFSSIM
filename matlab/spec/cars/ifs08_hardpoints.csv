@@ -1,0 +1,33 @@
+id,name,x_mm,y_mm,z_mm,source
+F1,Lower Wishbone Front Pivot,14.2,229.1,230,Susp_Geometry row 20
+F2,Lower Wishbone Rear Pivot,346.7,229.1,230,Susp_Geometry row 21
+F3,Lower Wishbone Outer Ball Joint,148.1,550,230,Susp_Geometry row 22
+F4,Upper Wishbone Front Pivot,14.2,263,400,Susp_Geometry row 23
+F5,Upper Wishbone Rear Pivot,332.7,263,360.3,Susp_Geometry row 24
+F6,Upper Wishbone Outer Ball Joint,165.5,530,390,Susp_Geometry row 25
+F7,Push Rod — Wishbone End,148.1,515.5,250,Susp_Geometry row 26
+F8,Push Rod — Rocker End,148.1,268.3,773.7,Susp_Geometry row 27
+F9,Outer Track Rod Ball Joint,221.75,505.2,265.1,Susp_Geometry row 28
+F10,Inner Track Rod Ball Joint,221.75,234.5,264,Susp_Geometry row 29
+F11,Damper — Body Mount,148.1,25,755.1,Susp_Geometry row 30
+F12,Damper — Rocker Mount,148.1,188.2,818.2,Susp_Geometry row 31
+F13,Rocker Axis Point 1,128.1,205,755.1,Susp_Geometry row 32
+F14,Rocker Axis Point 2,168.1,205,755.1,Susp_Geometry row 33
+F15,Wheel Center,160,600,310,Susp_Geometry row 34
+F16,Wheel Spindle Point,160,638,311.7,Susp_Geometry row 35
+R1,Lower Wishbone Front Pivot,1523.3,240,230,Susp_Geometry row 39
+R2,Lower Wishbone Rear Pivot,1756,240,230,Susp_Geometry row 40
+R3,Lower Wishbone Outer Ball Joint,1730,550,230,Susp_Geometry row 41
+R4,Upper Wishbone Front Pivot,1529.1,259,347,Susp_Geometry row 42
+R5,Upper Wishbone Rear Pivot,1895,259,390,Susp_Geometry row 43
+R6,Upper Wishbone Outer Ball Joint,1730,540,390,Susp_Geometry row 44
+R7,Push Rod — Wishbone End,1725,515,250,Susp_Geometry row 45
+R8,Push Rod — Rocker End,1858.9,279.5,485.8,Susp_Geometry row 46
+R9,Outer Track Rod Ball Joint,1790,550,230,Susp_Geometry row 47
+R10,Inner Track Rod Ball Joint,1816,240,230,Susp_Geometry row 48
+R11,Damper — Body Mount,1640.8,231.1,512.4,Susp_Geometry row 49
+R12,Damper — Rocker Mount,1811.8,213.5,545.1,Susp_Geometry row 50
+R13,Rocker Axis Point 1,1816.2,274.2,514.9,Susp_Geometry row 51
+R14,Rocker Axis Point 2,1818.8,246.6,486.1,Susp_Geometry row 52
+R15,Wheel Center,1730,600,310,Susp_Geometry row 53
+R16,Wheel Spindle Point,1730,650,311.9,Susp_Geometry row 54

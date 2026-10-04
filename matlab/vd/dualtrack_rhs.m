@@ -97,7 +97,7 @@ for it = 1:3
     % back inverted.
     travel = [Fz(1)-FzF/2; Fz(2)-FzF/2; Fz(3)-FzR/2; Fz(4)-FzR/2] ./ ...
              [M.kwF; M.kwF; M.kwR; M.kwR];
-    toeSign = [1; -1; 1; -1];        % +y is LEFT, so toe-in is -steer on the left
+    toeSign = [-1; 1; -1; 1];        % +y is LEFT, so toe-in is -steer on the left (index 1 = FL)
     dtoe  = toeSign .* [M.bumpF; M.bumpF; M.bumpR; M.bumpR] .* travel;
 
     for i = 1:4

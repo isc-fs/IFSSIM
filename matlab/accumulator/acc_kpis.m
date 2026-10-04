@@ -24,12 +24,14 @@ if nargin < 2, opts = struct(); end
 if ~isfield(opts, 'massFollowsPack'), opts.massFollowsPack = true; end
 
 PK  = pack_from_cells(P);
-PK0 = pack_from_cells(ifssim_params());
+% Against THIS car's own pack, not the active car's: comparing two prototypes
+% must not charge one for the difference between them.
+PK0 = pack_from_cells(ifssim_params([], P.SpecName));
 K.dMass = PK.Mass - PK0.Mass;
 if opts.massFollowsPack && abs(K.dMass) > 1e-9
     ov = P.Overrides;
     ov.Mass = P.Mass + K.dMass;
-    P = ifssim_params(ov);
+    P = ifssim_params(ov, P.SpecName);
 end
 
 K.Ns = PK.Ns;  K.Np = PK.Np;

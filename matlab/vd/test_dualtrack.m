@@ -40,10 +40,19 @@ ok = chk(ok,'lateral transfer = m*ay*h/t', dW, want, 0.02*abs(want));
 %% 5. The geometric term exists, and is the share the roll centres imply.
 % The reference plant cannot do this at all -- its roll centre is on the
 % ground -- so this check is also the standing note of what the plant owes.
+%
+% It used to assert the share sat in 10-25%%. That band was written around an
+% ASSUMED 40 mm front roll centre; the IFS-08's measured one is 15 mm
+% (susp_geometry on the workbook hardpoints), and the band was asserting the
+% assumption, not the physics. What is physics: the term EXISTS, so moving
+% the front roll centre to the ground must move the front transfer split.
 geoF = M.m*M.wdF*M.hrcF/M.tF;
 elas = (M.m*M.wdF*(M.h-M.hrcF) + M.m*(1-M.wdF)*(M.h-M.hrcR))*(M.KrF/(M.KrF+M.KrR))/M.tF;
-ok = chk(ok,'geometric share of front transfer is 10-25%%', ...
-         geoF/(geoF+elas) > 0.10 && geoF/(geoF+elas) < 0.25, true, 0);
+M0 = M;  M0.hrcF = 0;
+Y0 = dualtrack_sim(t, 6*pi/180, 12, M0);
+dF  = Y.Fz(end,2)  - Y.Fz(end,1);    % front lateral transfer, as built
+dF0 = Y0.Fz(end,2) - Y0.Fz(end,1);   % ... with the front roll centre on the ground
+ok = chk(ok,'the front roll centre moves the front transfer', abs(dF - dF0) > 1e-3*abs(dF), true, 0);
 fprintf('        front transfer: %.0f%% geometric (links), %.0f%% elastic (springs)\n', ...
         100*geoF/(geoF+elas), 100*elas/(geoF+elas));
 

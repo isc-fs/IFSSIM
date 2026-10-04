@@ -31,7 +31,7 @@ On the car as specified, at the 200 A limit:
 |---|---|---|
 | laps completed | **21.3 of 24.6, does not finish** | |
 | peak cell current | 33.4 A | 30 A, the highest characterised rate |
-| rms cell current | 14.4 A | 15 A sustained |
+| rms cell current | 14.3 A | 15 A sustained |
 | lowest cell voltage | 2.67 V | 2.5 V floor |
 | cell heating with no cooling | 138 K | |
 

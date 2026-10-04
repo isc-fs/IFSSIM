@@ -30,6 +30,29 @@ function C = ifs08()
 
 C = struct('Name','IFS-08','Parent','','Simulator',true,'Fields',struct(),'Order',{{}});
 
+%% ---- suspension hardpoints ---------------------------------------------
+% The full linkage, both axles, from the team workbook's Susp_Geometry sheet
+% (import_susp_geometry wrote the CSV beside this file; every row says which
+% sheet row it came from). sm_hardpoints converts them to the car's frame.
+%
+% THE SHEET'S FRAME, which is not what its header says:
+%   X grows REARWARD. The header says "positive forward", but the front wheel
+%     centre is at x = 160 and the rear at 1730, and the sheet's own +6.2 deg
+%     caster has the upper ball joint at LARGER x -- a positive caster only if
+%     larger x is further back.
+%   Z = 0 is NOT the ground. Wheel centres sit at z = 310; with the sheet's own
+%     203.2 mm tyre radius (row 15; a 16 in Hoosier) the ground is at z = 106.8.
+%     The sheet's roll-centre and scrub analysis puts the contact patch at
+%     Z = 0, so those numbers are measured from the wrong ground -- unless the
+%     tyre radius is what is wrong. UNCONFIRMED: ask the suspension team.
+C.Hardpoints = struct( ...
+    'File',       'ifs08_hardpoints.csv', ...
+    'XSign',      -1, ...          % sheet x grows rearward; the car's x is forward
+    'GroundZ_mm', 310 - 203.2, ... % wheel-centre z minus the sheet's tyre radius
+    'Source',     ['GEOMETRY team workbook ISC_IFS_08.xlsx, Susp_Geometry rows 20-35 ' ...
+                   'and 39-54. Frame: x rearward despite the header; ground ' ...
+                   'z = 106.8 (wheel centre minus tyre radius), UNCONFIRMED.']);
+
 %% ---- chassis geometry -------------------------------------------------
 % The wheelbase and track are read straight off the IFS-08 hardpoint table:
 % front wheel centre F15 at x=160 mm, rear R15 at x=1730 mm, both at y=600.
@@ -88,15 +111,19 @@ C = par(C,'PitchStiffness', 155600.0,'N/m','UNKNOWN no source anywhere');
 % approach neutral, so the bars cannot fix this on their own.
 C = par(C,'RollStiffnessFront',27000.0,'N*m/rad','UNKNOWN no source. DEAD: read by nothing; the models use Derived.RollStiffnessFront = springs*MR^2 + Susp.ArbRateFront. Kept as the total the bar rate was sized to.');
 C = par(C,'RollStiffnessRear', 22000.0,'N*m/rad','UNKNOWN no source. DEAD: see RollStiffnessFront.');
-C = par(C,'RollCenterFront', 0.040, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
-C = par(C,'RollCenterRear',  0.060, 'm','ASSUMED Susp_Geometry has the hardpoints these should be computed from');
+C = par(C,'RollCenterFront', 0.0151, 'm','DERIVED susp_geometry (Dixon front-view IC, the workbook''s own method) on the Susp_Geometry hardpoints, ground at wheel centre minus tyre radius. The sheet''s own 28.2 mm puts the ground at its Z=0; the MONO sheet''s independent 12.8 mm (AG51) agrees in kind.');
+C = par(C,'RollCenterRear',  0.0311, 'm','DERIVED as front. The MONO sheet''s independent 31 mm (AH51) agrees to 0.1 mm, which is what says the ground is right; the Susp_Geometry sheet''s 58.0 mm used Z=0.');
 C = par(C,'SuspensionDamping',1.5,  '-','ASSUMED damping ratio, never measured');
 
 % ---- suspension kinematics -------------------------------------------
 % The rates a suspension designer actually specifies, as distinct from the
-% wheel rates and roll stiffnesses the vehicle model consumes. This is the
-% concept-level representation: not a hardpoint solver, but the derivatives a
-% hardpoint solver would produce, which are what gets swept early.
+% wheel rates and roll stiffnesses the vehicle model consumes. The models
+% take the DERIVATIVES a hardpoint solver produces -- and since 2026-10 the
+% hardpoint solver exists: motion ratio, camber gain, bump steer, roll
+% centres and static camber below are DERIVED from the car's own hardpoints
+% (C.Hardpoints above) by matlab/sm (sm_corner_sweep, susp_geometry), and
+% test_kinematics_feed re-derives them, so a hardpoint change that is not
+% carried through here fails a test instead of drifting.
 %
 % MOTION RATIO is spring travel per wheel travel, so wheel rate = k_spring *
 % MR^2. It is a geometry lever on wheel rate: move the pushrod pickup and the
@@ -106,10 +133,10 @@ C = par(C,'SuspensionDamping',1.5,  '-','ASSUMED damping ratio, never measured')
 % Front and rear are separate throughout. The model could not express a
 % front/rear spring split at all before this -- all four corners took
 % HeaveStiffness/4 -- and a spring split is a primary setup lever.
-C = par(C,'Susp.MotionRatioFront', 0.70, '-','ASSUMED typical FS pushrod. Spring travel per wheel travel; wheel rate goes as the SQUARE of it.');
-C = par(C,'Susp.MotionRatioRear',  0.70, '-','ASSUMED as front.');
-C = par(C,'Susp.SpringRateFront', 41192.0,'N/m','DERIVED to reproduce the wheel rate implied by HeaveStiffness at the motion ratio above (41.2 N/mm, a real FS spring). Replace with the spring actually fitted.');
-C = par(C,'Susp.SpringRateRear',  41192.0,'N/m','DERIVED as front.');
+C = par(C,'Susp.MotionRatioFront', 0.829, '-','DERIVED sm_corner_sweep on the Susp_Geometry hardpoints (pushrod F7-F8, rocker axis F13-F14, damper F11-F12): damper travel per wheel travel at static. Regressive: 0.94 in droop to 0.77 in bump over +-55 mm. The workbook''s spring calc ASSUMES 1.2.');
+C = par(C,'Susp.MotionRatioRear',  0.833, '-','DERIVED as front (R7-R14). Regressive: 1.11 droop to 0.83 bump.');
+C = par(C,'Susp.SpringRateFront', 29363.0,'N/m','DERIVED to keep the wheel rate implied by HeaveStiffness (20184 N/m per corner, from the recorded ride frequency) at the motion ratio above: k = Kw/MR^2. Replace with the spring actually fitted.');
+C = par(C,'Susp.SpringRateRear',  29124.0,'N/m','DERIVED as front, at the rear motion ratio.');
 
 % Anti-roll bar rates, DECLARED. They used to be back-derived as "declared axle
 % roll stiffness minus what the springs give", which inverted the causality
@@ -135,16 +162,16 @@ C = par(C,'Susp.ArbArmRadiusRear',  0.20,'m','ASSUMED as front.');
 % Camber. Static is what the car sits at; gain is how much the OUTER wheel
 % recovers per degree of body roll -- a gain of 1.0 exactly cancels roll and
 % keeps the tyre upright, which is what the geometry is trying to do.
-C = par(C,'Susp.StaticCamberFront', -1.5,'deg','ASSUMED typical FS front. Negative = top of the wheel inboard.');
-C = par(C,'Susp.StaticCamberRear',  -1.0,'deg','ASSUMED typical FS rear, less than front.');
-C = par(C,'Susp.CamberGainFront',    0.80,'-','ASSUMED deg of camber recovered per deg of body roll. 1.0 would exactly cancel roll; real double wishbones fall short.');
-C = par(C,'Susp.CamberGainRear',     0.60,'-','ASSUMED as front, lower.');
+C = par(C,'Susp.StaticCamberFront', -2.56,'deg','DERIVED from the wheel spindle point F16 against the wheel centre F15 (1.7 mm rise over 38 mm, Susp_Geometry). SENSITIVE: 1 mm of spindle height is 1.5 deg. Negative = top of the wheel inboard.');
+C = par(C,'Susp.StaticCamberRear',  -2.18,'deg','DERIVED as front: R16 against R15, 1.9 mm over 50 mm.');
+C = par(C,'Susp.CamberGainFront',    0.125,'-','DERIVED sm_corner_sweep on the Susp_Geometry hardpoints: camber slope -11.96 deg/m over +-30 mm of travel, times half-track. Matches 1/FVSA (4.89 m) to 2%. Near-horizontal lower arms: long swing arm, little camber recovery. Was ASSUMED 0.80.');
+C = par(C,'Susp.CamberGainRear',     0.253,'-','DERIVED as front: -24.17 deg/m over +-30 mm; 1/FVSA (2.38 m) agrees. Was ASSUMED 0.60.');
 
-% Bump steer: toe change with wheel travel. Zero is the design target, so a
-% non-zero number here is a defect you are trying to quantify. ZEROED rather
-% than assumed, for the same reason the unmeasured tyre coefficients are.
-C = par(C,'Susp.BumpSteerFront',     0.0,'deg/m','ZEROED design target is zero; a real number should come from a hardpoint solver or a string-pot measurement.');
-C = par(C,'Susp.BumpSteerRear',      0.0,'deg/m','ZEROED as front.');
+% Bump steer: toe change with wheel travel, TOE-IN POSITIVE. Zero is the
+% design target; the IFS-08's front geometry does not meet it (2.86 deg/m of
+% toe-in in bump, from the track rod), and the rear does.
+C = par(C,'Susp.BumpSteerFront',     2.86,'deg/m','DERIVED sm_corner_sweep: toe-IN per metre of bump over +-30 mm, from the track rod F9-F10 with the rack held. Toe-in positive. Was ZEROED as a design target the geometry does not meet.');
+C = par(C,'Susp.BumpSteerRear',      0.018,'deg/m','DERIVED as front, from the toe link R9-R10: effectively zero.');
 
 % What a degree of inclination costs the tyre. The kinematics above are
 % GEOMETRY and are as trustworthy as the hardpoints; this is the only part of
