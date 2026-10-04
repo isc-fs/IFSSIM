@@ -18,7 +18,7 @@ function R = tyre_report(savePng)
 
 if nargin < 1, savePng = false; end
 here   = fileparts(mfilename('fullpath'));
-outdir = fullfile(here,'models');
+outdir = ifssim_models_dir();
 addpath(here); addpath(outdir);
 
 P  = ifssim_load_workspace();
@@ -32,7 +32,7 @@ Tset = 0.35;            % long enough for relaxation to settle: sigma/Vx = 0.03 
 %% ---- what is being assumed, and where each number came from -----------
 % The coefficients as actually written to the block, so the table below
 % reports what the tyre IS rather than what this file thinks it should be.
-TPcs = load(fullfile(fileparts(mfilename('fullpath')),'models','ifssim_tyre.mat'));
+TPcs = load(fullfile(ifssim_models_dir(),'ifssim_tyre.mat'));
 TPcs = TPcs.ifssim_tyre;
 prov = {
  'peak friction mu',        sprintf('%.2f',P.TireMu),                    'settings.json'

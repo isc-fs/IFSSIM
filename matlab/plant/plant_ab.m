@@ -20,7 +20,7 @@ function R = plant_ab(mode, tag)
 %   to the last bit, so any divergence is the change under test.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models')); addpath(fullfile(here,'..','spec'));
+addpath(here); addpath(ifssim_models_dir()); addpath(fullfile(here,'..','spec'));
 ifssim_workdir();
 if nargin < 1 || isempty(mode), mode = 'check'; end
 if nargin < 2 || isempty(tag),  tag  = 'baseline'; end

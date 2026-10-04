@@ -74,6 +74,7 @@ end
 
 % ---- side by side --------------------------------------------------------
 fprintf('\n======================= POWERTRAIN STUDY =======================\n');
+fprintf('  car: %s\n', ifssim_car());
 for i = 1:2:numel(varargin)
     fprintf('  %-28s %g  ->  %g\n', varargin{i}, getdot(P0, varargin{i}), varargin{i+1});
 end

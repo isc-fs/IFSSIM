@@ -17,7 +17,7 @@ function build_plant_skeleton(outdir, useVDB)
 %   the whole model compiles from day one and nobody is blocked.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 if ~isfolder(outdir), mkdir(outdir); end
 addpath(fileparts(mfilename('fullpath')));

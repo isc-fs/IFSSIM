@@ -16,7 +16,7 @@ function build_aero(outdir)
 %      Here front and rear application points are aF and -bR from IFSSIM_P.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 P = ifssim_load_workspace();

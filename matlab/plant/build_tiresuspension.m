@@ -35,7 +35,7 @@ function build_tiresuspension(outdir, overrides, useVDB)
 %   thermal model, camber held at zero.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 if nargin < 2, overrides = struct(); end

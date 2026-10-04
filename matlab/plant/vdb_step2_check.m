@@ -11,7 +11,7 @@ function ok = vdb_step2_check()
 %   parameters in car_spec.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 ok = true;
 fprintf('\n=== step 2: VDB suspension kinematics A/B ===\n');
 

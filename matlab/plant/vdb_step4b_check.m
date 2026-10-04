@@ -15,7 +15,7 @@ function ok = vdb_step4b_check()
 %   so each is built, run, and torn down in turn.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 ok = true;
 fprintf('\n=== step 4b: VDB vehicle body vs IFSSIM_Chassis ===\n');
 P = ifssim_load_workspace();

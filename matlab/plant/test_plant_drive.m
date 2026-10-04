@@ -7,7 +7,7 @@ function ok = test_plant_drive()
 %   that only show up when the loop is closed.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 % No harness model. The plant is driven directly by plant_direct_sim, because

@@ -8,7 +8,7 @@ function build_drive_harness(outdir)
 %   changing what the car does is editing four lines, not rewiring a diagram.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 P = ifssim_load_workspace();

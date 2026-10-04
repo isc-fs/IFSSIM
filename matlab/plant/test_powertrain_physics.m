@@ -2,7 +2,7 @@ function ok = test_powertrain_physics()
 %TEST_POWERTRAIN_PHYSICS  Check the motor envelope, regen limit and battery.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 PK = pack_from_cells(car_spec());

@@ -37,11 +37,12 @@ R = spec_reach(SPEC(:,1));
 moves = dept_moves(SPEC(:,1), @aero_kpis, KPI, K0);
 
 fprintf('\n============================ AERO ============================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  %-17s %8s %-5s %-10s %-8s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','GROUP','+10% MOVES');
 for i = 1:n
     f = C.Fields.(strrep(SPEC{i,1},'.','_'));
     fprintf('  %-17s %8.4g %-5s %-10s %-8s %s\n', SPEC{i,1}, f.value, f.unit, ...
-            provclass(f.source), SPEC{i,2}, moves{i});
+            prov_class(f.source), SPEC{i,2}, moves{i});
 end
 fprintf('\n  lap = %.2f s on lap_track;  ay@22 = yaw-balanced limit at 22 m/s;\n', K0.lap);
 fprintf('  bal@22 = front/rear axle capacity ratio there (>1: the rear goes first)\n');
@@ -69,12 +70,4 @@ fprintf('  aero_study(...)  try a change\n\n');
 
 T = table(SPEC(:,1), SPEC(:,2), moves, R.Reaches, ...
           'VariableNames', {'Parameter','Group','Moves','Reaches'});
-end
-
-function c = provclass(src)
-w = upper(strtok(src));
-known = {'MEASURED','MEASURED-ISH','GEOMETRY','DERIVED','DATASHEET', ...
-         'SECONDARY','ASSUMED','DISPUTED','ZEROED','UNKNOWN'};
-if any(strcmp(w, known)), c = w; else, c = 'UNKNOWN'; end
-if strcmp(c,'MEASURED-ISH'), c = 'MEASURED~'; end
 end

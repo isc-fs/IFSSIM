@@ -42,7 +42,7 @@ if nargin < 3, overrides = {}; end
 
 here  = fileparts(mfilename('fullpath'));
 plant = fullfile(here,'..','plant');
-addpath(plant); addpath(fullfile(plant,'models'));
+addpath(plant); addpath(ifssim_models_dir());
 addpath(fullfile(fileparts(mfilename('fullpath')),'..','spec'));
 P = ifssim_load_workspace(overrides);
 ifssim_plant_buses;

@@ -22,6 +22,7 @@ E  = pt_model(P);
 El = pt_model(P, struct('soc', 0.25));    % end of an endurance, roughly
 
 fprintf('\n========================= POWERTRAIN =========================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  pack %d s%d p, %.0f V open circuit at %.0f%% SoC, %.2f ohm, limit %.0f A\n', ...
         PK.Ns, PK.Np, PK.OCV(E.soc), 100*E.soc, PK.Rint, PK.IOperating);
 fprintf('\n  %-36s %12s %12s\n', '', sprintf('SoC %.0f%%',100*E.soc), sprintf('SoC %.0f%%',100*El.soc));

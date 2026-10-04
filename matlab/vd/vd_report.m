@@ -10,7 +10,7 @@ function R = vd_report(M, varargin)
 %       >> vd_report
 %
 %   To try a setup change without committing to it, use vd_study. To make one
-%   real, edit the number in matlab/spec/car_spec.m and run build_car.
+%   real, edit the number in the car's file in matlab/spec/cars/ and run build_car.
 %
 %   Every number here comes from car_spec through ifssim_params. Nothing in
 %   MATLAB reads settings.json -- that file is an EXPORT for the UE5 bridge
@@ -38,6 +38,7 @@ R = struct();
 
 fprintf('\n');
 fprintf('==================== VEHICLE CHARACTERISATION ====================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  mass %.0f kg, wheelbase %.3f m, track %.3f/%.3f m, CoG %.3f m up\n', ...
         M.m, M.L, M.tF, M.tR, M.h);
 fprintf('  weight distribution %.1f%% front, yaw inertia %.0f kg.m^2\n', ...

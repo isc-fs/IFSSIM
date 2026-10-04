@@ -37,6 +37,17 @@ PK = pack_from_cells(P);
 for bd = {fullfile(fileparts(mfilename('fullpath')),'models','battery'), fullfile(wd,'battery')}
     if isfolder(bd{1}), addpath(bd{1}); end
 end
+% EXACTLY ONE CAR'S MODELS ON THE PATH: the active one's. The cars' models
+% share their names (IFSSIM_Plant, ...), and Simulink resolves a model
+% reference by name -- with two cars' folders on the path, one car would be
+% simulated with the other's subsystems and nothing would say so.
+for c = car_list()
+    d = ifssim_models_dir(c{1});
+    if ~strcmp(c{1}, P.SpecName) && contains([pathsep path pathsep], [pathsep d pathsep])
+        rmpath(d);
+    end
+end
+addpath(ifssim_models_dir(P.SpecName));
 assignin('base','IFSSIM_P', P);
 ifssim_plant_buses();
 

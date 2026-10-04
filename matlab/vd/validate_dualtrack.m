@@ -19,7 +19,7 @@ function R = validate_dualtrack(speeds)
 
 here = fileparts(mfilename('fullpath'));
 addpath(here); addpath(fullfile(here,'..','plant'));
-addpath(fullfile(here,'..','plant','models'));
+addpath(ifssim_models_dir());
 if nargin < 1 || isempty(speeds), speeds = [6 9 12]; end
 
 P = ifssim_load_workspace();

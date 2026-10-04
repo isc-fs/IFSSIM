@@ -1,8 +1,9 @@
-function P = ifssim_params(overrides)
-%IFSSIM_PARAMS  The car, from car_spec.m. The single source of truth.
+function P = ifssim_params(overrides, car)
+%IFSSIM_PARAMS  The car, from its spec file (car_spec). The single source of truth.
 %
 %   P = IFSSIM_PARAMS()             the car as specified
 %   P = IFSSIM_PARAMS({'TireMu',1.65})   with study overrides applied
+%   P = IFSSIM_PARAMS(overrides, 'IFS-09')  a named car rather than the active one
 %
 %   CAR_SPEC IS THE SOURCE OF TRUTH, and nothing here reads settings.json.
 %
@@ -25,7 +26,8 @@ function P = ifssim_params(overrides)
 
 here = fileparts(mfilename('fullpath'));
 addpath(fullfile(here, '..', 'spec'));
-C = car_spec();
+if nargin < 2 || isempty(car), car = ifssim_car(); end
+C = car_spec(car);
 
 % Field names the plant and the design model rely on. Listed so that deleting
 % one from car_spec fails here, with the name, instead of somewhere downstream
@@ -81,7 +83,8 @@ if ~isempty(missing)
 end
 
 P.SpecName = C.Name;
-P.SpecPath = fullfile(here, '..', 'spec', 'car_spec.m');
+P.SpecPath = fullfile(here, '..', 'spec', 'cars', [lower(strrep(C.Name,'-','')) '.m']);
+P.Simulator = C.Simulator;
 
 % ---- study overrides --------------------------------------------------
 % An engineer asking "what if the CoG were 40 mm higher" should not have to
@@ -92,7 +95,7 @@ P.SpecPath = fullfile(here, '..', 'spec', 'car_spec.m');
 % disagree with each other.
 %
 % They are a STUDY tool and deliberately leave no trace. To make a change
-% real, edit matlab/spec/car_spec.m, where a number has to carry a source.
+% real, edit the car's file in matlab/spec/cars/, where a number has to carry a source.
 if nargin < 1, overrides = struct(); end
 overrides = ifssim_normalise_overrides(overrides);
 % Snapshot the legitimate names BEFORE any override is applied. The first pass

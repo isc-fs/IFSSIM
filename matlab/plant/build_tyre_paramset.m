@@ -33,7 +33,7 @@ function T = build_tyre_paramset(outdir, overrides)
 %   slip) is derived instead, see fit_combined_slip.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 % Study overrides thread all the way down. Without this, plant_study would
 % announce "a tyre parameter changed, so the tyre set has to be rebuilt",

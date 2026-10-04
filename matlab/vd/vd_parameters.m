@@ -66,12 +66,13 @@ R = spec_reach(SPEC(:,1));
 SPEC = [SPEC(:,1), R.Reaches, SPEC(:,2)];
 
 fprintf('\n================ SUSPENSION & VEHICLE DYNAMICS ================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  %-28s %11s %-7s %-12s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','REACHES');
 sources = struct();
 for i = 1:size(SPEC,1)
     nm = SPEC{i,1};
     [val, unit, src] = lookup(C, nm);
-    cls = provclass(src);
+    cls = prov_class(src);
     sources.(matlab.lang.makeValidName(nm)) = cls;
     fprintf('  %-28s %11.5g %-7s %-12s %s\n', nm, val, unit, cls, SPEC{i,2});
 end
@@ -131,14 +132,4 @@ if isfield(C.Fields, key)
     f = C.Fields.(key);
     val = f.value; unit = f.unit; src = f.source;
 end
-end
-
-function c = provclass(src)
-% The first word of a source string is its class, by the convention car_spec
-% enforces. Anything that does not start with one is treated as unsourced.
-w = upper(strtok(src));
-known = {'MEASURED','MEASURED-ISH','GEOMETRY','DERIVED','DATASHEET', ...
-         'SECONDARY','ASSUMED','DISPUTED','ZEROED','UNKNOWN'};
-if any(strcmp(w, known)), c = w; else, c = 'UNKNOWN'; end
-if strcmp(c,'MEASURED-ISH'), c = 'MEASURED~'; end
 end

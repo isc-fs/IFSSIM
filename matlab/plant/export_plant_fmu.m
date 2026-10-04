@@ -11,18 +11,18 @@ function fmuPath = export_plant_fmu(outdir)
 
 here = fileparts(mfilename('fullpath'));
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(here, 'fmu');
+    outdir = ifssim_models_dir([], 'fmu');   % plant/fmu for the simulator's car
 end
 outdir = char(outdir);
 if ~isfolder(outdir), mkdir(outdir); end
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 % Simulink.FMUExporter RESOLVES THE MODEL RELATIVE TO THE CURRENT DIRECTORY,
 % not the MATLAB path. With the model on the path but pwd elsewhere it fails
 % with "Model does not exist", which points nowhere near the cause. cd into the
 % model directory and restore afterwards.
-modelDir = fullfile(here,'models');
+modelDir = ifssim_models_dir();
 oldPwd = pwd;                       %#ok<NASGU>
 restore = onCleanup(@() cd(oldPwd));
 cd(modelDir);

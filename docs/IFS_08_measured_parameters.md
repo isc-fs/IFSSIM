@@ -18,7 +18,7 @@ the workbook.
 >
 > Both are being kept deliberately until somebody opens them and decides. Until
 > that happens, treat any number sourced from "the workbook" as needing to say
-> WHICH workbook. The parameters in `matlab/spec/car_spec.m` that cite it are
+> WHICH workbook. The parameters in `matlab/spec/cars/ifs08.m` that cite it are
 > `TrackFront`, `TrackRear`, `Wheelbase`, `WheelWidth` and the steering
 > geometry — see their source strings.
 >

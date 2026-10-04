@@ -6,7 +6,7 @@ function ok = test_chassis_physics()
 %   producing a plausible trajectory nobody checks.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 h = 'chassis_test_harness';

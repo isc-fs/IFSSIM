@@ -13,7 +13,7 @@ and an archive.
 ## The direction everything flows
 
 ```
-        spec/car_spec.m          <-- the only file you edit
+        spec/cars/ifs08.m        <-- the only file you edit (one per prototype)
                |
     +----------+-----------+--------------------+
     |          |           |                    |
@@ -45,7 +45,7 @@ ifssim_plant_check           % build everything and run every test
 
 ## Changing a number
 
-1. Edit it in `spec/car_spec.m`. **Every parameter needs a source string** —
+1. Edit it in your car's file, `spec/cars/ifs08.m` for the IFS-08. **Every parameter needs a source string** —
    the file refuses to build without one. Say where it came from: a
    measurement, a drawing, a datasheet, or an assumption.
 2. Run `build_car`. It checks the car, writes `settings.json`, and can rebuild

@@ -14,7 +14,7 @@ function T = characterise_plant()
 %   Needs no vehicle and no UE. This is the plant characterised on its own terms.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 L = P.Wheelbase;
 

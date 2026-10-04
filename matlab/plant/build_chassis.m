@@ -11,7 +11,7 @@ function build_chassis(outdir, useVDB)
 %   LAST step's state, so there is no algebraic loop by construction.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 if nargin < 2 || isempty(useVDB), useVDB = false; end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);

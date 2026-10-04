@@ -20,6 +20,7 @@ K = tyre_kpis(P);
 M = K.M;  Fz0 = M.Fz0;
 
 fprintf('\n============================ TYRES ===========================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  nominal load %.0f N (Tyre.NominalLoad)\n\n', Fz0);
 fprintf('  %-8s %10s %14s\n', 'load', 'peak mu', 'Ca [N/deg]');
 Kya = @(Fz) -M.PKY1*Fz0*sin(M.PKY4*atan(Fz./(M.PKY2*Fz0))) * pi/180;

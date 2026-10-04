@@ -17,6 +17,7 @@ P = ifssim_params();
 K = aero_kpis(P);
 
 fprintf('\n============================ AERO ============================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  ClA %.2f  CdA %.2f  L/D %.2f  balance %.1f%% front (weight %.1f%%)\n', ...
         P.ClA, P.CdA, K.LD, 100*K.aero_front, 100*K.weight_front);
 fprintf('  at 15 m/s: %.0f N downforce (%.1f%% of the car''s weight), %.0f N drag\n', ...

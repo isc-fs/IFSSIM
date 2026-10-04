@@ -18,7 +18,7 @@ function ok = vdb_step3_check()
 %   as it works. That is real geometry, and the size of it is the point.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 ok = true;
 fprintf('\n=== step 3: block WhlF vs the closed form ===\n');
 

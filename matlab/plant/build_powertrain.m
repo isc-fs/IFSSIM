@@ -11,7 +11,7 @@ function build_powertrain(outdir, overrides)
 %   powertrain parameter fixed at build time (it selects the generated pack).
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 if nargin < 2, overrides = struct(); end

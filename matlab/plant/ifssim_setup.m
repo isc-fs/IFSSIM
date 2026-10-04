@@ -10,13 +10,14 @@ function ifssim_setup()
 
 here = fileparts(mfilename('fullpath'));
 addpath(here);
+addpath(fullfile(here,'..','spec'));   % car_spec, ifssim_car: which prototype
 ifssim_workdir();
-addpath(fullfile(here,'models'));
+addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 fprintf('IFSSIM plant ready.\n');
 fprintf('  parameters : %s\n', P.SpecPath);
-fprintf('  models     : %s\n', fullfile(here,'models'));
+fprintf('  models     : %s\n', ifssim_models_dir());
 fprintf('\n  ifssim_plant_check     build everything and run every test\n');
 fprintf('  ifssim_params_report   show every parameter and where it came from\n');
 fprintf('  open_system(''IFSSIM_Plant'')\n\n');

@@ -2,7 +2,7 @@ function ok = test_steering_physics()
 %TEST_STEERING_PHYSICS  Check the steering block against Ackermann geometry.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 h = 'steering_test_harness';

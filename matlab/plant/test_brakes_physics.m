@@ -5,7 +5,7 @@ function ok = test_brakes_physics()
 %   number that matters is a stopping distance, not a torque.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 ok = true;
 fprintf('\n=== brakes ===\n');

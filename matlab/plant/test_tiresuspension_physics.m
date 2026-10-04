@@ -2,7 +2,7 @@ function ok = test_tiresuspension_physics()
 %TEST_TIRESUSPENSION_PHYSICS  Check the tyre/suspension block against closed form.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 h = 'tiresusp_test_harness';

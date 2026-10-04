@@ -28,8 +28,8 @@ function M = dualtrack_build(P, tyreMat)
 
 if nargin < 1 || isempty(P), P = ifssim_params(); end
 if nargin < 2 || isempty(tyreMat)
-    tyreMat = fullfile(fileparts(mfilename('fullpath')), '..', 'plant', ...
-                       'models', 'ifssim_tyre.mat');
+    addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'plant'));
+    tyreMat = fullfile(ifssim_models_dir(), 'ifssim_tyre.mat');   % the active car's
 end
 
 M = struct();

@@ -34,11 +34,11 @@ function R = plant_study(varargin)
 %   (capacity, resistance, the OCV curve) and Pack.CurrentLimit are runtime
 %   variables and need no rebuild.
 %
-%   To make a change permanent: put it in matlab/spec/car_spec.m with a source
+%   To make a change permanent: put it in the car's file in matlab/spec/cars/ with a source
 %   and run build_car. Nothing here touches the spec or settings.json.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 ifssim_workdir();
 if isempty(varargin)
     error('plant_study:noChange', ...
@@ -79,6 +79,7 @@ P0 = ifssim_load_workspace();
 A  = corner_case(P0, 'as specified');
 
 fprintf('\n================== PLANT STUDY ==================\n');
+fprintf('  car: %s\n', ifssim_car());
 for i = 1:2:numel(varargin)
     was = getdot(P0, varargin{i});
     fprintf('  %-28s %g  ->  %g\n', varargin{i}, was, varargin{i+1});
@@ -92,12 +93,12 @@ P1 = ifssim_load_workspace(varargin);
 if needsBuild
     % build_tiresuspension calls build_tyre_paramset itself, so one call
     % threads the override through both.
-    build_tiresuspension(fullfile(here,'models'), varargin);
+    build_tiresuspension(ifssim_models_dir(), varargin);
 end
 if needsPT
     fprintf('\n  the accumulator arrangement changed: rebuilding the powertrain around\n');
     fprintf('  its generated pack (the first time for an arrangement adds ~1 min).\n');
-    build_powertrain(fullfile(here,'models'), varargin);
+    build_powertrain(ifssim_models_dir(), varargin);
 end
 B = corner_case(P1, 'study');
 
@@ -124,11 +125,11 @@ R = struct('baseline',A,'study',B,'overrides',{varargin},'rebuilt',needsBuild);
 % put the workspace back, so a study leaves nothing behind
 ifssim_load_workspace();
 if needsPT
-    build_powertrain(fullfile(here,'models'));
+    build_powertrain(ifssim_models_dir());
 end
 if needsBuild
-    build_tyre_paramset(fullfile(here,'models'));
-    build_tiresuspension(fullfile(here,'models'));
+    build_tyre_paramset(ifssim_models_dir());
+    build_tiresuspension(ifssim_models_dir());
 end
 end
 

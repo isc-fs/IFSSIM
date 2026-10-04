@@ -19,7 +19,7 @@ function ok = test_battery_pack()
 %      brings. Generates a second library (~1 min, cached after the first run).
 
 here = fileparts(mfilename('fullpath'));
-addpath(here, fullfile(here,'models'), fullfile(here,'..','spec'));
+addpath(here, ifssim_models_dir(), fullfile(here,'..','spec'));
 ok = true;
 fprintf('\n=== Simscape Battery pack ===\n');
 I = 100;  T = 10;

@@ -46,11 +46,12 @@ R  = spec_reach(SPEC(:,1));
 moves = dept_moves(SPEC(:,1), @tyre_kpis, KPI, K0);
 
 fprintf('\n============================ TYRES ===========================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  %-27s %9s %-8s %-10s %-9s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','ROLE','+10% MOVES');
 for i = 1:n
     f = C.Fields.(strrep(SPEC{i,1},'.','_'));
     fprintf('  %-27s %9.4g %-8s %-10s %-9s %s\n', SPEC{i,1}, f.value, f.unit, ...
-            provclass(f.source), SPEC{i,2}, moves{i});
+            prov_class(f.source), SPEC{i,2}, moves{i});
 end
 fprintf(['\n  lap %.2f s;  skid = skid pad lap, %.3f s;  ay@22 = yaw-balanced limit;\n' ...
          '  K = understeer gradient at low lateral, %+.3f deg/g (negative: oversteer);\n' ...
@@ -92,12 +93,4 @@ fprintf('  tyre_study(...)  try a change\n\n');
 
 T = table(SPEC(:,1), SPEC(:,2), moves, R.Reaches, ...
           'VariableNames', {'Parameter','Role','Moves','Reaches'});
-end
-
-function c = provclass(src)
-w = upper(strtok(src));
-known = {'MEASURED','MEASURED-ISH','GEOMETRY','DERIVED','DATASHEET', ...
-         'SECONDARY','ASSUMED','DISPUTED','ZEROED','UNKNOWN'};
-if any(strcmp(w, known)), c = w; else, c = 'UNKNOWN'; end
-if strcmp(c,'MEASURED-ISH'), c = 'MEASURED~'; end
 end

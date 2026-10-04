@@ -19,7 +19,7 @@ function ifssim_plant_build(useVDB)
 
 if nargin < 1 || isempty(useVDB), useVDB = false; end
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 ifssim_workdir();
 
 fprintf('\n=== building plant ===\n');

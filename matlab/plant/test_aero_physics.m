@@ -2,7 +2,7 @@ function ok = test_aero_physics()
 %TEST_AERO_PHYSICS  Check drag, downforce, balance and the body-frame claim.
 
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 P = ifssim_load_workspace();
 
 h = 'aero_test_harness';

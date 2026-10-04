@@ -16,7 +16,7 @@ function ok = ifssim_plant_check(verbose, useVDB)
 if nargin < 1 || isempty(verbose), verbose = false; end
 if nargin < 2 || isempty(useVDB),  useVDB  = false; end
 here = fileparts(mfilename('fullpath'));
-addpath(here); addpath(fullfile(here,'models'));
+addpath(here); addpath(ifssim_models_dir());
 
 t0 = tic;
 results = {};   % name, ok

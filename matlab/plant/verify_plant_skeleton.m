@@ -7,7 +7,7 @@ function ok = verify_plant_skeleton(outdir)
 %   then the top level.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 ifssim_load_workspace();

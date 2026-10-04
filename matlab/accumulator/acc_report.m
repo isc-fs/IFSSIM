@@ -14,6 +14,7 @@ K = acc_kpis();
 R = K.R;  P = K.P;
 
 fprintf('\n========================= ACCUMULATOR ========================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  %d cells in series, %d in parallel (%d cells)\n', K.Ns, K.Np, K.Ns*K.Np);
 fprintf('  %.0f V full, %.0f V nominal, %.1f Ah, %.2f kWh, %.3f ohm\n', ...
         K.V_max, K.V_nom, K.cap_Ah, K.E_kWh, K.R_pack);

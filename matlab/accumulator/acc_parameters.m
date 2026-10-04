@@ -49,13 +49,14 @@ R  = spec_reach(SPEC(:,1));
 moves = dept_moves(SPEC(:,1), @acc_kpis, KPI, K0, steps);
 
 fprintf('\n========================= ACCUMULATOR ========================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  %d s %d p, %.0f V max, %.2f kWh, %.1f kg of cells, %.3f ohm\n', ...
         K0.Ns, K0.Np, K0.V_max, K0.E_kWh, K0.m_cells, K0.R_pack);
 fprintf('\n  %-27s %8s %-5s %-10s %-8s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','ROLE','STEP MOVES (+10%, or +1 for counts)');
 for i = 1:n
     f = C.Fields.(strrep(SPEC{i,1},'.','_'));
     fprintf('  %-27s %8.4g %-5s %-10s %-8s %s\n', SPEC{i,1}, f.value, f.unit, ...
-            provclass(f.source), SPEC{i,2}, moves{i});
+            prov_class(f.source), SPEC{i,2}, moves{i});
 end
 fprintf(['\n  laps = endurance laps completed (of %.1f); E = energy drawn; Vmin = lowest\n' ...
          '  cell voltage; Irms = rms cell current; dT = cell heating with NO cooling\n'], K0.R.laps_needed);
@@ -89,11 +90,4 @@ T = table(SPEC(:,1), SPEC(:,2), moves, R.Reaches, ...
           'VariableNames', {'Parameter','Role','Moves','Reaches'});
 end
 
-function c = provclass(src)
-w = upper(strtok(src));
-known = {'MEASURED','MEASURED-ISH','GEOMETRY','DERIVED','DATASHEET', ...
-         'SECONDARY','ASSUMED','DISPUTED','ZEROED','UNKNOWN'};
-if any(strcmp(w, known)), c = w; else, c = 'UNKNOWN'; end
-if strcmp(c,'MEASURED-ISH'), c = 'MEASURED~'; end
-end
 function s = tern(c,a,b), if c, s=a; else, s=b; end, end

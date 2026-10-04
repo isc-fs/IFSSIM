@@ -18,7 +18,7 @@ f = fieldnames(P);
 nFromFile = 0; nDefault = 0;
 for i = 1:numel(f)
     k = f{i};
-    if any(strcmp(k, {'Source','Pacejka','Derived','Cell','Pack','Overrides','SpecPath','SpecName'})), continue; end
+    if any(strcmp(k, {'Source','Pacejka','Derived','Cell','Pack','Overrides','SpecPath','SpecName','Simulator'})), continue; end
     src = P.Source.(k);
     if strcmp(src,'settings.json'), nFromFile = nFromFile + 1; tag = '   ';
     else,                           nDefault  = nDefault  + 1; tag = '(D)';

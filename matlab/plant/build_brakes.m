@@ -11,7 +11,7 @@ function build_brakes(outdir)
 %   slows down has not found a bug.
 
 if nargin < 1 || isempty(outdir)
-    outdir = fullfile(fileparts(mfilename('fullpath')), 'models');
+    outdir = ifssim_models_dir();
 end
 addpath(fileparts(mfilename('fullpath'))); addpath(outdir);
 P = ifssim_load_workspace();

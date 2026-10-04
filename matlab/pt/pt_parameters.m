@@ -55,11 +55,12 @@ R = spec_reach(SPEC(:,1));
 binds = dept_moves(SPEC(:,1), @(P) kpis(pt_model(P)), KPI, k0);
 
 fprintf('\n========================= POWERTRAIN =========================\n');
+fprintf('  car: %s\n', ifssim_car());
 fprintf('  %-26s %9s %-6s %-11s %-12s %s\n','PARAMETER','VALUE','UNIT','PROVENANCE','GROUP','+10% MOVES');
 for i = 1:n
     f = C.Fields.(strrep(SPEC{i,1},'.','_'));
     fprintf('  %-26s %9.4g %-6s %-11s %-12s %s\n', SPEC{i,1}, f.value, f.unit, ...
-            provclass(f.source), SPEC{i,2}, binds{i});
+            prov_class(f.source), SPEC{i,2}, binds{i});
 end
 
 fprintf('\n---- where each one reaches (spec_reach) ----------------------\n');
@@ -120,12 +121,4 @@ elseif strcmp(r.Plant{1}, '-')
 else
     s = sprintf('plant: %s', r.Plant{1});
 end
-end
-
-function c = provclass(src)
-w = upper(strtok(src));
-known = {'MEASURED','MEASURED-ISH','GEOMETRY','DERIVED','DATASHEET', ...
-         'SECONDARY','ASSUMED','DISPUTED','ZEROED','UNKNOWN'};
-if any(strcmp(w, known)), c = w; else, c = 'UNKNOWN'; end
-if strcmp(c,'MEASURED-ISH'), c = 'MEASURED~'; end
 end

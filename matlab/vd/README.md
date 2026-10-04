@@ -39,7 +39,7 @@ car whose numbers disagree with each other.
 
 ## If you are on the suspension & vehicle dynamics department
 
-These are the parameters you own, in `matlab/spec/car_spec.m`:
+These are the parameters you own, in your car's file in `matlab/spec/cars/` (`ifs08.m` for the IFS-08):
 
 | | |
 |---|---|
@@ -92,7 +92,7 @@ That drives the **full Simulink plant**: roll angle, per-corner loads, whether
 an inside wheel lifts. Use it for the things the design model does not have —
 dampers, ride, transient weight transfer.
 
-Neither touches the car. `settings.json` and `car_spec.m` are untouched, so
+Neither touches the car. `settings.json` and the car's spec file are untouched, so
 nothing you try here affects the simulator or anybody else's run.
 
 ### The build will stop you writing an impossible car
@@ -130,7 +130,7 @@ red ports and errors that look like a broken model but are not.
 the `build_*.m` scripts, which delete and rewrite the file. A change made in
 the diagram survives until the next `ifssim_plant_build` and then vanishes,
 which is worse than not being able to make it at all. To change the physics,
-edit the generator; to change a number, edit `car_spec.m`.
+edit the generator; to change a number, edit the car's file in `matlab/spec/cars/`.
 
 You do **not** need to rebuild to try a number. The suspension values reach the
 blocks as base-workspace variables (`IFSSIM_kw`, `IFSSIM_cw`, `IFSSIM_arbF`,
@@ -141,7 +141,7 @@ and `plant_study` says so.
 
 ## Making a change real
 
-1. Edit the number in `matlab/spec/car_spec.m`. **Every parameter needs a
+1. Edit the number in the car's file in `matlab/spec/cars/`. **Every parameter needs a
    source string** — the file refuses to build without one. Say where the
    number came from: a measurement, a drawing, a datasheet, or an assumption.
 2. `build_car` — checks the car, writes `settings.json`, so the simulator and

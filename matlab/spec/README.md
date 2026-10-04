@@ -1,6 +1,6 @@
 # The car
 
-**Edit `car_spec.m`. Run `build_car`. That is the whole workflow.**
+**Edit your car's file in `cars/`. Run `build_car`. That is the whole workflow.**
 
 You do not need to know how the simulator works to change the car. You need
 to know which number you want to change.
@@ -22,7 +22,7 @@ measured distance between the wheel centres, and stayed that way.
 So the direction is now one-way:
 
 ```
-   car_spec.m  ──►  check_car  ──►  settings.json   (UE5 reads this)
+   cars/ifs08.m ──►  check_car  ──►  settings.json   (UE5 reads this)
    (you edit)                  └──►  Simulink plant ──► FMU
 ```
 
@@ -34,7 +34,7 @@ and are still edited there.
 
 ## Every value has to say where it came from
 
-`car_spec.m` will not let you add a parameter without a source. Use one of:
+A car file will not let you add a parameter without a source. Use one of:
 
 | | meaning |
 |---|---|
@@ -44,6 +44,8 @@ and are still edited there.
 | `ASSUMED` | a typical value for a car like this. Nobody measured it. |
 | `DISPUTED` | sources disagree. Say who says what. |
 | `UNKNOWN` | nobody knows. **This is a legitimate and useful answer.** |
+| `DESIGN` | a target for a car not built yet. Say who set it and when. |
+| `INHERITED` | written for you: carried over from the parent car, not confirmed for this one. |
 
 `UNKNOWN` is not a failure state. Six values are `UNKNOWN` today and saying
 so out loud is worth more than a confident number nobody can defend. Every
@@ -102,3 +104,39 @@ a second and a half on a four-second event, and that gap is worth looking at
 rather than averaging away. Most of it is launch wheelspin — the point-mass
 model caps traction at μ·Fz, which is a car with perfect traction control,
 while the plant spins to a slip ratio of 26. Neither is right.
+
+## Prototypes
+
+One file per car, in `cars/`:
+
+| car | file | role |
+|---|---|---|
+| IFS-08 | `cars/ifs08.m` | **the simulator's car.** Its `settings.json`, plant models and FMU are committed and loaded by UE5. |
+| IFS-09 | `cars/ifs09.m` | the next prototype. Inherits the IFS-08 and overrides only what differs. |
+
+```matlab
+ifssim_car('IFS-09')          % work on the IFS-09; every tool follows
+build_car('plant')            % builds into matlab/build/cars/IFS-09/, never over the IFS-08
+car_diff('IFS-08','IFS-09')   % what is different, and how much is still inherited
+ifssim_car('IFS-08')          % back
+```
+
+- **Inherited values say so.** An IFS-09 value carried over from the IFS-08
+  has the source `INHERITED from IFS-08 -- <the IFS-08's source>`. The
+  IFS-08's `MEASURED` describes the IFS-08; nobody has weighed the IFS-09
+  just because somebody weighed the IFS-08. `check_car` counts what's still
+  inherited.
+- **Only what differs goes in the new car's file.** A value that's the same on
+  both cars stays inherited. Copying it would make two copies of one number,
+  free to drift.
+- **The active car is per session** (`ifssim_car`). A MATLAB restart is back
+  on the IFS-08, on purpose: a choice that outlived the session would let
+  somebody build "the car" a week later and get the wrong one. Batch jobs and
+  CI choose with the environment variable `IFSSIM_CAR`.
+- **Build outputs are separated.** The cars' Simulink models share names
+  (`IFSSIM_Plant`, …), so only one car's models folder is ever on the path
+  (`ifssim_models_dir`). `settings.json` is written only for the simulator's
+  car.
+- **Adding a prototype is adding a file.** `cars/ifs10.m` with
+  `C = inherit(ifs09(), 'IFS-10');` is a car.
+

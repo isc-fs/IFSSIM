@@ -146,16 +146,25 @@ else
 end
 
 %% ---- what nobody knows ------------------------------------------------
-lvl = struct('UNKNOWN',{{}},'DISPUTED',{{}},'ASSUMED',{{}});
+% INHERITED comes first and wins: a value a prototype carries over from the
+% car before it is the other car's number, whatever that car's source said.
+lvl = struct('INHERITED',{{}},'UNKNOWN',{{}},'DISPUTED',{{}},'ASSUMED',{{}});
 for i = 1:numel(C.Order)
     f = C.Fields.(C.Order{i});
-    tok = regexp(f.source,'^(UNKNOWN|DISPUTED|ASSUMED)','match','once');
+    tok = regexp(f.source,'^(INHERITED|UNKNOWN|DISPUTED|ASSUMED)','match','once');
     if ~isempty(tok), lvl.(tok){end+1} = f.name; end
 end
+nOwn = numel(C.Order) - numel(lvl.INHERITED);
 fprintf('\n--- provenance ---\n');
-fprintf('  %d parameters: %d unknown, %d disputed, %d assumed, %d sourced\n', ...
-    numel(C.Order), numel(lvl.UNKNOWN), numel(lvl.DISPUTED), numel(lvl.ASSUMED), ...
-    numel(C.Order)-numel(lvl.UNKNOWN)-numel(lvl.DISPUTED)-numel(lvl.ASSUMED));
+if ~isempty(C.Parent)
+    fprintf('  %s inherits from %s: %d of %d parameters are still the %s''s (INHERITED),\n', ...
+            C.Name, C.Parent, numel(lvl.INHERITED), numel(C.Order), C.Parent);
+    fprintf('  %d are the %s''s own. car_diff(''%s'',''%s'') lists them.\n', ...
+            nOwn, C.Name, C.Parent, C.Name);
+end
+fprintf('  %d own parameters: %d unknown, %d disputed, %d assumed, %d sourced\n', ...
+    nOwn, numel(lvl.UNKNOWN), numel(lvl.DISPUTED), numel(lvl.ASSUMED), ...
+    nOwn-numel(lvl.UNKNOWN)-numel(lvl.DISPUTED)-numel(lvl.ASSUMED));
 for t = {'UNKNOWN','DISPUTED'}
     if ~isempty(lvl.(t{1}))
         fprintf('  %-9s %s\n', t{1}, strjoin(lvl.(t{1}), ', '));

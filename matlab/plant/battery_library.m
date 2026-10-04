@@ -8,11 +8,13 @@ function [lib, block, B] = battery_library(P)
 %   in it (battery_from_spec), so the same library serves every cell and every
 %   study of one.
 %
-%   WHERE IT GOES. The car_spec arrangement lives in plant/models/battery/ and
-%   is committed with the other models, so the plant opens without
-%   generating anything. Any other arrangement -- a study, or the next
-%   prototype before it is in car_spec -- goes to the gitignored build folder,
-%   so trying one cannot leave a library in the repository.
+%   WHERE IT GOES. Libraries are named by ARRANGEMENT, not by car, so two
+%   prototypes with the same arrangement share one. The SIMULATOR car's
+%   arrangement lives in plant/models/battery/ and is committed with its
+%   models, so the plant opens without generating anything. Any other
+%   arrangement -- a study, or another prototype's pack -- goes to the
+%   gitignored build folder, so trying one cannot leave a library in the
+%   repository.
 %
 %   block is the pack block inside it, ready for add_block.
 
@@ -21,7 +23,7 @@ addpath(fullfile(here,'..','spec'));
 B = battery_from_spec(P);
 lib = B.LibraryName;
 
-Bspec = battery_from_spec(ifssim_params());
+Bspec = battery_from_spec(ifssim_params([], simulator_car()));
 if strcmp(lib, Bspec.LibraryName)
     d = fullfile(here, 'models', 'battery');
 else
