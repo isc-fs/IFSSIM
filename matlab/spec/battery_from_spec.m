@@ -53,6 +53,13 @@ if abs(P.Cell.OCV_V(end) - P.Cell.VMax) > 1e-9
           P.Cell.VMax, P.Cell.OCV_V(end));
 end
 
+if isfield(P.Pack, 'CellChargeCutoff')
+    socMax = interp1(P.Cell.OCV_V, P.Cell.OCV_SoC, min(P.Cell.VMax, P.Pack.CellChargeCutoff));
+    if P.Assumed.BatteryInitialSoC > socMax + 1e-9
+        error('battery_from_spec:soc0', ['the pack starts at %.0f%% charge but is only charged to ' ...
+              '%.1f%% (the %.2f V cut-off)'], 100*P.Assumed.BatteryInitialSoC, 100*socMax, P.Pack.CellChargeCutoff);
+    end
+end
 B.Np = P.Pack.CellsParallelPerModule;
 B.Ns = P.Pack.CellsSeriesPerModule;
 B.NModSeries   = P.Pack.ModulesInSeries;

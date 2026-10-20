@@ -349,6 +349,9 @@ C = par(C,'Pack.ModulesInParallel',       1, '-','MEASURED modules are in series
 % what check_car compares it against, so exceeding them is visible rather
 % than silently modelled as impossible.
 C = par(C,'Pack.CurrentLimit',         200, 'A','MEASURED logged on the car, bursts to 200 A');
+% Charge cut-off per cell. The pack's top voltage, top state of charge and
+% usable energy follow from it (pack_from_cells).
+C = par(C,'Pack.CellChargeCutoff',    4.20, 'V','ASSUMED charged to the cell''s own 4.20 V: nothing records the IFS-08 BMS stopping lower');
 
 %% ---- tyre curve ------------------------------------------------------
 % Shape factors, not measurements. LonC sets how much grip survives at full

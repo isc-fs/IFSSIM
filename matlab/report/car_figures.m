@@ -92,7 +92,8 @@ end
 [F, C] = add(F, C, reuse(@() acc_plots(D(1).Ac, D(2).Ac, cars, tmpd(opts.outdir)), opts.outdir, ...
     {'acc_lap_current.png', '13_acc_lap_current.png', sprintf('One flat-out lap, current per cell: peaks at the %.0f A pack limit (%.1f A a cell).', D(1).Ac.I_limit, D(1).Ac.I_cell_at_limit); ...
      'acc_endurance.png',   '14_acc_endurance.png', sprintf('Charge and sag across a flat-out endurance: %.1f of %.1f laps.', D(1).Ac.laps, D(1).Ac.R.laps_needed)}));
-[F, C] = add(F, C, fig_battery(D(1), opts.outdir));
+[F, C] = add(F, C, fig_battery(D, opts.outdir));
+ifssim_car(carA);  ifssim_load_workspace();
 [F, C] = add(F, C, fig_kpis(D, opts.outdir));
 
 R.files = F;  R.captions = C;  R.data = D;  R.outdir = opts.outdir;
@@ -357,45 +358,49 @@ fc = {'07_plant_vs_powertrain_model.png', sprintf(['The full plant at full throt
       'control, and that gap is the most traction control could be worth.'], D(1).accel.t_target - D(1).E.t_accel)};
 end
 
-% ---- 15: the generated battery pack against the analytic answer -----------
-function fc = fig_battery(d, outdir)
+% ---- 15: the generated battery packs against the analytic answer ---------
+function fc = fig_battery(D, outdir)
+% Each car's pack is simulated WITH THAT CAR ACTIVE: the generated modules
+% read the cell from the active car's workspace (IFSSIM_cell_*).
 fc = cell(0,2);
-P = d.P;  PK = pack_from_cells(P);
 I = 100;  T = 30;
-mdl = 'car_figures_battery';
-if bdIsLoaded(mdl), close_system(mdl, 0); end
-new_system(mdl);
-set_param(mdl, 'SolverType','Fixed-step','Solver','ode1','FixedStep','0.0010416666666666671','StopTime',num2str(T));
-add_block('simulink/Sources/Constant', [mdl '/I'], 'Value', num2str(I), 'Position',[30 60 60 80]);
-try
-    evalc('info = build_battery_pack(mdl, ''Pack'', [150 40 300 200], P);');
-catch ME
-    fprintf('  battery figure skipped: %s\n', ME.message);  close_system(mdl,0);  return
+f = figure('Visible','off','Position',[100 100 900 440]); hold on; grid on; box on;
+txt = {};  worst = 0;
+for i = 1:numel(D)
+    ifssim_car(D(i).name);  P = ifssim_params();  ifssim_load_workspace();
+    PK = pack_from_cells(P);
+    mdl = 'car_figures_battery';
+    if bdIsLoaded(mdl), close_system(mdl, 0); end
+    new_system(mdl);
+    set_param(mdl, 'SolverType','Fixed-step','Solver','ode1','FixedStep','0.0010416666666666671','StopTime',num2str(T));
+    add_block('simulink/Sources/Constant', [mdl '/I'], 'Value', num2str(I), 'Position',[30 60 60 80]);
+    try
+        evalc('info = build_battery_pack(mdl, ''Pack'', [150 40 300 200], P);');
+    catch ME
+        fprintf('  battery figure skipped for %s: %s\n', D(i).name, ME.message);  close_system(mdl,0);  continue
+    end
+    add_line(mdl, 'I/1', 'Pack/1');
+    add_block('simulink/Sinks/To Workspace', [mdl '/v'], 'VariableName','CF_v', 'SaveFormat','Timeseries', 'Position',[400 40 460 60]);
+    add_line(mdl, 'Pack/1', 'v/1');
+    for m = 1:info.NumModules
+        add_block('simulink/Sinks/Terminator', sprintf('%s/t%d', mdl, m), 'Position',[400 70+25*m 420 85+25*m]);
+        add_line(mdl, sprintf('Pack/%d', m+1), sprintf('t%d/1', m));
+    end
+    r = sim(mdl);  v = r.get('CF_v');  close_system(mdl, 0);
+    soc0 = P.Assumed.BatteryInitialSoC;  t = v.Time;  vs = squeeze(v.Data);
+    va = PK.Ns * interp1(P.Cell.OCV_SoC, P.Cell.OCV_V, soc0 - I*t/(PK.CapacityAh*3600)) - I*PK.Rint;
+    [c, ls] = sty(i);
+    plot(t, vs, '-', 'Color', c, 'LineWidth', 4, 'DisplayName', sprintf('%s: Simscape Battery %s', D(i).name, info.Library));
+    plot(t, va, ':', 'Color', [0.2 0.2 0.2], 'LineWidth', 1.5, 'DisplayName', sprintf('%s: analytic Ns OCV(soc) - I R', D(i).name));
+    worst = max(worst, max(abs(vs - va)));
+    txt{end+1} = sprintf('%s %dp%ds x %d modules', D(i).name, info.Np, info.Ns, info.NumModules); %#ok<AGROW>
 end
-add_line(mdl, 'I/1', 'Pack/1');
-add_block('simulink/Sinks/To Workspace', [mdl '/v'], 'VariableName','CF_v', 'SaveFormat','Timeseries', 'Position',[400 40 460 60]);
-add_line(mdl, 'Pack/1', 'v/1');
-for m = 1:info.NumModules
-    add_block('simulink/Sinks/Terminator', sprintf('%s/t%d', mdl, m), 'Position',[400 70+25*m 420 85+25*m]);
-    add_line(mdl, sprintf('Pack/%d', m+1), sprintf('t%d/1', m));
-end
-ifssim_load_workspace();
-r = sim(mdl);  v = r.get('CF_v');
-close_system(mdl, 0);
-soc0 = P.Assumed.BatteryInitialSoC;
-t = v.Time;
-va = PK.Ns * interp1(P.Cell.OCV_SoC, P.Cell.OCV_V, soc0 - I*t/(PK.CapacityAh*3600)) - I*PK.Rint;
-f = figure('Visible','off','Position',[100 100 800 420]); hold on; grid on; box on;
-plot(t, squeeze(v.Data), '-', 'Color', [0 0.35 0.65], 'LineWidth', 4, 'DisplayName', ...
-     sprintf('Simscape Battery pack (%s)', info.Library));
-plot(t, va, '--', 'Color', [0.85 0.5 0], 'LineWidth', 2, 'DisplayName', 'analytic: Ns OCV(soc) - I R');
 xlabel('time [s]'); ylabel('pack terminal voltage [V]');
-title(sprintf('%s pack at a constant %d A: max difference %.2g V', d.name, I, max(abs(squeeze(v.Data) - va))));
-legend('Location','northeast', 'Interpreter','none');
+title(sprintf('Each car''s generated pack at a constant %d A: max difference from the closed form %.2g V', I, worst));
+legend('Location','east', 'Interpreter','none', 'FontSize', 8);
 save_fig(f, outdir, '15_battery_pack.png');
-fc = {'15_battery_pack.png', sprintf(['The plant''s accumulator, generated by Simscape Battery from the spec''s ' ...
-      'arrangement (%dp%ds, %d modules), against the closed form under %d A: they agree to %.2g V.'], ...
-      info.Np, info.Ns, info.NumModules, I, max(abs(squeeze(v.Data) - va)))};
+fc = {'15_battery_pack.png', sprintf(['The plant''s accumulator for each car, generated by Simscape Battery from the spec''s ' ...
+      'arrangement (%s), against the closed form under %d A: they agree to %.2g V.'], strjoin(txt, '; '), I, worst)};
 end
 
 % ---- 16: the two cars, side by side --------------------------------------
@@ -426,7 +431,7 @@ xline(100, ':');
 for j = 1:n
     text(max(rel(j,:)) + 1, j, sprintf('  %s %.4g   %s %.4g', D(1).name, V(j,1), D(end).name, V(j,end)), 'FontSize', 8);
 end
-xlim([0 160]);
+xlim([0 max(160, max(rel(:)) + 60)]);
 xlabel(sprintf('percent of %s', D(1).name));
 legend({D.name}, 'Location','southeast');
 same = all(abs(V(:,end) - V(:,1)) < 1e-9);

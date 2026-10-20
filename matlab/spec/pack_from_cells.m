@@ -28,7 +28,14 @@ K.Np = v('Pack.CellsParallelPerModule') * v('Pack.ModulesInParallel');  % string
 K.NModules = v('Pack.ModulesInSeries') * v('Pack.ModulesInParallel');
 K.NCells   = K.Ns * K.Np;
 
-K.VMax = K.Ns * v('Cell.VMax');
+% CHARGED TO THE PACK'S CUT-OFF, not necessarily the cell's own maximum: a
+% BMS may stop short of the datasheet charge voltage, as the IFS-09 does to
+% keep 144 cells in series under the FS 600 V limit. The cut-off sets the
+% pack's top voltage, the highest state of charge it ever sees, and the
+% energy it actually holds.
+try, vcut = min(v('Cell.VMax'), v('Pack.CellChargeCutoff')); catch, vcut = v('Cell.VMax'); end
+K.VCellCharge = vcut;
+K.VMax = K.Ns * vcut;
 K.VNom = K.Ns * v('Cell.VNom');
 K.VMin = K.Ns * v('Cell.VMin');
 
@@ -38,12 +45,14 @@ K.VMin = K.Ns * v('Cell.VMin');
 % actual OCV while this printed 342 V regardless.
 K.OCV = @(soc) K.Ns * interp1(v('Cell.OCV_SoC'), v('Cell.OCV_V'), ...
                               max(0,min(1,soc)), 'linear');
-K.SoC0 = 0.9;
+K.SoCMax = interp1(v('Cell.OCV_V'), v('Cell.OCV_SoC'), vcut, 'linear');   % charged to the cut-off
+K.SoC0 = min(0.9, K.SoCMax);
 K.VOpen0 = K.OCV(K.SoC0);
 
 K.CapacityAh = K.Np * v('Cell.CapacityAh');
 % Energy by integrating the curve, not capacity times a nominal voltage.
-sg = linspace(0,1,201);
+% Up to the cut-off: the charge above it is never put in.
+sg = linspace(0, K.SoCMax, 201);
 K.EnergyWh   = K.CapacityAh * trapz(sg, K.OCV(sg));
 
 % Series adds resistance, parallel divides it.
