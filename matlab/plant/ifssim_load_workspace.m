@@ -98,7 +98,10 @@ flat = struct( ...
     'IFSSIM_gr',    P.GearRatio, ...
     'IFSSIM_eta',   P.DrivetrainEfficiency, ...
     'IFSSIM_Tmax',  P.MotorMaxTorque, ...        % Nm at the motor
-    'IFSSIM_Pmax',  P.MotorMaxPower, ...         % W
+    'IFSSIM_Pmax',  P.MotorMaxPower, ...         % W, PER MOTOR
+    'IFSSIM_nmot',  P.Motor.Count, ...           % 1: central + open diff; 2: one per rear wheel
+    'IFSSIM_rpmmax', P.Motor.MaxRpm, ...         % rpm at the motor (Inf: none modelled)
+    'IFSSIM_Pacc',  P.Pack.PowerLimit, ...       % W, the accumulator's limit, shared
     'IFSSIM_wregen', P.Assumed.RegenFadeSpeed, ...  % rad/s at the MOTOR
     'IFSSIM_Treg',  P.MaxRegenTorque, ...        % Nm at the motor, negative side
     'IFSSIM_Preg',  P.MaxRegenPower, ...         % W, cell input current limit

@@ -88,6 +88,32 @@ ok = check(ok,'SoC decreases under drive', soc(end) < soc(1), true, 0);
 ok = check(ok,'SoC stays in [0,1]', all(soc>=0 & soc<=1), true, 0);
 ok = check(ok,'terminal voltage sags under load', B.batt_voltage < PK.VMax, true, 0);
 
+%% 6. TWO MOTORS, ONE PER REAR WHEEL. Motor.Count is a workspace variable,
+%    so the same built model runs it: no rebuild. Two half-size motors, so the
+%    car is otherwise comparable. Each check is one an open differential FAILS.
+half = {'Motor.Count',2, 'MotorMaxTorque',P.MotorMaxTorque/2, 'MotorMaxPower',P.MotorMaxPower/2};
+P2 = ifssim_load_workspace(half);
+drive(1, 0, 0); r = sim(h); T = wheelT(r);
+ok = check(ok,'2 motors, stall: each rear wheel gets its own motor', T(3), ...
+           P2.MotorMaxTorque*P2.GearRatio*P2.DrivetrainEfficiency, 1e-6);
+ok = check(ok,'2 motors, stall: the other rear wheel too', T(4), T(3), 1e-9);
+% Each motor turns with ITS OWN wheel: put only the right rear past the
+% speed limit and only its motor may stop driving. Through an open diff both
+% would see the mean speed, and both would give the same torque.
+wlimWheel = 1000 * 2*pi/60 / P2.GearRatio;            % wheel speed at 1000 rpm motor
+P3 = ifssim_load_workspace([half, {'Motor.MaxRpm', 1000}]);
+assignin('base','W_P',[0;0;0.5*wlimWheel;1.2*wlimWheel]);
+c = Simulink.Bus.createMATLABStruct('IFSSIM_CmdBus'); c.throttle=1; assignin('base','CMD_P',c);
+r = sim(h); T = wheelT(r);
+ok = check(ok,'2 motors: the wheel under the speed limit still drives', T(3) > 0, true, 0);
+ok = check(ok,'2 motors: the wheel past it does not', T(4), 0, 1e-9);
+% THE ACCUMULATOR IS SHARED: two motors that could each make ~33 kW, under a
+% 20 kW accumulator limit, draw 20 kW between them.
+P4 = ifssim_load_workspace([half, {'Pack.PowerLimit', 20000}]);
+drive(1, 0, 100); r = sim(h); B = bus(r);
+ok = check(ok,'2 motors share the accumulator limit [kW]', B.motor_power/1000, 20, 1e-6);
+ifssim_load_workspace();
+
 close_system(h,0);
 fprintf('\n%s\n', ternary(ok,'powertrain checks PASS.','POWERTRAIN CHECKS FAILED.'));
 

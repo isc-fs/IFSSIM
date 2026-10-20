@@ -25,10 +25,23 @@ parameter 10% and watching the numbers this department is judged on:
   `Pack.CurrentLimit` and the cell arrangement do bind.
 - **Regen is power-limited** almost from rest: `MaxRegenPower` binds and
   `MaxRegenTorque` does not.
-- **`GearRatio` does not bind**, but only because the plant has **no motor
-  speed limit**. The ratio's real trade, launch torque against the rev
-  limiter, can't show up until one is added. The model reaches about
-  6400 rpm at top speed.
+- **`GearRatio` does not bind on the IFS-08**, but only because it has **no
+  recorded motor speed limit** (`Motor.MaxRpm` is Inf). On a car that has one
+  it does: the IFS-09's F-SiC motors stop at 20,000 rpm, so at 12.5:1 its top
+  speed is 33.2 m/s and the gear ratio trades launch torque against it.
+
+## One motor or two
+
+`Motor.Count` is the layout: 1 is a central motor through an open
+differential, which turns at the mean of the rear wheels and gives each half
+its torque; 2 is a motor per rear wheel, each with its own speed, torque,
+power and speed limits. Both share the accumulator: its own limit
+(`Pack.PowerLimit`, the FS 80 kW) and what the pack can pass. The two motors
+get equal torque; torque vectoring is a control strategy and gets its own
+block when it is written. `test_powertrain_physics` holds the dual layout to
+what an open differential cannot do: each wheel gets its own motor's torque,
+one wheel past the speed limit stops only its own motor, and two motors share
+the accumulator's limit exactly.
 
 These are facts about this car, not about the parameters. Change the pack and
 the motor's numbers may start to bind; `pt_study` reports when the binding

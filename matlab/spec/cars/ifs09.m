@@ -59,10 +59,26 @@ C = par(C,'Pack.ModulesInParallel',        1, '-','DESIGN IFS-09 accumulator: on
 % Charged to 4.15 V a cell, not the P30B's own 4.20 V: 144 x 4.15 = 597.6 V,
 % under the FS 600 V limit. 144 x 4.20 would be 604.8 V.
 C = par(C,'Pack.CellChargeCutoff',    4.15, 'V','DESIGN IFS-09: charge cut-off 4.15 V a cell, keeping 144s at 597.6 V under the FS 600 V limit (2026-10-20)');
-% THE LIMIT IS POWER, 80 kW, not a current. The plant's motor is lossless,
-% so MotorMaxPower is the accumulator's electrical power limit. The current
+% THE LIMIT IS POWER, 80 kW, not a current: Pack.PowerLimit. The current
 % limit is then sized so it never binds first: the current 80 kW needs at
 % the pack's lowest voltage (144 cells at the 2.5 V floor, 360 V).
-C = par(C,'MotorMaxPower',           80000, 'W','DESIGN IFS-09: 80 kW limit (2026-10-20). With the motor lossless in the plant, this is the accumulator''s electrical power limit, the FS one.');
+C = par(C,'Pack.PowerLimit',         80000, 'W','DESIGN IFS-09: 80 kW limit on the accumulator (2026-10-20), the FS one');
 C = par(C,'Pack.CurrentLimit',      222.2, 'A','DERIVED so the 80 kW limit binds, never the current: 80 kW at the pack''s floor, 144 x 2.5 V = 360 V. At nominal (518 V) 80 kW is 154 A, 38.6 A a cell.');
+
+% POWERTRAIN: Drivetrain Innovation F-SiC 2WD kit -- one F-SiC inverter block
+% (two inverter modules) and two F-SiC motors, ONE PER REAR WHEEL, through a
+% 12.5:1 in-wheel reduction. Figures from DTI's F-SiC product page.
+% Not on the page and not given, so still inherited: the reduction's
+% efficiency (DrivetrainEfficiency 0.92) and the rotor inertia (not modelled).
+% The motors' 3.7 kg each sit in the rear corners; the car's total mass is
+% still the IFS-08's.
+C = par(C,'Motor.Count',          2,     '-',  'DESIGN IFS-09: F-SiC 2WD kit, one motor per rear wheel (2026-10-20)');
+C = par(C,'GearRatio',            12.5,  '-',  'DESIGN IFS-09: 12.5:1 in-wheel reduction (2026-10-20)');
+C = par(C,'MotorMaxTorque',       31.6,  'N*m','DATASHEET F-SiC motor peak torque, per motor (11 Nm nominal)');
+C = par(C,'MotorMaxPower',        35000, 'W',  'DATASHEET F-SiC motor peak power, per motor (15.4 kW nominal). Two of them, 70 kW, sit under the 80 kW accumulator limit.');
+C = par(C,'Motor.MaxRpm',         20000, 'rpm','DATASHEET F-SiC motor maximum speed (13 250 rpm nominal). At 12.5:1 on a 0.202 m wheel: 33.8 m/s.');
+C = par(C,'Inverter.VMin',        36,    'V',  'DATASHEET F-SiC inverter operating voltage 36-620 VDC');
+C = par(C,'Inverter.VMax',        620,   'V',  'DATASHEET F-SiC inverter operating voltage 36-620 VDC');
+C = par(C,'MaxRegenTorque',       31.6,  'N*m','ASSUMED mirrors the drive torque, per motor (the IFS-08''s rule)');
+C = par(C,'MaxRegenPower',        18662, 'W',  'DERIVED from the P30B''s 9 A maximum charge current (datasheet): 4p x 9 A = 36 A at the 518 V nominal pack. The IFS-08''s 6 kW was an assumption about the VTC6.');
 end

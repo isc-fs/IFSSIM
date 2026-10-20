@@ -204,6 +204,13 @@ C = par(C,'MotorMaxPower',   80000,'W',  'MEASURED rules limit 80 kW, workbook a
 C = par(C,'MaxRegenTorque',  230,  'N*m','ASSUMED mirrors drive torque; regen is the only service brake on this car');
 C = par(C,'MaxRegenPower',   6000, 'W',  'ASSUMED battery cell input-current limit');
 C = par(C,'DrivetrainEfficiency',0.92,'-','MEASURED workbook quotes 92-98%; the low end taken');
+% THE LAYOUT. One central motor through a single reduction and an open
+% differential. MotorMaxTorque and MotorMaxPower above are PER MOTOR, and the
+% accumulator's own power limit is Pack.PowerLimit, shared by every motor.
+C = par(C,'Motor.Count',          1,     '-',  'GEOMETRY one central motor driving the rear axle through an open differential');
+C = par(C,'Motor.MaxRpm',         Inf,   'rpm','UNKNOWN no speed limit is recorded for the IFS-08 motor, so none is modelled -- which is why GearRatio never binds');
+C = par(C,'Inverter.VMin',        0,     'V',  'UNKNOWN the IFS-08 inverter''s DC range is not recorded');
+C = par(C,'Inverter.VMax',        Inf,   'V',  'UNKNOWN the IFS-08 inverter''s DC range is not recorded');
 
 %% ---- aerodynamics ----------------------------------------------------
 C = par(C,'CdA',             0.90, 'm^2','UNKNOWN no CFD or tunnel run is recorded');
@@ -352,6 +359,8 @@ C = par(C,'Pack.CurrentLimit',         200, 'A','MEASURED logged on the car, bur
 % Charge cut-off per cell. The pack's top voltage, top state of charge and
 % usable energy follow from it (pack_from_cells).
 C = par(C,'Pack.CellChargeCutoff',    4.20, 'V','ASSUMED charged to the cell''s own 4.20 V: nothing records the IFS-08 BMS stopping lower');
+% The most power the accumulator may give, whatever the motors could take.
+C = par(C,'Pack.PowerLimit',         80000, 'W','DESIGN FS rules: at most 80 kW drawn from the accumulator');
 
 %% ---- tyre curve ------------------------------------------------------
 % Shape factors, not measurements. LonC sets how much grip survives at full

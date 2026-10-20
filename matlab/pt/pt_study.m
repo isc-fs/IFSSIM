@@ -132,7 +132,9 @@ L{end+1} = sprintf('  what binds instead, low speed to high: %s', ...
 L{end+1} = sprintf('    traction up to %.1f m/s, then the pack at %.1f kW (the motor is rated higher)', ...
                    E0.v_traction_end, E0.shaft_kW);
 L{end+1} = '    regen is power-limited (MaxRegenPower) from a few m/s up';
-L{end+1} = '    there is no motor speed limit in the plant, so GearRatio has no top end to trade against';
+if isinf(ifssim_params().Motor.MaxRpm)
+    L{end+1} = '    this car has no recorded motor speed limit, so GearRatio has no top end to trade against';
+end
 L{end+1} = '  pt_parameters shows which parameters move what.';
 msg = strjoin(L, newline);
 end

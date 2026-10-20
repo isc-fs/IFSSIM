@@ -74,7 +74,8 @@ end
 % -------------------------------------------------------------------------
 function bands(E, yl, vmax)
 C = struct('traction',[0.90 0.93 0.97], 'torque',[0.93 0.97 0.92], ...
-           'pack',[0.98 0.95 0.88], 'motor_power',[0.96 0.92 0.96]);
+           'pack',[0.98 0.95 0.88], 'motor_power',[0.96 0.92 0.96], ...
+           'accumulator_limit',[0.97 0.94 0.90], 'motor_speed',[0.94 0.94 0.94]);
 lim = E.limit;  v = E.v;
 edges = [1; find(lim(2:end) ~= lim(1:end-1)) + 1; numel(v)+1];
 for k = 1:numel(edges)-1

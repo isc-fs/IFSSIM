@@ -11,7 +11,7 @@ function E = pt_model(P, opts)
 %
 %   IT IS THE PLANT'S OWN ENVELOPE, not a second one. The drive limit below is
 %   the line in build_powertrain's MATLAB Function block,
-%       T = min(T_cmd, min(Tmax, min(Pmax, v_pack*Ipk) / w)),
+%       T = min(T_cmd, min(Tmax, min(n*Pmax, Pacc, v_pack*Ipk)/n / w)) per motor,
 %   evaluated at the voltage the pack settles to while passing Ipk, and the
 %   regen limit and the directional efficiency -- charged ONCE, at the
 %   gears -- are that block's too. The
@@ -27,7 +27,8 @@ function E = pt_model(P, opts)
 %       two is what a traction controller is worth.
 %     - pack dynamics. Voltage is taken at a fixed state of charge; over 75 m
 %       the SoC moves by well under 1%.
-%     - motor speed limit. The plant has none, so neither does this.
+%     - nothing about the speed limit beyond the plant's own: drive fades to
+%       zero over the last 2% below Motor.MaxRpm (Inf where none is recorded).
 %
 %   E.v            speed grid                                   [m/s]
 %   E.F_motor      what the motor can put through the wheels    [N]
@@ -70,7 +71,17 @@ m_eff = m + 4*Iw/r^2;          % the wheels have to be spun up too
 Voc    = PK.OCV(opts.soc);
 Vterm  = Voc - PK.IOperating * PK.Rint;
 P_pack = Vterm * PK.IOperating;                % electrical = shaft: lossless motor
-P_shaft = min(P.MotorMaxPower, P_pack);
+% THE LAYOUT: Motor.Count motors (1: central with an open diff, 2: one per
+% rear wheel), each limited by MotorMaxTorque / MotorMaxPower / Motor.MaxRpm,
+% all sharing the accumulator: its own limit (Pack.PowerLimit) and what the
+% pack can pass. Equal torque to both motors, as the plant does it.
+nmot  = P.Motor.Count;
+P_mot = nmot * P.MotorMaxPower;
+P_acc = P.Pack.PowerLimit;
+P_shaft = min([P_mot, P_acc, P_pack]);
+wlim  = P.Motor.MaxRpm * 2*pi/60;                 % Inf: none modelled
+spd   = @(wm) min(max((wlim - wm) ./ (0.02*wlim), 0), 1);   % the plant's 2% fade
+if isinf(wlim), spd = @(wm) ones(size(wm)); end
 
 % ---- drive envelope ----------------------------------------------------
 v  = (0:0.05:80)';
@@ -101,8 +112,8 @@ kappa = zeros(size(v));
 ax = zeros(size(v));
 for it = 1:80
     wm = v .* (1 + kappa) / r * gr;
-    T_motor = min(P.MotorMaxTorque, P_shaft ./ max(wm, 1e-3));
-    F_motor = T_motor * gr * eta / r;
+    T_motor = min(P.MotorMaxTorque, (P_shaft/nmot) ./ max(wm, 1e-3)) .* spd(wm);   % each motor
+    F_motor = nmot * T_motor * gr * eta / r;
     FzR = FzR_static + m .* ax .* h ./ L;
     F_traction = 2 * peak(FzR/2);
     F_drive = min(F_motor, F_traction);
@@ -117,15 +128,18 @@ wa = max(v / r * gr, 1e-3);                    % road-speed motor speed, for reg
 
 limit = repmat("traction", size(v));
 mot = F_motor <= F_traction;
+pw = mot & T_motor < P.MotorMaxTorque - 1e-9;
 limit(mot & T_motor >= P.MotorMaxTorque - 1e-9) = "torque";
-limit(mot & T_motor <  P.MotorMaxTorque - 1e-9 & P_pack <  P.MotorMaxPower) = "pack";
-limit(mot & T_motor <  P.MotorMaxTorque - 1e-9 & P_pack >= P.MotorMaxPower) = "motor power";
+[~, which] = min([P_pack, P_acc, P_mot]);          % which power cap is the smallest
+caps = ["pack", "accumulator limit", "motor power"];
+limit(pw) = caps(which);
+limit(mot & spd(wm) < 1) = "motor speed";
 
 % ---- regen -------------------------------------------------------------
 % The block: |T| <= min(Treg, Preg/w), faded by tanh(w/wregen), and the wheel
 % must also brake the losses, so it is divided by eta, not multiplied.
-T_regen = min(P.MaxRegenTorque, P.MaxRegenPower ./ wa) .* tanh(wa / P.Assumed.RegenFadeSpeed);
-F_regen = T_regen * gr / eta / r;
+T_regen = min(P.MaxRegenTorque, (P.MaxRegenPower/nmot) ./ wa) .* tanh(wa / P.Assumed.RegenFadeSpeed);
+F_regen = nmot * T_regen * gr / eta / r;     % MaxRegenPower is the cells': shared
 
 % ---- the events --------------------------------------------------------
 % Quasi-steady straight line: t = integral dv/a, s = integral v dv/a.

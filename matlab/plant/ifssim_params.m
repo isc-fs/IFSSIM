@@ -41,7 +41,7 @@ REQUIRED = {'Mass','Wheelbase','TrackFront','TrackRear','CoGHeight','WeightDistF
 
 P = struct();  P.Source = struct();
 P.Pacejka = struct();  P.Cell = struct();  P.Pack = struct();  P.Assumed = struct();
-P.Susp = struct();
+P.Susp = struct();  P.Motor = struct();  P.Inverter = struct();
 
 for i = 1:numel(C.Order)
     f    = C.Fields.(C.Order{i});
@@ -66,7 +66,7 @@ for i = 1:numel(C.Order)
             % There is one copy now, so there is nothing to drift.
             P.Assumed.(['Tyre' key]) = f.value;
             P.Source.(['Tyre_' key]) = f.source;
-        case {'Cell','Pack','Susp'}
+        case {'Cell','Pack','Susp','Motor','Inverter'}
             P.(grp).(key) = f.value;
             P.Source.([grp '_' key]) = f.source;
         otherwise

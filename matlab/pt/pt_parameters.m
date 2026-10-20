@@ -29,7 +29,10 @@ C = car_spec();
 SPEC = {
 'GearRatio'            'owned'      'trades launch torque against motor speed at the top'
 'MotorMaxTorque'       'owned'      'the torque ceiling; only binds once traction stops binding'
-'MotorMaxPower'        'owned'      'the motor''s power ceiling, against the pack''s'
+'MotorMaxPower'        'owned'      'each motor''s power ceiling, against the pack''s'
+'Motor.Count'          'owned'      '1: central motor + open diff; 2: one per rear wheel'
+'Motor.MaxRpm'         'owned'      'the speed limit: with GearRatio it sets top speed'
+'Pack.PowerLimit'      'accumulator' 'the accumulator''s own cap (FS 80 kW), shared by the motors'
 'DrivetrainEfficiency' 'owned'      'every drive newton and every regen newton, both ways'
 'MaxRegenTorque'       'owned'      'regen ceiling at low speed'
 'MaxRegenPower'        'owned'      'regen ceiling at speed -- binds first, by a lot'
@@ -76,11 +79,12 @@ if ~isempty(dead)
     fprintf('  different limit at every speed. Changing them changes nothing until\n');
     fprintf('  whatever IS binding is moved out of the way.\n\n');
 end
-if any(strcmp(dead,'GearRatio'))
-    fprintf('  GearRatio does not bind because the PLANT HAS NO MOTOR SPEED LIMIT,\n');
-    fprintf('  not because the ratio is free. Its real trade -- launch torque against\n');
-    fprintf('  hitting the rev limit -- is invisible until one is added. This car\n');
-    fprintf('  reaches %.0f rpm at its %.1f m/s top speed in the model.\n\n', E0.top_rpm, E0.v_top);
+if any(strcmp(dead,'GearRatio')) && isinf(C.Fields.Motor_MaxRpm.value)
+    fprintf('  GearRatio does not bind because THIS CAR HAS NO RECORDED MOTOR SPEED\n');
+    fprintf('  LIMIT (Motor.MaxRpm is Inf), not because the ratio is free. Its real\n');
+    fprintf('  trade -- launch torque against the rev limit -- appears once one is set,\n');
+    fprintf('  as it does on a car that has one. This car reaches %.0f rpm at its\n', E0.top_rpm);
+    fprintf('  %.1f m/s top speed in the model.\n\n', E0.v_top);
 end
 fprintf('  DrivetrainEfficiency is charged ONCE, at the gears: road power is\n');
 fprintf('  eta = %.2f of pack power. The motor and inverter are LOSSLESS in the\n', ...
