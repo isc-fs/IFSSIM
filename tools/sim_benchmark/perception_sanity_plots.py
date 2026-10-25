@@ -5,7 +5,7 @@ Complements the numeric benchmarks with something you can look at: for each
 bag, the first PointCloud2 (or ``--scan-index``) goes through the production
 ``RealtimeConeDetector.detect`` and one HTML page shows, per bag:
 
-1. Ground removal — the cropped scan, coloured ground / above ground / vetoed.
+1. Ground removal — the cropped scan, coloured ground / above ground / filtered out.
 2. Clustering    — the above-ground points coloured by DBSCAN cluster, with
                    each cluster's fate (accepted, or which gate dropped it)
                    on hover.
@@ -23,7 +23,7 @@ Nothing is re-implemented: ``perception_sanity.capture`` wraps the stage functio
 production computed. Sim bag benchmarks record the same capture
 (``perception_sanity.json``), which IFS-DV-BENCHWEB shows in the perception section;
 this script is for any bag, including real ones. Everything is drawn in the frame the fit runs in: sensor xy origin,
-rotated so the RANSAC ground plane is horizontal and shifted so it is z = 0.
+rotated so the fitted ground plane is horizontal and shifted so it is z = 0.
 
 Example (from the repo root; re-execs in ifssim-dv_pipeline_stack when the host
 has no ROS)::
@@ -184,9 +184,11 @@ def fig_ground(cap: StageCapture) -> dict:
     ground = _to_ground_frame(cap, cap.cropped[cap.ground_mask])
     above = cap.clustered
     traces = [
-        _scatter3d(ground, f"ground — RANSAC inliers ({len(ground)})", "#8c8c8c", 1.2),
+        _scatter3d(ground, f"ground ({len(ground)})", "#8c8c8c", 1.2),
         _scatter3d(above, f"above ground → DBSCAN ({len(above)})", "#d62728", 2.0),
     ]
+    if len(cap.flat_dropped):
+        traces.append(_scatter3d(cap.flat_dropped, f"above ground, flat-cell filter ({len(cap.flat_dropped)})", "#56b4e9", 1.8))
     if len(cap.vetoed):
         traces.append(_scatter3d(cap.vetoed, f"above ground, tall-column veto ({len(cap.vetoed)})", "#ff9f1c", 1.8))
     if len(cap.guard_dropped):
@@ -398,7 +400,7 @@ def write_page(out: Path, sections: list[str]) -> Path:
 </style></head><body>
 <h1>Perception sanity plots</h1>
 <p class="note">One scan per bag through the production <code>RealtimeConeDetector.detect</code>.
-Frame: the one clustering and the cone fit run in: sensor xy origin, rotated so the RANSAC ground
+Frame: the one clustering and the cone fit run in: sensor xy origin, rotated so the fitted ground
 plane is horizontal and shifted so that plane is z = 0 (z = height above ground).
 Drag to rotate, scroll to zoom, click legend entries to hide layers.</p>
 {"".join(sections)}

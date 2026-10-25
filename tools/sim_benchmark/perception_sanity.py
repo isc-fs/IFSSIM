@@ -4,8 +4,9 @@ Runs the production ``RealtimeConeDetector.detect`` once with the stage function
 it calls wrapped, so every intermediate result is recorded exactly as production
 computed it (nothing is re-implemented):
 
-* ``ransac2``                -> which points were ground (RANSAC inliers)
-* ``_tall_column_veto_mask`` -> which above-ground points the veto removed
+* ``remove_ground``          -> which points were ground (any ``ground_method``)
+* ``_flat_cell_mask``        -> which above-ground points the flat-cell filter removed
+* ``_tall_column_veto_mask`` -> which of the rest the veto removed
 * ``_bound_dbscan_input``    -> which the DBSCAN memory guard dropped
 * ``clustering_separation_rt`` -> DBSCAN labels, and the ground plane
 * ``_fit_cluster``           -> every cone fit, with the points it used
@@ -47,11 +48,12 @@ class ClusterInfo:
 
 @dataclass
 class StageCapture:
-    cropped: object = None  # (N, 3) sensor frame: what RANSAC saw
+    cropped: object = None  # (N, 3) sensor frame: what ground removal saw
     ground_mask: object = None  # (N,) bool over ``cropped``
     rotation: object = None  # 3x3
     plane: object = None
     floor_z: float = 0.0  # ground z in the rotated SENSOR frame (-sensor height)
+    flat_dropped: object = None  # (F, 3) ground frame, removed by the flat-cell filter
     vetoed: object = None  # (M, 3) ground frame, removed by the tall-column veto
     guard_dropped: object = None  # (K, 3) ground frame, removed by the DBSCAN guard
     labels: object = None
@@ -92,26 +94,30 @@ def capture(xyz, config=None) -> StageCapture:
     orig = {
         name: getattr(cd, name)
         for name in (
-            "ransac2",
+            "remove_ground",
+            "_flat_cell_mask",
             "_tall_column_veto_mask",
             "_bound_dbscan_input",
             "_fit_cluster",
             "clustering_separation_rt",
         )
     }
-    veto_in: dict = {}
+    keeps: dict = {}
 
-    def ransac2(A, **kw):
-        inliers, coefs = orig["ransac2"](A, **kw)
-        mask = np.zeros(len(A), dtype=bool)
-        mask[inliers] = True
-        cap.cropped = np.asarray(A[:, 1:4])
-        cap.ground_mask = mask
-        return inliers, coefs
+    def remove_ground(method, data, c, **kw):
+        outliers, coefs = orig["remove_ground"](method, data, c, **kw)
+        cap.cropped = np.asarray(data)
+        cap.ground_mask = ~np.asarray(outliers, dtype=bool)
+        return outliers, coefs
+
+    def flat(xy, z, c):
+        keep = orig["_flat_cell_mask"](xy, z, c)
+        keeps["flat"] = keep
+        return keep
 
     def veto(xy, height, c):
         keep = orig["_tall_column_veto_mask"](xy, height, c)
-        veto_in["keep"] = keep
+        keeps["veto"] = keep
         return keep
 
     def guard(data, c):
@@ -129,7 +135,7 @@ def capture(xyz, config=None) -> StageCapture:
         cap.labels, cap.clustered, cap.plane = np.asarray(labels), np.asarray(clean), coefs
         return labels, clean, coefs
 
-    cd.ransac2, cd._tall_column_veto_mask = ransac2, veto
+    cd.remove_ground, cd._flat_cell_mask, cd._tall_column_veto_mask = remove_ground, flat, veto
     cd._bound_dbscan_input, cd._fit_cluster = guard, fit
     cd.clustering_separation_rt = sep
     try:
@@ -141,10 +147,14 @@ def capture(xyz, config=None) -> StageCapture:
     if cap.cropped is None:
         return cap  # nothing left after the range crop
     cap.rotation = cd.ground_rotation_matrix(cap.plane)
-    w = np.asarray(cap.plane[1:], dtype=np.float64)
-    cap.floor_z = float(np.dot([0.0, 0.0, -cap.plane[0]], w) / np.linalg.norm(w))
+    cap.floor_z = cd.plane_floor_z(cap.plane)
     outliers = to_ground_frame(cap, cap.cropped[~cap.ground_mask])
-    keep = veto_in.get("keep")
+    # Each filter's keep-mask is over what the previous one left (None: kept all).
+    keep = keeps.get("flat")
+    cap.flat_dropped = outliers[~keep] if keep is not None else outliers[:0]
+    if keep is not None:
+        outliers = outliers[keep]
+    keep = keeps.get("veto")
     cap.vetoed = outliers[~keep] if keep is not None else outliers[:0]
     if cap.guard_dropped is None:
         cap.guard_dropped = outliers[:0]
@@ -272,6 +282,7 @@ def to_record(cap: StageCapture, config=None, *, meta: dict | None = None,
         used = (pts[:, 2] > cfg.floor_margin_m) if info.fit is not None else np.zeros(len(pts), bool)
         parts.append((pts[used], "above", info.label, True))
         parts.append((pts[~used], "above", info.label, False))
+    parts.append((cap.flat_dropped, "flat", -1, False))
     parts.append((cap.vetoed, "veto", -1, False))
     parts.append((cap.guard_dropped, "guard", -1, False))
 
@@ -313,6 +324,7 @@ def to_record(cap: StageCapture, config=None, *, meta: dict | None = None,
         n_ground=int(cap.ground_mask.sum()),
         ground_stride=stride,
         n_clustered=int(len(cap.clustered)) if cap.clustered is not None else 0,
+        n_flat_dropped=int(len(cap.flat_dropped)),
         n_vetoed=int(len(cap.vetoed)),
         n_guard_dropped=int(len(cap.guard_dropped)),
         n_clusters=sum(1 for c in cap.clusters if c.label != -1),

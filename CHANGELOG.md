@@ -75,7 +75,7 @@ shipping pipeline, documentation.
   for any bag, including real ones, and `diagnose_cone_shape.py` measures the
   simulator's real cone shape per type. All of them need the ground-at-z=0
   pipeline from
-  [IFS09 `fix/2-perception-ground-z0`](https://github.com/isc-fs/IFS09-DV-PIPELINE/issues/13).
+  [IFS09-DV-PIPELINE#14](https://github.com/isc-fs/IFS09-DV-PIPELINE/pull/14).
 
 ### Changed
 

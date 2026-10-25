@@ -79,12 +79,30 @@ class PerceptionSanityTest(unittest.TestCase):
             n = len(rec["points"]["x"])
             self.assertTrue(all(len(v) == n for v in rec["points"].values()))
 
+    def test_flat_cell_filter_drops_are_recorded(self) -> None:
+        # A sheet 0.10 m above the ground: above the RANSAC threshold (not ground),
+        # and flat. It lies inside 3 x 3 whole 0.3 m filter cells, ~44 points each,
+        # so the filter drops every point of it.
+        rng = np.random.default_rng(3)
+        sheet = np.column_stack([
+            rng.uniform(4.25, 5.05, 400), rng.uniform(-2.95, -2.15, 400),
+            np.full(400, 0.10 - SENSOR_H),
+        ]).astype(np.float32)
+        cfg = ConeDetectionConfig(flat_cell_filter=True)
+        rec = ps.to_record(ps.capture(np.vstack([_scan(), sheet]), cfg), cfg)
+        s = rec["scan"]
+        self.assertEqual(s["n_flat_dropped"], 400)
+        self.assertEqual(rec["points"]["role"].count("flat"), 400)
+        self.assertEqual(s["n_accepted"], 1)  # the cone is a spike, not a flat cell
+
     def test_detector_state_is_restored(self) -> None:
         import cone_detection.cone_detection as cd
 
-        before = (cd.ransac2, cd._fit_cluster, cd.clustering_separation_rt)
+        names = ("remove_ground", "_flat_cell_mask", "_tall_column_veto_mask",
+                 "_bound_dbscan_input", "_fit_cluster", "clustering_separation_rt")
+        before = [getattr(cd, n) for n in names]
         ps.capture(_scan())
-        self.assertEqual(before, (cd.ransac2, cd._fit_cluster, cd.clustering_separation_rt))
+        self.assertEqual(before, [getattr(cd, n) for n in names])
 
 
 if __name__ == "__main__":
