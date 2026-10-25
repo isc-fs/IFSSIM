@@ -21,6 +21,8 @@
 #include <std_msgs/msg/float32_multi_array.hpp>
 
 #include "lws_steering_sensor.h"
+#include "sim_clock_gate.h"
+#include "stamp_guard.h"
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
 
@@ -182,8 +184,12 @@ private:
     // it's the clock *source*, so it builds rclcpp::Time straight from the wire
     // sim ns and must avoid the chicken-and-egg of waiting on its own /clock.
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_pub_;
-    // Last sim time published on /clock — /clock must be non-decreasing.
-    rclcpp::Time last_clock_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    // Which sim stamps go out on /clock (#611). Touched only by the sensor
+    // thread, in onSensorFrame.
+    ifssim_bridge::SimClockGate clock_gate_;
+    // Set by triggerReconnect when the sensor stream is reopened, consumed
+    // by the first frame on the new stream.
+    std::atomic<bool> sensor_stream_reconnected_{false};
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
@@ -244,13 +250,12 @@ private:
     // sensor and lidar publish threads can race occasionally — at 400 Hz
     // IMU we observed ~5-10 ms rewinds in 2026-04-26 step-2 verification,
     // which caused GLIM to reject every subsequent IMU sample after one
-    // outlier-future sample landed first. Clamp each stream's published
-    // stamp to be strictly greater than the previous one (bump by 1 ns
-    // when the natural `now()` would regress). Same clock domain for both
-    // streams (wall-clock from container), so no cross-stream alignment
-    // is needed beyond per-stream monotonicity.
-    rclcpp::Time last_imu_stamp_   = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    rclcpp::Time last_lidar_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    // outlier-future sample landed first. Each guard keeps its stream's
+    // stamps strictly increasing within a sim session and follows a new
+    // session (stamp_guard.h). imu_stamp_guard_ is touched only by the
+    // sensor thread, lidar_stamp_guard_ only by the LiDAR publish thread.
+    ifssim_bridge::StampGuard imu_stamp_guard_;
+    ifssim_bridge::StampGuard lidar_stamp_guard_;
 
     // Subscribers
     rclcpp::Subscription<fs_msgs::msg::ControlCommand>::SharedPtr control_cmd_sub_;

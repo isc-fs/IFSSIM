@@ -80,8 +80,8 @@
         },
         "Lidar1": {
           "SensorType": 6, "Enabled": true,
-          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond is the datasheet rate; the LiDAR stream is UDP-only since #322 (TCP and UDS senders retired — pre-#321 they existed to bypass macOS Docker Desktop's ~7 MB/s TCP loopback cap). The chunked, sender-paced UDP path holds ~7-8 Hz at the full datasheet rate; the remaining gap to nominal 10 Hz is in the DDS layer (1.4 MB BEST_EFFORT messages fragment-loss between publisher and subscriber) — tracked as a follow-up. Sensor packs only emit *hits*, so the wire rate is roughly 65 % of attempted rays (e.g. 1.14 M pts/s of valid range returns at 1.74 M attempted).",
-          "NumberOfChannels": 116, "PointsPerSecond": 300000,
+          "_comment_lidar": "Hesai ATX_S01 datasheet (Section 1.4): 1-D rotating mirror (hybrid solid-state), 116 ch, 120° H × 18.3° V FoV (-12.4° to +5.9°), 10 Hz, ~1.74 M pts/s @ 0.08° H, 3 cm 1σ range. PointsPerSecond is the datasheet rate; the LiDAR stream is UDP-only since #322 (TCP and UDS senders retired — pre-#321 they existed to bypass macOS Docker Desktop's ~7 MB/s TCP loopback cap). At the full datasheet rate a ROS 2 subscriber receives the nominal 10.0 Hz on the GPU path (measured 2026-10-01); the ~7-8 Hz once attributed to DDS fragment loss matches the CPU path's own scan rate at this density (7.7-8.9 Hz). Sensor packs only emit *hits*, so the wire rate is roughly 65 % of attempted rays (e.g. 1.14 M pts/s of valid range returns at 1.74 M attempted).",
+          "NumberOfChannels": 116, "PointsPerSecond": 1740000,
           "RotationsPerSecond": 10,
           "VerticalFOVUpper": 5.9, "VerticalFOVLower": -12.4,
           "HorizontalFOVStart": -60, "HorizontalFOVEnd": 60,
@@ -91,8 +91,8 @@
           "X": 0.0, "Y": 0, "Z": 1.10,
           "RangeNoiseStd": 0.03,
           "DropoutRate": 0.01,
-          "_comment_lidarpath": "CPU path — ParallelFor + LineTraceSingleByChannel against Chaos. The GPU path (#223) is retained as an option and remains the default on ARM Macs, where unified memory + async GPU→CPU readback is cheap; on Windows/x86 the discrete-GPU readback stall + PCIe bus transfer dominate and the CPU LineTrace loop is more predictable. PointsPerSecond dropped to 300k so the ParallelFor scan fits well under a single core budget (~50-60 % of 1 core at 300 k pts/s on a mid-range Ryzen).",
-          "LidarPath": "cpu",
+          "_comment_lidarpath": "GPU path (#223): depth render of the scan envelope, async GPU→CPU readback, compute-shader decode. Default at the datasheet 1.74 M pts/s on every platform. Measured on Windows (RTX 3080, same track and driver): 10.0 Hz, sim 60 fps, readback 17 ms median / 34 ms p95 over PCIe, 4.3 cm mean cone position error. The CPU path ('cpu': ParallelFor + Chaos LineTraceSingleByChannel) is kept for parity checks only: at 1.74 M it reaches 7.7–8.9 Hz and smears each scan along the direction of travel (14 cm forward bias), and at 300 k pts/s (the v1.0.0 default) the detector misreads up to 11 % of small cones at 15–20 m as big orange, which trips the stop latch. Do not judge perception below the datasheet density.",
+          "LidarPath": "gpu",
           "_comment_perchannelmaxrange": "Per-channel max-range overrides in METRES, indexed by V channel (0 = lowest V angle = -12.4°, 115 = highest = +5.9°). Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer channels reach less far than central beams: 60 m bottom rings, 198 m centre, 90 m top. The array below is derived from the datasheet (App. A.1.2 Sorted by Ring IDs) and linearly remapped [60-198 m] → [25-30 m] so it fits under the sim's MaxRange=30 m perf budget while preserving the relative shape. Regenerate with `python3 tools/gen_per_channel_range.py --pretty`. Length must equal NumberOfChannels (116); mismatch logs a warning and falls back to MaxRange. Both CPU and GPU LiDAR paths read from this.",
           "PerChannelMaxRangeM": [
             25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00, 25.00,

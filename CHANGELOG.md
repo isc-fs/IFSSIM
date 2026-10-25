@@ -14,6 +14,21 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Perception stress metrics** in the offline perception benchmark
+  (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
+  `docs/ENVIRONMENT_ROADMAP.md`. It now scores:
+  - big-orange classification, using the same height rule that routes cones
+    to `/Conos_Orange`;
+  - false big oranges per frame, and frames with two or more of them;
+  - an offline replay of `control_node`'s permanent stop latch, including
+    the trackdrive `/slam/final_lap` gate, reporting whether the car would
+    have stopped somewhere that is not a gate;
+  - clusters, ground fraction and above-ground points per scan.
+
+  `--reference <run>` reports deltas against a baseline run. The previous
+  benchmark discarded the detector's height, so big orange could not be
+  scored at all.
+
 - **Mission benchmarks** (`tools/sim_benchmark/run_mission_benchmark.py`,
   defaults in `missions.yaml`). The pipeline drives acceleration, skidpad,
   autocross and trackdrive in the sim, scored by the referee, per track and
@@ -64,6 +79,33 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
+  points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
+  change assumed the GPU→CPU readback would stall on a discrete GPU over
+  PCIe, and that 300 k points/s was still fine for cone detection. Neither
+  was measured, and both were wrong. Measured on the Windows dev computer
+  (RTX 3080 10 GB) with the same track, the ground-truth driver at 3 m/s
+  for 90 s, and the offline perception benchmark:
+
+  | | CPU, 300 k | CPU, 1.74 M | GPU, 1.74 M |
+  |---|---|---|---|
+  | LiDAR rate | 10.0 Hz | 7.7–8.9 Hz | 10.0 Hz |
+  | Cone recall | 87.3% | 97.4% | 97.6% |
+  | Precision | 99.98% | 99.64% | 99.98% |
+  | Mean / p95 position error | 4.7 / 8.6 cm | 19.5 / 28.4 cm | 4.3 / 6.9 cm |
+  | False big oranges (frames with ≥2) | 517 (109) | 0 | 0 |
+  | Stop latch fires away from a gate | yes, 30 m in | no | no |
+
+  At 300 k the cones are sparse enough at range that the detector picks the
+  big-cone template: 1.7% of small cones at 5–10 m read as big orange,
+  rising to 11% at 15–20 m. That is enough to trip `control_node`'s
+  permanent stop latch. The CPU path at 1.74 M cannot hold 10 Hz, and
+  because each scan is traced while the car moves it places cones 14 cm too
+  far forward. On the GPU path the readback took 17 ms median and 34 ms p95,
+  and the sim held 60 fps in all three runs. `LidarPath: cpu` stays
+  available for comparing the two paths but not for judging perception
+  (`docs/ENVIRONMENT_ROADMAP.md`, design rule 11). Not yet measured on a
+  weaker GPU.
 - **The `pipeline/` submodule now tracks
   [`isc-fs/IFS09-DV-PIPELINE`](https://github.com/isc-fs/IFS09-DV-PIPELINE)**
   instead of the frozen `IFS08-DV-PIPELINE`. 09 was imported with 08's
@@ -75,6 +117,102 @@ shipping pipeline, documentation.
   After pulling, run `git submodule sync --recursive && git submodule
   update --init --recursive`. Otherwise your checkout keeps fetching
   from the old URL.
+- **The start pose follows the ground.** `ComputeStartGatePose` used to
+  set the car at `HeightOffset + 50` cm, level, whatever was underneath. On
+  the 8° test ramp that put the car 15 cm inside the ramp. It now takes Z
+  from the ground under the spawn point and pitch/roll from a plane fitted
+  to a 4-ray cross ±0.8 m around it, keeping the heading. On the flat floor
+  the pose is bit-identical on every shipped track. The cone ground snap
+  shares the same trace, which now asks for WorldStatic *objects* (the
+  ground) rather than the WorldStatic *channel* (which a cone or the car
+  also blocks), over a ±200 m window (`GroundSearchHalfHeightCm`). Cones
+  cache where they landed after the snap. Checked by
+  `tools/smoke/test_start_pose.py` against a running sim. First C++ step
+  of `docs/ENVIRONMENT_ROADMAP.md`.
+
+### Fixed
+
+- **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
+  The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
+  a repeated or slightly earlier stamp 1 ns past the last one. Like the
+  `/clock` mark fixed in #611, that last stamp outlived the sim session. A
+  restarted sim starts its clock near zero, so every `/imu` and LiDAR stamp
+  after it stayed pinned to the previous session's last stamp (170.6 s, not
+  advancing at all, while `/clock` read 13.5 s). Anything that reads those
+  stamps (GLIM, the EKF, `verify_determinism.py`) got the wrong time until
+  the container restarted. Both guards (`stamp_guard.h`, with unit tests)
+  now follow a new session the way `/clock` does: when a stamp is more than
+  1 s behind the last one, and for `/imu` also on a sensor-stream reconnect.
+  After a restart, `/imu` and `/lidar_points` now track `/clock`.
+- **Two runs reset with the same seed did not get the same IMU noise**
+  ([#643](https://github.com/isc-fs/IFSSIM/issues/643)). The seeding itself
+  worked; two things around it did not.
+  - The TCP sensor stream built each 400 Hz frame on its own thread, reading
+    the sim clock, the IMU, the pose and ground truth from the game thread's
+    live objects while they were being updated. A frame could carry one
+    tick's time with the previous tick's IMU sample. The frame is now packed
+    once per tick on the game thread, after every actor has ticked, and the
+    stream resends the latest one. Every field in a frame now comes from the
+    same tick.
+  - `resetScenario` ran as a game-thread task wherever it landed in a frame,
+    sometimes before the IMU and physics had ticked and sometimes after. The
+    first tick after a reset then got noise sample 0 in one run and sample 1
+    in the next, and physics restarted a tick apart. It now runs at the start
+    of the next tick, before anything ticks, or at once when the sim is
+    paused. Its reply adds `sim_time`, the game time of the first tick with
+    the new seed.
+
+  `tools/scenario_runner/verify_determinism.py` now numbers ticks from the
+  reset and compares the injected yaw-rate noise (`/imu` minus
+  `/testing_only/odom`) tick by tick, instead of raw `/imu` samples. Raw
+  samples also contain the physics, which is not bit-identical after a
+  teleport. It passes 3 runs out of 3: every tick both same-seed runs
+  captured matches exactly, and a different seed matches none.
+- **`getImuData` and `simGetGroundTruthKinematics` reported the yaw rate with
+  the wrong sign.** `FSDSCoord::UEAngularVelocityToENU` swapped the axes like
+  a position, but angular velocity is an axial vector, so the swap between a
+  left- and a right-handed frame also flips its sign. `getImuData` also put
+  its body-frame readings through that world-frame swap, which reported the
+  sideways acceleration as forward. In a steady 4.2 m/s right turn, both RPCs
+  reported +0.325 rad/s where `/imu` reported −0.325, and `getImuData`
+  reported `ay` ≈ 0 for a 1.39 m/s² turn. Both now agree with `/imu` to
+  0.001 rad/s and 0.01 m/s². `getImuData` returns REP-103 body-frame values,
+  the same as `/imu`. ROS topics were not affected: the bridge and the sensor
+  stream already converted these correctly. Covered by the new automation
+  tests `FSDS.Coordinates.AngularVelocity` and `FSDS.Coordinates.BodyVector`.
+- **Pitch and roll were wrong in every orientation the sim sent to ROS**
+  ([#638](https://github.com/isc-fs/IFSSIM/issues/638)).
+  `FSDSCoord::UEQuatToENU` was correct only for yaw: it swapped the ENU x and
+  y quaternion components, so a car 8° nose-up on a ramp was reported 8°
+  nose-down. That covered the IMU orientation, the ground-truth pose
+  (`/testing_only/odom`), `getStartGatePose`, `simGetVehiclePose` and the
+  other pose RPCs. `ENUQuatToUE` (the `simSetVehiclePose` path) had the same
+  bug. Both now use the conversion derived from the two frames. On flat
+  ground nothing changes: for yaw-only rotations the output is identical, and
+  every shipped track's start pose is unchanged to 0.000 mm and 0.0000°. On
+  the 8° test ramp, `/imu` and `/testing_only/odom` now report pitch −8°
+  (REP-103: positive pitch is nose-down) where they reported +8°. Covered by
+  the new automation tests `FSDS.Coordinates.*` and by
+  `tools/smoke/test_start_pose.py`, which now checks the ENU poses against
+  the plant's pitch.
+- **`/clock` stopped for good after the sim restarted**
+  ([#611](https://github.com/isc-fs/IFSSIM/issues/611)). The bridge only
+  publishes a sim stamp on `/clock` if it is later than the last one, and
+  that mark survived a sim restart. A new session starts its clock near
+  zero, so `/clock` went silent for the life of the container and every
+  `use_sim_time` node in the pipeline froze. There was no error: sensors
+  kept streaming and lifecycle nodes still reported `active`. Until now the
+  only cure was restarting `dv_pipeline_stack`. The bridge now follows a new
+  session when the first frame on a reconnected sensor stream is behind the
+  mark, or when a stamp is more than 1 s behind it without a reconnect (that
+  case logs a warning). Repeats and small steps back are still dropped, so
+  `/clock` never goes backwards inside a session. The rules live in
+  `ifssim_bridge/include/sim_clock_gate.h` with unit tests.
+- **The perception benchmark could not decode real-car LiDAR bags.** It
+  reshaped every cloud by `point_step // 4`, which raises on the Hesai ATX's
+  packed 26-byte point. It now decodes with `cone_detection_node`'s own
+  offset-based reader, so offline scoring reads clouds exactly as the car
+  does.
 
 ## [1.0.0] — 2026-09-20
 
