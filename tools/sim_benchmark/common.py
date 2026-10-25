@@ -177,12 +177,17 @@ def _translate_argv(argv: list[str], paths: DockerPaths | None = None) -> list[s
     return out
 
 
-def maybe_reexec_in_docker(script_name: str) -> None:
+def maybe_reexec_in_docker(
+    script_name: str,
+    *,
+    extra_docker_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> None:
     """Re-run this benchmark inside dv_pipeline_stack when host lacks ROS."""
     if os.environ.get("IFSSIM_BENCHMARK_IN_DOCKER") == "1":
         return
     argv = sys.argv[1:]
-    if "--local-ros" in argv or "--no-docker" in argv:
+    if "--local-ros" in argv or "--no-docker" in argv or "--help" in argv or "-h" in argv:
         return
     if _in_ros_env():
         return
@@ -199,6 +204,8 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     results.mkdir(parents=True, exist_ok=True)
     cone_detection_src = repo_root() / "pipeline" / "cone_detection"
     cone_slam_src = repo_root() / "pipeline" / "cone_slam"
+    path_planning_src = repo_root() / "pipeline" / "path_planning"
+    control_src = repo_root() / "pipeline" / "control"
     image = os.environ.get("IFSSIM_DV_IMAGE", "ifssim-dv_pipeline_stack:latest")
     inner_argv = _translate_argv(argv, paths)
     if not any(
@@ -212,13 +219,21 @@ def maybe_reexec_in_docker(script_name: str) -> None:
     # Python fallback. Optional: absent → OdometryFilterCpp falls back.
     native_dir = bench / "_native"
     have_native = native_dir.is_dir() and any(native_dir.glob("odometry_filter_py*.so"))
-    pythonpath_dirs = "/dev_cone_detection:/dev_cone_slam"
+    pythonpath_dirs = (
+        "/dev_cone_detection:/dev_cone_slam:/dev_path_planning:/dev_control"
+    )
     if have_native:
         pythonpath_dirs = "/native:" + pythonpath_dirs
 
+    env_exports = ""
+    if extra_env:
+        env_exports = " ".join(
+            f"export {k}={shlex.quote(v)};" for k, v in extra_env.items()
+        )
     inner = (
         "set -eo pipefail; "
         "export IFSSIM_BENCHMARK_IN_DOCKER=1; "
+        f"{env_exports}"
         f"{dv_pipeline_ros_setup_shell()}"
         f"export PYTHONPATH={pythonpath_dirs}:${{PYTHONPATH}}; "
         f"cd /bench && python3 {shlex.quote(script_name)} {arg_str}"
@@ -230,12 +245,17 @@ def maybe_reexec_in_docker(script_name: str) -> None:
         "--rm",
         "--entrypoint",
         "bash",
+        *(extra_docker_args or []),
         "-v",
         f"{bench.resolve()}:/bench:ro",
         "-v",
         f"{cone_detection_src.resolve()}:/dev_cone_detection:ro",
         "-v",
         f"{cone_slam_src.resolve()}:/dev_cone_slam:ro",
+        "-v",
+        f"{path_planning_src.resolve()}:/dev_path_planning:ro",
+        "-v",
+        f"{control_src.resolve()}:/dev_control:ro",
         "-v",
         f"{results.resolve()}:/results",
     ]
