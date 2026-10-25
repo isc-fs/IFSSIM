@@ -322,6 +322,13 @@ def main() -> None:
         "--pipeline-overrides",
         help="JSON file of parameter overrides (pipeline_overrides.py); uses cone_detection",
     )
+    ap.add_argument(
+        "--sanity-scan",
+        type=int,
+        default=0,
+        help="LiDAR scan whose ground removal, clusters and cone fits are recorded in "
+        "perception_sanity.json for the viewer's sanity plots (default: the first; -1 = none).",
+    )
     args = ap.parse_args()
     bag_path = resolve_benchmark_path(args.bag)
     overrides = pipeline_overrides.load(args.pipeline_overrides)
@@ -682,6 +689,29 @@ def main() -> None:
             s["clusters"] = [_cone_dict(c) for c in cents]
             samples.append(s)
         (run_dir / "frame_samples.json").write_text(json.dumps(samples, indent=2))
+
+    if 0 <= args.sanity_scan < len(lidar_msgs):
+        import perception_sanity
+
+        # One scan through detect() with every stage recorded, with the config the
+        # benchmark scored (overrides included). A fresh detector: no warm-started
+        # RANSAC plane, and RANSAC is random, so it is one realisation of this scan.
+        bag_t_ns, cloud = lidar_msgs[args.sanity_scan]
+        scan_t_ns = msg_time_ns(bag_t_ns, cloud)
+        try:
+            path = perception_sanity.write(
+                run_dir,
+                _pointcloud_to_xyz(cloud),
+                detection_config,
+                meta={
+                    "index": args.sanity_scan,
+                    "t_s": scan_t_ns * 1e-9,
+                    "topic": args.lidar_topic,
+                },
+            )
+            print(f"Wrote {path}")
+        except Exception as exc:  # the plots are extra: never fail a scored benchmark over them
+            print(f"Warning: no perception sanity plots ({type(exc).__name__}: {exc})")
 
     report = write_run_report(summary, run_dir, Path(args.results_root))
     write_json(run_dir / "results.json", summary)
