@@ -454,14 +454,14 @@ response = s.recv(1024)  # b"true"
 | `setCarControls <throttle> <steering> <brake>` | `true` | Apply control inputs |
 | `simGetVehiclePose` | `x, y, z, qw, qx, qy, qz` | Vehicle pose in ENU metres |
 | `simSetVehiclePose <x> <y> <z>` | `true` | Teleport vehicle to ENU position |
-| `simGetGroundTruthKinematics` | `px, py, pz, vx, vy, vz, ax, ay, az, wx, wy, wz, qw, qx, qy, qz` | Full ground-truth kinematics (no sensor noise) |
+| `simGetGroundTruthKinematics` | `px, py, pz, vx, vy, vz, ax, ay, az, wx, wy, wz, qw, qx, qy, qz` | Full ground-truth kinematics (no sensor noise), ENU world frame: m, m/s, m/s², rad/s (`wz` > 0 turning left) |
 
 #### Sensors
 
 | Command | Response fields | Description |
 |---|---|---|
 | `getGpsData` | `lat, lon, alt` | GPS with noise |
-| `getImuData` | `ax, ay, az, gx, gy, gz, qw, qx, qy, qz` | IMU with noise |
+| `getImuData` | `ax, ay, az, gx, gy, gz, qw, qx, qy, qz` | IMU with noise, the same values as `/imu`: acceleration (m/s², about +9.81 `az` at rest) and rates (rad/s) in the REP-103 body frame (x forward, y left, z up); orientation in ENU |
 | `getGroundSpeedSensorData` | `vx, vy, vz` | GSS in body frame |
 | `getLidarData` | `points, channels, range` | LiDAR metadata (use binary or UDP for point cloud) |
 | `getDistanceSensorData` | `distance, min, max` | Distance sensor |

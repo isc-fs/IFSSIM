@@ -69,6 +69,12 @@ public:
 	UPROPERTY(EditAnywhere, Category = "FSDS Cones")
 	float HeightOffset = 5.0f;
 
+	/** Half-height (cm) of the vertical window searched for ground under a
+	 *  cone or the start pose, centred on z = 0. 200 m covers any FS venue's
+	 *  relief; ground outside it falls back to the flat-world placement. */
+	UPROPERTY(EditAnywhere, Category = "FSDS Cones")
+	float GroundSearchHalfHeightCm = 20000.f;
+
 	/** If set, load cone positions from this CSV file */
 	UPROPERTY(EditAnywhere, Category = "FSDS Cones")
 	FString CSVFilePath;
@@ -100,24 +106,26 @@ public:
 	/**
 	 * Derive the canonical "behind the start gate, facing the track"
 	 * vehicle pose from the cones spawned by the most recent
-	 * SpawnFromCSV call. Used by the loadTrack RPC to teleport the car
-	 * into a known-good starting pose so the autonomy stack doesn't
-	 * have to fight a 90° map/track misalignment on first ticks.
+	 * SpawnFromCSV call. Used by the loadTrack and reset RPCs to teleport
+	 * the car into a known-good starting pose.
 	 *
-	 * Algorithm — robust to any gate geometry:
-	 *   OrangeCentroid = mean(big_orange positions)
-	 *   TrackCentroid  = mean(blue + yellow positions)
-	 *   Forward        = normalize(TrackCentroid − OrangeCentroid)
-	 *   OutLocation    = OrangeCentroid − BackupCm × Forward, lifted by HeightOffset
-	 *   OutRotation    = yaw = atan2(Forward.Y, Forward.X)
+	 * Forward axis:
+	 *   - two or more big-orange gates (acceleration, skidpad): from the
+	 *     start gate (the one nearest the first track cone) toward the
+	 *     others;
+	 *   - one gate (closed loops): the smaller-variance PCA axis of the
+	 *     big-orange cones, signed toward the 4 nearest blue/yellow cones.
+	 * The car sits BackupCm behind the start gate along -Forward.
 	 *
-	 * Returns false (and leaves out-params untouched) when there isn't
-	 * enough cone data to compute a sensible answer (≥1 big_orange and
-	 * ≥2 track cones required). Caller falls back to the level's
-	 * PlayerStart in that case.
+	 * Height and attitude come from the ground under that point: Z is the
+	 * ground plus HeightOffset + 50 cm, and pitch/roll follow the plane fitted
+	 * to a 4-ray cross ±0.8 m around it, with heading kept along Forward. On
+	 * a flat floor at z = 0 this is the old pose exactly. Where no ground is
+	 * found it falls back to that flat pose, with a warning.
 	 *
-	 * BackupCm is the gap behind the start gate in centimetres
-	 * (default 300 cm = 3 m, matches FS Driverless start-area spec).
+	 * Returns false (out-params untouched) without at least 4 big-orange and
+	 * 1 blue/yellow cone; the caller then falls back to the level's
+	 * PlayerStart. BackupCm defaults to 300 cm, the FS Driverless start area.
 	 */
 	bool ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm = 300.f) const;
 
@@ -129,6 +137,14 @@ private:
 
 	/** Spawn a static mesh cone and register it with the referee */
 	AActor* SpawnStaticMeshCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation, EFSDSConeColor Color);
+
+	/** Ground under (X, Y): a downward trace for WorldStatic *objects* within
+	 *  ±GroundSearchHalfHeightCm, ignoring this spawner, its cones and pawns. */
+	bool TraceGroundAt(const FVector2D& XY, FHitResult& OutHit) const;
+
+	/** Start pose at FlatLocation's XY facing Forward, set on the ground there. */
+	void PlaceStartPoseOnGround(const FVector& FlatLocation, const FVector& Forward,
+	                            FVector& OutLocation, FQuat& OutRotation) const;
 
 	int32 TotalSpawned = 0;
 

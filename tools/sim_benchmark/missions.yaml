@@ -1,0 +1,46 @@
+# What one mission of the mission benchmark does, by default (run_mission_benchmark.py). A run spec
+# changes it through the `missions` benchmark's settings (bench.yaml), and each run records what it
+# used. Tracks are CSVs in Content/tracks/.
+#
+#   mc_name      the mission's name in Mission Control (/api/event/start)
+#   tracks       every track listed is run
+#   repeats      runs per track; repeat i resets the sim with seed i (resetScenario i), which also
+#                seeds the sim's sensor noise, so repeats vary even without start noise
+#   start_pose   noise: false = the track's start gate; true = a seeded random offset within
+#                ±lateral_m, ±longitudinal_m, ±yaw_deg
+#   laps         laps to drive (the referee's required laps)
+#   timeout_s    a run not finished by then counts as not finished (about twice the expected time)
+#
+# The timeouts are guesses until the rig has measured runs (at the pipeline's default speed).
+
+acceleration:
+  mc_name: accel
+  tracks: [acceleration.csv]
+  repeats: 1
+  start_pose: {noise: false, lateral_m: 0.3, longitudinal_m: 0.3, yaw_deg: 5}
+  laps: 1
+  timeout_s: 60
+
+skidpad:
+  mc_name: skidpad
+  tracks: [skidpad.csv]
+  repeats: 1
+  start_pose: {noise: false, lateral_m: 0.3, longitudinal_m: 0.3, yaw_deg: 5}
+  laps: 1
+  timeout_s: 240
+
+autocross:
+  mc_name: autocross
+  tracks: [track_20260404_013721.csv, track_20260404_013723.csv, track_20260404_013725.csv, track_20260404_013726.csv]
+  repeats: 1
+  start_pose: {noise: false, lateral_m: 0.3, longitudinal_m: 0.3, yaw_deg: 5}
+  laps: 1
+  timeout_s: 240
+
+trackdrive:
+  mc_name: trackdrive
+  tracks: [track_20260404_013721.csv, track_20260404_013723.csv, track_20260404_013725.csv, track_20260404_013726.csv]
+  repeats: 1
+  start_pose: {noise: false, lateral_m: 0.3, longitudinal_m: 0.3, yaw_deg: 5}
+  laps: 10
+  timeout_s: 2400

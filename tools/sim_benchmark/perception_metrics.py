@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from statistics import median
 from types import SimpleNamespace
 from typing import Any
@@ -47,6 +47,16 @@ class FrameMetrics:
     gt_cones: list[Cone2D] = field(default_factory=list)
     pred_cones: list[Cone2D] = field(default_factory=list)
     matches: list[MatchResult] = field(default_factory=list)
+    # Big-orange (finish-gate) classification. A detection is big orange when
+    # the detector's fitted height exceeds the strategy threshold — the same
+    # rule cone_detection_node uses to route cones onto /Conos_Orange.
+    n_pred_big: int = 0
+    n_big_tp: int = 0
+    # Detected as big orange but not a big-orange GT cone: either unmatched or
+    # matched to a small cone. These are what can trip the stop latch.
+    n_false_big: int = 0
+    # Big-orange GT cone in view that was not detected as big orange.
+    n_missed_big: int = 0
 
 
 def yaw_from_odom(odom) -> float:
@@ -183,6 +193,7 @@ def cone_in_lidar_fov(
 CONE_HEIGHT_SMALL_M = 0.35
 CONE_HEIGHT_BIG_M = 0.55
 FS_CONE_ORANGE_BIG = 2  # fs_msgs Cone.ORANGE_BIG
+FS_CONE_UNKNOWN = 4  # fs_msgs Cone.UNKNOWN; detection does not assign blue/yellow
 
 
 def cone_in_vertical_fov(
@@ -580,6 +591,52 @@ def match_cones(
     return matches, fp, fn
 
 
+def classify_detections(cones: Iterable[Any], big_orange_threshold_m: float) -> list[Cone2D]:
+    """Detector observations (``x``, ``y``, ``height_m``) to ``Cone2D``.
+
+    Big orange iff ``height_m > big_orange_threshold_m`` — strictly greater,
+    exactly as ``cone_detection_node._cones_to_markers`` routes /Conos_Orange.
+    Everything else is ``UNKNOWN``: blue/yellow is assigned later, by SLAM.
+    """
+    return [
+        Cone2D(
+            x=float(c.x),
+            y=float(c.y),
+            color=FS_CONE_ORANGE_BIG if c.height_m > big_orange_threshold_m else FS_CONE_UNKNOWN,
+        )
+        for c in cones
+    ]
+
+
+def _big_orange_counts(
+    pred: list[Cone2D],
+    gt: list[Cone2D],
+    matches: list[MatchResult],
+    fp_idx: list[int],
+    fn_idx: list[int],
+) -> tuple[int, int, int, int]:
+    """(n_pred_big, n_big_tp, n_false_big, n_missed_big) for one frame.
+
+    Matching is by position only, so a big-orange detection sitting on a small
+    cone matches it and counts as a false big orange (a size error), not a TP.
+    """
+    def is_big(c: Cone2D) -> bool:
+        return c.color == FS_CONE_ORANGE_BIG
+
+    tp = false_big = missed = 0
+    for m in matches:
+        p_big, g_big = is_big(pred[m.pred_idx]), is_big(gt[m.gt_idx])
+        if p_big and g_big:
+            tp += 1
+        elif p_big:
+            false_big += 1
+        elif g_big:
+            missed += 1
+    false_big += sum(1 for i in fp_idx if is_big(pred[i]))
+    missed += sum(1 for i in fn_idx if is_big(gt[i]))
+    return sum(1 for c in pred if is_big(c)), tp, false_big, missed
+
+
 def evaluate_frame(
     *,
     t_s: float,
@@ -591,6 +648,9 @@ def evaluate_frame(
 ) -> FrameMetrics:
     matches, fp_idx, fn_idx = match_cones(pred, gt, gate_m=gate_m)
     errs = [m.err_m for m in matches]
+    n_pred_big, n_big_tp, n_false_big, n_missed_big = _big_orange_counts(
+        pred, gt, matches, fp_idx, fn_idx
+    )
     return FrameMetrics(
         t_s=t_s,
         latency_ms=latency_ms,
@@ -605,6 +665,10 @@ def evaluate_frame(
         gt_cones=gt,
         pred_cones=pred,
         matches=matches,
+        n_pred_big=n_pred_big,
+        n_big_tp=n_big_tp,
+        n_false_big=n_false_big,
+        n_missed_big=n_missed_big,
     )
 
 
@@ -640,7 +704,200 @@ def aggregate_metrics(frames: list[FrameMetrics]) -> dict[str, Any]:
         "median_gt_per_frame": median(gt_counts) if gt_counts else 0.0,
         "mean_pred_per_frame": sum(pred_counts) / len(pred_counts) if pred_counts else 0.0,
         "median_pred_per_frame": median(pred_counts) if pred_counts else 0.0,
+        **_aggregate_big_orange(frames),
     }
+
+
+def _aggregate_big_orange(frames: list[FrameMetrics]) -> dict[str, Any]:
+    big_tp = sum(f.n_big_tp for f in frames)
+    false_big = [f.n_false_big for f in frames]
+    missed_big = sum(f.n_missed_big for f in frames)
+    total_false = sum(false_big)
+    return {
+        "total_pred_big": sum(f.n_pred_big for f in frames),
+        "total_big_tp": big_tp,
+        "total_false_big": total_false,
+        "total_missed_big": missed_big,
+        # None, not 0.0, when there is nothing to score: a run with no big
+        # oranges in view has no big-orange precision, rather than a bad one.
+        "big_orange_precision": big_tp / (big_tp + total_false) if (big_tp + total_false) else None,
+        "big_orange_recall": big_tp / (big_tp + missed_big) if (big_tp + missed_big) else None,
+        "false_big_per_frame": total_false / len(frames),
+        "max_false_big_per_frame": max(false_big),
+        "frames_with_false_big": sum(1 for n in false_big if n >= 1),
+        # The stop latch fires on >= 2 big-orange cones in ONE message, so a
+        # frame with two false big oranges can stop the car by itself.
+        "frames_with_2plus_false_big": sum(1 for n in false_big if n >= 2),
+    }
+
+
+@dataclass
+class LatchEvent:
+    t_s: float
+    anchor_x: float
+    anchor_y: float
+    n_cones: int
+    travelled_m: float
+    nearest_gt_big_m: float | None
+    premature: bool | None
+
+
+class StopLatchReplay:
+    """Offline replay of ``control_node._on_orange``'s stop latch.
+
+    Feed every LiDAR frame, in order, with the car's world pose and the frame's
+    big-orange detections (unfiltered, as /Conos_Orange carries them). The rule,
+    in the node's order: ignore fewer than 2 cones; ignore until the car has
+    travelled ``min_travel_m``; ignore while ``final_lap`` is false (trackdrive
+    lap gate, from /slam/final_lap, true when absent). Then latch once, for
+    good, at the cones' centroid projected into the world frame.
+
+    A latch is *premature* when that anchor is farther than ``finish_tol_m``
+    from every ground-truth big-orange cone: the car would stop somewhere that
+    is not a gate. ``premature`` is None when there is no big-orange ground
+    truth to judge against.
+
+    Approximation: the node accumulates travel from SLAM pose at control rate;
+    here it accumulates from the ground-truth pose at LiDAR rate.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_travel_m: float,
+        gt_big_world: list[tuple[float, float]],
+        finish_tol_m: float = 3.0,
+    ) -> None:
+        self.min_travel_m = min_travel_m
+        self.finish_tol_m = finish_tol_m
+        self.gt_big_world = list(gt_big_world)
+        self.travelled_m = 0.0
+        self.frames = 0
+        self.event: LatchEvent | None = None
+        self._last_xy: tuple[float, float] | None = None
+
+    def update(
+        self,
+        *,
+        t_s: float,
+        x: float,
+        y: float,
+        yaw: float,
+        big_cones_body: list[Cone2D],
+        final_lap: bool = True,
+    ) -> LatchEvent | None:
+        self.frames += 1
+        if self._last_xy is not None:
+            self.travelled_m += math.hypot(x - self._last_xy[0], y - self._last_xy[1])
+        self._last_xy = (x, y)
+        if self.event is not None:
+            return None
+        if len(big_cones_body) < 2:
+            return None
+        if self.travelled_m < self.min_travel_m:
+            return None
+        if not final_lap:
+            return None
+        n = len(big_cones_body)
+        sx = sum(c.x for c in big_cones_body) / n
+        sy = sum(c.y for c in big_cones_body) / n
+        cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+        ax = x + cos_y * sx - sin_y * sy
+        ay = y + sin_y * sx + cos_y * sy
+        nearest = (
+            min(math.hypot(ax - gx, ay - gy) for gx, gy in self.gt_big_world)
+            if self.gt_big_world
+            else None
+        )
+        self.event = LatchEvent(
+            t_s=t_s,
+            anchor_x=ax,
+            anchor_y=ay,
+            n_cones=n,
+            travelled_m=self.travelled_m,
+            nearest_gt_big_m=nearest,
+            premature=None if nearest is None else nearest > self.finish_tol_m,
+        )
+        return self.event
+
+    def summary(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "evaluated": True,
+            "min_travel_m": self.min_travel_m,
+            "finish_tol_m": self.finish_tol_m,
+            "frames": self.frames,
+            "travelled_m": self.travelled_m,
+            "latched": self.event is not None,
+            "premature": self.event.premature if self.event else False,
+        }
+        if self.event is not None:
+            out["event"] = asdict(self.event)
+        return out
+
+
+def scan_stats(result: Any) -> dict[str, float]:
+    """Per-scan structure from a cone_detection ``DetectionResult``.
+
+    ``rotated_xyz`` is the cropped scan after ground rotation and
+    ``outlier_xyz`` its non-ground (RANSAC outlier) points, so the ground
+    fraction is within the detector's input crop. Missing fields give NaN.
+    """
+    n_scan = len(getattr(result, "rotated_xyz", ()))
+    n_above = len(getattr(result, "outlier_xyz", ()))
+    counters = getattr(result, "debug_counters", None) or {}
+    return {
+        "n_clusters": float(counters.get("n_clusters", math.nan)),
+        "ground_fraction": (1.0 - n_above / n_scan) if n_scan else math.nan,
+        "above_ground_points": float(n_above),
+    }
+
+
+def aggregate_scan_stats(rows: list[dict[str, float]]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for key in ("n_clusters", "ground_fraction", "above_ground_points"):
+        vals = sorted(r[key] for r in rows if key in r and not math.isnan(r[key]))
+        if not vals:
+            continue
+        out[f"mean_{key}"] = sum(vals) / len(vals)
+        out[f"p95_{key}"] = vals[int(0.95 * (len(vals) - 1))]
+    return out
+
+
+# Metrics compared by ``reference_deltas``: (section of the summary, key).
+REFERENCE_KEYS: tuple[tuple[str, str], ...] = (
+    ("gt_metrics", "recall"),
+    ("gt_metrics", "precision"),
+    ("gt_metrics", "big_orange_recall"),
+    ("gt_metrics", "big_orange_precision"),
+    ("gt_metrics", "false_big_per_frame"),
+    ("gt_metrics", "frames_with_2plus_false_big"),
+    ("gt_metrics", "mean_match_err_m"),
+    ("scan_stats", "mean_n_clusters"),
+    ("scan_stats", "mean_ground_fraction"),
+    ("scan_stats", "mean_above_ground_points"),
+    ("stop_latch", "premature"),
+)
+
+
+def reference_deltas(
+    current: dict[str, Any],
+    reference: dict[str, Any],
+    keys: tuple[tuple[str, str], ...] = REFERENCE_KEYS,
+) -> dict[str, dict[str, Any]]:
+    """Each key present in both runs: value, reference value and numeric delta."""
+    out: dict[str, dict[str, Any]] = {}
+    for section, key in keys:
+        cur = (current.get(section) or {}).get(key)
+        ref = (reference.get(section) or {}).get(key)
+        if cur is None or ref is None:
+            continue
+        row: dict[str, Any] = {"value": cur, "reference": ref}
+        if isinstance(cur, (int, float)) and not isinstance(cur, bool) and isinstance(
+            ref, (int, float)
+        ) and not isinstance(ref, bool):
+            row["delta"] = cur - ref
+        out[key] = row
+    return out
 
 
 def pick_scan_center_fraction(
