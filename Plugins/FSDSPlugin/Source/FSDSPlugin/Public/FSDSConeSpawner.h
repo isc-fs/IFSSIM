@@ -6,6 +6,8 @@
 #include "Environment/FSDSEnvironment.h"
 #include "FSDSConeSpawner.generated.h"
 
+class AFSDSEnvironmentActor;
+
 /**
  * Spawns traffic cones on the track at BeginPlay.
  * Place this actor in your map and it will spawn cones
@@ -141,12 +143,22 @@ public:
 	const FString& GetEnvironmentStatus() const { return EnvironmentStatus; }
 	const FString& GetEnvironmentError() const { return EnvironmentError; }
 
+	/** The built props of the current environment; null until an environment
+	 *  has been loaded (so never with Environment.Enabled off). */
+	const AFSDSEnvironmentActor* GetEnvironmentActor() const { return EnvironmentActor; }
+
 private:
 	void SpawnTestTrack();
 	void SpawnFromCSV();
 
 	/** Load the current track's sidecar, before any cone spawns. */
 	void LoadEnvironmentSidecar();
+
+	/** Build the loaded sidecar's props, or clear the last track's. */
+	void BuildEnvironment();
+
+	UPROPERTY()
+	TObjectPtr<AFSDSEnvironmentActor> EnvironmentActor = nullptr;
 	void SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 	void SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 

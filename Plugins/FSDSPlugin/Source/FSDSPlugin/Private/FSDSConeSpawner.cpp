@@ -2,6 +2,7 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSRandom.h"
 #include "FSDSSettings.h"
+#include "Environment/FSDSEnvironmentBuilder.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -397,11 +398,35 @@ void AFSDSConeSpawner::LoadEnvironmentSidecar()
 	}
 }
 
+void AFSDSConeSpawner::BuildEnvironment()
+{
+	if (EnvironmentStatus != TEXT("loaded"))
+	{
+		// Off, no sidecar, or an invalid one: no props, including the last
+		// track's. With Environment.Enabled off nothing is ever created.
+		if (EnvironmentActor) EnvironmentActor->Clear();
+		return;
+	}
+	if (!EnvironmentActor)
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Name = TEXT("FSDSEnvironment");
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		EnvironmentActor = GetWorld()->SpawnActor<AFSDSEnvironmentActor>(
+			AFSDSEnvironmentActor::StaticClass(), FTransform::Identity, SpawnParams);
+	}
+	if (EnvironmentActor)
+	{
+		EnvironmentActor->Build(Environment);
+	}
+}
+
 void AFSDSConeSpawner::SpawnFromCSV()
 {
 	// The environment a track runs in is settled before its cones spawn
 	// (docs/ENVIRONMENT_ROADMAP.md rule 4).
 	LoadEnvironmentSidecar();
+	BuildEnvironment();
 
 	FString FileContent;
 	if (!FFileHelper::LoadFileToString(FileContent, *CSVFilePath))

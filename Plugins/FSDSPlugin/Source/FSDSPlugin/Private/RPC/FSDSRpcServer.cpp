@@ -7,6 +7,7 @@
 #include "RPC/FSDSUdpBroadcaster.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
+#include "Environment/FSDSEnvironmentBuilder.h"
 #include "FSDSConeSpawner.h"
 #include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
@@ -1274,7 +1275,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			{
 				if (World)
 				{
-					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+					if (TActorIterator<AFSDSConeSpawner> It(World); It)
 					{
 						FVector StartLoc; FQuat StartRot;
 						if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
@@ -1284,7 +1285,6 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 						}
 						NumCones = It->SpawnedCones.Num();
-						break;
 					}
 				}
 
@@ -1609,7 +1609,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (!ProbeWorld) return TEXT("{\"ok\":false,\"error\":\"no world\"}");
 
 			AFSDSTestTerrain* Terrain = nullptr;
-			for (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It; ++It) { Terrain = *It; break; }
+			if (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It) { Terrain = *It; }
 			if (!Terrain)
 			{
 				Terrain = ProbeWorld->SpawnActor<AFSDSTestTerrain>(AFSDSTestTerrain::StaticClass());
@@ -1810,7 +1810,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 				AFSDSConeSpawner* Spawner = nullptr;
 				if (World) {
-					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It) { Spawner = *It; break; }
+					if (TActorIterator<AFSDSConeSpawner> It(World); It) { Spawner = *It; }
 				}
 				Out += FString::Printf(TEXT(",\"spawner\":%s,\"world\":%s}"),
 					Spawner ? TEXT("true") : TEXT("false"),
@@ -1883,10 +1883,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (!World) return TEXT("{\"error\":\"no world\"}");
 
 				AFSDSConeSpawner* Spawner = nullptr;
-				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+				if (TActorIterator<AFSDSConeSpawner> It(World); It)
 				{
 					Spawner = *It;
-					break;
 				}
 				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
 
@@ -1998,10 +1997,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			[this]() -> FString {
 				if (!World) return TEXT("{\"error\":\"no world\"}");
 				const AFSDSConeSpawner* Spawner = nullptr;
-				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+				if (TActorIterator<AFSDSConeSpawner> It(World); It)
 				{
 					Spawner = *It;
-					break;
 				}
 				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
 
@@ -2034,6 +2032,17 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					Counts.KeySort(TLess<FString>());
 					for (const auto& Pair : Counts) Classes->SetNumberField(Pair.Key, Pair.Value);
 					Out->SetObjectField(TEXT("classes"), Classes);
+
+					// What the builder made of it: props standing in the world.
+					if (const AFSDSEnvironmentActor* Built = Spawner->GetEnvironmentActor())
+					{
+						Out->SetNumberField(TEXT("built"), Built->GetNumBuilt());
+						Out->SetNumberField(TEXT("skipped"), Built->GetNumSkipped());
+						TArray<TSharedPtr<FJsonValue>> Unknown;
+						for (const FString& C : Built->GetUnknownClasses()) Unknown.Add(MakeShared<FJsonValueString>(C));
+						Out->SetArrayField(TEXT("unknown_classes"), Unknown);
+						Out->SetStringField(TEXT("transform_sha1"), Built->GetTransformHash());
+					}
 				}
 
 				FString Json;

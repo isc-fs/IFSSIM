@@ -14,6 +14,23 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Trackside props**, the first slice of P2a in `docs/ENVIRONMENT_ROADMAP.md`
+  ([#683](https://github.com/isc-fs/IFSSIM/issues/683)): the perception
+  stressors the roadmap ranks worst, around any track.
+  - `tools/envgen` writes a track's environment sidecar from a seed and a
+    profile (`python3 -m envgen <track>.csv --seed 7 --profile stress`):
+    bollards and bins at cone scale, timekeeping tripods beside the timing
+    lines, low tyre walls behind the cone line and stacks of spare cones.
+    Every prop stays out of the cone corridor and clear of the cones; the
+    same seed gives the same file on every platform.
+  - The sim builds the sidecar's props when it loads the track, before the
+    cones, from engine basic shapes and the small cone mesh, with the
+    `FSDSProp` collision profile. `getEnvironment` reports what was built
+    and a hash of the transforms.
+  - Mission Control's track recentring moves a track's sidecar with its cones.
+  - Only with `"Environment": { "Enabled": true }`; off, the default, builds
+    nothing.
+
 - **Collision channels for trackside props**, step 1 of
   `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)),
   with the matrix in `docs/collision_matrix.md`.

@@ -11,9 +11,9 @@ The sim's settings.json decides which half runs (getEnvironment reports it):
 
   Environment.Enabled true:
     env_gate.csv loads its sidecar (seed 7, profile "smoke", 3 props, ground
-    extent); ramp_gate.csv, which has none, reports "none"; env_bad.csv's
+    extent) and builds its 3 props; ramp_gate.csv, which has none, reports "none"; env_bad.csv's
     sidecar has a misspelt key and reports "invalid" with that reason; and
-    env_gate.csv loads again afterwards.
+    env_gate.csv loads again afterwards, building the same props (same hash).
 
 Either way the sim is left on acceleration.csv.
 
@@ -90,6 +90,10 @@ def main():
         check(env.get("ground_extent") == {"x_min": -60, "y_min": -60, "x_max": 75, "y_max": 60},
               "ground extent as authored")
         check(str(env.get("sidecar", "")).endswith("env_gate.env.json"), "sidecar path recorded")
+        check(env.get("built") == 3 and env.get("skipped") == 0 and env.get("unknown_classes") == [],
+              "all 3 props built, none skipped")
+        first_hash = env.get("transform_sha1")
+        check(bool(first_hash), "built transforms hashed")
 
         reply = load(client, FIXTURES / "ramp_gate.csv")
         env = rpc(client, "getEnvironment")
@@ -107,6 +111,8 @@ def main():
 
         reply = load(client, FIXTURES / "env_gate.csv")
         check(reply.get("environment") == "loaded", "a valid sidecar loads again afterwards")
+        env = rpc(client, "getEnvironment")
+        check(env.get("transform_sha1") == first_hash, "and builds the same props, to the mm")
 
     load(client, REPO / "Content" / "tracks" / "acceleration.csv")
 
