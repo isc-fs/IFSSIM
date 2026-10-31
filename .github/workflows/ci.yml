@@ -162,6 +162,11 @@ jobs:
       - name: pytest (unit tests only)
         run: pytest tests/ -v
 
+      - name: Headless runner tests
+        # tools/headless_run: the sim, backend and benchmark are faked.
+        working-directory: tools
+        run: pytest headless_run/tests -v
+
   # ---------------------------------------------------------------
   # Tracks — every CSV under Content/tracks/ parses cleanly.
   # Catches stale generator output (#365 cycle hit a 1-byte empty
