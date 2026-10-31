@@ -133,6 +133,26 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Shipped tracks had blue on the car's right, or a start heading decided by centimetres.**
+  The CSV frame is right-handed (+y is left of +x), and the CSV → UE → ROS
+  chain is a pure rotation, so a cone's side in the CSV is its side in the sim
+  and in ROS.
+  - `acceleration.csv` and `skidpad.csv` were mirrored (blue on the right).
+    Colours are swapped.
+  - On the four `track_20260404_*` loops, the sim picks forward from the four
+    cones nearest the gate. Two of them sat behind the gate and two ahead, so
+    the heading came down to a few centimetres. 25 and 26 spawned facing −x,
+    with blue on the right. Each loop now has the `tools/envgen` start zone:
+    pairs at +2.0 m and +3.5 m, nothing within 5 m behind. All four face +x,
+    the direction they were drawn in, with blue on the left. sim_benchmark
+    baselines on these tracks will shift.
+  - `tools/validate_tracks.py` (the CI `tracks` job) now runs the
+    `ComputeStartGatePose` port (`tools/envgen/startpose.py`, identical to the
+    copy on feat/671). It fails a track if the car would not have blue on its
+    left, or if any of a loop's four deciding cones is less than 1 m ahead.
+    `skidpad.csv` is exempt for now. Its gate is deeper than it is wide, so
+    PCA spawns the car 90° off, and fixing that needs a sim-side change.
+
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
   a repeated or slightly earlier stamp 1 ns past the last one. Like the
