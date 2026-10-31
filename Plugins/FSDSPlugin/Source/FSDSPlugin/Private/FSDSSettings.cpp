@@ -32,6 +32,7 @@ bool FFSDSSettings::AutoLoad()
 		if (FPaths::FileExists(Path))
 		{
 			UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Loading from %s"), *Path);
+			LoadedFromPath = FPaths::ConvertRelativePathToFull(Path);
 			return LoadFromFile(Path);
 		}
 	}
@@ -95,6 +96,16 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 		if (Root->TryGetNumberField(TEXT("ScenarioSeed"), SeedVal)) ScenarioSeed = (int32)SeedVal;
 	}
 	Root->TryGetStringField(TEXT("SpectatorServerPassword"), SpectatorServerPassword);
+
+	const TSharedPtr<FJsonObject>* McObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("MissionControl"), McObj))
+	{
+		(*McObj)->TryGetStringField(TEXT("Url"), MissionControlUrl);
+		(*McObj)->TryGetStringField(TEXT("ApiKey"), MissionControlApiKey);
+		(*McObj)->TryGetStringField(TEXT("ComposeDir"), MissionControlComposeDir);
+		(*McObj)->TryGetBoolField(TEXT("Panel"), bLauncherPanel);
+		(*McObj)->TryGetStringField(TEXT("Key"), LauncherKey);
+	}
 
 	// Plant selection. A top-level "Plant" block, because which simulator
 	// runs the car is not a property of the car.

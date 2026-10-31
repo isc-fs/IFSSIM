@@ -14,6 +14,12 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Mission Control inside the sim.** Press Tab in the sim window for a panel
+  that loads a track, starts and stops a session, resets the car and works
+  RES, through the same backend as the web UI. When the backend is down it
+  can run `docker compose up -d` for you. Configured by a `MissionControl`
+  block in `settings.json`; off in headless runs. See
+  `docs/OPERATING.md`, "From inside the sim".
 - **Onboard bag replay.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT). `--report` records pipeline outputs and writes the HTML summary (detections, odom/SLAM trajectories, cone map, autonomy vs recorded pilot steering). `--live` without `--report` only plays into the nodes — no second bag. `--live` starts `foxglove_bridge` on `ws://localhost:8766` and plays as soon as a WebSocket client is ESTABLISHED on that port (falls back after `--live-wait-s`). Layout `lichtblick/onboard_live.json`: Perception BEV is `/lidar_points/above_ground` (RANSAC outliers only); perspective is `/lidar_points/ground` (full rotated crop). Both sit in the same `base_link` plane as `/Conos_raw`. Clouds and diagnostic Float32s publish only while subscribed, so the 15 k-point rotate is skipped when Lichtblick is not connected.
 - **Perception stress metrics** in the offline perception benchmark
   (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
