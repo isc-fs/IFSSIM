@@ -113,8 +113,12 @@ public:
 	 *   - two or more big-orange gates (acceleration, skidpad): from the
 	 *     start gate (the one nearest the first track cone) toward the
 	 *     others;
-	 *   - one gate (closed loops): the smaller-variance PCA axis of the
-	 *     big-orange cones, signed toward the 4 nearest blue/yellow cones.
+	 *   - one gate (closed loops, skidpad): of the two PCA axes of the
+	 *     big-orange cones, the one more perpendicular to the offset from
+	 *     the 2 nearest yellow to the 2 nearest blue cones (within 8 m),
+	 *     signed so blue is on the car's left (FS rules). Without blue and
+	 *     yellow near the gate: the smaller-variance axis, signed toward
+	 *     the 4 nearest blue/yellow cones.
 	 * The car sits BackupCm behind the start gate along -Forward.
 	 *
 	 * Height and attitude come from the ground under that point: Z is the
@@ -161,6 +165,7 @@ private:
 	// track's cones.
 	TArray<FVector> BigOrangePositions;
 	TArray<FVector> BlueYellowPositions;
+	TArray<bool> BlueYellowIsBlue;      // parallel to BlueYellowPositions
 
 	UPROPERTY()
 	AFSDSReferee* Referee = nullptr;

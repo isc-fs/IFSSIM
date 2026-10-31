@@ -149,9 +149,17 @@ shipping pipeline, documentation.
   - `tools/validate_tracks.py` (the CI `tracks` job) now runs the
     `ComputeStartGatePose` port (`tools/envgen/startpose.py`, identical to the
     copy on feat/671). It fails a track if the car would not have blue on its
-    left, or if any of a loop's four deciding cones is less than 1 m ahead.
-    `skidpad.csv` is exempt for now. Its gate is deeper than it is wide, so
-    PCA spawns the car 90° off, and fixing that needs a sim-side change.
+    left, or if the cones that set a loop's heading don't do so clearly.
+- **Skidpad spawned the car 90° off (needs a UE recompile).** On a one-gate
+  track `ComputeStartGatePose` took PCA's smaller-variance axis as forward.
+  Skidpad's gate is 4 m along the lane and 3 m across it, so that axis was
+  cross-track. It now uses the FS rule on every one-gate track: forward is
+  the gate axis more perpendicular to the offset from the 2 nearest yellow
+  cones to the 2 nearest blue cones (within 8 m), signed so blue is on the
+  car's left. The 4-nearest-cones sign test is kept only for tracks without
+  both colours near the gate. Skidpad now spawns at (12, 0) facing +x. Loops
+  keep their gate axis, and no longer depend on how the cones are spaced
+  around the gate. `tools/envgen/startpose.py` carries the same change.
 
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping

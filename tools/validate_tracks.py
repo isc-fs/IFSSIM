@@ -13,10 +13,12 @@ of FSDSConeSpawner::ComputeStartGatePose):
   - the car faces the way the track goes, with BLUE ON ITS LEFT (FS rules;
     the planner's left chain is blue). The CSV frame is right-handed:
     +y is left of +x (the loader maps CSV +y to UE -Y).
-  - on a one-gate loop, the four track cones nearest the gate (which decide
-    forward) are all clearly ahead of it, so the heading is not decided by
-    centimetres. tools/envgen/corridor.py's start zone does this by
-    construction: pairs at +2.0 and +3.5 m, nothing within 5 m behind.
+  - on a one-gate track the sim puts blue on the left from the nearest blue
+    and yellow cones; that offset must point clearly across the gate, not
+    along it. Without both colours near the gate the sim falls back to the
+    four track cones nearest it, which must then all be clearly ahead.
+    tools/envgen/corridor.py's start zone satisfies both by construction:
+    pairs at +2.0 and +3.5 m, nothing within 5 m behind.
 
 Exit code:
   0 — every CSV under the search root parses clean
@@ -42,19 +44,12 @@ VALID_CONE_TYPES = frozenset({"blue", "yellow", "big_orange", "small_orange"})
 MAX_COORD_M = 500.0
 
 # Start-pose margins.
+MAX_SIDE_SKEW = 0.5      # side test: |along| / |across| of the yellow->blue offset
 MIN_AHEAD_M = 1.0        # each of the K nearest cones is at least this far ahead
 SET_MARGIN_M = 1.0       # the nearest cone not ahead is this much farther than the K-th
-SIDE_WINDOW_AHEAD_M = 8.0   # cones 0..this far ahead decide which side blue is on
+SIDE_WINDOW_AHEAD_M = 5.0   # cones 0..this far ahead decide which side blue is on (skidpad's outer circle crosses the lane at ~6.8 m)
 SIDE_WINDOW_LAT_M = 4.0
 MIN_SIDE_LAT_M = 0.5
-
-# Tracks whose start pose is known wrong for a reason the CSV cannot fix.
-# Reported, not failed. Keep each entry short and pointed at the fix.
-START_POSE_EXEMPT = {
-    "skidpad.csv": "one 4 m deep x 3 m wide gate, so the sim's PCA picks the "
-                   "cross-track axis and spawns the car 90 deg off; needs a "
-                   "sim-side fix in ComputeStartGatePose",
-}
 
 Cone = Tuple[str, float, float]
 
@@ -78,12 +73,20 @@ def check_start_pose(path: Path, cones: List[Cone]) -> List[str]:
     where = f"{path}: start pose ({pose.method}, facing ({fx:+.2f}, {fy:+.2f}) from ({ax:.2f}, {ay:.2f}))"
     errors: List[str] = []
 
-    if pose.method == "pca":
+    if pose.method == "pca-sides":
+        sx, sy = pose.side_offset
+        along, across = sx * fx + sy * fy, -sx * fy + sy * fx
+        if abs(along) > MAX_SIDE_SKEW * abs(across):
+            errors.append(f"{where}: the nearest blue and yellow cones, which set the heading, "
+                          f"are offset {along:+.2f} m along the gate and {across:+.2f} m across it; "
+                          f"put them in pairs (lay out the start zone as envgen/corridor.py does).")
+    elif pose.method == "pca":
         by_dist = sorted(track, key=lambda c: c[3])
         nearest = by_dist[:K_DIRECTION]
         offsets = ", ".join(f"{c[0]} {c[1]:+.2f}" for c in nearest)
         if any(c[1] < MIN_AHEAD_M for c in nearest):
-            errors.append(f"{where}: the {K_DIRECTION} cones nearest the gate pick forward, "
+            errors.append(f"{where}: with no blue and yellow near the gate, the {K_DIRECTION} cones "
+                          f"nearest it pick forward, "
                           f"and not all are >= {MIN_AHEAD_M} m ahead (along: {offsets}). "
                           f"Lay out the start zone as envgen/corridor.py does.")
         else:
@@ -159,12 +162,7 @@ def validate_one(path: Path) -> List[str]:
     if cone_count == 0:
         errors.append(f"{path}: no valid cone rows parsed")
     elif not errors:
-        pose_errors = check_start_pose(path, cones)
-        if pose_errors and path.name in START_POSE_EXEMPT:
-            print(f"track-validator: {path}: start pose exempt "
-                  f"({START_POSE_EXEMPT[path.name]})", file=sys.stderr)
-        else:
-            errors.extend(pose_errors)
+        errors.extend(check_start_pose(path, cones))
     return errors
 
 
