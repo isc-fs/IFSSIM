@@ -92,6 +92,19 @@ def test_missions_not_finished_pass_through(tmp_path, backend):
     assert rec["outcome"] == "not_finished" and exit_code("not_finished") == 1
 
 
+def test_a_benchmark_that_crashes_is_not_a_pipeline_result(tmp_path, backend):
+    rec = run_once(cfg(tmp_path, free_port(), backend, bench_args=["--crash"]), log=quiet)
+    assert rec["outcome"] == "benchmark_error" and exit_code(rec["outcome"]) == 3
+
+
+def test_a_benchmark_that_cannot_start_fails_before_the_sim_boots(tmp_path, backend):
+    c = cfg(tmp_path, free_port(), backend)
+    c.benchmark_cmd = [sys.executable, "-c", "import no_such_module_xyz"]
+    rec = run_once(c, log=quiet)
+    assert rec["outcome"] == "benchmark_error" and "no_such_module_xyz" in rec["error"]
+    assert "sim_ready_s" not in rec
+
+
 def test_a_sim_crash_stops_the_benchmark(tmp_path, backend):
     t = time.monotonic()
     rec = run_once(cfg(tmp_path, free_port(), backend, sim_args=[1.5], bench_args=["--sleep", "60"]),

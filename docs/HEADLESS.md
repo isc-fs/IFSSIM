@@ -29,6 +29,9 @@ python3 -m headless_run loop --sim ../Saved/StagedBuilds/Linux/IFSSIM.sh --mc-up
     -- --missions all --start-noise
 ```
 
+The benchmark runs with the same Python as the CLI, and needs PyYAML
+(`pip install pyyaml`). A run checks this before it starts the sim.
+
 `--sim` takes a packaged build (`IFSSIM.sh`, `IFSSIM.app`, `IFSSIM.exe`), or
 the editor (`UnrealEditor`, with `--project IFSSIM.uproject`) on a dev box,
 or `attach` for a sim that's already running. `--settings-dir` picks the

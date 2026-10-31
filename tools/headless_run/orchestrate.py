@@ -102,9 +102,13 @@ def wait_backend_sees_sim(cfg: RunConfig, should_stop: Callable[[], bool]) -> fl
                    "(is the backend up? --mc-up starts it)")
 
 
-def _manifests(root: Path) -> set:
+def _manifests_since(root: Path, since: float) -> set:
+    """Benchmark runs written since ``since`` (epoch s). By time, not by name:
+    a repeat of the same mission, track, commit and seed rewrites the same folder."""
     mission = root / "mission"
-    return set(mission.rglob("manifest.json")) if mission.is_dir() else set()
+    if not mission.is_dir():
+        return set()
+    return {p for p in mission.rglob("manifest.json") if p.stat().st_mtime >= since}
 
 
 def _terminate(proc: subprocess.Popen, grace_s: float = 30.0) -> None:
@@ -143,10 +147,19 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         "benchmark_args": cfg.benchmark_args,
         "outcome": None,
     }
-    before = _manifests(root)
+    since = time.time() - 1.0
     bench: Optional[subprocess.Popen] = None
     t_start = time.monotonic()
     try:
+        # Cheap preflight before a slow sim boot: does the benchmark even start
+        # with this Python (its imports, e.g. PyYAML)?
+        pre = subprocess.run(cfg.benchmark_cmd + ["--help"], capture_output=True, text=True,
+                             timeout=60, cwd=str(REPO))
+        if pre.returncode != 0:
+            tail = (pre.stderr or pre.stdout).strip().splitlines()[-1:] or [""]
+            rec["outcome"] = "benchmark_error"
+            rec["error"] = f"the benchmark doesn't start with {cfg.benchmark_cmd[0]}: {tail[0]}"
+            return rec
         log(f"[{label or 'run'}] starting the sim" + (" (attach)" if sim.attached else ""))
         try:
             sim.start()
@@ -194,6 +207,12 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
                     return rec
         rec["benchmark_exit"] = bench.returncode
         rec["outcome"] = BENCH_OUTCOMES.get(bench.returncode, "benchmark_error")
+        # 1 means "a mission didn't finish", but it is also what a Python
+        # traceback exits with. No mission run written = the benchmark itself
+        # failed (a missing module, a bad flag), not the pipeline.
+        if rec["outcome"] == "not_finished" and not _manifests_since(root, since):
+            rec["outcome"] = "benchmark_error"
+            rec["error"] = "the benchmark exited 1 without running a mission; see benchmark.log"
         return rec
     except KeyboardInterrupt:
         if bench is not None:
@@ -202,7 +221,7 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         return rec
     finally:
         sim.stop()
-        rec["mission_runs"] = sorted(str(p.parent) for p in _manifests(root) - before)
+        rec["mission_runs"] = sorted(str(p.parent) for p in _manifests_since(root, since))
         rec["ended"] = _now()
         rec["duration_s"] = round(time.monotonic() - t_start, 1)
         (run_dir / "run.json").write_text(json.dumps(rec, indent=2) + "\n")
