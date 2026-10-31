@@ -38,9 +38,16 @@ def spec_path(csv_path: str) -> str:
 
 
 def _geometry(created) -> Dict[str, Any]:
+    from envgen.startpose import compute_start_pose
     t = created.track
     r = lambda pts: [[round(x, 3), round(y, 3)] for x, y in pts]  # noqa: E731
+    pose = compute_start_pose(t.cones)
     return {
+        # where the sim will put the car: 3 m behind the gate, facing `forward`
+        "start": None if pose is None else {
+            "spawn": [round(v, 3) for v in pose.spawn],
+            "forward": [round(v, 4) for v in pose.forward],
+        },
         "cones": [{"type": c, "x": round(x, 3), "y": round(y, 3)} for c, x, y in t.cones],
         "centreline": r(t.centreline[::4]),   # 1 m resolution is plenty to draw
         "left": r(t.left[::4]),
