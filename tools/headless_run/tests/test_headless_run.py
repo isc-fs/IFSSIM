@@ -141,3 +141,13 @@ def test_the_loop_keeps_going_while_runs_merely_fail(tmp_path, backend):
     recs = run_loop(cfg(tmp_path, free_port(), backend, bench_args=["--exit", "1"]), cycles=3,
                     pause_s=0, max_infra_failures=2, log=quiet)
     assert [r["outcome"] for r in recs] == ["not_finished"] * 3
+
+
+def test_each_run_keeps_its_own_results(tmp_path, backend):
+    """Repeats write the same mission/track/commit/seed folder; one per run, none lost."""
+    recs = run_loop(cfg(tmp_path, free_port(), backend), cycles=2, pause_s=0, log=quiet)
+    runs = [r["mission_runs"] for r in recs]
+    assert all(len(r) == 1 for r in runs), runs
+    assert runs[0] != runs[1]
+    assert all(Path(r[0], "manifest.json").exists() for r in runs)
+    assert all(Path(r[0]).is_relative_to(Path(rec["run_dir"])) for r, rec in zip(runs, recs))

@@ -47,8 +47,12 @@ In `tools/sim_benchmark/results/` (or `--results-root`):
 |---|---|
 | `headless/<stamp>/run.json` | the run: outcome, timings, sim command, the benchmark's runs |
 | `headless/<stamp>/sim.log`, `benchmark.log` | the two processes' output |
+| `headless/<stamp>/mission/...` | the benchmark's own results for that run |
 | `headless/index.jsonl` | one line per run, for a night's summary |
-| `mission/...` | the benchmark's own results, as before |
+
+Each run keeps its own benchmark results. The benchmark names its folders by
+mission, track, commit and seed, so in one shared folder a repeat would
+overwrite the run before it.
 
 | Outcome | Meaning | `run` exit code |
 |---|---|---|

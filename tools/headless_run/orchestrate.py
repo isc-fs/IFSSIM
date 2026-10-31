@@ -8,7 +8,10 @@ missions; this owns the processes around it, which is what an unattended
 machine needs: nobody is there to restart a sim that crashed.
 
 Every run writes ``<results>/headless/<stamp>/run.json`` and appends one line
-to ``<results>/headless/index.jsonl``.
+to ``<results>/headless/index.jsonl``. The benchmark's own results for the run
+go in that same folder (``<stamp>/mission/...``): the benchmark names its
+folders by mission, track, commit and seed, so two runs sharing a results root
+would overwrite each other, and a loop repeats exactly those.
 """
 
 from __future__ import annotations
@@ -183,7 +186,7 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
 
         argv = cfg.benchmark_cmd + [
             "--sim", f"{cfg.host}:{cfg.port}", "--mc-url", cfg.mc_url,
-            "--results-root", str(root),
+            "--results-root", str(run_dir),
         ] + (["--mc-key", cfg.mc_key] if cfg.mc_key else []) + cfg.benchmark_args
         rec["benchmark_cmd"] = argv
         log(f"[{label or 'run'}] benchmark: {' '.join(argv[1:])}")
@@ -210,7 +213,7 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         # 1 means "a mission didn't finish", but it is also what a Python
         # traceback exits with. No mission run written = the benchmark itself
         # failed (a missing module, a bad flag), not the pipeline.
-        if rec["outcome"] == "not_finished" and not _manifests_since(root, since):
+        if rec["outcome"] == "not_finished" and not _manifests_since(run_dir, since):
             rec["outcome"] = "benchmark_error"
             rec["error"] = "the benchmark exited 1 without running a mission; see benchmark.log"
         return rec
@@ -221,7 +224,7 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         return rec
     finally:
         sim.stop()
-        rec["mission_runs"] = sorted(str(p.parent) for p in _manifests_since(root, since))
+        rec["mission_runs"] = sorted(str(p.parent) for p in _manifests_since(run_dir, since))
         rec["ended"] = _now()
         rec["duration_s"] = round(time.monotonic() - t_start, 1)
         (run_dir / "run.json").write_text(json.dumps(rec, indent=2) + "\n")
