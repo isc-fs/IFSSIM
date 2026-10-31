@@ -24,11 +24,11 @@ fi
 # path; override with UE_ROOT if the engine lives elsewhere. Matches the
 # knob package_windows.sh (UE_ROOT) and package_linux.sh (UE5_ROOT)
 # already expose, and the one docs/SETUP.md documents.
-UE_ROOT="${UE_ROOT:-/Users/Shared/Epic Games/UE_5.7}"
+UE_ROOT="${UE_ROOT:-/Users/Shared/Epic Games/UE_5.8}"
 RUN_UAT="$UE_ROOT/Engine/Build/BatchFiles/RunUAT.sh"
 if [ ! -f "$RUN_UAT" ]; then
     echo "ERROR: RunUAT.sh not found at $RUN_UAT" >&2
-    echo "Set UE_ROOT=/path/to/UE_5.7 if the engine is installed elsewhere." >&2
+    echo "Set UE_ROOT=/path/to/UE_5.8 if the engine is installed elsewhere." >&2
     exit 1
 fi
 
@@ -36,7 +36,7 @@ echo "=== IFSSIM Mac post-build (v$PROJECT_VERSION) ==="
 
 # 1. BuildCookRun
 #
-# `-pak -iostore -compressed` is the UE5.7 recipe for packaged
+# `-pak -iostore -compressed` is the UE5 recipe for packaged
 # shipping builds — generates one bundled .pak + .ucas/.utoc pair
 # under Content/Paks/. Tried dropping `-pak` on perf/sim-tier1-cook-strip
 # expecting IoStore to fully replace it; got 200 MB of loose
@@ -78,10 +78,10 @@ echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 # 4. Force absolute -project path + windowed + 60 FPS cap in UECommandLine.txt.
 #    BuildCookRun writes its own relative -project path here that's only
 #    valid when the engine and project live on the same volume / under
-#    the same user. With the engine at /Users/Shared/Epic Games/UE_5.7/
+#    the same user. With the engine at /Users/Shared/Epic Games/UE_5.8/
 #    and the project at /Users/$USER/.../IFSSIM/, UE's relative-path
 #    composer produces a malformed string of the form
-#    "../../../../../../Shared/Epic Games/UE_5.7/../../../<user>/Documents/..."
+#    "../../../../../../Shared/Epic Games/UE_5.8/../../../<user>/Documents/..."
 #    which doesn't resolve to a real file — every launch from the
 #    packaged .app then throws "Failed to open descriptor file" and
 #    the app exits before any in-game code runs. We force-overwrite

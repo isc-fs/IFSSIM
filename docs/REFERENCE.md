@@ -1,6 +1,6 @@
 # IFSSIM — Functionalities Reference
 
-> **ISC Racing Team** | Unreal Engine 5.7 · Chaos Physics · ROS 2 · Python
+> **ISC Racing Team** | Unreal Engine 5.8 · Chaos Physics · ROS 2 · Python
 
 This document is a comprehensive technical reference for all systems, components, and interfaces in IFSSIM.
 
@@ -27,7 +27,7 @@ This document is a comprehensive technical reference for all systems, components
 
 ## 1. Architecture Overview
 
-IFSSIM is a Formula Student Driverless simulator built on Unreal Engine 5.7. It is layered, and one of those layers is a seam rather than a stack boundary: **the vehicle dynamics are a swappable plant behind an interface**, not a fixed part of the engine.
+IFSSIM is a Formula Student Driverless simulator built on Unreal Engine 5.8. It is layered, and one of those layers is a seam rather than a stack boundary: **the vehicle dynamics are a swappable plant behind an interface**, not a fixed part of the engine.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -97,9 +97,9 @@ design and its open questions in
 
 ## 2. Simulation Engine
 
-### Unreal Engine 5.7 + Chaos Physics
+### Unreal Engine 5.8 + Chaos Physics
 
-IFSSIM runs on **Unreal Engine 5.7** using the **Chaos physics engine** (UE5's native physics system, replacing the legacy PhysX). The project is structured as:
+IFSSIM runs on **Unreal Engine 5.8** using the **Chaos physics engine** (UE5's native physics system, replacing the legacy PhysX). The project is structured as:
 
 - **Game Module:** `Source/Blocks/` — minimal UE5 game module, entry point
 - **Plugin:** `Plugins/FSDSPlugin/` — all simulation logic lives here

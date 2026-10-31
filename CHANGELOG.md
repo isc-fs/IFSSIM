@@ -86,6 +86,9 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Unreal Engine 5.8.** The project, build and packaging scripts and setup
+  docs move from 5.7 to 5.8.4. UE 5.7 can't build with Xcode 27 on macOS.
+  On a Mac, also run `xcodebuild -downloadComponent MetalToolchain` once.
 - **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
   points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
   change assumed the GPU→CPU readback would stall on a discrete GPU over
