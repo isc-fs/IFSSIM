@@ -33,6 +33,24 @@ shipping pipeline, documentation.
   default GPU LiDAR: about 1,000-1,200 returns per scan on each prop, and 0
   once they are removed. Driving over the 15 cm LiDAR-only strip at 10 m/s
   leaves height (0.09 cm) and pitch (0.15°) the same as a drive without it.
+- **Track environment sidecars**, the first plumbing step of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
+  A track can carry a `<track>.env.json` next to its CSV: the ground extent
+  and the trackside props, generated in Python from a seed and a profile
+  (`docs/environment_sidecar.md`). The cone spawner loads it before the
+  cones, for the boot track and for `loadTrack`; the `loadTrack` reply
+  reports `environment` (`off`, `none`, `loaded` or `invalid`), and the new
+  `getEnvironment` RPC returns what was loaded. The loader is strict:
+  unknown keys and wrongly typed values are errors, and an invalid sidecar
+  is not loaded while the track still is. Nothing is spawned yet; that
+  comes with the builder in P2a.
+  - Off unless `settings.json` sets `"Environment": { "Enabled": true }`.
+    With it off, every shipped track's start pose is unchanged to 0.000 mm.
+  - `tools/validate_tracks.py` applies the same rules to every sidecar
+    under `Content/tracks/` in CI, with unit tests (`tools/tests/`).
+  - Packaging copies `*.env.json` next to the track CSVs.
+  - Covered by the automation tests `FSDS.Environment.*` and
+    `tools/smoke/test_environment.py`.
 
 - **Onboard bag replay.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT). `--report` records pipeline outputs and writes the HTML summary (detections, odom/SLAM trajectories, cone map, autonomy vs recorded pilot steering). `--live` without `--report` only plays into the nodes — no second bag. `--live` starts `foxglove_bridge` on `ws://localhost:8766` and plays as soon as a WebSocket client is ESTABLISHED on that port (falls back after `--live-wait-s`). Layout `lichtblick/onboard_live.json`: Perception BEV is `/lidar_points/above_ground` (RANSAC outliers only); perspective is `/lidar_points/ground` (full rotated crop). Both sit in the same `base_link` plane as `/Conos_raw`. Clouds and diagnostic Float32s publish only while subscribed, so the 15 k-point rotate is skipped when Lichtblick is not connected.
 - **Perception stress metrics** in the offline perception benchmark

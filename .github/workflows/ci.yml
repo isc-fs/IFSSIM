@@ -180,6 +180,9 @@ jobs:
       - name: Validate
         run: python3 tools/validate_tracks.py
 
+      - name: Validator tests
+        run: python3 -m unittest discover -s tools/tests -v
+
   # ---------------------------------------------------------------
   # Internal markdown link check — catches dead links inside the
   # repo's docs (relative paths, anchors). External URL checking is
