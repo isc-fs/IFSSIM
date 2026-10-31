@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lift a sim-recorded rosbag onto the REAL CAR (isc-fs/IFS08-DV-uDV) — replay
+# Lift a sim-recorded rosbag onto the REAL CAR (isc-fs/IFS09-DV-uDV) — replay
 # a car-parity sim bag into the live car pipeline so the whole autonomy stack
 # can be tested on real hardware with the car UP ON STANDS before ground testing.
 #
