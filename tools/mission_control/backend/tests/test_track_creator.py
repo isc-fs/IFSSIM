@@ -9,8 +9,19 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+import pytest  # noqa: E402
+
+import benchmark_control_runner as bcr  # noqa: E402
 import track_creator as tc  # noqa: E402
 from track_centering import is_centered  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _real_tools_dir(monkeypatch):
+    # test_benchmark_control_runner points the cached tools dir at a temp
+    # folder; resolve the repo's tools/ again so envgen imports.
+    monkeypatch.delenv("IFSSIM_TOOLS_DIR", raising=False)
+    monkeypatch.setattr(bcr, "_tools_dir_cache", None)
 
 BUILTINS = {"acceleration.csv": "acceleration", "skidpad.csv": "skidpad"}
 LOOP = {"format": "ifssim-trackspec/1", "closed": True,
