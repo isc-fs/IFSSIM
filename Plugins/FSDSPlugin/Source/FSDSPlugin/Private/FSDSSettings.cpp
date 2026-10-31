@@ -142,7 +142,7 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 			const TSharedPtr<FJsonObject>* VehicleObj;
 			if (Pair.Value->TryGetObject(VehicleObj))
 			{
-				ParseVehicle(Pair.Key, *VehicleObj);
+				ParseVehicle(FString(*Pair.Key), *VehicleObj);
 			}
 		}
 	}
@@ -176,7 +176,7 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 			const TSharedPtr<FJsonObject>* SensorObj;
 			if (Pair.Value->TryGetObject(SensorObj))
 			{
-				ParseSensor(Pair.Key, *SensorObj, Vehicle);
+				ParseSensor(FString(*Pair.Key), *SensorObj, Vehicle);
 			}
 		}
 	}
@@ -350,8 +350,5 @@ const FFSDSVehicleSettings* FFSDSSettings::GetDefaultVehicle() const
 		return &Vehicles[TEXT("FSCar")];
 
 	// Return first vehicle
-	for (auto& Pair : Vehicles)
-		return &Pair.Value;
-
-	return nullptr;
+	return &Vehicles.CreateConstIterator().Value();
 }
