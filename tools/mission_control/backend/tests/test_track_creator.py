@@ -21,7 +21,8 @@ def test_preview_returns_geometry_and_writes_nothing(tmp_path):
     code, body = tc.preview(LOOP)
     assert code == 200 and body["ok"]
     assert body["by_type"]["big_orange"] == 4
-    assert {"cones", "centreline", "left", "right", "issues"} <= set(body)
+    assert {"cones", "centreline", "left", "right", "issues", "start"} <= set(body)
+    assert body["start"]["forward"][0] > 0.9      # drawn from (0,0) toward (40,0)
     assert list(tmp_path.iterdir()) == []
 
 
