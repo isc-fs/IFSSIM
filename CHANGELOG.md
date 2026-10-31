@@ -33,6 +33,7 @@ shipping pipeline, documentation.
   - Covered by the automation tests `FSDS.Environment.*` and
     `tools/smoke/test_environment.py`.
 
+- **Onboard bag replay.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT). `--report` records pipeline outputs and writes the HTML summary (detections, odom/SLAM trajectories, cone map, autonomy vs recorded pilot steering). `--live` without `--report` only plays into the nodes — no second bag. `--live` starts `foxglove_bridge` on `ws://localhost:8766` and plays as soon as a WebSocket client is ESTABLISHED on that port (falls back after `--live-wait-s`). Layout `lichtblick/onboard_live.json`: Perception BEV is `/lidar_points/above_ground` (RANSAC outliers only); perspective is `/lidar_points/ground` (full rotated crop). Both sit in the same `base_link` plane as `/Conos_raw`. Clouds and diagnostic Float32s publish only while subscribed, so the 15 k-point rotate is skipped when Lichtblick is not connected.
 - **Perception stress metrics** in the offline perception benchmark
   (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
   `docs/ENVIRONMENT_ROADMAP.md`. It now scores:
@@ -83,6 +84,18 @@ shipping pipeline, documentation.
   this file.
 - The benchmarks accept bags and results outside `tools/sim_benchmark/`
   (`common.DockerPaths`), as the central machine keeps them elsewhere.
+- **Perception sanity plots.** The perception benchmark now puts one LiDAR
+  scan (`--sanity-scan`, the first by default) through the production cone
+  detector with every stage recorded (`tools/sim_benchmark/perception_sanity.py`)
+  and writes it as `perception_sanity.json`. IFS-DV-BENCHWEB shows it as three
+  charts in a simulator bag's perception section: ground removal, DBSCAN
+  clusters with each cluster's gate verdict, and the cone fit against both
+  templates. They are for checking by eye what the numeric benchmarks can't
+  show. `perception_sanity_plots.py` makes the same plots as a standalone page
+  for any bag, including real ones, and `diagnose_cone_shape.py` measures the
+  simulator's real cone shape per type. All of them need the ground-at-z=0
+  pipeline from
+  [IFS09-DV-PIPELINE#14](https://github.com/isc-fs/IFS09-DV-PIPELINE/pull/14).
 
 ### Changed
 
