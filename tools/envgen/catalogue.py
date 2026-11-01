@@ -4,7 +4,7 @@ A class here is what the generator needs to place a prop: its footprint and
 how far from the track it stands. What it looks like is the plugin's business
 (Private/Environment/FSDSEnvironmentBuilder.cpp builds every class from
 primitives); the two must agree on the names and footprints, which
-tests/test_envgen.py checks.
+tests/test_environment.py checks.
 
 The classes are the roadmap's worst perception stressors (P2a):
 - narrow props at cone scale (bollards, bins), which a LiDAR detector reads as

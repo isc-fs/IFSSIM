@@ -49,7 +49,7 @@ The plugin builds each class from primitives (engine basic shapes and the small 
 
 ```bash
 cd tools
-python3 -m envgen ../Content/tracks/<track>.csv --seed 7 --profile stress
+python3 -m envgen env ../Content/tracks/<track>.csv --seed 7 --profile stress
 ```
 
 - **`flat_baseline`** has no props.
