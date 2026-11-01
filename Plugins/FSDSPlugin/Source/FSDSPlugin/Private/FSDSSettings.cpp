@@ -122,6 +122,16 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 			*PlantType, *PlantFmuPath, RoadProbeUpM, RoadProbeDownM, RoadDefaultMu);
 	}
 
+	// Trackside environment. Only the switch is read here; what a track's
+	// environment contains is in its sidecar (FSDSEnvironment.h).
+	const TSharedPtr<FJsonObject>* EnvObj;
+	if (Root->TryGetObjectField(TEXT("Environment"), EnvObj))
+	{
+		(*EnvObj)->TryGetBoolField(TEXT("Enabled"), bEnvironmentEnabled);
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Environment %s"),
+		bEnvironmentEnabled ? TEXT("enabled (track sidecars are loaded)") : TEXT("off (flat world)"));
+
 	// Vehicles
 	const TSharedPtr<FJsonObject>* VehiclesObj;
 	if (Root->TryGetObjectField(TEXT("Vehicles"), VehiclesObj))

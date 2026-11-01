@@ -62,6 +62,10 @@ codesign --sign - --force --deep \
 echo "[3/3] Staging track CSVs..."
 mkdir -p "$TRACKS_DST"
 cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
+# Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+for f in "$TRACKS_SRC/"*.env.json; do
+    if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
+done
 echo "  Tracks staged: $(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') files"
 
 # 3b. Copy settings.json to the UE5 UserSettingsDir for this game.

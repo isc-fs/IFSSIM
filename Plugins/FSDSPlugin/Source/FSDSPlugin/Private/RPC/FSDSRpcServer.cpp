@@ -8,8 +8,13 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
 #include "FSDSConeSpawner.h"
+#include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
 #include "Async/Async.h"
+#include "Dom/JsonObject.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Misc/App.h"
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
@@ -1924,13 +1929,74 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				bHasStartGate = true;
 				}
 
+				// environment: off | none | loaded | invalid (getEnvironment has
+				// the details, including why a sidecar was invalid).
 				return FString::Printf(
-					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s}"),
-					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"));
+					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
+					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"),
+					*Spawner->GetEnvironmentStatus());
 			},
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
 			TEXT("loadTrack"));
+	}
+
+	else if (Method == TEXT("getEnvironment"))
+	{
+		// The current track's environment, as loaded from its sidecar
+		// (docs/environment_sidecar.md). Values are as authored: metres in the
+		// track CSV frame.
+		return CallOnGameThread<FString>(
+			[this]() -> FString {
+				if (!World) return TEXT("{\"error\":\"no world\"}");
+				const AFSDSConeSpawner* Spawner = nullptr;
+				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+				{
+					Spawner = *It;
+					break;
+				}
+				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
+
+				const FFSDSEnvironment& Env = Spawner->GetEnvironment();
+				TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+				Out->SetBoolField(TEXT("enabled"), FFSDSSettings::Get().bEnvironmentEnabled);
+				Out->SetStringField(TEXT("status"), Spawner->GetEnvironmentStatus());
+				if (!Spawner->GetEnvironmentError().IsEmpty())
+				{
+					Out->SetStringField(TEXT("error"), Spawner->GetEnvironmentError());
+				}
+				if (Spawner->GetEnvironmentStatus() == TEXT("loaded"))
+				{
+					Out->SetStringField(TEXT("sidecar"), Env.SidecarPath);
+					Out->SetNumberField(TEXT("seed"), (double)Env.Seed);
+					Out->SetStringField(TEXT("profile"), Env.Profile);
+					if (Env.bHasGroundExtent)
+					{
+						TSharedRef<FJsonObject> Extent = MakeShared<FJsonObject>();
+						Extent->SetNumberField(TEXT("x_min"), Env.GroundXMin);
+						Extent->SetNumberField(TEXT("y_min"), Env.GroundYMin);
+						Extent->SetNumberField(TEXT("x_max"), Env.GroundXMax);
+						Extent->SetNumberField(TEXT("y_max"), Env.GroundYMax);
+						Out->SetObjectField(TEXT("ground_extent"), Extent);
+					}
+					Out->SetNumberField(TEXT("props"), Env.Props.Num());
+					TSharedRef<FJsonObject> Classes = MakeShared<FJsonObject>();
+					TMap<FString, int32> Counts;
+					for (const FFSDSEnvProp& Prop : Env.Props) Counts.FindOrAdd(Prop.Class)++;
+					Counts.KeySort(TLess<FString>());
+					for (const auto& Pair : Counts) Classes->SetNumberField(Pair.Key, Pair.Value);
+					Out->SetObjectField(TEXT("classes"), Classes);
+				}
+
+				FString Json;
+				TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+					TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
+				FJsonSerializer::Serialize(Out, Writer);
+				return Json;
+			},
+			5.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("getEnvironment"));
 	}
 
 	// === UDP Target Registration ===
