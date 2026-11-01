@@ -243,6 +243,7 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Mission benchmark timed out runs the car finished.** `timeout_s` counted real time, so a sim running slower than real time ran out of budget: an acceleration run that finished in 29.9 s of sim time took 60.8 s of real time and was scored a timeout. The timeout now counts sim time, read from a new `sim_time` field in `getSimStatus`, with six times `timeout_s` of real time as a backstop for a stalled sim. Older sim builds fall back to real time. `results.json` adds `race/run_sim_time_s` (#692).
 - **Acceleration finished at the start line.** The referee put the finish line on the big-orange gate farthest from the map origin. Since Mission Control started recentring tracks on load, both acceleration gates sit the same distance from the origin, and the tie picked the start gate: runs "finished" about 3 m after launch. The finish is now the gate farthest from the start gate, chosen by the same rule that spawns the car (#689).
 - **Autonomy no longer flaps when the sim runs slower than real time**
   ([#684](https://github.com/isc-fs/IFSSIM/issues/684)). The emulated uDV

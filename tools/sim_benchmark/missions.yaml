@@ -9,7 +9,8 @@
 #   start_pose   noise: false = the track's start gate; true = a seeded random offset within
 #                ±lateral_m, ±longitudinal_m, ±yaw_deg
 #   laps         laps to drive (the referee's required laps)
-#   timeout_s    a run not finished by then counts as not finished (about twice the expected time)
+#   timeout_s    a run not finished by then counts as not finished (about twice the expected time);
+#                SIM seconds, so a slow sim doesn't fail runs it finishes (real time if the sim can't say)
 #
 # The timeouts are guesses until the rig has measured runs (at the pipeline's default speed).
 
