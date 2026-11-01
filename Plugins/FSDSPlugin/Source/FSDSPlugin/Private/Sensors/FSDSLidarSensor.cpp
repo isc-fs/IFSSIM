@@ -74,11 +74,12 @@ static TAutoConsoleVariable<int32> CVarLidarDebugColorChannel(
 
 static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
 	TEXT("fsds.LidarGPU.StencilEncoder"),
-	0,
-	TEXT("0 = depth-only LiDAR (no color capture, no #488 stippling). ")
-	TEXT("1 = full reflectance LUT path (creates color capture, ships ")
-	TEXT("per-cone-material 905 nm reflectance via M_LiDARStencilEncoder, ")
-	TEXT("but reintroduces the asphalt/car-paint stippling tracked in #488)."),
+	1,
+	TEXT("Read once, at startup (-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0). ")
+	TEXT("1 (default) = per-material 905 nm reflectance: the colour capture ")
+	TEXT("renders each scan and M_LiDARStencilEncoder feeds the LUT. ")
+	TEXT("0 = no colour capture, so intensity carries no material information; ")
+	TEXT("use it if the faint viewport stippling of #488 shows in a packaged build."),
 	ECVF_Default);
 
 UFSDSLidarSensor::UFSDSLidarSensor()
@@ -663,7 +664,8 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// because the decode shader (line ~1168, `Params->ColorTexture`) needs
 	// a valid color texture handle to bind even when reflectance LUT is
 	// disabled. What's gated by `fsds.LidarGPU.StencilEncoder` is the
-	// per-tick CaptureScene() call (see TickGPUPath below). Default OFF
+	// per-tick CaptureScene() call (see TickGPUPath below). On by default
+	// since the LUT works (#698); with it OFF
 	// → the GPU color capture exists but never renders → the color
 	// render target stays cleared-to-black → the decode shader reads
 	// zero alpha → reflectance LUT lookup gracefully falls back to
@@ -978,8 +980,9 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 	// LiDAR's POV. That render is the contamination vector — without
 	// it the RT stays cleared-to-black and the decode shader's
 	// reflectance lookup gracefully falls back to luminance baseline.
-	// Opt in via -ExecCmds="fsds.LidarGPU.StencilEncoder 1" if you
-	// need per-cone reflectance and can tolerate the #488 stippling.
+	// On by default (per-material reflectance). Opt out at startup with
+	// -ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0 if
+	// the #488 stippling shows in a packaged build.
 	if (GPUColorCapture && CVarLidarStencilEncoder.GetValueOnGameThread() > 0)
 	{
 		GPUColorCapture->CaptureScene();
