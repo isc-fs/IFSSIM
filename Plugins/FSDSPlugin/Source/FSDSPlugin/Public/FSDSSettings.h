@@ -256,6 +256,23 @@ public:
 	 *  free, which is a demo, not a measurement. */
 	bool bShadowSync = true;
 
+	// --- Mission Control panel (in-game launcher) ----------------------
+	//
+	// "MissionControl": { "Url", "ApiKey", "ComposeDir", "Panel", "Key" }.
+	// The panel drives the same backend as the web UI; see
+	// UI/FSDSLauncher.h. ApiKey falls back to $IFSSIM_MC_API_KEY, the
+	// variable docker-compose hands the backend. ComposeDir is where
+	// docker-compose.yml lives, for the panel's "Start stack" button;
+	// empty means search upward from the project.
+	FString MissionControlUrl = TEXT("http://127.0.0.1:8000");
+	FString MissionControlApiKey;
+	FString MissionControlComposeDir;
+	bool bLauncherPanel = true;
+	FString LauncherKey = TEXT("Tab");
+
+	/** The settings.json actually loaded; empty when defaults are in use. */
+	FString LoadedFromPath;
+
 	// --- Environment -----------------------------------------------------
 	//
 	// Trackside environment (docs/ENVIRONMENT_ROADMAP.md). When true, loading a

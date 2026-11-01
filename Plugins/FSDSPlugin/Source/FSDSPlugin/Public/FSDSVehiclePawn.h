@@ -456,6 +456,8 @@ private:
 	void OnBrakeInput(float Value);
 	void OnHandbrakePressed();
 	void OnHandbrakeReleased();
+	/** Opens/closes the in-game Mission Control panel (UI/FSDSLauncher.h). */
+	void OnToggleLauncher();
 
 	FCarControls CurrentControls;
 	bool bApiControlEnabled = false;

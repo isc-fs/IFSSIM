@@ -14,6 +14,12 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Mission Control inside the sim.** Press Tab in the sim window for a panel
+  that loads a track, starts and stops a session, resets the car and works
+  RES, through the same backend as the web UI. When the backend is down it
+  can run `docker compose up -d` for you. Configured by a `MissionControl`
+  block in `settings.json`; off in headless runs. See
+  `docs/OPERATING.md`, "From inside the sim".
 - **Trackside props**, the first slice of P2a in `docs/ENVIRONMENT_ROADMAP.md`
   ([#683](https://github.com/isc-fs/IFSSIM/issues/683)): the perception
   stressors the roadmap ranks worst, around any track.
@@ -173,6 +179,9 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Unreal Engine 5.8.** The project, build and packaging scripts and setup
+  docs move from 5.7 to 5.8.4. UE 5.7 can't build with Xcode 27 on macOS.
+  On a Mac, also run `xcodebuild -downloadComponent MetalToolchain` once.
 - **LiDAR per-material reflectance is on by default**
   (`fsds.LidarGPU.StencilEncoder` now defaults to 1). Intensity follows the
   reflectance LUT instead of carrying no material information. No measurable

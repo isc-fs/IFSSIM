@@ -1,6 +1,9 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSCollision.h"
 #include "FSDSSettings.h"
+#include "FSDSGameMode.h"
+#include "UI/FSDSLauncher.h"
+#include "GameFramework/PlayerController.h"
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Plant/FSDSChaosPlant.h"
@@ -1558,6 +1561,19 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 
 	PlayerInputComponent->BindAction("Handbrake", IE_Pressed, this, &AFSDSVehiclePawn::OnHandbrakePressed);
 	PlayerInputComponent->BindAction("Handbrake", IE_Released, this, &AFSDSVehiclePawn::OnHandbrakeReleased);
+
+	// Bound by key, not by an input-settings action, so the key comes from
+	// settings.json ("MissionControl": {"Key": ...}) with nothing to add to
+	// DefaultInput.ini.
+	PlayerInputComponent->BindKey(FFSDSLauncher::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleLauncher);
+}
+
+void AFSDSVehiclePawn::OnToggleLauncher()
+{
+	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
+	{
+		GM->GetLauncher().Toggle(Cast<APlayerController>(GetController()));
+	}
 }
 
 void AFSDSVehiclePawn::OnThrottleInput(float Value)
