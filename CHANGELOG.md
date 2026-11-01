@@ -164,6 +164,19 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The LiDAR's per-material reflectance never applied**
+  ([#698](https://github.com/isc-fs/IFSSIM/issues/698)). With
+  `fsds.LidarGPU.StencilEncoder 1` the log said the reflectance LUT was
+  active, but intensity still followed the rendered colour: UE applies a
+  post-process material only to a view with a view state, and the LiDAR's
+  colour capture had none, so the stencil encoder never ran. The colour
+  capture now keeps its rendering state when the encoder is on. Measured
+  on the 25 m circle: blue cones read 0.14 and yellow 0.47 (range-corrected,
+  LUT 0.15 / 0.50), and the ground shows no speckle (#488). New
+  `fsds.LidarGPU.DebugColorChannel 1|2` reports the encoder's raw R (stencil
+  ID) or G (luminance) as the intensity. The encoder is still off by
+  default and must be set at startup.
+
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
   a repeated or slightly earlier stamp 1 ns past the last one. Like the

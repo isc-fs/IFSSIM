@@ -63,6 +63,15 @@ static TAutoConsoleVariable<float> CVarLidarGPUExtraOversample(
 // cones from ground returns. Anyone who needs the LUT path enables
 // this CVar at boot time (e.g. via -ExecCmds in UECommandLine.txt or
 // from settings.json's startup hooks).
+static TAutoConsoleVariable<int32> CVarLidarDebugColorChannel(
+	TEXT("fsds.LidarGPU.DebugColorChannel"),
+	0,
+	TEXT("Debug: report a raw channel of the LiDAR's colour capture as the ")
+	TEXT("intensity, to check what the stencil encoder writes. 0 = off, ")
+	TEXT("1 = R (stencil ID / 255), 2 = G (luminance). Needs ")
+	TEXT("fsds.LidarGPU.StencilEncoder 1 at startup."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
 	TEXT("fsds.LidarGPU.StencilEncoder"),
 	0,
@@ -793,6 +802,18 @@ void UFSDSLidarSensor::InitializeGPUPath()
 			// as a sensor baseline).
 			const bool bEncoderEnabled = CVarLidarStencilEncoder.GetValueOnGameThread() > 0;
 			bReflectanceLUTActive = bEncoderEnabled;
+			if (bEncoderEnabled)
+			{
+				// UE applies a post-process material only to a view with a
+				// view state (UMaterialInterface::OverrideBlendableSettings
+				// returns early without one), and a capture that neither
+				// captures every frame nor persists its rendering state has
+				// none. So the encoder never ran: R came back as the scene's
+				// red, not the stencil ID, and every hit fell back to G
+				// (#698). Only the colour capture persists; the #488 dots
+				// come from the depth capture persisting (see above).
+				GPUColorCapture->bAlwaysPersistRenderingState = true;
+			}
 			UE_LOG(LogTemp, Log,
 				TEXT("FSDS LiDAR GPU: stencil-encoder post-process material loaded — reflectance LUT %s (fsds.LidarGPU.StencilEncoder=%d, #488 fix)"),
 				bEncoderEnabled ? TEXT("ACTIVE (#321 D-Phase-2)") : TEXT("OFF (color capture disabled, falling back to Rec.709 luminance)"),
@@ -1156,6 +1177,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// shader branch on `UseReflectanceLUT` is constant across the
 	// dispatch so there's no warp-divergence cost.
 	U.UseReflectanceLUT = bReflectanceLUTActive ? 1u : 0u;
+	// Debug: report a raw colour-capture channel as the intensity (#698).
+	if (const int32 Debug = CVarLidarDebugColorChannel.GetValueOnAnyThread(); Debug == 1 || Debug == 2)
+	{
+		U.UseReflectanceLUT = 1u + (uint32)Debug;
+	}
 
 	const int32 SlotIdx = NextDispatchSlot;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
