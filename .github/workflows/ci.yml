@@ -180,6 +180,14 @@ jobs:
       - name: Validate
         run: python3 tools/validate_tracks.py
 
+      # The track creator (tools/envgen): drawn path -> cones, FS rules, and
+      # the sim's start-pose logic ported to Python. Standard library only;
+      # pytest is the one install.
+      - name: Track creator tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tools/envgen/tests -q
+
   # ---------------------------------------------------------------
   # Internal markdown link check — catches dead links inside the
   # repo's docs (relative paths, anchors). External URL checking is
