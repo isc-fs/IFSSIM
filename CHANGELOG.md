@@ -33,6 +33,37 @@ shipping pipeline, documentation.
   - Covered by the automation tests `FSDS.Environment.*` and
     `tools/smoke/test_environment.py`.
 
+- **Track creator.** Draw a path, get a real track. `tools/envgen` turns a
+  track spec (the drawn control points, width, cone spacing and a seed) into
+  the cone CSV the sim loads: a smooth centreline, blue on the left and yellow
+  on the right, cones closer together in corners, and a start gate.
+  - **Test sections** change one stretch of track, by control point: width,
+    spacing, missing cones, wrong colours, misplaced cones. They are seeded,
+    so a spec always builds the same cones.
+  - **Checked before it reaches the sim:** the FS layout rules (width,
+    spacing, longest straight, hairpin diameter, lap length) are warnings,
+    because a test track may break them on purpose. A corridor that folds or
+    crosses itself is an error, and so is a start gate the sim would read the
+    wrong way. `envgen/startpose.py` ports `ComputeStartGatePose` to check
+    the second.
+  - **Mission Control:** `POST /api/track/preview_spec` builds without
+    saving, for an editor to redraw as you draw. `POST /api/track/create`
+    saves `<name>.csv` next to the spec it came from (`<name>.track.json`).
+    `GET /api/track/{name}/spec` reopens it, and `/api/track/list` marks
+    drawn tracks `editable`.
+  - **Command line:** `cd tools && python3 -m envgen create my.track.json -o
+    ../Content/tracks/my.csv`. `python3 -m envgen startpose <csv>...`
+    reports where the sim will spawn the car on any track.
+  - **Stress tracks:** shapes too exact to draw by hand, built from geometry
+    by `envgen/primitives.py` and committed as `Content/tracks/stress_*.csv`
+    (each with its spec, so it reopens in the editor). Constant-radius
+    circles (5, 9 both ways, 15, 25 m), a corner that tightens 20 → 6 m and
+    the same loop opening, a wide and a tight slalom, five back-to-back
+    hairpins, a 75 m straight into a hairpin, plus that hairpin with missing
+    cones and the 15 m circle with misplaced ones.
+    `python3 -m envgen stress --list` says what each tests; `python3 -m
+    envgen stress -o ../Content/tracks` regenerates them, and CI checks the
+    committed CSVs still match.
 - **Onboard bag replay.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT). `--report` records pipeline outputs and writes the HTML summary (detections, odom/SLAM trajectories, cone map, autonomy vs recorded pilot steering). `--live` without `--report` only plays into the nodes — no second bag. `--live` starts `foxglove_bridge` on `ws://localhost:8766` and plays as soon as a WebSocket client is ESTABLISHED on that port (falls back after `--live-wait-s`). Layout `lichtblick/onboard_live.json`: Perception BEV is `/lidar_points/above_ground` (RANSAC outliers only); perspective is `/lidar_points/ground` (full rotated crop). Both sit in the same `base_link` plane as `/Conos_raw`. Clouds and diagnostic Float32s publish only while subscribed, so the 15 k-point rotate is skipped when Lichtblick is not connected.
 - **Perception stress metrics** in the offline perception benchmark
   (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
