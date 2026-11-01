@@ -50,6 +50,7 @@ shipping pipeline, documentation.
   default GPU LiDAR: about 1,000-1,200 returns per scan on each prop, and 0
   once they are removed. Driving over the 15 cm LiDAR-only strip at 10 m/s
   leaves height (0.09 cm) and pitch (0.15°) the same as a drive without it.
+
 - **Track environment sidecars**, the first plumbing step of
   `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
   A track can carry a `<track>.env.json` next to its CSV: the ground extent
