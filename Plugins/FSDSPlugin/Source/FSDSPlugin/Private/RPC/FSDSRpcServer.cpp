@@ -7,9 +7,15 @@
 #include "RPC/FSDSUdpBroadcaster.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
+#include "Environment/FSDSEnvironmentBuilder.h"
 #include "FSDSConeSpawner.h"
+#include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
 #include "Async/Async.h"
+#include "Dom/JsonObject.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Misc/App.h"
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
@@ -23,6 +29,7 @@
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
 #include "Test/FSDSTestTerrain.h"
+#include "Test/FSDSCollisionMatrixCheck.h"
 
 /**
  * Tell the vehicle's plant(s) that the car has been teleported.
@@ -1268,7 +1275,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			{
 				if (World)
 				{
-					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+					if (TActorIterator<AFSDSConeSpawner> It(World); It)
 					{
 						FVector StartLoc; FQuat StartRot;
 						if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
@@ -1278,7 +1285,6 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 						}
 						NumCones = It->SpawnedCones.Num();
-						break;
 					}
 				}
 
@@ -1532,6 +1538,53 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return TEXT("true");
 	}
 
+	else if (Method == TEXT("validateCollisionMatrix"))
+	{
+		// docs/collision_matrix.md checked against the engine, with two test
+		// props spawned in front of the car (FSDSCollisionMatrixCheck.h).
+		//   validateCollisionMatrix [ahead_m]   spawn them and check (default 10 m)
+		//   validateCollisionMatrix clear       remove them
+		// The props stay after a check, so the car can be driven over the
+		// LiDAR-only strip and a LiDAR consumer can look for both.
+		const FString Arg = Args.TrimStartAndEnd();
+		const bool bClear = Arg == TEXT("clear");
+		const double AheadM = (!bClear && !Arg.IsEmpty()) ? FCString::Atod(*Arg) : 10.0;
+		if (!VehiclePawn) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+
+		const FString Timeout = TEXT("{\"ok\":false,\"error\":\"timeout\"}");
+		if (bClear)
+		{
+			return CallOnGameThread<FString>([this]() -> FString
+			{
+				if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+				return FString::Printf(TEXT("{\"ok\":true,\"removed\":%d}"),
+					FSDSCollisionMatrixCheck::Clear(VehiclePawn->GetWorld()));
+			}, 10.0, Timeout, TEXT("validateCollisionMatrix clear"));
+		}
+
+		const FString SpawnError = CallOnGameThread<FString>([this, AheadM]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+			return FSDSCollisionMatrixCheck::Spawn(VehiclePawn, AheadM);
+		}, 10.0, Timeout, TEXT("validateCollisionMatrix spawn"));
+		if (!SpawnError.IsEmpty()) return SpawnError;
+
+		// Chaos adds new bodies to its scene queries on a later tick, so let
+		// the world tick a few frames before querying (see Check()).
+		const uint64 SpawnFrame = GFrameCounter;
+		const double Deadline = FPlatformTime::Seconds() + 10.0;
+		while (GFrameCounter < SpawnFrame + 3 && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Sleep(0.01f);
+		}
+
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+			return FSDSCollisionMatrixCheck::Check(VehiclePawn);
+		}, 10.0, Timeout, TEXT("validateCollisionMatrix check"));
+	}
+
 	else if (Method == TEXT("validateRoadProbe"))
 	{
 		// Build deliberately non-flat ground and check the probe against the
@@ -1556,7 +1609,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (!ProbeWorld) return TEXT("{\"ok\":false,\"error\":\"no world\"}");
 
 			AFSDSTestTerrain* Terrain = nullptr;
-			for (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It; ++It) { Terrain = *It; break; }
+			if (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It) { Terrain = *It; }
 			if (!Terrain)
 			{
 				Terrain = ProbeWorld->SpawnActor<AFSDSTestTerrain>(AFSDSTestTerrain::StaticClass());
@@ -1757,7 +1810,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 				AFSDSConeSpawner* Spawner = nullptr;
 				if (World) {
-					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It) { Spawner = *It; break; }
+					if (TActorIterator<AFSDSConeSpawner> It(World); It) { Spawner = *It; }
 				}
 				Out += FString::Printf(TEXT(",\"spawner\":%s,\"world\":%s}"),
 					Spawner ? TEXT("true") : TEXT("false"),
@@ -1830,10 +1883,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (!World) return TEXT("{\"error\":\"no world\"}");
 
 				AFSDSConeSpawner* Spawner = nullptr;
-				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+				if (TActorIterator<AFSDSConeSpawner> It(World); It)
 				{
 					Spawner = *It;
-					break;
 				}
 				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
 
@@ -1924,13 +1976,87 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				bHasStartGate = true;
 				}
 
+				// environment: off | none | loaded | invalid (getEnvironment has
+				// the details, including why a sidecar was invalid).
 				return FString::Printf(
-					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s}"),
-					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"));
+					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
+					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"),
+					*Spawner->GetEnvironmentStatus());
 			},
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
 			TEXT("loadTrack"));
+	}
+
+	else if (Method == TEXT("getEnvironment"))
+	{
+		// The current track's environment, as loaded from its sidecar
+		// (docs/environment_sidecar.md). Values are as authored: metres in the
+		// track CSV frame.
+		return CallOnGameThread<FString>(
+			[this]() -> FString {
+				if (!World) return TEXT("{\"error\":\"no world\"}");
+				const AFSDSConeSpawner* Spawner = nullptr;
+				if (TActorIterator<AFSDSConeSpawner> It(World); It)
+				{
+					Spawner = *It;
+				}
+				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
+
+				const FFSDSEnvironment& Env = Spawner->GetEnvironment();
+				TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+				Out->SetBoolField(TEXT("enabled"), FFSDSSettings::Get().bEnvironmentEnabled);
+				Out->SetStringField(TEXT("status"), Spawner->GetEnvironmentStatus());
+				if (!Spawner->GetEnvironmentError().IsEmpty())
+				{
+					Out->SetStringField(TEXT("error"), Spawner->GetEnvironmentError());
+				}
+				if (Spawner->GetEnvironmentStatus() == TEXT("loaded"))
+				{
+					Out->SetStringField(TEXT("sidecar"), Env.SidecarPath);
+					Out->SetNumberField(TEXT("seed"), (double)Env.Seed);
+					Out->SetStringField(TEXT("profile"), Env.Profile);
+					if (Env.bHasGroundExtent)
+					{
+						TSharedRef<FJsonObject> Extent = MakeShared<FJsonObject>();
+						Extent->SetNumberField(TEXT("x_min"), Env.GroundXMin);
+						Extent->SetNumberField(TEXT("y_min"), Env.GroundYMin);
+						Extent->SetNumberField(TEXT("x_max"), Env.GroundXMax);
+						Extent->SetNumberField(TEXT("y_max"), Env.GroundYMax);
+						Out->SetObjectField(TEXT("ground_extent"), Extent);
+					}
+					Out->SetNumberField(TEXT("props"), Env.Props.Num());
+					TSharedRef<FJsonObject> Classes = MakeShared<FJsonObject>();
+					TMap<FString, int32> Counts;
+					for (const FFSDSEnvProp& Prop : Env.Props) Counts.FindOrAdd(Prop.Class)++;
+					Counts.KeySort(TLess<FString>());
+					for (const auto& Pair : Counts) Classes->SetNumberField(Pair.Key, Pair.Value);
+					Out->SetObjectField(TEXT("classes"), Classes);
+
+					// What the builder made of it: props standing in the world.
+					if (const AFSDSEnvironmentActor* Built = Spawner->GetEnvironmentActor())
+					{
+						Out->SetNumberField(TEXT("built"), Built->GetNumBuilt());
+						Out->SetNumberField(TEXT("skipped"), Built->GetNumSkipped());
+						TArray<TSharedPtr<FJsonValue>> Unknown;
+						for (const FString& C : Built->GetUnknownClasses()) Unknown.Add(MakeShared<FJsonValueString>(C));
+						Out->SetArrayField(TEXT("unknown_classes"), Unknown);
+						Out->SetStringField(TEXT("transform_sha1"), Built->GetTransformHash());
+						TSharedRef<FJsonObject> Meshes = MakeShared<FJsonObject>();
+						for (const auto& Pair : Built->GetMeshSources()) Meshes->SetStringField(Pair.Key, Pair.Value);
+						Out->SetObjectField(TEXT("meshes"), Meshes);
+					}
+				}
+
+				FString Json;
+				TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+					TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
+				FJsonSerializer::Serialize(Out, Writer);
+				return Json;
+			},
+			5.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("getEnvironment"));
 	}
 
 	// === UDP Target Registration ===

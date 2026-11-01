@@ -35,6 +35,7 @@ from scoring import compute_scoring
 import bag_recorder as _bag
 import benchmark_control_runner as _benchmark
 import mission_catalog as _missions
+import track_creator as _creator
 from ros_bridge import RosBridge, StartMissionOutcome
 
 
@@ -355,6 +356,17 @@ class TrackGenerate(BaseModel):
     n_regions: int = 30
     max_bound: int = 150
     name: str = ""
+
+class TrackCreate(BaseModel):
+    """A drawn track: see tools/envgen/spec.py for `spec`."""
+    name: str
+    spec: dict
+    overwrite: bool = False
+    strict: bool = False
+
+class TrackPreview(BaseModel):
+    spec: dict
+    strict: bool = False
 
 class TeleportRequest(BaseModel):
     x: float
@@ -1309,6 +1321,8 @@ def track_list():
             "orange": len(cones["big_orange"]) + len(cones["small_orange"]),
             "builtin": name in BUILTIN_TRACKS,
             "event_type": BUILTIN_TRACKS.get(name),
+            # drawn in the track creator: its spec can be reopened
+            "editable": _creator.has_spec(f),
         })
     return tracks
 
@@ -1413,8 +1427,43 @@ def track_delete(name: str):
     filepath = _resolve_track_path(name)
     if os.path.exists(filepath):
         os.remove(filepath)
+        spec_file = _creator.spec_path(filepath)
+        if os.path.exists(spec_file):
+            os.remove(spec_file)
         return {"deleted": name}
     return JSONResponse({"error": "Not found"}, status_code=404)
+
+
+# === Track creator (tools/envgen) ===
+# A drawn path in, cones out. `preview` builds without writing, for the
+# editor to redraw as you draw; `create` saves <name>.csv and the spec it came
+# from (<name>.track.json); `spec` returns that spec so a track can be reopened.
+
+@app.post("/api/track/preview_spec")
+def track_preview_spec(req: TrackPreview):
+    code, body = _creator.preview(req.spec, strict=req.strict)
+    return body if code == 200 else JSONResponse(body, status_code=code)
+
+
+@app.post("/api/track/create", dependencies=[Depends(require_api_key)])
+def track_create(req: TrackCreate):
+    code, body = _creator.create(req.name, req.spec, TRACKS_DIR, BUILTIN_TRACKS,
+                                 overwrite=req.overwrite, strict=req.strict)
+    if code == 200:
+        log_event("track_create", f"Created {body['name']} ({body['cones']} cones, "
+                                  f"{body['length_m']} m)")
+        return body
+    return JSONResponse(body, status_code=code)
+
+
+@app.get("/api/track/{name}/spec")
+def track_spec(name: str):
+    name = _validate_track_name(name)
+    spec = _creator.load_spec(name, TRACKS_DIR)
+    if spec is None:
+        return JSONResponse({"error": "This track was not drawn in the track creator"},
+                            status_code=404)
+    return spec
 
 @app.post("/api/track/generate", dependencies=[Depends(require_api_key)])
 def track_generate(params: TrackGenerate):
