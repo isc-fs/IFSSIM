@@ -5,7 +5,7 @@
 #include "Environment/FSDSEnvironment.h"
 #include "FSDSEnvironmentBuilder.generated.h"
 
-class UInstancedStaticMeshComponent;
+class UStaticMeshComponent;
 class UStaticMesh;
 
 /**
@@ -14,8 +14,7 @@ class UStaticMesh;
  *
  * A prop class uses its real (photoreal) mesh when one is installed, and is
  * otherwise built from primitives: engine basic shapes and the existing
- * small-cone mesh (docs/environment_props.md). One instanced component per
- * mesh and LiDAR material, all with the FSDSProp collision profile
+ * small-cone mesh (docs/environment_props.md). One component per part, all with the FSDSProp collision profile
  * (docs/collision_matrix.md): the LiDAR sees them and the car hits them, but
  * they are never ground. Each part carries a stencil ID (FSDSPropStencil) so
  * the LiDAR's reflectance LUT gives it its material's 905 nm reflectance. Nothing here is random;
@@ -62,15 +61,12 @@ public:
 	static TArray<FString> KnownClasses();
 
 private:
-	UInstancedStaticMeshComponent* PartComponent(UStaticMesh* Mesh, uint8 Stencil);
+	void AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTransform& WorldXf);
 	void PlaceRealMesh(UStaticMesh* Mesh, const FVector& FitCm, int32 Copies, double SpacingCm,
 		uint8 Stencil, const FTransform& PropXf);
 
 	UPROPERTY()
-	TArray<TObjectPtr<UInstancedStaticMeshComponent>> Parts;
-
-	// The same components, by mesh and stencil; Parts keeps them alive.
-	TMap<TPair<UStaticMesh*, uint8>, UInstancedStaticMeshComponent*> PartsByKey;
+	TArray<TObjectPtr<UStaticMeshComponent>> Parts;
 	TMap<FString, FString> MeshSources;
 	TSet<UStaticMesh*> LoggedMeshes;
 

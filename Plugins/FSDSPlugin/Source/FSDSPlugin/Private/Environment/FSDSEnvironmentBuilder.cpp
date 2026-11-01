@@ -1,6 +1,6 @@
 #include "Environment/FSDSEnvironmentBuilder.h"
 
-#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -178,40 +178,38 @@ TArray<FString> AFSDSEnvironmentActor::KnownClasses()
 	return Names;
 }
 
-UInstancedStaticMeshComponent* AFSDSEnvironmentActor::PartComponent(UStaticMesh* Mesh, uint8 Stencil)
+void AFSDSEnvironmentActor::AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTransform& WorldXf)
 {
-	const TPair<UStaticMesh*, uint8> Key(Mesh, Stencil);
-	if (UInstancedStaticMeshComponent** Found = PartsByKey.Find(Key))
-	{
-		return *Found;
-	}
-	UInstancedStaticMeshComponent* C = NewObject<UInstancedStaticMeshComponent>(this);
+	// One plain component per part, not instanced: a material needs the
+	// "used with instanced static meshes" flag to render instanced, and the
+	// repo's tyre and cone materials (and most marketplace ones) don't have
+	// it, so instanced props rendered with the engine's grey default material.
+	// A track has at most a few hundred parts.
+	UStaticMeshComponent* C = NewObject<UStaticMeshComponent>(this);
 	// Movable first: a Static component refuses SetStaticMesh at runtime.
 	C->SetMobility(EComponentMobility::Movable);
 	C->SetStaticMesh(Mesh);
 	C->SetCollisionProfileName(FSDSCollision::PropProfile);
 	C->SetupAttachment(RootComponent);
+	C->SetWorldTransform(WorldXf);
 	C->RegisterComponent();
 	// The LiDAR's reflectance LUT reads this (FSDSPropStencil); untagged
-	// parts read their own colour. Set once the component has a render
-	// proxy, as the cone spawner does for its cones.
+	// parts read their own colour.
 	if (Stencil != FSDSConeStencil::None)
 	{
 		C->SetRenderCustomDepth(true);
 		C->SetCustomDepthStencilValue(Stencil);
-		C->MarkRenderStateDirty();
 	}
 	Parts.Add(C);
-	PartsByKey.Add(Key, C);
-	return C;
 }
 
 void AFSDSEnvironmentActor::Clear()
 {
-	for (UInstancedStaticMeshComponent* C : Parts)
+	for (UStaticMeshComponent* C : Parts)
 	{
-		if (C) C->ClearInstances();
+		if (C) C->DestroyComponent();
 	}
+	Parts.Reset();
 	Built.Reset();
 	MeshSources.Reset();
 	LoggedMeshes.Reset();
@@ -244,13 +242,12 @@ void AFSDSEnvironmentActor::PlaceRealMesh(UStaticMesh* Mesh, const FVector& FitC
 	}
 	// Centre the bounds on the prop and stand them on the ground.
 	const FVector Pivot = FVector(-B.GetCenter().X, -B.GetCenter().Y, -B.Min.Z) * Scale;
-	UInstancedStaticMeshComponent* C = PartComponent(Mesh, Stencil);
 	const int32 N = FMath::Max(Copies, 1);
 	for (int32 I = 0; I < N; ++I)
 	{
 		const FVector Offset((I - (N - 1) * 0.5) * SpacingCm, 0.0, 0.0);
 		const FTransform Local(FRotator::ZeroRotator, Offset + Pivot, FVector(Scale));
-		C->AddInstance(Local * PropXf, /*bWorldSpace=*/true);
+		AddPart(Mesh, Stencil, Local * PropXf);
 	}
 }
 
@@ -334,7 +331,7 @@ int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
 			{
 				Local = FTransform(Part.Rotation, Part.Location, Part.SizeCm / 100.0);
 			}
-			PartComponent(Mesh, Part.Stencil)->AddInstance(Local * PropXf, /*bWorldSpace=*/true);
+			AddPart(Mesh, Part.Stencil, Local * PropXf);
 			bPlaced = true;
 		}
 		if (!bPlaced)
