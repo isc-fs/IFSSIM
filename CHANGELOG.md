@@ -243,6 +243,7 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Acceleration finished at the start line.** The referee put the finish line on the big-orange gate farthest from the map origin. Since Mission Control started recentring tracks on load, both acceleration gates sit the same distance from the origin, and the tie picked the start gate: runs "finished" about 3 m after launch. The finish is now the gate farthest from the start gate, chosen by the same rule that spawns the car (#689).
 - **Autonomy no longer flaps when the sim runs slower than real time**
   ([#684](https://github.com/isc-fs/IFSSIM/issues/684)). The emulated uDV
   published its `/assi/state` heartbeat on sim time, and mission_control
