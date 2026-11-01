@@ -7,7 +7,7 @@ not first-class; see [Linux](#linux) at the bottom.
 
 The end-to-end time is **20–45 minutes**, dominated by:
 
-1. UE 5.7 install (~20 min, only first time)
+1. UE 5.8 install (~20 min, only first time)
 2. Building the sim (~5 min cold, ~1 min incremental)
 3. First Docker image build (~5–10 min cold, seconds after)
 
@@ -20,7 +20,7 @@ get through this. You do need patience for the engine install.
 
 When you finish you'll have, on **one machine**:
 
-- **UE 5.7** running the sim natively (the Windows / Mac `IFSSIM.exe` /
+- **UE 5.8** running the sim natively (the Windows / Mac `IFSSIM.exe` /
   `.app` binary), publishing sensor data over loopback TCP/UDP
 - **Docker Desktop** hosting four containers — bridge, mission-control
   backend, mission-control frontend, Lichtblick visualiser
@@ -39,9 +39,9 @@ node, foxglove bridge) lives inside `dv_pipeline_stack`.
 | **Git** | [git for windows](https://git-scm.com/download/win) | `xcode-select --install` or `brew install git` |
 | **Git LFS** | bundled with git for windows; run `git lfs install` once | `brew install git-lfs && git lfs install` |
 | **Docker Desktop ≥ 4.34** | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop) — enable WSL2 backend | [docker.com](https://www.docker.com/products/docker-desktop) — Apple Silicon native build |
-| **UE 5.7** | [Epic Games Launcher](https://www.epicgames.com/store/en-US/download) → Library → "+" → Unreal Engine 5.7 | same — installs to `/Users/Shared/Epic Games/UE_5.7/` |
+| **UE 5.8** | [Epic Games Launcher](https://www.epicgames.com/store/en-US/download) → Library → "+" → Unreal Engine 5.8 | same — installs to `/Users/Shared/Epic Games/UE_5.8/` |
 | **(Windows only) Visual Studio 2022** | [visualstudio.microsoft.com](https://visualstudio.microsoft.com/) Community is free. Install with the **"Game development with C++"** workload, plus the optional **"Unreal Engine installer"** subworkload | — |
-| **(macOS only) Xcode** | — | App Store, full Xcode (not just CLT) so UBT can sign |
+| **(macOS only) Xcode** | — | App Store, full Xcode (not just CLT) so UBT can sign. UE 5.8 takes Xcode up to 27.x; Xcode 26+ also needs the Metal compiler, a separate one-time download: `xcodebuild -downloadComponent MetalToolchain` |
 
 Docker Desktop: give it **≥ 6 GB RAM** in Settings → Resources. The
 `dv_pipeline_stack` container peaks at ~2.5 GB during cone-detection
@@ -139,7 +139,7 @@ That's it; skip to step 3.
 > [BUILD_FROM_SOURCE.md](BUILD_FROM_SOURCE.md). The manual steps below
 > are the same thing, by hand.
 
-You'll need UE 5.7 installed (see prerequisites). From the repo root:
+You'll need UE 5.8 installed (see prerequisites). From the repo root:
 
 ```bash
 # Windows (in Git Bash, not PowerShell — package_windows.sh is bash):
@@ -153,14 +153,14 @@ The script does a clean `BuildCookRun` then stages the result. ~5 min
 cold, ~1 min on a re-cook. Output lands at
 `Saved/StagedBuilds/{Windows,Mac}/...` — same layout as Option A.
 
-If `UE_5.7` is somewhere unusual, override:
+If `UE_5.8` is somewhere unusual, override:
 
 ```bash
 # Windows:
-UE_ROOT="/c/path/to/UE_5.7" bash package_windows.sh
+UE_ROOT="/c/path/to/UE_5.8" bash package_windows.sh
 
 # macOS:
-UE_ROOT="/path/to/UE_5.7" ./package_mac.sh
+UE_ROOT="/path/to/UE_5.8" ./package_mac.sh
 ```
 
 To skip producing the distribution zip (the last step), set
@@ -457,12 +457,12 @@ runs natively, all the ROS deps are Linux-first) but not first-class —
 no pre-built release zip, no self-hosted CI runner. Setup is the same
 as macOS / Windows except:
 
-- UE 5.7 has to be built from source on Linux. Clone
+- UE 5.8 has to be built from source on Linux. Clone
   [EpicGames/UnrealEngine](https://github.com/EpicGames/UnrealEngine)
   (requires Epic GitHub account linkage), build with
   `./Setup.sh && ./GenerateProjectFiles.sh && make` (~1 hour on a
   16-core box).
-- Set `UE_ROOT=/opt/UE_5.7` (or wherever you built it) before running
+- Set `UE_ROOT=/opt/UE_5.8` (or wherever you built it) before running
   `./package_linux.sh`.
 - Docker Engine + Compose plugin instead of Docker Desktop. Add your
   user to the `docker` group. `host.docker.internal` is mapped via

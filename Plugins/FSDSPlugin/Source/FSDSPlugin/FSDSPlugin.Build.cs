@@ -23,7 +23,8 @@ public class FSDSPlugin : ModuleRules
 			"Networking",
 			"Sockets",
 			"Json",
-			"JsonUtilities"
+			"JsonUtilities",
+			"HTTP"             // in-game Mission Control panel -> backend (UI/FSDSMissionControlClient)
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {

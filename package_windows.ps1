@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Mirrors package_mac.sh / package_linux.sh for Win64. Requires:
-      - UE5 5.7 installed (default lookup: C:\Program Files\Epic Games\UE_5.7)
+      - UE5 5.8 installed (default lookup: C:\Program Files\Epic Games\UE_5.8)
       - Visual Studio 2022 with C++ workload
       - The project's content + plugin source in this repo
     UE5 cannot cross-compile to Windows from macOS or Linux, so this
@@ -16,12 +16,12 @@
     / loadTrack RPC search there).
 
 .PARAMETER Ue5Root
-    Path to a UE_5.7 install. Defaults to %UE5_ROOT% env var if set,
-    otherwise C:\Program Files\Epic Games\UE_5.7.
+    Path to a UE_5.8 install. Defaults to %UE5_ROOT% env var if set,
+    otherwise C:\Program Files\Epic Games\UE_5.8.
 
 .EXAMPLE
     PS> ./package_windows.ps1
-    PS> ./package_windows.ps1 -Ue5Root "D:\Epic\UE_5.7"
+    PS> ./package_windows.ps1 -Ue5Root "D:\Epic\UE_5.8"
 
 .NOTES
     Run from a "x64 Native Tools Command Prompt for VS 2022" shell
@@ -30,7 +30,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Ue5Root = $(if ($env:UE5_ROOT) { $env:UE5_ROOT } else { "C:\Program Files\Epic Games\UE_5.7" })
+    [string]$Ue5Root = $(if ($env:UE5_ROOT) { $env:UE5_ROOT } else { "C:\Program Files\Epic Games\UE_5.8" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,7 +38,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RunUAT = Join-Path $Ue5Root "Engine\Build\BatchFiles\RunUAT.bat"
 
 if (-not (Test-Path $RunUAT)) {
-    Write-Error "UE5 not found at '$Ue5Root'. Install UE 5.7 or set -Ue5Root / UE5_ROOT."
+    Write-Error "UE5 not found at '$Ue5Root'. Install UE 5.8 or set -Ue5Root / UE5_ROOT."
     exit 1
 }
 
@@ -73,6 +73,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "[2/3] Staging track CSVs..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $TracksDst | Out-Null
 Copy-Item -Path (Join-Path $TracksSrc "*.csv") -Destination $TracksDst -Force
+# Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+Get-ChildItem -Path $TracksSrc -Filter "*.env.json" | Copy-Item -Destination $TracksDst -Force
 $Count = (Get-ChildItem -Path $TracksDst -Filter "*.csv").Count
 Write-Host "  Tracks staged: $Count files"
 
