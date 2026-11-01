@@ -243,6 +243,13 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Autonomy no longer flaps when the sim runs slower than real time**
+  ([#684](https://github.com/isc-fs/IFSSIM/issues/684)). The emulated uDV
+  published its `/assi/state` heartbeat on sim time, and mission_control
+  judges it stale after 0.4 s of wall time: at 15 fps (sim time at 0.25x)
+  the heartbeat fell to 2.5 Hz of wall time and the pipeline prepared and tore
+  down the mission dozens of times a minute, never driving. The heartbeat now
+  runs on the wall clock, as the real uDV's does.
 - **The LiDAR's per-material reflectance never applied**
   ([#698](https://github.com/isc-fs/IFSSIM/issues/698)). With
   `fsds.LidarGPU.StencilEncoder 1` the log said the reflectance LUT was
