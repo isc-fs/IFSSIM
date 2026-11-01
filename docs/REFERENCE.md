@@ -489,6 +489,7 @@ response = s.recv(1024)  # b"true"
 | Command | Response fields | Description |
 |---|---|---|
 | `getRefereeState` | `doo_counter, oc_counter, cones, laps, required_laps, finished, event, lap_times[], cone_positions[]` | Full competition state |
+| `validateCollisionMatrix [ahead_m \| clear]` | `ok, props[], checks[]` | Spawn two test props in front of the car and check [collision_matrix.md](collision_matrix.md) against them; `clear` removes them |
 | `setEvent <type> <laps>` | `true` | Set event type and required lap count |
 | `loadTrack <filepath>` | `loaded, cones, car_aligned, environment` | Load a CSV track file at runtime; `environment` is `off`, `none`, `loaded` or `invalid` (see [environment_sidecar.md](environment_sidecar.md)) |
 | `getEnvironment` | `enabled, status, error, sidecar, seed, profile, ground_extent, props, classes` | The current track's environment sidecar as loaded |
