@@ -72,6 +72,7 @@ private:
 	// The same components, by mesh and stencil; Parts keeps them alive.
 	TMap<TPair<UStaticMesh*, uint8>, UInstancedStaticMeshComponent*> PartsByKey;
 	TMap<FString, FString> MeshSources;
+	TSet<UStaticMesh*> LoggedMeshes;
 
 	TMap<FString, int32> Built;
 	int32 NumBuilt = 0;

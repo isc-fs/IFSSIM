@@ -212,6 +212,7 @@ void AFSDSEnvironmentActor::Clear()
 	}
 	Built.Reset();
 	MeshSources.Reset();
+	LoggedMeshes.Reset();
 	NumBuilt = 0;
 	NumSkipped = 0;
 	UnknownClasses.Reset();
@@ -233,6 +234,12 @@ void AFSDSEnvironmentActor::PlaceRealMesh(UStaticMesh* Mesh, const FVector& FitC
 		}
 	}
 	if (Scale == TNumericLimits<double>::Max()) Scale = 1.0;
+	if (!LoggedMeshes.Contains(Mesh))
+	{
+		LoggedMeshes.Add(Mesh);
+		UE_LOG(LogTemp, Log, TEXT("FSDS Environment: %s bounds %.1f x %.1f x %.1f cm (min z %.1f), scaled %.3f to fit %.0f x %.0f x %.0f"),
+			*Mesh->GetPathName(), Size.X, Size.Y, Size.Z, B.Min.Z, Scale, FitCm.X, FitCm.Y, FitCm.Z);
+	}
 	// Centre the bounds on the prop and stand them on the ground.
 	const FVector Pivot = FVector(-B.GetCenter().X, -B.GetCenter().Y, -B.Min.Z) * Scale;
 	UInstancedStaticMeshComponent* C = PartComponent(Mesh, Stencil);
