@@ -190,15 +190,17 @@ UInstancedStaticMeshComponent* AFSDSEnvironmentActor::PartComponent(UStaticMesh*
 	C->SetMobility(EComponentMobility::Movable);
 	C->SetStaticMesh(Mesh);
 	C->SetCollisionProfileName(FSDSCollision::PropProfile);
+	C->SetupAttachment(RootComponent);
+	C->RegisterComponent();
 	// The LiDAR's reflectance LUT reads this (FSDSPropStencil); untagged
-	// parts read their own colour.
+	// parts read their own colour. Set once the component has a render
+	// proxy, as the cone spawner does for its cones.
 	if (Stencil != FSDSConeStencil::None)
 	{
 		C->SetRenderCustomDepth(true);
 		C->SetCustomDepthStencilValue(Stencil);
+		C->MarkRenderStateDirty();
 	}
-	C->SetupAttachment(RootComponent);
-	C->RegisterComponent();
 	Parts.Add(C);
 	PartsByKey.Add(Key, C);
 	return C;
