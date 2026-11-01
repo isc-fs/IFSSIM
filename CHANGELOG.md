@@ -111,6 +111,14 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **LiDAR per-material reflectance is on by default**
+  (`fsds.LidarGPU.StencilEncoder` now defaults to 1). Intensity follows the
+  reflectance LUT instead of carrying no material information. No measurable
+  frame-rate cost (27 fps, real-time factor 0.45, either way; Mac, UE 5.8).
+  Turn it off at startup with
+  `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0` if the
+  faint viewport stippling of #488 shows in a packaged build.
+
 - **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
   points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
   change assumed the GPU→CPU readback would stall on a discrete GPU over
