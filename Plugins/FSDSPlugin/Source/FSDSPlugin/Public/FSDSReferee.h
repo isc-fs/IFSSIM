@@ -183,6 +183,9 @@ private:
 
 	void AppendCone(FTransform Transform, EFSDSConeColor Color);
 
+	/** Place the finish-line trigger on the big orange gate farthest from the start gate. */
+	void UpdateFinishLine();
+
 	/** Callback when vehicle overlaps a cone */
 	UFUNCTION()
 	void OnConeOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
@@ -238,6 +241,8 @@ private:
 	FVector FinishLineCenter = FVector::ZeroVector;
 	FVector FinishLineDirection = FVector::ForwardVector;
 	bool bFinishLineValid = false;
+	/** The finish gate was chosen relative to a track cone, not the origin. */
+	bool bFinishAnchoredToTrack = false;
 
 	/** Displacement threshold for cone hit (cm) */
 	float ConeHitThreshold = 15.0f;

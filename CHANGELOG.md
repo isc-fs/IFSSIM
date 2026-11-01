@@ -133,6 +133,8 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Acceleration finished at the start line.** The referee put the finish line on the big-orange gate farthest from the map origin. Since Mission Control started recentring tracks on load, both acceleration gates sit the same distance from the origin, and the tie picked the start gate: runs "finished" about 3 m after launch. The finish is now the gate farthest from the start gate, chosen by the same rule that spawns the car (#689).
+
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
   a repeated or slightly earlier stamp 1 ns past the last one. Like the
