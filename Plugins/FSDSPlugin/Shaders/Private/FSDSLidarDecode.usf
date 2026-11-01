@@ -358,5 +358,10 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	// cm → m + ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The w
 	// channel carries intensity for valid hits ([0, 1]); -1.0 sentinel
 	// for invalid was written above and any return-path bail leaves it.
-	OutPoints[RayIdx] = float4(Px, -Py, Pz, Intensity);
+	// Debug (fsds.LidarGPU.DebugColorChannel): 2 = report the colour
+	// capture's raw R (the encoded stencil ID, x255), 3 = raw G (the
+	// luminance fallback), instead of the intensity.
+	const float OutIntensity = UseReflectanceLUT == 2u ? ColorSample.r
+		: (UseReflectanceLUT == 3u ? ColorSample.g : Intensity);
+	OutPoints[RayIdx] = float4(Px, -Py, Pz, OutIntensity);
 }
