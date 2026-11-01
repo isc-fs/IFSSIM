@@ -294,7 +294,10 @@ def build_track(spec: TrackSpec) -> Track:
     protected_to = AHEAD_SECOND + 1e-6
     finish_from = length - FINISH_CLEAR - 1e-6
     out_cones = []
-    for colour, x, y, sc, side, u in sorted(track_cones, key=lambda c: (c[3], c[4])):
+    # Round s before sorting: a blue and a yellow cone at the same station
+    # differ only by float noise, which differs between platforms, and that
+    # order decides which cone gets which random draw.
+    for colour, x, y, sc, side, u in sorted(track_cones, key=lambda c: (round(c[3], 6), c[4])):
         r_drop, jx, jy = rng.random(), rng.gauss(0.0, 1.0), rng.gauss(0.0, 1.0)
         if sc <= protected_to or (not spec.closed and sc >= finish_from):
             out_cones.append((colour, x, y, sc, side))
