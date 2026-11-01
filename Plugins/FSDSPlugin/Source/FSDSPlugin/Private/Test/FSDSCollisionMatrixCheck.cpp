@@ -18,7 +18,7 @@
 namespace
 {
 	const FName TestPropTag(TEXT("FSDSCollisionTest"));
-	constexpr double M2CM = 100.0;
+	constexpr double CollisionCheckMToCm = 100.0;
 
 	struct FTestProp
 	{
@@ -72,7 +72,7 @@ namespace
 		const FString Who = !A ? FString(TEXT("?"))
 			: IsTestProp(A) ? FString::Printf(TEXT("the test prop (%s)"), *A->GetName())
 			: A->GetName();
-		return FString::Printf(TEXT("%s at z=%.3f m"), *Who, Hit.ImpactPoint.Z / M2CM);
+		return FString::Printf(TEXT("%s at z=%.3f m"), *Who, Hit.ImpactPoint.Z / CollisionCheckMToCm);
 	}
 
 	const TCHAR* ResponseName(ECollisionResponse R)
@@ -133,7 +133,7 @@ FString FSDSCollisionMatrixCheck::Spawn(AFSDSVehiclePawn* Pawn, double AheadM)
 	{
 		P.AheadM = AheadM + P.AheadOffsetM;
 		P.FwdUe = Fwd;
-		const FVector XY = CarXY + Fwd * (P.AheadM * M2CM) + Left * (P.LeftM * M2CM);
+		const FVector XY = CarXY + Fwd * (P.AheadM * CollisionCheckMToCm) + Left * (P.LeftM * CollisionCheckMToCm);
 		FHitResult Ground;
 		if (!GroundAt(World, FVector2D(XY.X, XY.Y), Pawn, Ground))
 		{
@@ -145,7 +145,7 @@ FString FSDSCollisionMatrixCheck::Spawn(AFSDSVehiclePawn* Pawn, double AheadM)
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		// The engine cube is 1 m, centred on its origin.
-		const FVector Centre = P.BaseUe + FVector(0, 0, P.SizeZ * M2CM * 0.5);
+		const FVector Centre = P.BaseUe + FVector(0, 0, P.SizeZ * CollisionCheckMToCm * 0.5);
 		AStaticMeshActor* A = World->SpawnActor<AStaticMeshActor>(
 			AStaticMeshActor::StaticClass(), Centre, FRotator(0.0, Fwd.Rotation().Yaw, 0.0), SpawnParams);
 		if (!A)
@@ -201,7 +201,7 @@ FString FSDSCollisionMatrixCheck::Check(AFSDSVehiclePawn* Pawn)
 		AddCheck(Checks, bOk, FString::Printf(TEXT("%s: object type"), P.Name), Type == P.Type,
 			UCollisionProfile::Get()->ReturnChannelNameFromContainerIndex(Type).ToString());
 
-		const FVector Top = P.BaseUe + FVector(0, 0, P.SizeZ * M2CM + 100.0);
+		const FVector Top = P.BaseUe + FVector(0, 0, P.SizeZ * CollisionCheckMToCm + 100.0);
 		const FVector Below = P.BaseUe - FVector(0, 0, 100.0);
 
 		// Control: an unfiltered WorldDynamic trace straight down must hit the
@@ -243,9 +243,9 @@ FString FSDSCollisionMatrixCheck::Check(AFSDSVehiclePawn* Pawn)
 		{
 			FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSCollisionMatrixLidar), false, Pawn);
 			Params.bReturnPhysicalMaterial = false;
-			const double HalfHeight = P.SizeZ * M2CM * 0.5;
+			const double HalfHeight = P.SizeZ * CollisionCheckMToCm * 0.5;
 			const FVector Mid = P.BaseUe + FVector(0, 0, HalfHeight);
-			FVector From = Mid - P.FwdUe * (P.SizeX * M2CM * 0.5 + 200.0);
+			FVector From = Mid - P.FwdUe * (P.SizeX * CollisionCheckMToCm * 0.5 + 200.0);
 			FHitResult FromGround;
 			if (GroundAt(World, FVector2D(From.X, From.Y), Pawn, FromGround))
 			{
@@ -292,7 +292,7 @@ FString FSDSCollisionMatrixCheck::Check(AFSDSVehiclePawn* Pawn)
 		TArray<TSharedPtr<FJsonValue>> Size = {
 			MakeShared<FJsonValueNumber>(P.SizeX), MakeShared<FJsonValueNumber>(P.SizeY), MakeShared<FJsonValueNumber>(P.SizeZ) };
 		J->SetArrayField(TEXT("size_m"), Size);
-		J->SetNumberField(TEXT("ground_z_m"), P.BaseUe.Z / M2CM);
+		J->SetNumberField(TEXT("ground_z_m"), P.BaseUe.Z / CollisionCheckMToCm);
 		PropsJson.Add(MakeShared<FJsonValueObject>(J));
 	}
 	Out->SetArrayField(TEXT("props"), PropsJson);
