@@ -4,6 +4,7 @@
     python3 -m envgen create my.track.json -o ../Content/tracks/my_track.csv
     python3 -m envgen create my.track.json --check          # report only
     python3 -m envgen startpose ../Content/tracks/*.csv     # where the sim spawns
+    python3 -m envgen stress -o ../Content/tracks           # the stress-track library
 
 `create` writes the CSV and, next to it, the spec it came from
 (`<name>.track.json`), so the track can be reopened in the editor. It refuses
@@ -68,6 +69,45 @@ def _startpose(args) -> int:
     return 1 if bad else 0
 
 
+def _stress(args) -> int:
+    from .primitives import FILE_PREFIX, LIBRARY, by_name
+
+    if args.list:
+        for s in LIBRARY:
+            print(f"{s.name:26} {s.tests}")
+        return 0
+    chosen = LIBRARY
+    if args.names:
+        chosen = []
+        for n in args.names:
+            s = by_name(n)
+            if s is None:
+                print(f"envgen: no stress track '{n}' (--list shows them)", file=sys.stderr)
+                return 2
+            chosen.append(s)
+    bad = 0
+    for s in chosen:
+        spec = s.build()
+        res = create_track(spec)
+        summ = res.summary()
+        errors = [i for i in res.issues if i["severity"] == "error"]
+        print(f"{FILE_PREFIX}{s.name}: {summ['length_m']} m, {summ['cones']} cones"
+              f"{'' if res.ok else ', ERRORS'}")
+        for i in errors:
+            print(f"  [error] {i['code']}: {i['message']}")
+        if not res.ok:
+            bad += 1
+            continue
+        if args.out:
+            out = Path(args.out) / f"{FILE_PREFIX}{s.name}.csv"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(res.csv)
+            out.with_suffix(".track.json").write_text(json.dumps(spec.to_dict(), indent=2) + "\n")
+    if args.out and not bad:
+        print(f"wrote {len(chosen)} track(s) to {args.out}")
+    return 1 if bad else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="envgen", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -80,8 +120,12 @@ def main(argv=None) -> int:
     c.add_argument("--force", action="store_true", help="write even with errors")
     s = sub.add_parser("startpose", help="where the sim will spawn the car on a CSV")
     s.add_argument("csv", nargs="+")
+    st = sub.add_parser("stress", help="build the stress-track library (circles, spirals, slaloms...)")
+    st.add_argument("names", nargs="*", help="only these tracks (default: all)")
+    st.add_argument("-o", "--out", help="directory to write stress_<name>.csv into (omit to only check)")
+    st.add_argument("--list", action="store_true", help="list the library and what each track tests")
     args = ap.parse_args(argv)
-    return _create(args) if args.cmd == "create" else _startpose(args)
+    return {"create": _create, "startpose": _startpose, "stress": _stress}[args.cmd](args)
 
 
 if __name__ == "__main__":

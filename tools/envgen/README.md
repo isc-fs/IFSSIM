@@ -33,6 +33,23 @@ every feature.
   `width`, `spacing`, `drop` (missing cones), `recolor` (wrong colours),
   `jitter` (misplaced cones), on one `side` or both. Seeded by `seed`.
 
+## Stress tracks
+
+Some test shapes are too exact to draw: a circle of exactly 9 m, a corner
+that tightens from 20 m to 6 m. [`primitives.py`](primitives.py) builds them
+from straights, arcs and spirals into ordinary specs, so they get the same
+checks and start gate as a drawn track and reopen in the editor.
+
+```bash
+python3 -m envgen stress --list                     # the library and what each tests
+python3 -m envgen stress -o ../Content/tracks        # regenerate all of it
+python3 -m envgen stress circle_r9                   # check one, write nothing
+```
+
+The library is committed as `Content/tracks/stress_*.csv` plus the spec of
+each. Never edit those by hand: change the generator and regenerate.
+`tests/test_primitives.py` fails if a committed CSV no longer matches.
+
 ## What it checks
 
 | Severity | Check |
