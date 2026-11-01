@@ -12,10 +12,13 @@ class UStaticMesh;
  * The props of a track's environment, as the sidecar lists them
  * (docs/environment_sidecar.md).
  *
- * Every prop class is built from primitives: engine basic shapes and the
- * existing small-cone mesh, one instanced component per mesh, all with the
- * FSDSProp collision profile (docs/collision_matrix.md): the LiDAR sees them
- * and the car hits them, but they are never ground. Nothing here is random;
+ * A prop class uses its real (photoreal) mesh when one is installed, and is
+ * otherwise built from primitives: engine basic shapes and the existing
+ * small-cone mesh (docs/environment_props.md). One instanced component per
+ * mesh and LiDAR material, all with the FSDSProp collision profile
+ * (docs/collision_matrix.md): the LiDAR sees them and the car hits them, but
+ * they are never ground. Each part carries a stencil ID (FSDSPropStencil) so
+ * the LiDAR's reflectance LUT gives it its material's 905 nm reflectance. Nothing here is random;
  * the sidecar says where everything goes (roadmap rule 3), and each prop
  * stands on the ground found by a WorldStatic trace, as the cones do.
  *
@@ -52,14 +55,23 @@ public:
 	 *  ground gives the same hash on every boot, whatever the scenario seed. */
 	const FString& GetTransformHash() const { return TransformHash; }
 
+	/** Per class, the real mesh it was built from, or "primitives". */
+	const TMap<FString, FString>& GetMeshSources() const { return MeshSources; }
+
 	/** The class names this build knows. */
 	static TArray<FString> KnownClasses();
 
 private:
-	UInstancedStaticMeshComponent* PartComponent(UStaticMesh* Mesh);
+	UInstancedStaticMeshComponent* PartComponent(UStaticMesh* Mesh, uint8 Stencil);
+	void PlaceRealMesh(UStaticMesh* Mesh, const FVector& FitCm, int32 Copies, double SpacingCm,
+		uint8 Stencil, const FTransform& PropXf);
 
 	UPROPERTY()
-	TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UInstancedStaticMeshComponent>> Parts;
+	TArray<TObjectPtr<UInstancedStaticMeshComponent>> Parts;
+
+	// The same components, by mesh and stencil; Parts keeps them alive.
+	TMap<TPair<UStaticMesh*, uint8>, UInstancedStaticMeshComponent*> PartsByKey;
+	TMap<FString, FString> MeshSources;
 
 	TMap<FString, int32> Built;
 	int32 NumBuilt = 0;

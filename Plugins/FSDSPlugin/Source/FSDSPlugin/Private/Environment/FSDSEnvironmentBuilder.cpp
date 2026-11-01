@@ -5,6 +5,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "FSDSCollision.h"
+#include "FSDSReferee.h"
 #include "Misc/SecureHash.h"
 
 namespace
@@ -19,22 +20,57 @@ namespace
 
 	enum class EPartMesh : uint8 { Cylinder, Cube, SmallCone };
 
-	/** One piece of a prop, in the prop's frame: cm, X along its yaw, Z up from
-	 *  the ground at its centre. A basic shape is placed by its centre and
-	 *  sized in cm; the cone mesh is placed by the centre of its base, unscaled. */
+	/** One piece of a primitive prop, in the prop's frame: cm, X along its yaw,
+	 *  Z up from the ground at its centre. A basic shape is placed by its centre
+	 *  and sized in cm; the cone mesh is placed by the centre of its base,
+	 *  unscaled. Stencil is the material the LiDAR sees (FSDSPropStencil). */
 	struct FPart
 	{
 		EPartMesh Mesh;
 		FVector Location;
 		FRotator Rotation = FRotator::ZeroRotator;
 		FVector SizeCm = FVector(100.0);
+		uint8 Stencil = FSDSConeStencil::None;
+	};
+
+	/**
+	 * A real (photoreal) mesh for a class, used instead of the primitives when
+	 * one of Paths loads. Scanned assets from the marketplace can't be
+	 * committed to this public repo, so they live under /Game/ThirdParty/Props
+	 * (git-ignored) on the machines that have them; see docs/environment_props.md.
+	 *
+	 * The mesh is scaled uniformly until its bounds fit FitCm (0 = that axis is
+	 * free) and stood on the ground by the bottom of its bounds; Copies of it go
+	 * side by side along X, SpacingCm apart, centred on the prop.
+	 */
+	struct FRealMesh
+	{
+		TArray<const TCHAR*> Paths;
+		FVector FitCm;
+		int32 Copies = 1;
+		double SpacingCm = 0.0;
+		// None = the LiDAR reads the mesh's own colour (its textures).
+		uint8 Stencil = FSDSConeStencil::None;
 	};
 
 	struct FPropClassDef
 	{
 		const TCHAR* Name;
 		TArray<FPart> Parts;
+		FRealMesh Real;
 	};
+
+	/** Bollard: a 20 cm post, 75 cm tall, with a 10 cm retroreflective band near the top. */
+	TArray<FPart> BollardParts()
+	{
+		return {
+			{EPartMesh::Cylinder, FVector(0.0, 0.0, 37.5), FRotator::ZeroRotator, FVector(20.0, 20.0, 75.0),
+				FSDSPropStencil::DarkPlastic},
+			// A hair wider than the post, so its surface is the one the LiDAR sees.
+			{EPartMesh::Cylinder, FVector(0.0, 0.0, 60.0), FRotator::ZeroRotator, FVector(20.4, 20.4, 10.0),
+				FSDSPropStencil::Retroreflective},
+		};
+	}
 
 	/** Light barrier: three 3 cm legs from a 0.5 m radius to a head at 1.05 m. */
 	TArray<FPart> TripodParts()
@@ -47,9 +83,11 @@ namespace
 			const FVector Foot(50.0 * FMath::Cos(A), 50.0 * FMath::Sin(A), 0.0);
 			const FVector Leg = Apex - Foot;
 			Parts.Add({EPartMesh::Cylinder, (Apex + Foot) * 0.5,
-				FRotationMatrix::MakeFromZ(Leg.GetSafeNormal()).Rotator(), FVector(3.0, 3.0, Leg.Size())});
+				FRotationMatrix::MakeFromZ(Leg.GetSafeNormal()).Rotator(), FVector(3.0, 3.0, Leg.Size()),
+				FSDSPropStencil::Aluminium});
 		}
-		Parts.Add({EPartMesh::Cube, FVector(0.0, 0.0, 110.0), FRotator::ZeroRotator, FVector(12.0, 8.0, 10.0)});
+		Parts.Add({EPartMesh::Cube, FVector(0.0, 0.0, 110.0), FRotator::ZeroRotator, FVector(12.0, 8.0, 10.0),
+			FSDSPropStencil::DarkPlastic});
 		return Parts;
 	}
 
@@ -60,7 +98,7 @@ namespace
 		for (int32 I = 0; I < 4; ++I)
 		{
 			Parts.Add({EPartMesh::Cylinder, FVector(-90.0 + 60.0 * I, 0.0, 30.0), FRotator::ZeroRotator,
-				FVector(60.0, 60.0, 60.0)});
+				FVector(60.0, 60.0, 60.0), FSDSPropStencil::Rubber});
 		}
 		return Parts;
 	}
@@ -71,7 +109,8 @@ namespace
 		TArray<FPart> Parts;
 		for (int32 I = 0; I < 4; ++I)
 		{
-			Parts.Add({EPartMesh::SmallCone, FVector(0.0, 0.0, 6.0 * I)});
+			Parts.Add({EPartMesh::SmallCone, FVector(0.0, 0.0, 6.0 * I), FRotator::ZeroRotator, FVector(100.0),
+				FSDSConeStencil::Yellow});
 		}
 		return Parts;
 	}
@@ -80,11 +119,21 @@ namespace
 	const TArray<FPropClassDef>& Classes()
 	{
 		static const TArray<FPropClassDef> Defs = {
-			{TEXT("bollard"), {{EPartMesh::Cylinder, FVector(0.0, 0.0, 37.5), FRotator::ZeroRotator, FVector(20.0, 20.0, 75.0)}}},
-			{TEXT("bin"), {{EPartMesh::Cylinder, FVector(0.0, 0.0, 32.5), FRotator::ZeroRotator, FVector(45.0, 45.0, 65.0)}}},
-			{TEXT("tripod"), TripodParts()},
-			{TEXT("tyre_wall"), TyreWallParts()},
-			{TEXT("cone_stack"), ConeStackParts()},
+			{TEXT("bollard"), BollardParts(),
+				{{TEXT("/Game/ThirdParty/Props/SM_Bollard.SM_Bollard")}, FVector(20.0, 20.0, 75.0)}},
+			{TEXT("bin"),
+				{{EPartMesh::Cylinder, FVector(0.0, 0.0, 32.5), FRotator::ZeroRotator, FVector(45.0, 45.0, 65.0),
+					FSDSPropStencil::DarkPlastic}},
+				{{TEXT("/Game/ThirdParty/Props/SM_Bin.SM_Bin")}, FVector(50.0, 50.0, 65.0)}},
+			{TEXT("tripod"), TripodParts(),
+				{{TEXT("/Game/ThirdParty/Props/SM_Tripod.SM_Tripod")}, FVector(100.0, 100.0, 115.0)}},
+			// The repo's own textured tyre stack, unless a scanned one is installed.
+			{TEXT("tyre_wall"), TyreWallParts(),
+				{{TEXT("/Game/ThirdParty/Props/SM_TyreStack.SM_TyreStack"),
+				  TEXT("/Game/RaceCourse/Model/Environment/tire_stacked.tire_stacked")},
+				 FVector(60.0, 60.0, 0.0), 4, 60.0, FSDSPropStencil::Rubber}},
+			// Already a real mesh: the sim's own small cone.
+			{TEXT("cone_stack"), ConeStackParts(), {}},
 		};
 		return Defs;
 	}
@@ -94,6 +143,20 @@ namespace
 		for (const FPropClassDef& Def : Classes())
 		{
 			if (Name == Def.Name) return &Def;
+		}
+		return nullptr;
+	}
+
+	/** The first of Paths that loads, without warning about the ones that don't. */
+	UStaticMesh* LoadFirst(const TArray<const TCHAR*>& Paths, FString& OutPath)
+	{
+		for (const TCHAR* Path : Paths)
+		{
+			if (UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, Path, nullptr, LOAD_NoWarn | LOAD_Quiet))
+			{
+				OutPath = Path;
+				return Mesh;
+			}
 		}
 		return nullptr;
 	}
@@ -115,34 +178,71 @@ TArray<FString> AFSDSEnvironmentActor::KnownClasses()
 	return Names;
 }
 
-UInstancedStaticMeshComponent* AFSDSEnvironmentActor::PartComponent(UStaticMesh* Mesh)
+UInstancedStaticMeshComponent* AFSDSEnvironmentActor::PartComponent(UStaticMesh* Mesh, uint8 Stencil)
 {
-	if (TObjectPtr<UInstancedStaticMeshComponent>* Found = Parts.Find(Mesh))
+	const TPair<UStaticMesh*, uint8> Key(Mesh, Stencil);
+	if (UInstancedStaticMeshComponent** Found = PartsByKey.Find(Key))
 	{
-		return Found->Get();
+		return *Found;
 	}
 	UInstancedStaticMeshComponent* C = NewObject<UInstancedStaticMeshComponent>(this);
 	// Movable first: a Static component refuses SetStaticMesh at runtime.
 	C->SetMobility(EComponentMobility::Movable);
 	C->SetStaticMesh(Mesh);
 	C->SetCollisionProfileName(FSDSCollision::PropProfile);
+	// The LiDAR's reflectance LUT reads this (FSDSPropStencil); untagged
+	// parts read their own colour.
+	if (Stencil != FSDSConeStencil::None)
+	{
+		C->SetRenderCustomDepth(true);
+		C->SetCustomDepthStencilValue(Stencil);
+	}
 	C->SetupAttachment(RootComponent);
 	C->RegisterComponent();
-	Parts.Add(Mesh, C);
+	Parts.Add(C);
+	PartsByKey.Add(Key, C);
 	return C;
 }
 
 void AFSDSEnvironmentActor::Clear()
 {
-	for (auto& Pair : Parts)
+	for (UInstancedStaticMeshComponent* C : Parts)
 	{
-		if (Pair.Value) Pair.Value->ClearInstances();
+		if (C) C->ClearInstances();
 	}
 	Built.Reset();
+	MeshSources.Reset();
 	NumBuilt = 0;
 	NumSkipped = 0;
 	UnknownClasses.Reset();
 	TransformHash.Reset();
+}
+
+void AFSDSEnvironmentActor::PlaceRealMesh(UStaticMesh* Mesh, const FVector& FitCm, int32 Copies, double SpacingCm,
+	uint8 Stencil, const FTransform& PropXf)
+{
+	const FBox B = Mesh->GetBoundingBox();
+	const FVector Size = B.GetSize();
+	// Uniform scale: the largest that keeps every constrained axis within FitCm.
+	double Scale = TNumericLimits<double>::Max();
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		if (FitCm[Axis] > 0.0 && Size[Axis] > KINDA_SMALL_NUMBER)
+		{
+			Scale = FMath::Min(Scale, FitCm[Axis] / Size[Axis]);
+		}
+	}
+	if (Scale == TNumericLimits<double>::Max()) Scale = 1.0;
+	// Centre the bounds on the prop and stand them on the ground.
+	const FVector Pivot = FVector(-B.GetCenter().X, -B.GetCenter().Y, -B.Min.Z) * Scale;
+	UInstancedStaticMeshComponent* C = PartComponent(Mesh, Stencil);
+	const int32 N = FMath::Max(Copies, 1);
+	for (int32 I = 0; I < N; ++I)
+	{
+		const FVector Offset((I - (N - 1) * 0.5) * SpacingCm, 0.0, 0.0);
+		const FTransform Local(FRotator::ZeroRotator, Offset + Pivot, FVector(Scale));
+		C->AddInstance(Local * PropXf, /*bWorldSpace=*/true);
+	}
 }
 
 int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
@@ -163,6 +263,17 @@ int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
 			UE_LOG(LogTemp, Error, TEXT("FSDS Environment: mesh %d of the prop kit is missing; props using it are skipped"), I);
 		}
 	}
+
+	// Which classes have a real mesh installed, resolved once per build.
+	TMap<FString, UStaticMesh*> RealMeshes;
+	for (const FPropClassDef& Def : Classes())
+	{
+		FString Path;
+		UStaticMesh* Real = Def.Real.Paths.Num() ? LoadFirst(Def.Real.Paths, Path) : nullptr;
+		RealMeshes.Add(Def.Name, Real);
+		MeshSources.Add(Def.Name, Real ? Path : FString(TEXT("primitives")));
+	}
+	MeshSources.KeySort(TLess<FString>());
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSEnvironmentGround), /*bTraceComplex=*/true, this);
 	const FCollisionObjectQueryParams GroundOnly(ECC_WorldStatic);
@@ -193,7 +304,12 @@ int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
 		const FTransform PropXf(FRotator(0.0, YawDeg, 0.0), Hit.ImpactPoint);
 
 		bool bPlaced = false;
-		for (const FPart& Part : Def->Parts)
+		if (UStaticMesh* Real = RealMeshes.FindRef(Def->Name))
+		{
+			PlaceRealMesh(Real, Def->Real.FitCm, Def->Real.Copies, Def->Real.SpacingCm, Def->Real.Stencil, PropXf);
+			bPlaced = true;
+		}
+		else for (const FPart& Part : Def->Parts)
 		{
 			UStaticMesh* Mesh = Meshes[(int32)Part.Mesh];
 			if (!Mesh) continue;
@@ -209,7 +325,7 @@ int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
 			{
 				Local = FTransform(Part.Rotation, Part.Location, Part.SizeCm / 100.0);
 			}
-			PartComponent(Mesh)->AddInstance(Local * PropXf, /*bWorldSpace=*/true);
+			PartComponent(Mesh, Part.Stencil)->AddInstance(Local * PropXf, /*bWorldSpace=*/true);
 			bPlaced = true;
 		}
 		if (!bPlaced)

@@ -126,3 +126,7 @@ tools/sim_benchmark/_native/
 *.slxc
 slprj/
 matlab/**/slprj/
+
+# Licensed photoreal props (docs/environment_props.md). Marketplace assets
+# can ship inside a packaged build but not as source in this public repo.
+Content/ThirdParty/

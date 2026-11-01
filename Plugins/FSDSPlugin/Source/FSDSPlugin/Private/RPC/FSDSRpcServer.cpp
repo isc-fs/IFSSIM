@@ -2042,6 +2042,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						for (const FString& C : Built->GetUnknownClasses()) Unknown.Add(MakeShared<FJsonValueString>(C));
 						Out->SetArrayField(TEXT("unknown_classes"), Unknown);
 						Out->SetStringField(TEXT("transform_sha1"), Built->GetTransformHash());
+						TSharedRef<FJsonObject> Meshes = MakeShared<FJsonObject>();
+						for (const auto& Pair : Built->GetMeshSources()) Meshes->SetStringField(Pair.Key, Pair.Value);
+						Out->SetObjectField(TEXT("meshes"), Meshes);
 					}
 				}
 

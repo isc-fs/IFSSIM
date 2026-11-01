@@ -24,9 +24,16 @@ shipping pipeline, documentation.
     Every prop stays out of the cone corridor and clear of the cones; the
     same seed gives the same file on every platform.
   - The sim builds the sidecar's props when it loads the track, before the
-    cones, from engine basic shapes and the small cone mesh, with the
-    `FSDSProp` collision profile. `getEnvironment` reports what was built
-    and a hash of the transforms.
+    cones, with the `FSDSProp` collision profile. Each class uses its
+    photoreal mesh when one is installed under the git-ignored
+    `Content/ThirdParty/Props/` (licensed marketplace assets can't be
+    committed to this public repo), and otherwise plain shapes; the tyre
+    wall uses the repo's textured tyre stack (`docs/environment_props.md`).
+    `getEnvironment` reports what was built, from which mesh, and a hash of
+    the transforms.
+  - The LiDAR sees each prop's material: rubber, dark plastic, aluminium,
+    and a retroreflective band on the bollards, in the reflectance LUT
+    (read with `fsds.LidarGPU.StencilEncoder 1`).
   - Mission Control's track recentring moves a track's sidecar with its cones.
   - Only with `"Environment": { "Enabled": true }`; off, the default, builds
     nothing.

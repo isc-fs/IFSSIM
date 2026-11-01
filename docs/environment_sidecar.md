@@ -33,7 +33,7 @@ The roadmap's design rules shape the file:
 
 ### Prop classes
 
-The plugin builds each class from primitives (engine basic shapes and the small cone mesh), with the `FSDSProp` collision profile: the LiDAR sees them and the car hits them, but they are never ground ([collision_matrix.md](collision_matrix.md)). Each prop stands on the ground under its `x`, `y`, found by the same WorldStatic trace the cones use. A prop of an unknown class, or with no ground under it, is skipped and counted.
+The plugin builds each class from its real mesh when one is installed, and otherwise from primitives (engine basic shapes and the small cone mesh); see [environment_props.md](environment_props.md) for the meshes and the LiDAR materials. Every prop has the `FSDSProp` collision profile: the LiDAR sees them and the car hits them, but they are never ground ([collision_matrix.md](collision_matrix.md)). Each prop stands on the ground under its `x`, `y`, found by the same WorldStatic trace the cones use. A prop of an unknown class, or with no ground under it, is skipped and counted.
 
 | `class` | What | Size |
 |---|---|---|

@@ -1147,6 +1147,13 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.ReflectanceLUT[FSDSConeStencil::Yellow]      = 0.50f;
 	U.ReflectanceLUT[FSDSConeStencil::OrangeLarge] = 0.65f;
 	U.ReflectanceLUT[FSDSConeStencil::OrangeSmall] = 0.65f;
+	// Trackside props (#683). Carbon-black rubber and dark plastic return
+	// little at 905 nm, bare aluminium about half; retroreflective sheeting
+	// returns far more than any diffuse surface, so it saturates.
+	U.ReflectanceLUT[FSDSPropStencil::Rubber]          = 0.06f;
+	U.ReflectanceLUT[FSDSPropStencil::DarkPlastic]     = 0.12f;
+	U.ReflectanceLUT[FSDSPropStencil::Aluminium]       = 0.45f;
+	U.ReflectanceLUT[FSDSPropStencil::Retroreflective] = 1.00f;
 
 	// Gate the LUT on whether the post-process material loaded
 	// successfully in InitializeGPUPath. If yes, the alpha channel of
