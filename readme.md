@@ -2,7 +2,7 @@
 
 # IFSSIM
 
-A Formula Student Driverless simulator. Unreal Engine 5.7 provides
+A Formula Student Driverless simulator. Unreal Engine 5.8 provides
 the world — terrain, a Hesai-class LiDAR, cones, a full
 FS-Rules-2026 referee — and the vehicle dynamics are a separate,
 swappable plant. A ROS 2 bridge and a Mission Control UI sit on top.

@@ -162,6 +162,14 @@ jobs:
       - name: pytest (unit tests only)
         run: pytest tests/ -v
 
+      # The environment generator in tools/envgen uses shapely, which the
+      # backend installs, so all envgen tests run here. The Tracks job runs
+      # them without shapely, which proves the track creator needs nothing
+      # else (the environment tests skip there).
+      - name: envgen tests
+        working-directory: tools
+        run: pytest envgen/tests -q
+
   # ---------------------------------------------------------------
   # Tracks — every CSV under Content/tracks/ parses cleanly.
   # Catches stale generator output (#365 cycle hit a 1-byte empty
@@ -179,6 +187,17 @@ jobs:
 
       - name: Validate
         run: python3 tools/validate_tracks.py
+
+      - name: Validator tests
+        run: python3 -m unittest discover -s tools/tests -v
+
+      # The track creator (tools/envgen): drawn path -> cones, FS rules, and
+      # the sim's start-pose logic ported to Python. Standard library only;
+      # pytest is the one install.
+      - name: Track creator tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tools/envgen/tests -q
 
   # ---------------------------------------------------------------
   # Internal markdown link check — catches dead links inside the

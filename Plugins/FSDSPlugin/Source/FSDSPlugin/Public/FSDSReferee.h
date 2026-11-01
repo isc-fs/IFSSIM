@@ -63,6 +63,22 @@ namespace FSDSConeStencil
 	static constexpr uint8 MaxID       = 15;
 }
 
+/**
+ * Stencil IDs for trackside props (#683), from the cone IDs' reserved range.
+ * The environment builder tags each prop part with the material it stands
+ * for; the LiDAR's reflectance LUT (FSDSLidarSensor.cpp) gives each its
+ * 905 nm reflectance. A part tagged None reads its reflectance from its own
+ * colour instead (the luminance fallback), which is what a textured, scanned
+ * mesh wants.
+ */
+namespace FSDSPropStencil
+{
+	static constexpr uint8 Rubber          = 5;  // tyres
+	static constexpr uint8 DarkPlastic     = 6;  // bins, bollard bodies, sensor heads
+	static constexpr uint8 Aluminium       = 7;  // tripod legs
+	static constexpr uint8 Retroreflective = 8;  // the reflective band on a bollard
+}
+
 USTRUCT(BlueprintType)
 struct FFSDSCone
 {

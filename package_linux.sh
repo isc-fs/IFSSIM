@@ -3,17 +3,17 @@
 #
 # Two ways to run:
 #
-# 1. NATIVE Linux build, on a Linux box with UE5 5.7 installed.
+# 1. NATIVE Linux build, on a Linux box with UE5 5.8 installed.
 #    UE5_ROOT=/path/to/Linux/UnrealEngine ./package_linux.sh
 #
-# 2. CROSS-COMPILE from a Mac dev box. Requires UE5 5.7 + the Linux
+# 2. CROSS-COMPILE from a Mac dev box. Requires UE5 5.8 + the Linux
 #    Clang Toolchain ("v22 clang-19.0.1-rockylinux8" or compatible)
 #    installed and pointed to via LINUX_MULTIARCH_ROOT. Epic ships
 #    the toolchain at:
 #        https://dev.epicgames.com/documentation/en-us/unreal-engine/linux-development-requirements-for-unreal-engine
 #    Set both UE5_ROOT (Mac install) and LINUX_MULTIARCH_ROOT before
 #    running:
-#        UE5_ROOT="/Users/Shared/Epic Games/UE_5.7" \
+#        UE5_ROOT="/Users/Shared/Epic Games/UE_5.8" \
 #        LINUX_MULTIARCH_ROOT="$HOME/UnrealToolchains/v22_clang-19.0.1-rockylinux8" \
 #          ./package_linux.sh
 #
@@ -26,12 +26,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Resolve UE5 root. On Mac dev boxes the default install is under
-# /Users/Shared/Epic Games/UE_5.7. On a Linux runner with a custom
+# /Users/Shared/Epic Games/UE_5.8. On a Linux runner with a custom
 # clone, the operator sets UE5_ROOT.
-UE5_ROOT="${UE5_ROOT:-/Users/Shared/Epic Games/UE_5.7}"
+UE5_ROOT="${UE5_ROOT:-/Users/Shared/Epic Games/UE_5.8}"
 if [ ! -f "$UE5_ROOT/Engine/Build/BatchFiles/RunUAT.sh" ]; then
     echo "ERROR: UE5 not found at '$UE5_ROOT'." >&2
-    echo "Set UE5_ROOT to your UE_5.7 install directory." >&2
+    echo "Set UE5_ROOT to your UE_5.8 install directory." >&2
     exit 1
 fi
 
@@ -74,6 +74,10 @@ echo "[1/3] Building..."
 echo "[2/3] Staging track CSVs..."
 mkdir -p "$TRACKS_DST"
 cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
+# Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+for f in "$TRACKS_SRC/"*.env.json; do
+    if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
+done
 echo "  Tracks staged: $(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') files"
 
 # 3. Copy settings.json to UE5's UserSettingsDir so FSDSSettings::AutoLoad

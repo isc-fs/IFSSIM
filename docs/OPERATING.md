@@ -230,6 +230,37 @@ Session. To drive manually, focus the sim window and use:
 Manual control is only available when the autonomy isn't taking
 priority (i.e. before Start Session, or in `Stopped` state).
 
+### From inside the sim
+
+Press **Tab** in the sim window to open the Mission Control panel. It does
+what the web UI does, through the same backend, so both always show the
+same session:
+
+- load a track, pick a mission and laps, record a bag;
+- start and stop the session, reset the car, pause, RES;
+- see the backend, the sim link, the pipeline, RES and lap/DOO/OC.
+
+Stop and Reset ask for a second click, as the web UI asks for a confirm.
+The car keeps its keys while the panel is open; Tab or Esc closes it.
+
+If the backend isn't running, the panel offers **Start stack**, which runs
+`docker compose up -d` in the repo (found by searching upward from the
+project; set `ComposeDir` if it isn't). The panel is off in headless runs
+and with `-NoLauncher`. Settings, all optional:
+
+```json
+"MissionControl": {
+  "Url": "http://127.0.0.1:8000",
+  "ApiKey": "",
+  "ComposeDir": "",
+  "Panel": true,
+  "Key": "Tab"
+}
+```
+
+`ApiKey` falls back to `$IFSSIM_MC_API_KEY`, the variable compose hands
+the backend.
+
 ### Manual mission control without Mission Control
 
 If you want to reproduce the production lifecycle from a shell —
