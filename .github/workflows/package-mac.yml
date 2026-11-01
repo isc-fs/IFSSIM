@@ -80,6 +80,10 @@ jobs:
           cp "$GITHUB_WORKSPACE/settings.json" "$PROJ/settings.json"
           mkdir -p "$PROJ/Content/tracks"
           cp "$GITHUB_WORKSPACE/Content/tracks/"*.csv "$PROJ/Content/tracks/"
+          # Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+          for f in "$GITHUB_WORKSPACE/Content/tracks/"*.env.json; do
+            if [ -e "$f" ]; then cp "$f" "$PROJ/Content/tracks/"; fi
+          done
 
           # Editing the bundle invalidates its seal; re-sign ad-hoc or
           # Gatekeeper refuses to launch it.

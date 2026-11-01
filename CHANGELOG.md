@@ -14,6 +14,24 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Track environment sidecars**, the first plumbing step of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
+  A track can carry a `<track>.env.json` next to its CSV: the ground extent
+  and the trackside props, generated in Python from a seed and a profile
+  (`docs/environment_sidecar.md`). The cone spawner loads it before the
+  cones, for the boot track and for `loadTrack`; the `loadTrack` reply
+  reports `environment` (`off`, `none`, `loaded` or `invalid`), and the new
+  `getEnvironment` RPC returns what was loaded. The loader is strict:
+  unknown keys and wrongly typed values are errors, and an invalid sidecar
+  is not loaded while the track still is. Nothing is spawned yet; that
+  comes with the builder in P2a.
+  - Off unless `settings.json` sets `"Environment": { "Enabled": true }`.
+    With it off, every shipped track's start pose is unchanged to 0.000 mm.
+  - `tools/validate_tracks.py` applies the same rules to every sidecar
+    under `Content/tracks/` in CI, with unit tests (`tools/tests/`).
+  - Packaging copies `*.env.json` next to the track CSVs.
+  - Covered by the automation tests `FSDS.Environment.*` and
+    `tools/smoke/test_environment.py`.
 - **Collision channels for trackside props**, step 1 of
   `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)),
   with the matrix in `docs/collision_matrix.md`.
@@ -131,6 +149,14 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **LiDAR per-material reflectance is on by default**
+  (`fsds.LidarGPU.StencilEncoder` now defaults to 1). Intensity follows the
+  reflectance LUT instead of carrying no material information. No measurable
+  frame-rate cost (27 fps, real-time factor 0.45, either way; Mac, UE 5.8).
+  Turn it off at startup with
+  `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0` if the
+  faint viewport stippling of #488 shows in a packaged build.
+
 - **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
   points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
   change assumed the GPU→CPU readback would stall on a discrete GPU over
@@ -183,6 +209,19 @@ shipping pipeline, documentation.
   of `docs/ENVIRONMENT_ROADMAP.md`.
 
 ### Fixed
+
+- **The LiDAR's per-material reflectance never applied**
+  ([#698](https://github.com/isc-fs/IFSSIM/issues/698)). With
+  `fsds.LidarGPU.StencilEncoder 1` the log said the reflectance LUT was
+  active, but intensity still followed the rendered colour: UE applies a
+  post-process material only to a view with a view state, and the LiDAR's
+  colour capture had none, so the stencil encoder never ran. The colour
+  capture now keeps its rendering state when the encoder is on. Measured
+  on the 25 m circle: blue cones read 0.14 and yellow 0.47 (range-corrected,
+  LUT 0.15 / 0.50), and the ground shows no speckle (#488). New
+  `fsds.LidarGPU.DebugColorChannel 1|2` reports the encoder's raw R (stencil
+  ID) or G (luminance) as the intensity. The encoder is still off by
+  default and must be set at startup.
 
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping

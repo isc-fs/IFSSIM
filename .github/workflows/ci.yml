@@ -180,6 +180,9 @@ jobs:
       - name: Validate
         run: python3 tools/validate_tracks.py
 
+      - name: Validator tests
+        run: python3 -m unittest discover -s tools/tests -v
+
       # The track creator (tools/envgen): drawn path -> cones, FS rules, and
       # the sim's start-pose logic ported to Python. Standard library only;
       # pytest is the one install.

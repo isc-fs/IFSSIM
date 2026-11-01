@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "FSDSReferee.h"
+#include "Environment/FSDSEnvironment.h"
 #include "FSDSConeSpawner.generated.h"
 
 /**
@@ -129,9 +130,23 @@ public:
 	 */
 	bool ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm = 300.f) const;
 
+	/** The environment loaded with the current track (docs/environment_sidecar.md).
+	 *  Empty unless settings.json Environment.Enabled is true and the track
+	 *  has a valid <track>.env.json. */
+	const FFSDSEnvironment& GetEnvironment() const { return Environment; }
+
+	/** What GetEnvironment() holds: "off" (Environment.Enabled is false),
+	 *  "none" (the track has no sidecar), "loaded", or "invalid" (the sidecar
+	 *  failed to parse; GetEnvironmentError() says why). */
+	const FString& GetEnvironmentStatus() const { return EnvironmentStatus; }
+	const FString& GetEnvironmentError() const { return EnvironmentError; }
+
 private:
 	void SpawnTestTrack();
 	void SpawnFromCSV();
+
+	/** Load the current track's sidecar, before any cone spawns. */
+	void LoadEnvironmentSidecar();
 	void SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 	void SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 
@@ -161,6 +176,10 @@ private:
 	// track's cones.
 	TArray<FVector> BigOrangePositions;
 	TArray<FVector> BlueYellowPositions;
+
+	FFSDSEnvironment Environment;
+	FString EnvironmentStatus = TEXT("off");
+	FString EnvironmentError;
 
 	UPROPERTY()
 	AFSDSReferee* Referee = nullptr;
