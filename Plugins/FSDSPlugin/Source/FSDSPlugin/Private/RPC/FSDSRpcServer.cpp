@@ -1992,10 +1992,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		FPS = 1.0f / FApp::GetDeltaTime();
 
-		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s}"),
+		// sim_time: the game clock (s), the same clock the sensor stamps and
+		// /clock use. The mission benchmark counts its timeouts in it, so a
+		// sim running slower than real time doesn't fail runs it finishes.
+		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f}"),
 			*MapName, FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
-			bApiControlEnabled ? TEXT("true") : TEXT("false"));
+			bApiControlEnabled ? TEXT("true") : TEXT("false"),
+			SimTime);
 	}
 
 	// === Version ===

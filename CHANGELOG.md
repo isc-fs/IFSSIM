@@ -133,6 +133,8 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Mission benchmark timed out runs the car finished.** `timeout_s` counted real time, so a sim running slower than real time ran out of budget: an acceleration run that finished in 29.9 s of sim time took 60.8 s of real time and was scored a timeout. The timeout now counts sim time, read from a new `sim_time` field in `getSimStatus`, with six times `timeout_s` of real time as a backstop for a stalled sim. Older sim builds fall back to real time. `results.json` adds `race/run_sim_time_s` (#692).
+
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
   a repeated or slightly earlier stamp 1 ns past the last one. Like the
