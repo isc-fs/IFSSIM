@@ -62,16 +62,14 @@ its reflectance from the mesh's own colour: a white or reflective band on a
 scanned bollard comes out bright without any tagging. The small cones in a
 cone stack use the yellow cone's entry.
 
-The LUT is only read with `fsds.LidarGPU.StencilEncoder 1`, set at startup
-(`-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=1`; the LiDAR
-reads it once, when it starts). It is off by default (#488), and then the
-LiDAR's colour capture never renders, so intensity carries no material
-information for props or cones.
-
-Until #700 is merged the LUT never takes effect, even with the encoder on
-(#698): the encoder material didn't run in the LiDAR's colour capture. With
-#700, range-corrected intensities follow the table (tyre wall 0.05, bin 0.08,
-tripod legs 0.24 at grazing angles, the bollard's band ~0.9).
+The LUT is on by default (`fsds.LidarGPU.StencilEncoder 1`, #702), and
+range-corrected intensities follow the table (tyre wall 0.05, bin 0.08,
+tripod legs 0.24 at grazing angles, the bollard's band ~0.9). To turn it off,
+for example if the #488 viewport stippling shows in a packaged build, launch
+with `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0`; the
+LiDAR reads it once, when it starts. With it off the LiDAR's colour capture
+never renders, so intensity carries no material information for props or
+cones.
 
 Props are plain mesh components, not instanced: most materials (the repo's
 tyre and cone materials included) lack the "used with instanced static
