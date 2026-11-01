@@ -108,6 +108,8 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		//     M_LiDARStencilEncoder post-process material to be applied
 		//     to GPUColorCapture's PostProcessSettings (tracked as a
 		//     follow-up issue).
+		// 2 / 3 = debug (fsds.LidarGPU.DebugColorChannel): output the colour
+		//     capture's raw R / G as the intensity.
 		SHADER_PARAMETER(uint32, UseReflectanceLUT)
 	END_SHADER_PARAMETER_STRUCT()
 

@@ -273,6 +273,14 @@ public:
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;
 
+	// --- Environment -----------------------------------------------------
+	//
+	// Trackside environment (docs/ENVIRONMENT_ROADMAP.md). When true, loading a
+	// track also loads the <track>.env.json sidecar next to it
+	// (docs/environment_sidecar.md). Off by default: the flat world stays the
+	// regression baseline, and while this is off a sidecar is ignored.
+	bool bEnvironmentEnabled = false;
+
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 
 	/** Get the first (default) vehicle settings */

@@ -73,6 +73,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "[2/3] Staging track CSVs..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $TracksDst | Out-Null
 Copy-Item -Path (Join-Path $TracksSrc "*.csv") -Destination $TracksDst -Force
+# Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+Get-ChildItem -Path $TracksSrc -Filter "*.env.json" | Copy-Item -Destination $TracksDst -Force
 $Count = (Get-ChildItem -Path $TracksDst -Filter "*.csv").Count
 Write-Host "  Tracks staged: $Count files"
 
