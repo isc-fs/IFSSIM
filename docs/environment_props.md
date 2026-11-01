@@ -68,10 +68,10 @@ reads it once, when it starts). It is off by default (#488), and then the
 LiDAR's colour capture never renders, so intensity carries no material
 information for props or cones.
 
-Known issue: in the UE 5.8 Mac build the LUT doesn't take effect even with
-the encoder on. Cone intensities are the same with it on and off, and the
-bollard's band doesn't read bright, so intensity still follows the rendered
-colour. The props carry their tags and pick the LUT up once it works.
+Until #700 is merged the LUT never takes effect, even with the encoder on
+(#698): the encoder material didn't run in the LiDAR's colour capture. With
+#700, range-corrected intensities follow the table (tyre wall 0.05, bin 0.08,
+tripod legs 0.24 at grazing angles, the bollard's band ~0.9).
 
 Props are plain mesh components, not instanced: most materials (the repo's
 tyre and cone materials included) lack the "used with instanced static
