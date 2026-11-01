@@ -14,6 +14,30 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Trackside props**, the first slice of P2a in `docs/ENVIRONMENT_ROADMAP.md`
+  ([#683](https://github.com/isc-fs/IFSSIM/issues/683)): the perception
+  stressors the roadmap ranks worst, around any track.
+  - `tools/envgen` writes a track's environment sidecar from a seed and a
+    profile (`python3 -m envgen env <track>.csv --seed 7 --profile stress`):
+    bollards and bins at cone scale, timekeeping tripods beside the timing
+    lines, low tyre walls behind the cone line and stacks of spare cones.
+    Every prop stays out of the cone corridor and clear of the cones; the
+    same seed gives the same file on every platform.
+  - The sim builds the sidecar's props when it loads the track, before the
+    cones, with the `FSDSProp` collision profile. Each class uses its
+    photoreal mesh when one is installed under the git-ignored
+    `Content/ThirdParty/Props/` (licensed marketplace assets can't be
+    committed to this public repo), and otherwise plain shapes; the tyre
+    wall uses the repo's textured tyre stack (`docs/environment_props.md`).
+    `getEnvironment` reports what was built, from which mesh, and a hash of
+    the transforms.
+  - The LiDAR sees each prop's material: rubber, dark plastic, aluminium,
+    and a retroreflective band on the bollards, in the reflectance LUT
+    (on by default since #702).
+  - Mission Control's track recentring moves a track's sidecar with its cones.
+  - Only with `"Environment": { "Enabled": true }`; off, the default, builds
+    nothing.
+
 - **Track environment sidecars**, the first plumbing step of
   `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
   A track can carry a `<track>.env.json` next to its CSV: the ground extent

@@ -1,17 +1,22 @@
-"""envgen: tracks and (later) their environments, generated from data.
+"""envgen: tracks and their environments, generated from data.
 
-Today: the track creator. A drawn path (a TrackSpec) becomes the cone CSV the
-sim loads, checked against the FS rules and against where the sim will spawn
-the car. The perception-stress environment generator in
-docs/ENVIRONMENT_ROADMAP.md (P2a) is planned to live here too and reuse the
-corridor.
+The track creator: a drawn path (a TrackSpec) becomes the cone CSV the sim
+loads, checked against the FS rules and against where the sim will spawn the
+car.
 
     from envgen import parse_spec, create_track
     result = create_track(parse_spec(json.load(open("my.track.json"))))
     result.csv, result.issues
 
-Standard library only, so it runs in CI, in the Mission Control backend image
-and from a plain shell alike.
+The environment generator (docs/environment_sidecar.md,
+docs/ENVIRONMENT_ROADMAP.md P2a): a track's trackside props, from a seed and a
+profile, written as the <track>.env.json sidecar.
+
+    cd tools && python3 -m envgen env ../Content/tracks/<track>.csv --seed 7 --profile stress
+
+The track creator is standard library only, so it runs in CI, in the Mission
+Control backend image and from a plain shell alike. The environment generator
+(envgen.generate, envgen.track) needs shapely; importing envgen does not.
 """
 
 from __future__ import annotations

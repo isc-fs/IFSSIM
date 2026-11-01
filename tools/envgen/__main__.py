@@ -1,14 +1,18 @@
-"""Command line for the track creator.
+"""Command line for envgen: the track creator and the environment generator.
 
     cd tools
     python3 -m envgen create my.track.json -o ../Content/tracks/my_track.csv
     python3 -m envgen create my.track.json --check          # report only
     python3 -m envgen startpose ../Content/tracks/*.csv     # where the sim spawns
     python3 -m envgen stress -o ../Content/tracks           # the stress-track library
+    python3 -m envgen env ../Content/tracks/<track>.csv --seed 7 --profile stress
 
 `create` writes the CSV and, next to it, the spec it came from
 (`<name>.track.json`), so the track can be reopened in the editor. It refuses
 to write a track with errors unless given --force.
+
+`env` writes a track's environment sidecar (`<track>.env.json`, the trackside
+props) from a seed and a profile. It needs shapely; the other commands don't.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import argparse
 import csv
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 from . import SpecError, create_track, parse_spec
@@ -108,6 +113,28 @@ def _stress(args) -> int:
     return 1 if bad else 0
 
 
+def _env(args) -> int:
+    from .generate import dumps, generate, sha256, sidecar_path
+
+    try:
+        env = generate(args.track, args.seed, args.profile)
+    except (OSError, ValueError) as e:
+        print(f"envgen: {e}", file=sys.stderr)
+        return 2
+    text = dumps(env)
+    if args.stdout:
+        sys.stdout.write(text)
+        return 0
+    out = args.out or str(sidecar_path(args.track))
+    with open(out, "w") as f:
+        f.write(text)
+    counts = Counter(p["class"] for p in env["props"])
+    print(f"{out}: {len(env['props'])} props "
+          f"({', '.join(f'{k} {v}' for k, v in sorted(counts.items())) or 'none'}), "
+          f"sha256 {sha256(text)[:12]}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="envgen", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -124,8 +151,16 @@ def main(argv=None) -> int:
     st.add_argument("names", nargs="*", help="only these tracks (default: all)")
     st.add_argument("-o", "--out", help="directory to write stress_<name>.csv into (omit to only check)")
     st.add_argument("--list", action="store_true", help="list the library and what each track tests")
+    from .catalogue import PROFILES  # standard library only
+    e = sub.add_parser("env", help="write a track's environment sidecar (trackside props)")
+    e.add_argument("track", help="track CSV")
+    e.add_argument("--seed", type=int, required=True, help="environment seed (not the scenario seed)")
+    e.add_argument("--profile", default="stress", choices=sorted(PROFILES))
+    e.add_argument("--out", help="where to write (default: <track>.env.json next to the CSV)")
+    e.add_argument("--stdout", action="store_true", help="print instead of writing")
     args = ap.parse_args(argv)
-    return {"create": _create, "startpose": _startpose, "stress": _stress}[args.cmd](args)
+    return {"create": _create, "startpose": _startpose, "stress": _stress,
+            "env": _env}[args.cmd](args)
 
 
 if __name__ == "__main__":
