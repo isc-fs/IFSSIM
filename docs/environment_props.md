@@ -30,8 +30,11 @@ don't matter. Its own collision is used, with the `FSDSProp` profile.
 packaged build, but this repo is public, so they can't be committed as source.
 On each machine that builds the sim:
 
-1. Get the assets from Fab (free scanned assets, under Fab's licence) and add
-   them to the project from the editor.
+1. Get the assets from Fab and add them to the project from the editor. Fab's
+   Standard License lets a packaged build include them but not the raw
+   assets be shared outside the team. Megascans stopped being free at the
+   end of 2024: scans claimed before then stay usable, new ones are paid or
+   occasional free picks.
 2. Move each static mesh to `Content/ThirdParty/Props/` and name it as in the
    table, materials and textures alongside.
 3. Rebuild or recook. `Config/DefaultGame.ini` always cooks
