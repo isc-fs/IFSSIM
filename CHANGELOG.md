@@ -33,30 +33,10 @@ shipping pipeline, documentation.
     the transforms.
   - The LiDAR sees each prop's material: rubber, dark plastic, aluminium,
     and a retroreflective band on the bollards, in the reflectance LUT
-    (read with `fsds.LidarGPU.StencilEncoder 1`).
+    (on by default since #702).
   - Mission Control's track recentring moves a track's sidecar with its cones.
   - Only with `"Environment": { "Enabled": true }`; off, the default, builds
     nothing.
-
-- **Collision channels for trackside props**, step 1 of
-  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)),
-  with the matrix in `docs/collision_matrix.md`.
-  - Two object channels: `FSDSProp`, a solid prop that stops the car and
-    the cones, and `FSDSPropLidarOnly`, which has no physics and answers
-    only Visibility traces. Both default to Block, so the car, the cones
-    and the CPU LiDAR meet them without any profile edits.
-  - The car's wheel trace ignores both, so a prop is never ground. Neither
-    is `WorldStatic`, so the road probe and the cone snap never take one
-    for ground either.
-  - A documented `FSDSTerrain` profile for ground.
-
-  Nothing spawns props yet; that comes in P2a. The new
-  `validateCollisionMatrix` RPC (`tools/smoke/test_collision_matrix.py`)
-  checks every row with the queries the sim itself makes, on flat ground
-  and on the 8° ramp. `tools/smoke/lidar_sees_test_props.py` checks the
-  default GPU LiDAR: about 1,000-1,200 returns per scan on each prop, and 0
-  once they are removed. Driving over the 15 cm LiDAR-only strip at 10 m/s
-  leaves height (0.09 cm) and pitch (0.15°) the same as a drive without it.
 
 - **Track environment sidecars**, the first plumbing step of
   `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
@@ -76,6 +56,25 @@ shipping pipeline, documentation.
   - Packaging copies `*.env.json` next to the track CSVs.
   - Covered by the automation tests `FSDS.Environment.*` and
     `tools/smoke/test_environment.py`.
+- **Collision channels for trackside props**, step 1 of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)),
+  with the matrix in `docs/collision_matrix.md`.
+  - Two object channels: `FSDSProp`, a solid prop that stops the car and
+    the cones, and `FSDSPropLidarOnly`, which has no physics and answers
+    only Visibility traces. Both default to Block, so the car, the cones
+    and the CPU LiDAR meet them without any profile edits.
+  - The car's wheel trace ignores both, so a prop is never ground. Neither
+    is `WorldStatic`, so the road probe and the cone snap never take one
+    for ground either.
+  - A documented `FSDSTerrain` profile for ground.
+
+  Nothing spawns props yet; that comes in P2a. The new
+  `validateCollisionMatrix` RPC (`tools/smoke/test_collision_matrix.py`)
+  checks every row with the queries the sim itself makes, on flat ground
+  and on the 8° ramp. `tools/smoke/lidar_sees_test_props.py` checks the
+  default GPU LiDAR: about 1,000-1,200 returns per scan on each prop, and 0
+  once they are removed. Driving over the 15 cm LiDAR-only strip at 10 m/s
+  leaves height (0.09 cm) and pitch (0.15°) the same as a drive without it.
 
 - **Track creator.** Draw a path, get a real track. `tools/envgen` turns a
   track spec (the drawn control points, width, cone spacing and a seed) into
@@ -174,6 +173,14 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **LiDAR per-material reflectance is on by default**
+  (`fsds.LidarGPU.StencilEncoder` now defaults to 1). Intensity follows the
+  reflectance LUT instead of carrying no material information. No measurable
+  frame-rate cost (27 fps, real-time factor 0.45, either way; Mac, UE 5.8).
+  Turn it off at startup with
+  `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0` if the
+  faint viewport stippling of #488 shows in a packaged build.
+
 - **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
   points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
   change assumed the GPU→CPU readback would stall on a discrete GPU over
@@ -226,6 +233,19 @@ shipping pipeline, documentation.
   of `docs/ENVIRONMENT_ROADMAP.md`.
 
 ### Fixed
+
+- **The LiDAR's per-material reflectance never applied**
+  ([#698](https://github.com/isc-fs/IFSSIM/issues/698)). With
+  `fsds.LidarGPU.StencilEncoder 1` the log said the reflectance LUT was
+  active, but intensity still followed the rendered colour: UE applies a
+  post-process material only to a view with a view state, and the LiDAR's
+  colour capture had none, so the stencil encoder never ran. The colour
+  capture now keeps its rendering state when the encoder is on. Measured
+  on the 25 m circle: blue cones read 0.14 and yellow 0.47 (range-corrected,
+  LUT 0.15 / 0.50), and the ground shows no speckle (#488). New
+  `fsds.LidarGPU.DebugColorChannel 1|2` reports the encoder's raw R (stencil
+  ID) or G (luminance) as the intensity. The encoder is still off by
+  default and must be set at startup.
 
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping
