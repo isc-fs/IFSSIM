@@ -1479,7 +1479,8 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildTelemetryTab()
 		[
 			Row(LOCTEXT("TelRpm", "Motor"), [](const AFSDSVehiclePawn& P)
 			{
-				return FString::Printf(TEXT("%.0f rpm"), P.GetCarState().RPM);
+				// Rounded to an int so a tiny negative jitter at rest shows 0, not -0.
+				return FString::Printf(TEXT("%d rpm"), FMath::RoundToInt(P.GetCarState().RPM));
 			})
 		]
 		+ SVerticalBox::Slot().AutoHeight()
