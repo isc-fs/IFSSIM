@@ -12,8 +12,114 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Changed
+
+- **`dv_pipeline_stack` now compiles C++ packages as Release.** The
+  image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
+  optimization off for any package that didn't hardcode its own.
+  Matches CI and `mission_control_backend`'s Dockerfile.
+
 ### Added
 
+- **Mission Control inside the sim.** Press Tab in the sim window for a panel
+  that loads a track, starts and stops a session, resets the car and works
+  RES, through the same backend as the web UI. When the backend is down it
+  can run `docker compose up -d` for you. Configured by a `MissionControl`
+  block in `settings.json`; off in headless runs. See
+  `docs/OPERATING.md`, "From inside the sim".
+- **Trackside props**, the first slice of P2a in `docs/ENVIRONMENT_ROADMAP.md`
+  ([#683](https://github.com/isc-fs/IFSSIM/issues/683)): the perception
+  stressors the roadmap ranks worst, around any track.
+  - `tools/envgen` writes a track's environment sidecar from a seed and a
+    profile (`python3 -m envgen env <track>.csv --seed 7 --profile stress`):
+    bollards and bins at cone scale, timekeeping tripods beside the timing
+    lines, low tyre walls behind the cone line and stacks of spare cones.
+    Every prop stays out of the cone corridor and clear of the cones; the
+    same seed gives the same file on every platform.
+  - The sim builds the sidecar's props when it loads the track, before the
+    cones, with the `FSDSProp` collision profile. Each class uses its
+    photoreal mesh when one is installed under the git-ignored
+    `Content/ThirdParty/Props/` (licensed marketplace assets can't be
+    committed to this public repo), and otherwise plain shapes; the tyre
+    wall uses the repo's textured tyre stack (`docs/environment_props.md`).
+    `getEnvironment` reports what was built, from which mesh, and a hash of
+    the transforms.
+  - The LiDAR sees each prop's material: rubber, dark plastic, aluminium,
+    and a retroreflective band on the bollards, in the reflectance LUT
+    (on by default since #702).
+  - Mission Control's track recentring moves a track's sidecar with its cones.
+  - Only with `"Environment": { "Enabled": true }`; off, the default, builds
+    nothing.
+
+- **Track environment sidecars**, the first plumbing step of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)).
+  A track can carry a `<track>.env.json` next to its CSV: the ground extent
+  and the trackside props, generated in Python from a seed and a profile
+  (`docs/environment_sidecar.md`). The cone spawner loads it before the
+  cones, for the boot track and for `loadTrack`; the `loadTrack` reply
+  reports `environment` (`off`, `none`, `loaded` or `invalid`), and the new
+  `getEnvironment` RPC returns what was loaded. The loader is strict:
+  unknown keys and wrongly typed values are errors, and an invalid sidecar
+  is not loaded while the track still is. Nothing is spawned yet; that
+  comes with the builder in P2a.
+  - Off unless `settings.json` sets `"Environment": { "Enabled": true }`.
+    With it off, every shipped track's start pose is unchanged to 0.000 mm.
+  - `tools/validate_tracks.py` applies the same rules to every sidecar
+    under `Content/tracks/` in CI, with unit tests (`tools/tests/`).
+  - Packaging copies `*.env.json` next to the track CSVs.
+  - Covered by the automation tests `FSDS.Environment.*` and
+    `tools/smoke/test_environment.py`.
+- **Collision channels for trackside props**, step 1 of
+  `docs/ENVIRONMENT_ROADMAP.md` ([#660](https://github.com/isc-fs/IFSSIM/issues/660)),
+  with the matrix in `docs/collision_matrix.md`.
+  - Two object channels: `FSDSProp`, a solid prop that stops the car and
+    the cones, and `FSDSPropLidarOnly`, which has no physics and answers
+    only Visibility traces. Both default to Block, so the car, the cones
+    and the CPU LiDAR meet them without any profile edits.
+  - The car's wheel trace ignores both, so a prop is never ground. Neither
+    is `WorldStatic`, so the road probe and the cone snap never take one
+    for ground either.
+  - A documented `FSDSTerrain` profile for ground.
+
+  Nothing spawns props yet; that comes in P2a. The new
+  `validateCollisionMatrix` RPC (`tools/smoke/test_collision_matrix.py`)
+  checks every row with the queries the sim itself makes, on flat ground
+  and on the 8° ramp. `tools/smoke/lidar_sees_test_props.py` checks the
+  default GPU LiDAR: about 1,000-1,200 returns per scan on each prop, and 0
+  once they are removed. Driving over the 15 cm LiDAR-only strip at 10 m/s
+  leaves height (0.09 cm) and pitch (0.15°) the same as a drive without it.
+
+- **Track creator.** Draw a path, get a real track. `tools/envgen` turns a
+  track spec (the drawn control points, width, cone spacing and a seed) into
+  the cone CSV the sim loads: a smooth centreline, blue on the left and yellow
+  on the right, cones closer together in corners, and a start gate.
+  - **Test sections** change one stretch of track, by control point: width,
+    spacing, missing cones, wrong colours, misplaced cones. They are seeded,
+    so a spec always builds the same cones.
+  - **Checked before it reaches the sim:** the FS layout rules (width,
+    spacing, longest straight, hairpin diameter, lap length) are warnings,
+    because a test track may break them on purpose. A corridor that folds or
+    crosses itself is an error, and so is a start gate the sim would read the
+    wrong way. `envgen/startpose.py` ports `ComputeStartGatePose` to check
+    the second.
+  - **Mission Control:** `POST /api/track/preview_spec` builds without
+    saving, for an editor to redraw as you draw. `POST /api/track/create`
+    saves `<name>.csv` next to the spec it came from (`<name>.track.json`).
+    `GET /api/track/{name}/spec` reopens it, and `/api/track/list` marks
+    drawn tracks `editable`.
+  - **Command line:** `cd tools && python3 -m envgen create my.track.json -o
+    ../Content/tracks/my.csv`. `python3 -m envgen startpose <csv>...`
+    reports where the sim will spawn the car on any track.
+  - **Stress tracks:** shapes too exact to draw by hand, built from geometry
+    by `envgen/primitives.py` and committed as `Content/tracks/stress_*.csv`
+    (each with its spec, so it reopens in the editor). Constant-radius
+    circles (5, 9 both ways, 15, 25 m), a corner that tightens 20 → 6 m and
+    the same loop opening, a wide and a tight slalom, five back-to-back
+    hairpins, a 75 m straight into a hairpin, plus that hairpin with missing
+    cones and the 15 m circle with misplaced ones.
+    `python3 -m envgen stress --list` says what each tests; `python3 -m
+    envgen stress -o ../Content/tracks` regenerates them, and CI checks the
+    committed CSVs still match.
 - **Onboard bag replay.** `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag>` plays a car `manual_` bag through the live pipeline (no sim GT). `--report` records pipeline outputs and writes the HTML summary (detections, odom/SLAM trajectories, cone map, autonomy vs recorded pilot steering). `--live` without `--report` only plays into the nodes — no second bag. `--live` starts `foxglove_bridge` on `ws://localhost:8766` and plays as soon as a WebSocket client is ESTABLISHED on that port (falls back after `--live-wait-s`). Layout `lichtblick/onboard_live.json`: Perception BEV is `/lidar_points/above_ground` (RANSAC outliers only); perspective is `/lidar_points/ground` (full rotated crop). Both sit in the same `base_link` plane as `/Conos_raw`. Clouds and diagnostic Float32s publish only while subscribed, so the 15 k-point rotate is skipped when Lichtblick is not connected.
 - **Perception stress metrics** in the offline perception benchmark
   (`tools/sim_benchmark/run_perception_benchmark.py`), the first step of
@@ -79,6 +185,17 @@ shipping pipeline, documentation.
   [IFS09-DV-PIPELINE#14](https://github.com/isc-fs/IFS09-DV-PIPELINE/pull/14).
 
 ### Changed
+
+- **Unreal Engine 5.8.** The project, build and packaging scripts and setup
+  docs move from 5.7 to 5.8.4. UE 5.7 can't build with Xcode 27 on macOS.
+  On a Mac, also run `xcodebuild -downloadComponent MetalToolchain` once.
+- **LiDAR per-material reflectance is on by default**
+  (`fsds.LidarGPU.StencilEncoder` now defaults to 1). Intensity follows the
+  reflectance LUT instead of carrying no material information. No measurable
+  frame-rate cost (27 fps, real-time factor 0.45, either way; Mac, UE 5.8).
+  Turn it off at startup with
+  `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0` if the
+  faint viewport stippling of #488 shows in a packaged build.
 
 - **The sim LiDAR is back on the GPU path at the Hesai ATX's 1.74 M
   points/s**, reverting the 1.0.0 default (`cpu` at 300 k points/s). That
@@ -147,11 +264,46 @@ shipping pipeline, documentation.
     the direction they were drawn in, with blue on the left. sim_benchmark
     baselines on these tracks will shift.
   - `tools/validate_tracks.py` (the CI `tracks` job) now runs the
-    `ComputeStartGatePose` port (`tools/envgen/startpose.py`, identical to the
-    copy on feat/671). It fails a track if the car would not have blue on its
-    left, or if any of a loop's four deciding cones is less than 1 m ahead.
+    `ComputeStartGatePose` port (`tools/envgen/startpose.py`, from #671).
+    It fails a track if the nearest blue cones ahead of the gate are not left
+    of the nearest yellow ones, or if the four cones that pick a loop's
+    heading average less than 0.5 m ahead of the gate, also when a slightly
+    farther cone could swap in. Comparing blue with yellow, not with the
+    heading, keeps starts on tight curves (the `stress_circle_*` tracks)
+    passing.
     `skidpad.csv` is exempt for now. Its gate is deeper than it is wide, so
     PCA spawns the car 90° off, and fixing that needs a sim-side change.
+- **The sim's EBS reset reaches the bridge.** `sim_supervisor` published
+  `/signal/ebs_reset` before its lifecycle activated, and a lifecycle
+  publisher drops messages until then, so the reset never went out. An EBS
+  latched in a previous run could keep blocking every control command. It is
+  now published right after activation. Fix by @sjrom47 from #614.
+- **Bag recordings include the LiDAR again.** `tools/record_bag.sh` still
+  recorded `/lidar/Lidar1`, which the sim stopped publishing when it moved to
+  `/lidar_points`, so both its dev and `--car-parity` bags had no LiDAR.
+  `tools/lift_to_car.sh` now replays `/lidar_points` and still remaps
+  `/lidar/Lidar1` from bags recorded before the rename.
+- **Mission benchmark timed out runs the car finished.** `timeout_s` counted real time, so a sim running slower than real time ran out of budget: an acceleration run that finished in 29.9 s of sim time took 60.8 s of real time and was scored a timeout. The timeout now counts sim time, read from a new `sim_time` field in `getSimStatus`, with six times `timeout_s` of real time as a backstop for a stalled sim. Older sim builds fall back to real time. `results.json` adds `race/run_sim_time_s` (#692).
+- **Acceleration finished at the start line.** The referee put the finish line on the big-orange gate farthest from the map origin. Since Mission Control started recentring tracks on load, both acceleration gates sit the same distance from the origin, and the tie picked the start gate: runs "finished" about 3 m after launch. The finish is now the gate farthest from the start gate, chosen by the same rule that spawns the car (#689).
+- **Autonomy no longer flaps when the sim runs slower than real time**
+  ([#684](https://github.com/isc-fs/IFSSIM/issues/684)). The emulated uDV
+  published its `/assi/state` heartbeat on sim time, and mission_control
+  judges it stale after 0.4 s of wall time: at 15 fps (sim time at 0.25x)
+  the heartbeat fell to 2.5 Hz of wall time and the pipeline prepared and tore
+  down the mission dozens of times a minute, never driving. The heartbeat now
+  runs on the wall clock, as the real uDV's does.
+- **The LiDAR's per-material reflectance never applied**
+  ([#698](https://github.com/isc-fs/IFSSIM/issues/698)). With
+  `fsds.LidarGPU.StencilEncoder 1` the log said the reflectance LUT was
+  active, but intensity still followed the rendered colour: UE applies a
+  post-process material only to a view with a view state, and the LiDAR's
+  colour capture had none, so the stencil encoder never ran. The colour
+  capture now keeps its rendering state when the encoder is on. Measured
+  on the 25 m circle: blue cones read 0.14 and yellow 0.47 (range-corrected,
+  LUT 0.15 / 0.50), and the ground shows no speckle (#488). New
+  `fsds.LidarGPU.DebugColorChannel 1|2` reports the encoder's raw R (stencil
+  ID) or G (luminance) as the intensity. The encoder is still off by
+  default and must be set at startup.
 
 - **`/imu` and `/lidar_points` stamps stayed stuck after the sim restarted.**
   The bridge keeps each topic's stamps strictly increasing for GLIM, bumping

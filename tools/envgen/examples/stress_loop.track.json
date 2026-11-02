@@ -1,0 +1,15 @@
+{
+  "format": "ifssim-trackspec/1",
+  "closed": true,
+  "points": [[0, 0], [40, 0], [60, 8], [66, 25], [55, 38], [38, 36], [30, 48],
+             [38, 62], [25, 72], [5, 66], [-8, 52], [-20, 40], [-32, 30], [-30, 12], [-15, 2]],
+  "width": 3.5,
+  "spacing": {"straight": 5.0, "corner_min": 1.5},
+  "seed": 7,
+  "sections": [
+    {"from": 4, "to": 6, "width": 3.0, "note": "narrow chicane"},
+    {"from": 8, "to": 10, "drop": 0.4, "side": "left", "note": "missing blue cones"},
+    {"from": 11, "to": 12, "recolor": "swap", "note": "wrong colours"},
+    {"from": 12, "to": 14, "jitter": 0.3, "note": "misplaced cones"}
+  ]
+}

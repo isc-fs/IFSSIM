@@ -71,6 +71,10 @@ jobs:
           TRACKS_DST="$GITHUB_WORKSPACE/Packaged/Linux/tracks"
           mkdir -p "$TRACKS_DST"
           cp "$GITHUB_WORKSPACE/Content/tracks/"*.csv "$TRACKS_DST/"
+          # Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+          for f in "$GITHUB_WORKSPACE/Content/tracks/"*.env.json; do
+            if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
+          done
           ls "$TRACKS_DST"
 
       - name: Tar artifact

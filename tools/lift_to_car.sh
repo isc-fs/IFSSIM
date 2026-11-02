@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Lift a sim-recorded rosbag onto the REAL CAR (isc-fs/IFS08-DV-uDV) — replay
+# Lift a sim-recorded rosbag onto the REAL CAR (isc-fs/IFS09-DV-uDV) — replay
 # a car-parity sim bag into the live car pipeline so the whole autonomy stack
 # can be tested on real hardware with the car UP ON STANDS before ground testing.
 #
 # Record the bag with:  tools/record_bag.sh <name> <dur> --car-parity
-# (that set is exactly /imu + /lidar/Lidar1 — see below for why only those two).
+# (that set is exactly /imu + /lidar_points — see below for why only those two).
 #
 # WHY ONLY /imu + /lidar (the "car up on stands, thinking it's moving" model):
 #   The uDV firmware is the ROS<->CAN bridge. On a live car it PUBLISHES its own
@@ -37,7 +37,9 @@
 #   - /imu          -> NO REMAP. IMU is canonical /imu on BOTH sides (uDV
 #                      publishes /imu; odometry_filter/slam subscribe /imu —
 #                      settled 2026-07-04, pipeline dev/v1.0.0).
-#   - /lidar/Lidar1 -> /lidar_points   (REMAP_LIDAR_CAR — Hesai driver topic)
+#   - /lidar_points -> NO REMAP. The sim has published the Hesai driver's own
+#                      topic since 2026-08. Bags recorded before that carry
+#                      /lidar/Lidar1, which is remapped to /lidar_points.
 #
 # It does NOT pass --clock / use_sim_time: the sim bridge stamps IMU/LiDAR on
 # wall clock and the car runs use_sim_time=false, so replayed stamps flow
@@ -61,7 +63,7 @@ fi
 shift || true
 
 echo "==> Lifting $BAG onto the car pipeline (car on stands)"
-echo "    replaying ONLY /imu + /lidar/Lidar1  (remap /lidar/Lidar1->/lidar_points)"
+echo "    replaying ONLY /imu + /lidar_points  (older bags: /lidar/Lidar1 -> /lidar_points)"
 echo "    /motor_rpm, /steering_angle, /tf_static come LIVE from the car — not replayed"
 echo "    reminder: uDV /imu publisher OFF and Hesai driver NOT running on the bench"
 
@@ -71,10 +73,11 @@ echo "    reminder: uDV /imu publisher OFF and Hesai driver NOT running on the b
 # would fight the live uDV feedback, /testing_only/* would inject GT into
 # slam_node, /Conos_raw would double the car's cone_detection.
 # NB: Humble `ros2 bag play` has NO --exclude flag; --topics (whitelist) is the
-# portable filter. The /lidar/Lidar1 remap still applies to the whitelisted topic.
+# portable filter. /lidar/Lidar1 stays whitelisted only for bags recorded before
+# the rename; the remap puts it on /lidar_points. A bag has one or the other.
 ros2 bag play "$BAG" \
     --remap /lidar/Lidar1:=/lidar_points \
-    --topics /imu /lidar/Lidar1 \
+    --topics /imu /lidar_points /lidar/Lidar1 \
     "$@"
 
 echo "==> Playback finished."

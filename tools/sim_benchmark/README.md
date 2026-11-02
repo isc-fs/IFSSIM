@@ -201,6 +201,12 @@ with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `tele
 layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
 noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
 
+**Timeouts count sim time.** A run's `timeout_s` is measured on the sim's game clock (`getSimStatus`
+`sim_time`), so a sim running slower than real time (an editor build at 15 fps runs at a quarter of
+real time) still gets its full budget. Six times `timeout_s` of real time ends the run anyway, in
+case the sim stalls. A sim build that doesn't report `sim_time` falls back to real time and the
+log says so. `results.json` carries `race/run_sim_time_s` next to the real-time `race/run_time_s`.
+
 **Pipeline parameter overrides** (`--pipeline-overrides <file.json>`, `{node: {param: value}}`; the
 `pipeline:` section of a run spec): checked against the pipeline's `bringup/config/params.yaml`
 (an unknown node or parameter, or a wrong type, stops the benchmark before anything runs), merged

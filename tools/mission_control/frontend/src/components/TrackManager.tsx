@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react'
 import { apiFetch, promptForApiKey, readJsonResponse } from '../lib/api'
 import { useConfirm } from './ConfirmDialog'
+import TrackEditor from './TrackEditor'
+import { EMPTY_SPEC } from '../lib/trackSpec'
+import type { TrackSpec } from '../lib/trackSpec'
 
 interface Track {
   name: string; path: string; cones: number;
   blue: number; yellow: number; orange: number;
   builtin: boolean; event_type: string | null;
+  editable?: boolean;   // drawn in the track editor: its spec can be reopened
 }
 
 // Response shapes — kept narrow per endpoint so TS catches typos at
@@ -42,6 +46,18 @@ export default function TrackManager() {
   // shows the correct label.
   const [deletingName, setDeletingName] = useState<string | null>(null)
   const confirm = useConfirm()
+  // The editor remounts (key) whenever a different track is opened in it.
+  const [editor, setEditor] = useState<{ key: number; name: string; spec: TrackSpec }>(
+    { key: 0, name: '', spec: EMPTY_SPEC })
+
+  const editTrack = async (name: string) => {
+    const r = await apiFetch(`/api/track/${encodeURIComponent(name)}/spec`, {}, promptForApiKey)
+    if (!r.ok) { setMsg(`Cannot open ${name} in the editor`); return }
+    const spec = await readJsonResponse<TrackSpec>(r)
+    setEditor(e => ({ key: e.key + 1, name, spec }))
+    setMsg(`Editing ${name}`)
+    document.getElementById('track-editor')?.scrollIntoView({ behavior: 'smooth' })
+  }
 
   const refresh = async () => {
     const r = await apiFetch('/api/track/list', {}, promptForApiKey)
@@ -174,6 +190,17 @@ export default function TrackManager() {
         {msg && <p className="mt-3 text-xs text-gray-400">{msg}</p>}
       </div>
 
+      {/* Editor */}
+      <div id="track-editor" className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold">Draw Track</h2>
+          <button onClick={() => setEditor(e => ({ key: e.key + 1, name: '', spec: EMPTY_SPEC }))}
+            className="px-3 py-1 bg-[#333] text-gray-300 rounded text-xs hover:bg-[#444]">New</button>
+        </div>
+        <TrackEditor key={editor.key} initialName={editor.name} initialSpec={editor.spec}
+          onSaved={name => { refresh(); selectTrack(name) }} />
+      </div>
+
       {/* Generator */}
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
         <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Generate Track</h2>
@@ -195,7 +222,7 @@ export default function TrackManager() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Generated Track List */}
         <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6">
-          <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Generated Tracks</h2>
+          <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Your Tracks</h2>
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
             {generatedTracks.map(t => (
               <div
@@ -226,6 +253,14 @@ export default function TrackManager() {
                   </div>
                 </div>
                 <div className="flex gap-2">
+                  {t.editable && (
+                    <button
+                      onClick={e => { e.stopPropagation(); editTrack(t.name) }}
+                      className="px-2 py-1 text-gray-300 border border-[#444] rounded text-xs hover:bg-[#333]"
+                    >
+                      Edit
+                    </button>
+                  )}
                   <button
                     onClick={e => { e.stopPropagation(); loadTrack(t) }}
                     disabled={loadingName !== null || deletingName === t.name}
@@ -245,7 +280,7 @@ export default function TrackManager() {
                 </div>
               </div>
             ))}
-            {generatedTracks.length === 0 && <p className="text-gray-500 text-sm">No generated tracks yet</p>}
+            {generatedTracks.length === 0 && <p className="text-gray-500 text-sm">No generated or drawn tracks yet</p>}
           </div>
         </div>
 
