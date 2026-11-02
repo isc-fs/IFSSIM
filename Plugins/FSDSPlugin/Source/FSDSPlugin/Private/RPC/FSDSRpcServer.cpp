@@ -7,9 +7,16 @@
 #include "RPC/FSDSUdpBroadcaster.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
+#include "Environment/FSDSEnvironmentBuilder.h"
 #include "FSDSConeSpawner.h"
+#include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
 #include "Async/Async.h"
+#include "Dom/JsonObject.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "Misc/App.h"
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
 #include "Kismet/GameplayStatics.h"
@@ -22,6 +29,7 @@
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Common/TcpListener.h"
 #include "Test/FSDSTestTerrain.h"
+#include "Test/FSDSCollisionMatrixCheck.h"
 
 /**
  * Tell the vehicle's plant(s) that the car has been teleported.
@@ -178,6 +186,15 @@ void FFSDSRpcServer::Start(uint16 Port)
 
 	bRunning = true;
 	ServerPort = Port;
+
+	// Pack the sensor stream's frame on the game thread, once per tick, after
+	// every actor (and so every sensor component) has ticked. See StreamSensors.
+	PostActorTickHandle = FWorldDelegates::OnWorldPostActorTick.AddLambda(
+		[this](UWorld* InWorld, ELevelTick, float) { CaptureSensorFrame(InWorld); });
+	// Work that must happen at a fixed point in the frame (resetScenario).
+	PreActorTickHandle = FWorldDelegates::OnWorldPreActorTick.AddLambda(
+		[this](UWorld* InWorld, ELevelTick, float) { RunTickStartWork(InWorld); });
+
 	ServerThread = std::make_unique<std::thread>(&FFSDSRpcServer::ServerThreadFunc, this);
 
 	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Server starting on port %d"), Port);
@@ -187,6 +204,11 @@ void FFSDSRpcServer::Stop()
 {
 	if (!bRunning) return;
 	bRunning = false;
+
+	FWorldDelegates::OnWorldPostActorTick.Remove(PostActorTickHandle);
+	PostActorTickHandle.Reset();
+	FWorldDelegates::OnWorldPreActorTick.Remove(PreActorTickHandle);
+	PreActorTickHandle.Reset();
 
 	if (ServerThread && ServerThread->joinable())
 	{
@@ -542,13 +564,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		if (!VehiclePawn || !VehiclePawn->ImuSensor) return TEXT("{}");
 		auto Imu = VehiclePawn->ImuSensor->GetOutput();
-		// IMU data is already in body frame, convert to ENU body frame
-		FVector AccENU = FSDSCoord::UEVelocityToENU(Imu.LinearAcceleration);
-		FVector GyroENU = FSDSCoord::UEAngularVelocityToENU(Imu.AngularVelocity);
+		// The IMU reports in the UE body frame (X forward, Y right, Z up), with
+		// acceleration in cm/s^2. Return REP-103 FLU body values in m/s^2 and
+		// rad/s, the same as the bridge's /imu. These were put through the
+		// world-frame axis swap before, which mixed up forward and sideways.
+		FVector AccFLU = FSDSCoord::UEBodyToFLU(Imu.LinearAcceleration) / 100.0;
+		FVector GyroFLU = FSDSCoord::UEBodyAngularVelocityToFLU(Imu.AngularVelocity);
 		FQuat OriENU = FSDSCoord::UEQuatToENU(Imu.Orientation);
 		return FString::Printf(TEXT("{\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f}"),
-			AccENU.X, AccENU.Y, AccENU.Z,
-			GyroENU.X, GyroENU.Y, GyroENU.Z,
+			AccFLU.X, AccFLU.Y, AccFLU.Z,
+			GyroFLU.X, GyroFLU.Y, GyroFLU.Z,
 			OriENU.W, OriENU.X, OriENU.Y, OriENU.Z);
 	}
 	else if (Method == TEXT("getGroundSpeedSensorData"))
@@ -1214,10 +1239,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const bool bHasSeed = (Parts.Num() >= 2);
 		const int32 NewSeed = bHasSeed ? FCString::Atoi(*Parts[1]) : 0;
 
-		FString Result;
-		FEvent* Done = FPlatformProcess::GetSynchEventFromPool(false);
-
-		AsyncTask(ENamedThreads::GameThread, [this, bHasSeed, NewSeed, &Result, Done]()
+		// Run the reset at the start of a tick, before any actor ticks (#643).
+		// As a plain game-thread task it ran wherever the task graph picked
+		// it up within a frame: sometimes before the IMU and physics had
+		// ticked, sometimes after. The first tick after the reset then drew
+		// noise sample 0 in one run and sample 1 in the next, and physics
+		// started from the teleport a tick apart, so two resets with the same
+		// seed were not the same run. A paused world does not tick, so there
+		// the reset runs at once; the next tick is still the first after it.
+		const bool bAtTickStart = !bSimPaused.load();
+		auto DoReset = [this, bHasSeed, NewSeed, bAtTickStart]() -> FString
 		{
 			int32 NumCones = 0;
 
@@ -1244,7 +1275,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			{
 				if (World)
 				{
-					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+					if (TActorIterator<AFSDSConeSpawner> It(World); It)
 					{
 						FVector StartLoc; FQuat StartRot;
 						if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
@@ -1254,7 +1285,6 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
 						}
 						NumCones = It->SpawnedCones.Num();
-						break;
 					}
 				}
 
@@ -1275,21 +1305,29 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (VehiclePawn->Motor) VehiclePawn->Motor->Reset();
 			}
 
-			Result = FString::Printf(
-				TEXT("{\"ok\":true,\"seed\":%d,\"generation\":%u,\"cones\":%d}"),
-				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration(), NumCones);
+			// sim_time: the game time of the first tick that runs with the new
+			// seed, so a client can number samples from the reset by their
+			// stamps (verify_determinism.py). At the start of a tick the clock
+			// has already advanced to it; a paused world's has not, and its
+			// next tick is one fixed step on.
+			const double SimTime = !World ? 0.0
+				: World->GetTimeSeconds() + (bAtTickStart ? 0.0 : FApp::GetDeltaTime());
+			const FString Result = FString::Printf(
+				TEXT("{\"ok\":true,\"seed\":%d,\"generation\":%u,\"cones\":%d,\"sim_time\":%.6f}"),
+				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration(), NumCones, SimTime);
 
 			UE_LOG(LogTemp, Log,
 				TEXT("FSDS RPC: resetScenario — seed %d (generation %u), referee cleared, "
 					 "vehicle at start gate, velocities and rotor zeroed"),
 				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration());
 
-			Done->Trigger();
-		});
+			return Result;
+		};
 
-		Done->Wait();
-		FPlatformProcess::ReturnSynchEventToPool(Done);
-		return Result;
+		const FString TimeoutReply = TEXT("{\"error\":\"resetScenario timed out\"}");
+		return bAtTickStart
+			? CallAtNextTickStart(DoReset, 10.0, TimeoutReply, TEXT("resetScenario"))
+			: CallOnGameThread<FString>(DoReset, 10.0, TimeoutReply, TEXT("resetScenario"));
 	}
 
 	// === Object APIs ===
@@ -1500,6 +1538,53 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		return TEXT("true");
 	}
 
+	else if (Method == TEXT("validateCollisionMatrix"))
+	{
+		// docs/collision_matrix.md checked against the engine, with two test
+		// props spawned in front of the car (FSDSCollisionMatrixCheck.h).
+		//   validateCollisionMatrix [ahead_m]   spawn them and check (default 10 m)
+		//   validateCollisionMatrix clear       remove them
+		// The props stay after a check, so the car can be driven over the
+		// LiDAR-only strip and a LiDAR consumer can look for both.
+		const FString Arg = Args.TrimStartAndEnd();
+		const bool bClear = Arg == TEXT("clear");
+		const double AheadM = (!bClear && !Arg.IsEmpty()) ? FCString::Atod(*Arg) : 10.0;
+		if (!VehiclePawn) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+
+		const FString Timeout = TEXT("{\"ok\":false,\"error\":\"timeout\"}");
+		if (bClear)
+		{
+			return CallOnGameThread<FString>([this]() -> FString
+			{
+				if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+				return FString::Printf(TEXT("{\"ok\":true,\"removed\":%d}"),
+					FSDSCollisionMatrixCheck::Clear(VehiclePawn->GetWorld()));
+			}, 10.0, Timeout, TEXT("validateCollisionMatrix clear"));
+		}
+
+		const FString SpawnError = CallOnGameThread<FString>([this, AheadM]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+			return FSDSCollisionMatrixCheck::Spawn(VehiclePawn, AheadM);
+		}, 10.0, Timeout, TEXT("validateCollisionMatrix spawn"));
+		if (!SpawnError.IsEmpty()) return SpawnError;
+
+		// Chaos adds new bodies to its scene queries on a later tick, so let
+		// the world tick a few frames before querying (see Check()).
+		const uint64 SpawnFrame = GFrameCounter;
+		const double Deadline = FPlatformTime::Seconds() + 10.0;
+		while (GFrameCounter < SpawnFrame + 3 && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Sleep(0.01f);
+		}
+
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle\"}");
+			return FSDSCollisionMatrixCheck::Check(VehiclePawn);
+		}, 10.0, Timeout, TEXT("validateCollisionMatrix check"));
+	}
+
 	else if (Method == TEXT("validateRoadProbe"))
 	{
 		// Build deliberately non-flat ground and check the probe against the
@@ -1524,7 +1609,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (!ProbeWorld) return TEXT("{\"ok\":false,\"error\":\"no world\"}");
 
 			AFSDSTestTerrain* Terrain = nullptr;
-			for (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It; ++It) { Terrain = *It; break; }
+			if (TActorIterator<AFSDSTestTerrain> It(ProbeWorld); It) { Terrain = *It; }
 			if (!Terrain)
 			{
 				Terrain = ProbeWorld->SpawnActor<AFSDSTestTerrain>(AFSDSTestTerrain::StaticClass());
@@ -1725,7 +1810,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 				AFSDSConeSpawner* Spawner = nullptr;
 				if (World) {
-					for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It) { Spawner = *It; break; }
+					if (TActorIterator<AFSDSConeSpawner> It(World); It) { Spawner = *It; }
 				}
 				Out += FString::Printf(TEXT(",\"spawner\":%s,\"world\":%s}"),
 					Spawner ? TEXT("true") : TEXT("false"),
@@ -1798,10 +1883,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				if (!World) return TEXT("{\"error\":\"no world\"}");
 
 				AFSDSConeSpawner* Spawner = nullptr;
-				for (TActorIterator<AFSDSConeSpawner> It(World); It; ++It)
+				if (TActorIterator<AFSDSConeSpawner> It(World); It)
 				{
 					Spawner = *It;
-					break;
 				}
 				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
 
@@ -1892,13 +1976,87 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				bHasStartGate = true;
 				}
 
+				// environment: off | none | loaded | invalid (getEnvironment has
+				// the details, including why a sidecar was invalid).
 				return FString::Printf(
-					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s}"),
-					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"));
+					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
+					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"),
+					*Spawner->GetEnvironmentStatus());
 			},
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
 			TEXT("loadTrack"));
+	}
+
+	else if (Method == TEXT("getEnvironment"))
+	{
+		// The current track's environment, as loaded from its sidecar
+		// (docs/environment_sidecar.md). Values are as authored: metres in the
+		// track CSV frame.
+		return CallOnGameThread<FString>(
+			[this]() -> FString {
+				if (!World) return TEXT("{\"error\":\"no world\"}");
+				const AFSDSConeSpawner* Spawner = nullptr;
+				if (TActorIterator<AFSDSConeSpawner> It(World); It)
+				{
+					Spawner = *It;
+				}
+				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
+
+				const FFSDSEnvironment& Env = Spawner->GetEnvironment();
+				TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+				Out->SetBoolField(TEXT("enabled"), FFSDSSettings::Get().bEnvironmentEnabled);
+				Out->SetStringField(TEXT("status"), Spawner->GetEnvironmentStatus());
+				if (!Spawner->GetEnvironmentError().IsEmpty())
+				{
+					Out->SetStringField(TEXT("error"), Spawner->GetEnvironmentError());
+				}
+				if (Spawner->GetEnvironmentStatus() == TEXT("loaded"))
+				{
+					Out->SetStringField(TEXT("sidecar"), Env.SidecarPath);
+					Out->SetNumberField(TEXT("seed"), (double)Env.Seed);
+					Out->SetStringField(TEXT("profile"), Env.Profile);
+					if (Env.bHasGroundExtent)
+					{
+						TSharedRef<FJsonObject> Extent = MakeShared<FJsonObject>();
+						Extent->SetNumberField(TEXT("x_min"), Env.GroundXMin);
+						Extent->SetNumberField(TEXT("y_min"), Env.GroundYMin);
+						Extent->SetNumberField(TEXT("x_max"), Env.GroundXMax);
+						Extent->SetNumberField(TEXT("y_max"), Env.GroundYMax);
+						Out->SetObjectField(TEXT("ground_extent"), Extent);
+					}
+					Out->SetNumberField(TEXT("props"), Env.Props.Num());
+					TSharedRef<FJsonObject> Classes = MakeShared<FJsonObject>();
+					TMap<FString, int32> Counts;
+					for (const FFSDSEnvProp& Prop : Env.Props) Counts.FindOrAdd(Prop.Class)++;
+					Counts.KeySort(TLess<FString>());
+					for (const auto& Pair : Counts) Classes->SetNumberField(Pair.Key, Pair.Value);
+					Out->SetObjectField(TEXT("classes"), Classes);
+
+					// What the builder made of it: props standing in the world.
+					if (const AFSDSEnvironmentActor* Built = Spawner->GetEnvironmentActor())
+					{
+						Out->SetNumberField(TEXT("built"), Built->GetNumBuilt());
+						Out->SetNumberField(TEXT("skipped"), Built->GetNumSkipped());
+						TArray<TSharedPtr<FJsonValue>> Unknown;
+						for (const FString& C : Built->GetUnknownClasses()) Unknown.Add(MakeShared<FJsonValueString>(C));
+						Out->SetArrayField(TEXT("unknown_classes"), Unknown);
+						Out->SetStringField(TEXT("transform_sha1"), Built->GetTransformHash());
+						TSharedRef<FJsonObject> Meshes = MakeShared<FJsonObject>();
+						for (const auto& Pair : Built->GetMeshSources()) Meshes->SetStringField(Pair.Key, Pair.Value);
+						Out->SetObjectField(TEXT("meshes"), Meshes);
+					}
+				}
+
+				FString Json;
+				TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+					TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
+				FJsonSerializer::Serialize(Out, Writer);
+				return Json;
+			},
+			5.0,
+			FString(TEXT("{\"error\":\"timeout\"}")),
+			TEXT("getEnvironment"));
 	}
 
 	// === UDP Target Registration ===
@@ -1960,10 +2118,15 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		FPS = 1.0f / FApp::GetDeltaTime();
 
-		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s}"),
+		// sim_time: the game clock (s), the same clock the sensor stamps and
+		// /clock use. The mission benchmark counts its timeouts in it, so a
+		// sim running slower than real time doesn't fail runs it finishes.
+		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f}"),
 			*MapName, FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
-			bApiControlEnabled ? TEXT("true") : TEXT("false"));
+			bApiControlEnabled ? TEXT("true") : TEXT("false"),
+			SimTime);
 	}
 
 	// === Version ===
@@ -2007,6 +2170,188 @@ void FFSDSRpcServer::BindMethods()
 	// Methods are handled in ProcessRequest/ProcessBinaryRequest
 }
 
+FString FFSDSRpcServer::CallAtNextTickStart(TFunction<FString()> Fn, double TimeoutSec,
+	const FString& OnTimeout, const TCHAR* Tag)
+{
+	// Same shared-state pattern as CallOnGameThread: if the caller times out,
+	// the queued work still owns the state and can finish safely.
+	TSharedPtr<TCallState<FString>, ESPMode::ThreadSafe> State =
+		MakeShared<TCallState<FString>, ESPMode::ThreadSafe>();
+	{
+		FScopeLock Lock(&TickStartWorkLock);
+		TickStartWork.Add([State, Fn = MoveTemp(Fn)]()
+		{
+			State->Value = Fn();
+			State->Done.store(true, std::memory_order_release);
+		});
+	}
+
+	const double Deadline = FPlatformTime::Seconds() + TimeoutSec;
+	while (FPlatformTime::Seconds() < Deadline)
+	{
+		if (State->Done.load(std::memory_order_acquire))
+		{
+			return MoveTemp(State->Value);
+		}
+		FPlatformProcess::Sleep(0.002f);
+	}
+	UE_LOG(LogTemp, Warning, TEXT("FSDS RPC: tick-start call timed out (%s)"), Tag);
+	return OnTimeout;
+}
+
+void FFSDSRpcServer::RunTickStartWork(UWorld* InWorld)
+{
+	if (!IsValid(VehiclePawn) || InWorld != VehiclePawn->GetWorld()) return;
+
+	TArray<TFunction<void()>> Work;
+	{
+		FScopeLock Lock(&TickStartWorkLock);
+		Work = MoveTemp(TickStartWork);
+		TickStartWork.Reset();
+	}
+	for (TFunction<void()>& Item : Work)
+	{
+		Item();
+	}
+}
+
+void FFSDSRpcServer::CaptureSensorFrame(UWorld* InWorld)
+{
+	// Every world broadcasts this (the editor world too, under PIE); only the
+	// one the car lives in counts.
+	if (!IsValid(VehiclePawn) || InWorld != VehiclePawn->GetWorld()) return;
+
+	FFSDSSensorFrame Frame;
+	PackSensorFrame(Frame);
+
+	FScopeLock Lock(&LatestSensorFrameLock);
+	LatestSensorFrame = Frame;
+	bHasLatestSensorFrame = true;
+}
+
+void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
+{
+	Frame.Magic = 0x49465353;
+	// Authoritative capture clock = UE game/sim time (ns), NOT wall clock —
+	// this is the primary (TCP) sensor path the bridge consumes, and it must
+	// match the UDP PackSensorFrame so header.stamp / /clock run on sim time.
+	// Packed after every actor has ticked, so this is the tick every value
+	// below was produced in.
+	{
+		UWorld* W = VehiclePawn->GetWorld();
+		const double SimSeconds = W ? W->GetTimeSeconds() : 0.0;
+		Frame.Timestamp = (uint64)(SimSeconds * 1e9);
+	}
+
+	// GPS
+	if (VehiclePawn->GpsSensor)
+	{
+		auto Gps = VehiclePawn->GpsSensor->GetOutput();
+		Frame.Latitude = Gps.Latitude;
+		Frame.Longitude = Gps.Longitude;
+		Frame.Altitude = Gps.Altitude;
+	}
+
+	// IMU
+	if (VehiclePawn->ImuSensor)
+	{
+		auto Imu = VehiclePawn->ImuSensor->GetOutput();
+		Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
+		Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
+		Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
+		Frame.GyroX = Imu.AngularVelocity.X;
+		Frame.GyroY = Imu.AngularVelocity.Y;
+		Frame.GyroZ = Imu.AngularVelocity.Z;
+		FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
+		Frame.OrientX = EnuQuat.X;
+		Frame.OrientY = EnuQuat.Y;
+		Frame.OrientZ = EnuQuat.Z;
+		Frame.OrientW = EnuQuat.W;
+	}
+
+	// GSS — body frame, X=forward (longitudinal), Y=lateral
+	if (VehiclePawn->GssSensor)
+	{
+		auto Gss = VehiclePawn->GssSensor->GetOutput();
+		Frame.GssVelX = Gss.LinearVelocity.X;
+		Frame.GssVelY = Gss.LinearVelocity.Y;
+		Frame.GssVelZ = Gss.LinearVelocity.Z;
+	}
+
+	// Pose (ENU meters)
+	FVector Pos = VehiclePawn->GetActorLocation();
+	FQuat Quat = VehiclePawn->GetActorQuat();
+	Frame.PosX = Pos.Y / 100.f;
+	Frame.PosY = Pos.X / 100.f;
+	Frame.PosZ = Pos.Z / 100.f;
+	FQuat EnuQ = FSDSCoord::UEQuatToENU(Quat);
+	Frame.PoseOrientX = EnuQ.X;
+	Frame.PoseOrientY = EnuQ.Y;
+	Frame.PoseOrientZ = EnuQ.Z;
+	Frame.PoseOrientW = EnuQ.W;
+
+	// Ground-truth body-frame velocity (#315) — same as the UDP path
+	// in FSDSUdpBroadcaster.cpp. Both senders pack the same struct
+	// layout; this branch is the TCP `streamSensors` route, which
+	// remains the production sensor path. (LiDAR-over-TCP was
+	// retired in #322; sensors still ride the TCP push because the
+	// ~40 KB/s rate isn't bandwidth-bound.)
+	const FVector WorldVel = VehiclePawn->GetVehicleVelocityUe() * 0.01f;
+	const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
+	Frame.GtVelBodyX =  BodyVel.X;
+	Frame.GtVelBodyY = -BodyVel.Y;
+	Frame.GtVelBodyZ =  BodyVel.Z;
+
+	// Ground-truth body-frame angular velocity — same pattern as the
+	// UDP path. Mirrors FSDSImuSensor::Tick exactly so GT and noisy
+	// IMU live in the same body-frame convention, downstream can diff
+	// them directly to read off the bias/noise the filter has to bound.
+	if (UPrimitiveComponent* RootPrim =
+			Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
+		RootPrim && VehiclePawn->IsVehicleMotionLive())
+	{
+		const FVector WorldAngVel = VehiclePawn->GetVehicleAngularVelocityUe();
+		const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
+		// UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
+		// Angular velocity is an axial vector; under the Y-reflection
+		// between the two frames it transforms (X, Y, Z) → (-X, Y, -Z).
+		// Matches the bridge's /imu gyro convention so GT and IMU yaw_rate
+		// are directly comparable. See sibling fix in FSDSUdpBroadcaster.cpp
+		// and issue #466 (historical PR #454 landed on main, not dev).
+		Frame.GtAngVelBodyX = -BodyAngVel.X;
+		Frame.GtAngVelBodyY =  BodyAngVel.Y;
+		Frame.GtAngVelBodyZ = -BodyAngVel.Z;
+	}
+	else
+	{
+		Frame.GtAngVelBodyX = 0.f;
+		Frame.GtAngVelBodyY = 0.f;
+		Frame.GtAngVelBodyZ = 0.f;
+	}
+
+	auto CarState = VehiclePawn->GetCarState();
+	Frame.Speed = CarState.Speed;
+	Frame.RPM = CarState.RPM;
+
+	// Referee
+	if (Referee)
+	{
+		auto RefState = Referee->GetState();
+		Frame.DooCounter = RefState.DooCounter;
+		Frame.OffTrackCounter = RefState.OffTrackCounter;
+		Frame.LapCount = RefState.Laps.Num();
+	}
+
+	// Controls. Frame.Brake is the wire-format name kept for back-compat
+	// with downstream sensor-stream consumers; semantically it carries
+	// the regen demand (the only retarding channel folded into the
+	// motor command — see FCarControls in FSDSVehiclePawn.h).
+	auto Controls = VehiclePawn->GetCarControls();
+	Frame.Throttle = Controls.Throttle;
+	Frame.Steering = Controls.Steering;
+	Frame.Brake = Controls.Regen;
+}
+
 void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 {
 	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Sensor streaming started"));
@@ -2021,131 +2366,26 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	{
 		if (!IsValid(VehiclePawn)) { FPlatformProcess::Sleep(0.1f); continue; }
 
-		// Pack sensor frame (reuse the struct from UdpBroadcaster)
+		// Resend the latest tick's frame (CaptureSensorFrame). This loop used to
+		// pack the frame itself, off the game thread, reading sim time, the IMU,
+		// the pose and ground truth at different moments while the game thread
+		// was updating them. A frame could then carry one tick's time with the
+		// previous tick's IMU sample, and which tick each 400 Hz frame landed on
+		// changed from run to run, so two runs with the same seed could never be
+		// compared sample by sample (#643).
 		FFSDSSensorFrame Frame;
-		Frame.Magic = 0x49465353;
-		Frame.FrameID = StreamFrameCounter++;
-		// Authoritative capture clock = UE game/sim time (ns), NOT wall clock
-		// — this is the primary (TCP) sensor path the bridge consumes, and it
-		// must match PackSensorFrame so header.stamp / /clock run on sim time.
-		// Reading TimeSeconds off the game thread is a benign plain-float read,
-		// same as the sensor GetOutput() calls already made from here.
+		bool bHaveFrame = false;
 		{
-			UWorld* W = VehiclePawn->GetWorld();
-			const double SimSeconds = W ? W->GetTimeSeconds() : 0.0;
-			Frame.Timestamp = (uint64)(SimSeconds * 1e9);
+			FScopeLock Lock(&LatestSensorFrameLock);
+			bHaveFrame = bHasLatestSensorFrame;
+			if (bHaveFrame) Frame = LatestSensorFrame;
 		}
-		// Wall clock alongside it (latency/health only, never integrated).
+		if (!bHaveFrame) { FPlatformProcess::Sleep(0.0025f); continue; }
+
+		Frame.FrameID = StreamFrameCounter++;
+		// Wall clock at send time (latency/health only, never integrated).
 		Frame.ExternalTimestamp =
 			(uint64)(FPlatformTime::Cycles64() * FPlatformTime::GetSecondsPerCycle64() * 1e9);
-
-		// GPS
-		if (VehiclePawn->GpsSensor)
-		{
-			auto Gps = VehiclePawn->GpsSensor->GetOutput();
-			Frame.Latitude = Gps.Latitude;
-			Frame.Longitude = Gps.Longitude;
-			Frame.Altitude = Gps.Altitude;
-		}
-
-		// IMU
-		if (VehiclePawn->ImuSensor)
-		{
-			auto Imu = VehiclePawn->ImuSensor->GetOutput();
-			Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
-			Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
-			Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
-			Frame.GyroX = Imu.AngularVelocity.X;
-			Frame.GyroY = Imu.AngularVelocity.Y;
-			Frame.GyroZ = Imu.AngularVelocity.Z;
-			FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
-			Frame.OrientX = EnuQuat.X;
-			Frame.OrientY = EnuQuat.Y;
-			Frame.OrientZ = EnuQuat.Z;
-			Frame.OrientW = EnuQuat.W;
-		}
-
-		// GSS — body frame, X=forward (longitudinal), Y=lateral
-		if (VehiclePawn->GssSensor)
-		{
-			auto Gss = VehiclePawn->GssSensor->GetOutput();
-			Frame.GssVelX = Gss.LinearVelocity.X;
-			Frame.GssVelY = Gss.LinearVelocity.Y;
-			Frame.GssVelZ = Gss.LinearVelocity.Z;
-		}
-
-		// Pose (ENU meters)
-		FVector Pos = VehiclePawn->GetActorLocation();
-		FQuat Quat = VehiclePawn->GetActorQuat();
-		Frame.PosX = Pos.Y / 100.f;
-		Frame.PosY = Pos.X / 100.f;
-		Frame.PosZ = Pos.Z / 100.f;
-		FQuat EnuQ = FSDSCoord::UEQuatToENU(Quat);
-		Frame.PoseOrientX = EnuQ.X;
-		Frame.PoseOrientY = EnuQ.Y;
-		Frame.PoseOrientZ = EnuQ.Z;
-		Frame.PoseOrientW = EnuQ.W;
-
-		// Ground-truth body-frame velocity (#315) — same as the UDP path
-		// in FSDSUdpBroadcaster.cpp. Both senders pack the same struct
-		// layout; this branch is the TCP `streamSensors` route, which
-		// remains the production sensor path. (LiDAR-over-TCP was
-		// retired in #322; sensors still ride the TCP push because the
-		// ~40 KB/s rate isn't bandwidth-bound.)
-		const FVector WorldVel = VehiclePawn->GetVehicleVelocityUe() * 0.01f;
-		const FVector BodyVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldVel);
-		Frame.GtVelBodyX =  BodyVel.X;
-		Frame.GtVelBodyY = -BodyVel.Y;
-		Frame.GtVelBodyZ =  BodyVel.Z;
-
-		// Ground-truth body-frame angular velocity — same pattern as the
-		// UDP path. Mirrors FSDSImuSensor::Tick exactly so GT and noisy
-		// IMU live in the same body-frame convention, downstream can diff
-		// them directly to read off the bias/noise the filter has to bound.
-		if (UPrimitiveComponent* RootPrim =
-				Cast<UPrimitiveComponent>(VehiclePawn->GetRootComponent());
-			RootPrim && VehiclePawn->IsVehicleMotionLive())
-		{
-			const FVector WorldAngVel = VehiclePawn->GetVehicleAngularVelocityUe();
-			const FVector BodyAngVel  = VehiclePawn->GetActorQuat().Inverse().RotateVector(WorldAngVel);
-			// UE5 (left-handed, Y-right) → REP-103 (right-handed, Y-left).
-			// Angular velocity is an axial vector; under the Y-reflection
-			// between the two frames it transforms (X, Y, Z) → (-X, Y, -Z).
-			// Matches the bridge's /imu gyro convention so GT and IMU yaw_rate
-			// are directly comparable. See sibling fix in FSDSUdpBroadcaster.cpp
-			// and issue #466 (historical PR #454 landed on main, not dev).
-			Frame.GtAngVelBodyX = -BodyAngVel.X;
-			Frame.GtAngVelBodyY =  BodyAngVel.Y;
-			Frame.GtAngVelBodyZ = -BodyAngVel.Z;
-		}
-		else
-		{
-			Frame.GtAngVelBodyX = 0.f;
-			Frame.GtAngVelBodyY = 0.f;
-			Frame.GtAngVelBodyZ = 0.f;
-		}
-
-		auto CarState = VehiclePawn->GetCarState();
-		Frame.Speed = CarState.Speed;
-		Frame.RPM = CarState.RPM;
-
-		// Referee
-		if (Referee)
-		{
-			auto RefState = Referee->GetState();
-			Frame.DooCounter = RefState.DooCounter;
-			Frame.OffTrackCounter = RefState.OffTrackCounter;
-			Frame.LapCount = RefState.Laps.Num();
-		}
-
-		// Controls. Frame.Brake is the wire-format name kept for back-compat
-		// with downstream sensor-stream consumers; semantically it carries
-		// the regen demand (the only retarding channel folded into the
-		// motor command — see FCarControls in FSDSVehiclePawn.h).
-		auto Controls = VehiclePawn->GetCarControls();
-		Frame.Throttle = Controls.Throttle;
-		Frame.Steering = Controls.Steering;
-		Frame.Brake = Controls.Regen;
 
 		// Send frame — SendAll retries on transient zero-progress (kernel
 		// buffer momentarily full) instead of treating it as a disconnect.

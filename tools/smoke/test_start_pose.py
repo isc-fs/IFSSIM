@@ -11,7 +11,10 @@ Mission Control, no Docker):
      tools/smoke/fixtures/ramp_gate.csv puts the start gate where the car's
      3 m back-off lands on the ramp's centre (x = 39 m, surface 0.702 m).
      The car must sit 0.55 m above the surface (HeightOffset 5 cm + 50 cm)
-     within 1 cm, nose up 8 deg within 0.2 deg, heading along +x.
+     within 1 cm, nose up 8 deg within 0.2 deg, heading along +x. The nose-up
+     pitch must read the same from the plant (the pawn's UE rotator) and from
+     the ENU poses (getStartGatePose, simGetVehiclePose), which go through
+     FSDSCoord::UEQuatToENU (#638).
   3. Reset: move the car off the ramp, resetScenario, and it must be back on
      the ramp start pose (the reset path re-derives it the same way).
 
@@ -118,20 +121,22 @@ def main():
         probe = rpc(client, "validateRoadProbe")
         print(f"validateRoadProbe (builds the terrain): ok={probe.get('ok')}")
         p = start_pose(client, RAMP_FIXTURE)
-        # Pitch is read from the plant (the pawn's own UE rotator, + = nose up),
-        # not from getStartGatePose: FSDSCoord::UEQuatToENU is only correct for
-        # yaw and reports a nose-up pose as nose-down (#638). Heading and
-        # position go through it correctly.
+        # The plant reads the pawn's own UE rotator (+ = nose up), so it is the
+        # reference the ENU poses must agree with.
         plant = rpc(client, "getPlantState")
         pitch_deg = math.degrees(plant["attitude"][1])
+        _, car_elev = forward_angles(rpc(client, "simGetVehiclePose"))
         want_z = RAMP_SURFACE_Z_M + START_CLEARANCE_M
         print(f"ramp_gate.csv: xyz=({p['x']:.3f},{p['y']:.3f},{p['z']:.3f}) (want z {want_z:.3f}), "
-              f"pitch={pitch_deg:+.2f} (want +{RAMP_PITCH_DEG}), "
+              f"pitch: plant {pitch_deg:+.2f}, start gate ENU {p['elevation_deg']:+.2f}, "
+              f"car ENU {car_elev:+.2f} (want +{RAMP_PITCH_DEG}), "
               f"heading={p['heading_deg']:.2f} (want {RAMP_HEADING_DEG})")
         if abs(p["z"] - want_z) > 0.01:
             failures.append(f"ramp: z {p['z']:.3f} m, want {want_z:.3f} ± 0.01")
-        if abs(pitch_deg - RAMP_PITCH_DEG) > 0.2:
-            failures.append(f"ramp: pitch {pitch_deg:+.2f} deg, want +{RAMP_PITCH_DEG} ± 0.2")
+        for source, value in (("plant", pitch_deg), ("start gate ENU", p["elevation_deg"]),
+                              ("car ENU", car_elev)):
+            if abs(value - RAMP_PITCH_DEG) > 0.2:
+                failures.append(f"ramp: {source} pitch {value:+.2f} deg, want +{RAMP_PITCH_DEG} ± 0.2")
         if abs((p["heading_deg"] - RAMP_HEADING_DEG + 180) % 360 - 180) > 0.2:
             failures.append(f"ramp: heading {p['heading_deg']:.2f} deg, want {RAMP_HEADING_DEG} ± 0.2")
 
@@ -143,12 +148,15 @@ def main():
         plant = rpc(client, "getPlantState")
         px, py = plant["position"][0], plant["position"][1]
         pitch_deg = math.degrees(plant["attitude"][1])
+        _, car_elev = forward_angles(rpc(client, "simGetVehiclePose"))
         print(f"after resetScenario: plant xy=({px:.3f},{py:.3f}) (want ({RAMP_START_X_M}, 0)), "
-              f"pitch={pitch_deg:+.2f} (want +{RAMP_PITCH_DEG})  [{json.dumps(reset)[:80]}]")
+              f"pitch: plant {pitch_deg:+.2f}, car ENU {car_elev:+.2f} (want +{RAMP_PITCH_DEG})  "
+              f"[{json.dumps(reset)[:80]}]")
         if math.hypot(px - RAMP_START_X_M, py) > 0.05:
             failures.append(f"reset: car at ({px:.3f}, {py:.3f}), want ({RAMP_START_X_M}, 0) ± 0.05 m")
-        if abs(pitch_deg - RAMP_PITCH_DEG) > 0.2:
-            failures.append(f"reset: pitch {pitch_deg:+.2f} deg, want +{RAMP_PITCH_DEG} ± 0.2")
+        for source, value in (("plant", pitch_deg), ("car ENU", car_elev)):
+            if abs(value - RAMP_PITCH_DEG) > 0.2:
+                failures.append(f"reset: {source} pitch {value:+.2f} deg, want +{RAMP_PITCH_DEG} ± 0.2")
 
     if failures:
         print("\nFAIL:\n  " + "\n  ".join(failures))

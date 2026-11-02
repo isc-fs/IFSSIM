@@ -63,6 +63,22 @@ namespace FSDSConeStencil
 	static constexpr uint8 MaxID       = 15;
 }
 
+/**
+ * Stencil IDs for trackside props (#683), from the cone IDs' reserved range.
+ * The environment builder tags each prop part with the material it stands
+ * for; the LiDAR's reflectance LUT (FSDSLidarSensor.cpp) gives each its
+ * 905 nm reflectance. A part tagged None reads its reflectance from its own
+ * colour instead (the luminance fallback), which is what a textured, scanned
+ * mesh wants.
+ */
+namespace FSDSPropStencil
+{
+	static constexpr uint8 Rubber          = 5;  // tyres
+	static constexpr uint8 DarkPlastic     = 6;  // bins, bollard bodies, sensor heads
+	static constexpr uint8 Aluminium       = 7;  // tripod legs
+	static constexpr uint8 Retroreflective = 8;  // the reflective band on a bollard
+}
+
 USTRUCT(BlueprintType)
 struct FFSDSCone
 {
@@ -183,6 +199,9 @@ private:
 
 	void AppendCone(FTransform Transform, EFSDSConeColor Color);
 
+	/** Place the finish-line trigger on the big orange gate farthest from the start gate. */
+	void UpdateFinishLine();
+
 	/** Callback when vehicle overlaps a cone */
 	UFUNCTION()
 	void OnConeOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
@@ -238,6 +257,8 @@ private:
 	FVector FinishLineCenter = FVector::ZeroVector;
 	FVector FinishLineDirection = FVector::ForwardVector;
 	bool bFinishLineValid = false;
+	/** The finish gate was chosen relative to a track cone, not the origin. */
+	bool bFinishAnchoredToTrack = false;
 
 	/** Displacement threshold for cone hit (cm) */
 	float ConeHitThreshold = 15.0f;

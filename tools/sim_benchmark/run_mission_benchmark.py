@@ -90,6 +90,11 @@ OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
 MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
+# timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
+# sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
+# finish. This many times timeout_s of real time still ends the run, in case the sim
+# stalls and its clock stops.
+WALL_BACKSTOP = 6.0
 
 
 class BenchmarkError(Exception):
@@ -209,6 +214,14 @@ class Sim:
         except ValueError:
             return {}
         return out if isinstance(out, dict) else {}
+
+    def sim_time(self) -> float | None:
+        """The sim's game clock in seconds, or None (a build that doesn't report it, or no answer)."""
+        try:
+            t = self.json("getSimStatus").get("sim_time")
+        except BenchmarkError:
+            return None
+        return float(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else None
 
 
 class MissionControl:
@@ -633,6 +646,7 @@ class RunResult:
     start_offset: dict | None = None
     error: str | None = None
     telemetry: list[dict] = field(default_factory=list)
+    sim_seconds: float | None = None  # the run's length in sim time, when the sim reports it
 
 
 class Progress:
@@ -689,6 +703,7 @@ def run_one(
         sim.cmd("simSetVehiclePose {x} {y} {z} {qw} {qx} {qy} {qz}".format(**pose))
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
+    sim0 = sim.sim_time()  # None: this sim doesn't report its clock, count real time
     progress.report(r.index, 0.0, f"{where} · starting the pipeline")
     status, body = mc.post(
         "/api/event/start",
@@ -705,11 +720,20 @@ def run_one(
             time.monotonic() - t0,
             error=f"mission didn't start: {status} {err}",
         )
-    log(f"{where}: running")
+    log(
+        f"{where}: running"
+        + ("" if sim0 is not None else " (the sim doesn't report sim_time: the timeout counts real time)")
+    )
     ref: dict = {}
     telemetry: list[dict] = []
     outcome = "timeout"
-    while time.monotonic() - t0 < float(m["timeout_s"]):
+    limit = float(m["timeout_s"])
+    sim_now = sim0
+
+    def elapsed() -> float:
+        return time.monotonic() - t0 if sim0 is None else sim_now - sim0
+
+    while elapsed() < limit and time.monotonic() - t0 < limit * WALL_BACKSTOP:
         ref = mc.get("/api/event/state") or ref
         st = mc.get("/api/vehicle/state") or {}
         t = time.monotonic() - t0
@@ -735,9 +759,18 @@ def run_one(
             outcome = "finished"
             break
         time.sleep(poll_s)
+        if sim0 is not None:
+            sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
     mc.post("/api/pipeline/stop")
     return RunResult(
-        r, outcome, started, time.monotonic() - t0, ref, offset, telemetry=telemetry
+        r,
+        outcome,
+        started,
+        time.monotonic() - t0,
+        ref,
+        offset,
+        telemetry=telemetry,
+        sim_seconds=None if sim0 is None else sim_now - sim0,
     )
 
 
@@ -754,6 +787,8 @@ def race_metrics(res: RunResult) -> dict[str, float]:
         "race/penalty_s": doo * DOO_PENALTY_S + oc * OC_PENALTY_S,
         "race/run_time_s": res.seconds,
     }
+    if res.sim_seconds is not None:
+        out["race/run_sim_time_s"] = res.sim_seconds
     if laps:
         out |= {
             "race/lap_time_best_s": min(laps),
