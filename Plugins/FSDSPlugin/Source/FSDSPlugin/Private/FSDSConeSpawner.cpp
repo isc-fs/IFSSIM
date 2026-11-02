@@ -481,6 +481,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 	// spawn also gets a clean slate.
 	BigOrangePositions.Reset();
 	BlueYellowPositions.Reset();
+	BlueYellowIsBlue.Reset();
 	GroundSnapHits = 0;
 	GroundSnapMisses = 0;
 
@@ -521,6 +522,7 @@ void AFSDSConeSpawner::SpawnFromCSV()
 		else if (Color == EFSDSConeColor::Blue || Color == EFSDSConeColor::Yellow)
 		{
 			BlueYellowPositions.Add(Landed);
+			BlueYellowIsBlue.Add(Color == EFSDSConeColor::Blue);
 		}
 	}
 
@@ -691,44 +693,97 @@ bool AFSDSConeSpawner::ComputeStartGatePose(FVector& OutLocation, FQuat& OutRota
 	if (Forward.IsNearlyZero()) return false;
 	Forward.Normalize();
 
-	// Sign disambiguation: PCA gives the axis but not the direction.
-	// Pick the half-line that points TOWARD the bulk of nearby track
-	// cones. We use the K=4 nearest blue/yellow cones to the orange
-	// centroid because:
-	//   - K small enough that only the immediate gate-entry cones
-	//     dominate (loop-return cones are ≥ a lap-length away)
-	//   - K large enough to be robust to a single misclassified cone
-	constexpr int32 K_DIRECTION = 4;
+	// Direction from the cone sides. FS puts blue on the car's left, so the
+	// offset from the nearest yellow cones to the nearest blue ones points
+	// left. Forward is whichever gate axis is more perpendicular to that
+	// offset, signed so blue is on the left. This also catches a gate that
+	// is deeper than wide, where PCA's smaller-variance axis is cross-track
+	// (skidpad: 4 m along the lane, 3 m across it, so PCA alone spawned the
+	// car 90 deg off). Uses the 2 nearest of each colour within 8 m.
+	constexpr int32 K_SIDE = 2;
+	constexpr double SideRadiusSq = 800.0 * 800.0;   // 8 m
+	constexpr double MinSideOffsetCm = 100.0;        // 1 m
 	struct FConeDist { double DSq; FVector Pos; };
-	TArray<FConeDist> Sorted;
-	Sorted.Reserve(BlueYellowPositions.Num());
-	for (const FVector& P : BlueYellowPositions)
+	TArray<FConeDist> NearBlue, NearYellow;
+	for (int32 i = 0; i < BlueYellowPositions.Num(); ++i)
 	{
-		Sorted.Add({FVector::DistSquaredXY(P, OrangeCentroid), P});
+		const double DSq = FVector::DistSquaredXY(BlueYellowPositions[i], OrangeCentroid);
+		if (DSq > SideRadiusSq) continue;
+		(BlueYellowIsBlue[i] ? NearBlue : NearYellow).Add({DSq, BlueYellowPositions[i]});
 	}
-	Sorted.Sort([](const FConeDist& A, const FConeDist& B) { return A.DSq < B.DSq; });
+	auto MeanOfNearest = [&](TArray<FConeDist>& Cones)
+	{
+		Cones.Sort([](const FConeDist& A, const FConeDist& B) { return A.DSq < B.DSq; });
+		const int32 Count = FMath::Min(K_SIDE, Cones.Num());
+		FVector Mean = FVector::ZeroVector;
+		for (int32 i = 0; i < Count; ++i) Mean += Cones[i].Pos;
+		return Mean / FMath::Max(1, Count);
+	};
 
-	const int32 N = FMath::Min(K_DIRECTION, Sorted.Num());
-	FVector NearbyCentroid = FVector::ZeroVector;
-	for (int32 i = 0; i < N; i++) NearbyCentroid += Sorted[i].Pos;
-	NearbyCentroid /= N;
+	bool bFromSides = false;
+	FVector SideOffset = FVector::ZeroVector;   // nearest yellow -> nearest blue
+	if (NearBlue.Num() > 0 && NearYellow.Num() > 0)
+	{
+		SideOffset = MeanOfNearest(NearBlue) - MeanOfNearest(NearYellow);
+		SideOffset.Z = 0.f;
+		bFromSides = SideOffset.Size() >= MinSideOffsetCm;
+	}
 
-	const FVector ToNearby = NearbyCentroid - OrangeCentroid;
-	if (FVector::DotProduct(ToNearby, Forward) < 0.f) Forward = -Forward;
+	int32 N = 0;
+	if (bFromSides)
+	{
+		const FVector Across(-Forward.Y, Forward.X, 0.f);
+		if (FMath::Abs(FVector::DotProduct(Across, SideOffset)) <
+			FMath::Abs(FVector::DotProduct(Forward, SideOffset)))
+		{
+			Forward = Across;
+		}
+		// UE is left-handed (+Y is right of +X): the left of F is (F.Y, -F.X).
+		const FVector Left(Forward.Y, -Forward.X, 0.f);
+		if (FVector::DotProduct(SideOffset, Left) < 0.f) Forward = -Forward;
+	}
+	else
+	{
+		// No blue and yellow near the gate: pick the half-line that points
+		// toward the K=4 track cones nearest the orange centroid. K small
+		// enough that only the gate-entry cones dominate (loop-return cones
+		// are a lap away), large enough to survive one misclassified cone.
+		// On a loop with cones both behind and ahead of the gate this is
+		// decided by centimetres; the side test above avoids it.
+		constexpr int32 K_DIRECTION = 4;
+		TArray<FConeDist> Sorted;
+		Sorted.Reserve(BlueYellowPositions.Num());
+		for (const FVector& P : BlueYellowPositions)
+		{
+			Sorted.Add({FVector::DistSquaredXY(P, OrangeCentroid), P});
+		}
+		Sorted.Sort([](const FConeDist& A, const FConeDist& B) { return A.DSq < B.DSq; });
+
+		N = FMath::Min(K_DIRECTION, Sorted.Num());
+		FVector NearbyCentroid = FVector::ZeroVector;
+		for (int32 i = 0; i < N; i++) NearbyCentroid += Sorted[i].Pos;
+		NearbyCentroid /= N;
+
+		const FVector ToNearby = NearbyCentroid - OrangeCentroid;
+		if (FVector::DotProduct(ToNearby, Forward) < 0.f) Forward = -Forward;
+	}
 
 	// Back up from the gate along -Forward, set on the ground there.
 	PlaceStartPoseOnGround(OrangeCentroid - Forward * BackupCm, Forward, OutLocation, OutRotation);
 
 	const float YawDeg = FMath::RadiansToDegrees(FMath::Atan2(Forward.Y, Forward.X));
+	const FString SignedBy = bFromSides ? FString(TEXT("blue on the left"))
+	                                    : FString::Printf(TEXT("toward %d nearest"), N);
 
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS ConeSpawner: PCA start-gate pose — "
 			 "orange centroid (%.1f, %.1f), Cxx=%.1f Cyy=%.1f Cxy=%.1f, "
-			 "forward (%.2f, %.2f) [sign-checked vs %d nearest], "
+			 "forward (%.2f, %.2f) [%s], "
 			 "spawn (%.1f, %.1f), yaw %.1f°"),
 		OrangeCentroid.X, OrangeCentroid.Y,
 		Cxx, Cyy, Cxy,
-		Forward.X, Forward.Y, N,
+		Forward.X, Forward.Y,
+		*SignedBy,
 		OutLocation.X, OutLocation.Y, YawDeg);
 
 	return true;

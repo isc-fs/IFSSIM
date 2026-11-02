@@ -14,10 +14,12 @@ of FSDSConeSpawner::ComputeStartGatePose):
   - the car faces the way the track goes, with BLUE ON ITS LEFT (FS rules;
     the planner's left chain is blue). The CSV frame is right-handed:
     +y is left of +x (the loader maps CSV +y to UE -Y).
-  - on a one-gate loop, the four track cones nearest the gate (which decide
-    forward) are all clearly ahead of it, so the heading is not decided by
-    centimetres. tools/envgen/corridor.py's start zone does this by
-    construction: pairs at +2.0 and +3.5 m, nothing within 5 m behind.
+  - on a one-gate track the sim puts blue on the left from the nearest blue
+    and yellow cones; that offset must point clearly across the gate, not
+    along it. Without both colours near the gate the sim falls back to the
+    four track cones nearest it, whose mean must then be clearly ahead.
+    tools/envgen/corridor.py's start zone satisfies both by construction:
+    pairs at +2.0 and +3.5 m, nothing within 5 m behind.
 
 A sidecar (`<track>.env.json`, docs/environment_sidecar.md) is the
 environment around a track's cones. It is checked by the same rules the plugin
@@ -49,6 +51,11 @@ VALID_CONE_TYPES = frozenset({"blue", "yellow", "big_orange", "small_orange"})
 MAX_COORD_M = 500.0
 
 # Start-pose margins.
+# Side test: |along| / |across| of the yellow->blue offset. The sim takes the
+# gate axis more perpendicular to that offset, so it picks the wrong axis past
+# 1.0 (45 deg). tan(35 deg) keeps 10 deg of margin; stress_circle_r5 sits at
+# 0.61 (31 deg) because its nearest cones bend round the circle.
+MAX_SIDE_SKEW = 0.70
 # The K nearest cones' mean offset ahead of the gate picks forward. 0.5 m keeps
 # the sign clear of cone-position noise; the stress circles sit at 0.68-0.81 m,
 # the loops that once spawned backwards or by a few tenths sat at 0.33 m or less.
@@ -57,14 +64,6 @@ SET_MARGIN_M = 1.0       # a cone this close to joining the K nearest counts as 
 SIDE_RADIUS_M = 8.0      # cones ahead of the gate within this radius decide which side blue is on
 SIDE_NEAREST = 2         # nearest cones of each colour compared
 MIN_SIDE_GAP_M = 1.0     # blue must sit at least this far left of yellow
-
-# Tracks whose start pose is known wrong for a reason the CSV cannot fix.
-# Reported, not failed. Keep each entry short and pointed at the fix.
-START_POSE_EXEMPT = {
-    "skidpad.csv": "one 4 m deep x 3 m wide gate, so the sim's PCA picks the "
-                   "cross-track axis and spawns the car 90 deg off; needs a "
-                   "sim-side fix in ComputeStartGatePose",
-}
 
 Cone = Tuple[str, float, float]
 
@@ -88,8 +87,15 @@ def check_start_pose(path: Path, cones: List[Cone]) -> List[str]:
     where = f"{path}: start pose ({pose.method}, facing ({fx:+.2f}, {fy:+.2f}) from ({ax:.2f}, {ay:.2f}))"
     errors: List[str] = []
 
-    if pose.method == "pca":
-        # The sim faces the car toward the mean of the K track cones nearest
+    if pose.method == "pca-sides":
+        sx, sy = pose.side_offset
+        along, across = sx * fx + sy * fy, -sx * fy + sy * fx
+        if abs(along) > MAX_SIDE_SKEW * abs(across):
+            errors.append(f"{where}: the nearest blue and yellow cones, which set the heading, "
+                          f"are offset {along:+.2f} m along the gate and {across:+.2f} m across it; "
+                          f"put them in pairs (lay out the start zone as envgen/corridor.py does).")
+    elif pose.method == "pca":
+        # No blue and yellow near the gate: the sim faces the car toward the mean of the K track cones nearest
         # the gate. Check that mean is clearly ahead, also for every set a
         # slightly farther cone could make by swapping in for one of them.
         by_dist = sorted(track, key=lambda c: c[3])
@@ -101,7 +107,8 @@ def check_start_pose(path: Path, cones: List[Cone]) -> List[str]:
         worst_mean = sum(c[1] for c in worst) / len(worst)
         if worst_mean < MIN_MEAN_AHEAD_M:
             offsets = ", ".join(f"{c[0]} {c[1]:+.2f}" for c in worst)
-            errors.append(f"{where}: the {K_DIRECTION} cones nearest the gate pick forward from "
+            errors.append(f"{where}: with no blue and yellow near the gate, the {K_DIRECTION} cones "
+                          f"nearest it pick forward from "
                           f"their mean offset, which can fall to {worst_mean:+.2f} m "
                           f"(< {MIN_MEAN_AHEAD_M} m; along: {offsets}). Lay out the start zone "
                           f"as envgen/corridor.py does.")
@@ -181,12 +188,7 @@ def validate_one(path: Path) -> List[str]:
     if cone_count == 0:
         errors.append(f"{path}: no valid cone rows parsed")
     elif not errors:
-        pose_errors = check_start_pose(path, cones)
-        if pose_errors and path.name in START_POSE_EXEMPT:
-            print(f"track-validator: {path}: start pose exempt "
-                  f"({START_POSE_EXEMPT[path.name]})", file=sys.stderr)
-        else:
-            errors.extend(pose_errors)
+        errors.extend(check_start_pose(path, cones))
     return errors
 
 
