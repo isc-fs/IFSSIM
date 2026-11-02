@@ -932,7 +932,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildScoringTab()
 				})
 				.Text_Lambda([this]()
 				{
-					if (!ReferenceInput.IsEmpty()) return FText::Format(LOCTEXT("RefUsing", "Using {0} s (Enter to apply)"), FText::FromString(ReferenceInput));
+					if (!ReferenceInput.IsEmpty()) return FText::Format(LOCTEXT("RefUsing", "Scoring against {0} s"), FText::FromString(ReferenceInput));
 					if (Scoring && Scoring->bHasReference)
 					{
 						return FText::FromString(FString::Printf(TEXT("Scoring against %.3f s"), Scoring->Reference));

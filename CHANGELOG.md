@@ -25,7 +25,9 @@ shipping pipeline, documentation.
   UI's view: score, elapsed, penalties, corrected time, the reference time
   (T_best) and the lap times. Both UIs now show no score until a reference
   time is set: without one the backend compares the run with itself and
-  every run got full points (#719).
+  every run got full points (#719). A run faster than the reference now
+  scores the maximum instead of more (271/200 before), and a run with no
+  completed lap scores 0.
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
