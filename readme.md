@@ -45,6 +45,9 @@ Once you've finished SETUP, **[`docs/OPERATING.md`](docs/OPERATING.md)**
 is the daily-ops reference: recording MCAP bags, refreshing the bridge
 after a source edit, switching tracks, common-failure fixes.
 
+To run it with no window, unattended (benchmark runs on repeat, on a
+GPU machine), see **[`docs/HEADLESS.md`](docs/HEADLESS.md)**.
+
 ## I want to wire my autonomy code to it
 
 → **[`docs/AUTONOMY.md`](docs/AUTONOMY.md)** — end-to-end architecture

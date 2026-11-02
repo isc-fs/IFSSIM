@@ -4,6 +4,8 @@
 # Shell scripts must stay LF on every OS — core.autocrlf=true on Windows devs
 # otherwise converts to CRLF, breaking the shebang inside Linux containers.
 *.sh text eol=lf
+# nginx image entrypoint hooks, sourced by /bin/sh (docker/mission_control_frontend)
+*.envsh text eol=lf
 
 # Dockerfiles must stay LF — Windows clones with core.autocrlf=true otherwise
 # get CRLF inside RUN-built strings, which then leak into the image. We hit

@@ -153,4 +153,4 @@ benchmarks:
       mc_url:
         type: string
         flag: --mc-url
-        help: Mission Control's backend (default http://127.0.0.1:8000)
+        help: Mission Control, its UI's address (default http://127.0.0.1:3000)

@@ -21,6 +21,11 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
+  with no window, runs the mission benchmark around it and stops it, once
+  (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.
+  `check` tells whether a machine can run the sim offscreen, LiDAR included.
+  See `docs/HEADLESS.md`.
 - **Mission Control inside the sim.** Press Tab in the sim window for a panel
   that loads a track, starts and stops a session, resets the car and works
   RES, through the same backend as the web UI. When the backend is down it

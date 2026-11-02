@@ -7,11 +7,12 @@ server {
     # Backend now runs with `network_mode: host` (so its rclpy node
     # can join the DDS domain dv_pipeline_stack lives on), which
     # means the compose-network DNS name `mission_control_backend`
-    # no longer resolves from the frontend container. Talk to it via
-    # the host gateway instead — `extra_hosts` in docker-compose.yml
-    # makes host.docker.internal resolvable from this nginx process.
+    # no longer resolves from the frontend container. ${MC_BACKEND}
+    # is filled in when the container starts (mc-backend.envsh): this
+    # network's gateway, where host-network containers listen on
+    # every platform.
     location /api/ {
-        proxy_pass http://host.docker.internal:8000/api/;
+        proxy_pass http://${MC_BACKEND}/api/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         # Stop-and-save (POST /api/event/start teardown / bag stop) streams a
@@ -26,7 +27,7 @@ server {
 
     # WebSocket proxy → backend (same upstream, see /api/ comment).
     location /ws {
-        proxy_pass http://host.docker.internal:8000/ws;
+        proxy_pass http://${MC_BACKEND}/ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";

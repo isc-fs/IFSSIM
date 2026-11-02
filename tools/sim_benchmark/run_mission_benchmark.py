@@ -43,8 +43,10 @@ calls ``cone_detection``). Needs ``--stack own`` on the bench PC, and a pipeline
 ``params.yaml``; each run records what was overridden.
 
 The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451),
-Mission Control's backend on ``--mc-url`` (default http://127.0.0.1:8000, ``--mc-key`` if it has an
-API key). This script itself needs no ROS: it's HTTP, the sim's line protocol and ``docker``.
+Mission Control on ``--mc-url`` (default http://127.0.0.1:3000, ``--mc-key`` if it has an API key):
+the UI's address, whose ``/api`` reaches the backend on every OS (its own port 8000 is not
+published on Docker Desktop for Windows). This script itself needs no ROS: it's HTTP, the sim's
+line protocol and ``docker``.
 
 Progress (mission, track, lap) goes to ``$BENCH_PROGRESS_FILE`` when the launcher's worker sets it.
 
@@ -87,6 +89,7 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
 # finish. This many times timeout_s of real time still ends the run, in case the sim
@@ -224,7 +227,7 @@ class Sim:
 class MissionControl:
     def __init__(
         self,
-        url: str = "http://127.0.0.1:8000",
+        url: str = MC_URL,
         key: str | None = None,
         timeout: float = 30.0,
     ) -> None:
@@ -330,6 +333,11 @@ class PipelineHost:
 # ------------------------------------------------------------------ the pipeline stack
 CONTAINER = "bench-dv-stack"
 WS = "/dv_pipeline_stack_ws"
+# the sim, seen from the stack's container, as docker-compose.yml's dv_pipeline_stack sees it:
+# under --network host, 127.0.0.1 is this computer only on Linux; on Docker Desktop for Windows
+# it is the Linux VM's own, and this computer is host.docker.internal
+SIM_HOST = "host.docker.internal"
+NETWORK = ["--network", "host", "--add-host", f"{SIM_HOST}:host-gateway"]
 DEFAULT_IMAGE = "ifssim-dv_pipeline_stack:latest"  # what `docker compose build` makes
 STACK_READY = (
     "IFSSIM ROS stack starting"  # the entrypoint says it after the rebuild and warmup
@@ -473,6 +481,7 @@ class Stack:
                 "sim: stop it (docker compose stop dv_pipeline_stack), or pass --replace-stack to "
                 "stop it for the benchmark and start it again after"
             )
+        self.reach_sim()  # before anything is stopped or started
         for name in others:
             log(f"stopping {name} for the benchmark (started again at the end)")
             docker("stop", name, timeout=120)
@@ -483,8 +492,7 @@ class Stack:
             "-d",
             "--name",
             CONTAINER,
-            "--network",
-            "host",
+            *NETWORK,
             # as docker-compose.yml: Fast DDS's shared-memory transport needs more than the
             # default 64 MB /dev/shm (else it falls back to UDP, much slower for the LiDAR)
             "--shm-size",
@@ -494,7 +502,7 @@ class Stack:
             "--memory-swap",
             "8g",
             "-e",
-            "IFSSIM_HOST=127.0.0.1",
+            f"IFSSIM_HOST={SIM_HOST}",
             "-e",
             f"IFSSIM_PORT={self.sim_port}",
             "-e",
@@ -534,7 +542,7 @@ class Stack:
         else:  # the latte panda runs the pipeline: here only the sim bridge
             launch = (
                 f"source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && "
-                f"exec ros2 launch {WS}/bridge.launch.py host:=127.0.0.1 port:={self.sim_port}"
+                f"exec ros2 launch {WS}/bridge.launch.py host:={SIM_HOST} port:={self.sim_port}"
             )
             run += ["--entrypoint", "bash", self.image, "-c", launch]
             ready = None
@@ -569,6 +577,21 @@ class Stack:
                 )
             time.sleep(poll_s)
         log(f"pipeline stack up ({time.monotonic() - t0:.0f} s)")
+
+    def reach_sim(self) -> None:
+        """Whether the stack's container can reach the sim. Its entrypoint says it is up before
+        the bridge connects, so an unreachable sim would otherwise only show as missions that
+        never start."""
+        probe = f"timeout 5 bash -c '</dev/tcp/{SIM_HOST}/{self.sim_port}'"
+        r = docker(
+            "run", "--rm", *NETWORK, "--entrypoint", "bash", self.image, "-c", probe
+        )
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout).strip()[:300]
+            raise BenchmarkError(
+                f"the pipeline stack's container can't reach the sim at "
+                f"{SIM_HOST}:{self.sim_port}: is the sim running? {detail}".strip()
+            )
 
     def down(self, log, results: Path | None = None) -> None:
         if not self.started:
@@ -1065,7 +1088,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--sim", default="127.0.0.1:41451", help="the sim's RPC host:port")
     ap.add_argument(
-        "--mc-url", default="http://127.0.0.1:8000", help="Mission Control's backend"
+        "--mc-url",
+        default=MC_URL,
+        help="Mission Control: its UI's address, whose /api reaches the backend",
     )
     ap.add_argument("--mc-key", help="Mission Control's API key (default $MC_API_KEY)")
     ap.add_argument(
