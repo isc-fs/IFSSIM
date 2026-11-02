@@ -108,8 +108,10 @@ shipping pipeline, documentation.
 - **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
 
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
-  Skidpad, Autocross, Trackdrive, with laps), the track (a top-down map of its
-  cones) and who drives, then START. A manual run needs only the sim, no Docker:
+  Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
+  suits it (a gridded top-down map of its cones, in metres), and who drives,
+  then START. Practice takes any track, open test tracks included, and has no
+  lap target. A manual run needs only the sim, no Docker:
   the menu loads the track with `loadTrack`'s own code and hands the car to the
   keyboard. Esc pauses (Resume, Restart run, Main menu); when the referee ends
   the run, a results box shows its laps and cones, and the Results page keeps

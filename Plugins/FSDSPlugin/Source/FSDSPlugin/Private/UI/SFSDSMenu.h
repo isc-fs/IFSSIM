@@ -43,12 +43,11 @@ public:
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
 
 private:
-	enum class EPage : int32 { Drive = 0, Tracks = 1, Results = 2, Settings = 3 };
+	enum class EPage : int32 { Drive = 0, Results = 1, Settings = 2 };
 
 	TSharedRef<SWidget> BuildMain();
 	TSharedRef<SWidget> BuildRunBox();
 	TSharedRef<SWidget> BuildDrivePage();
-	TSharedRef<SWidget> BuildTracksPage();
 	TSharedRef<SWidget> BuildResultsPage();
 	TSharedRef<SWidget> BuildSettingsPage();
 
@@ -58,9 +57,12 @@ private:
 		TAttribute<bool> Enabled = true);
 	TSharedRef<SWidget> MakeHeading(const FText& Title);
 
-	void RebuildTrackLists();
+	void RebuildTrackList();
 	void SelectTrack(int32 Index);
-	void SetEvent(EFSDSEventType Event);
+	void SetEvent(EFSDSEventType Event, bool bInPractice);
+	/** Whether a track suits the chosen event. */
+	bool Fits(const FFSDSMenuTrack& Track) const;
+	FText EventHint() const;
 	FText TrackSummary(int32 Index) const;
 
 	EScreen Screen = EScreen::Main;
@@ -78,13 +80,12 @@ private:
 	int32 Selected = INDEX_NONE;
 	EFSDSEventType Event = EFSDSEventType::Autocross;
 	int32 Laps = 10;
+	bool bPractice = false;
 	bool bAutonomous = false;
 
 	FString Message;
 	bool bMessageError = false;
 
 	TSharedPtr<SScrollBox> DriveList;
-	TSharedPtr<SScrollBox> TracksList;
 	TSharedPtr<SFSDSTrackMap> DriveMap;
-	TSharedPtr<SFSDSTrackMap> TracksMap;
 };
