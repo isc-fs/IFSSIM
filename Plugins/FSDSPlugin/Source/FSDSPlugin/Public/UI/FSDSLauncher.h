@@ -5,6 +5,7 @@
 #include "InputCoreTypes.h"
 
 class AFSDSReferee;
+class AFSDSVehiclePawn;
 class APlayerController;
 class FFSDSMissionControlClient;
 class FFSDSStackStarter;
@@ -26,7 +27,7 @@ public:
 	FFSDSLauncher();
 	~FFSDSLauncher();
 
-	void Init(UWorld* InWorld, AFSDSReferee* InReferee);
+	void Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn* InPawn = nullptr);
 	void Shutdown();
 
 	void Toggle(APlayerController* PC);
@@ -46,6 +47,7 @@ private:
 
 	TWeakObjectPtr<UWorld> World;
 	TWeakObjectPtr<AFSDSReferee> Referee;
+	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;
 	TWeakObjectPtr<APlayerController> Controller;
 	TSharedPtr<FFSDSMissionControlClient> Client;
 	TSharedPtr<FFSDSStackStarter> Stack;

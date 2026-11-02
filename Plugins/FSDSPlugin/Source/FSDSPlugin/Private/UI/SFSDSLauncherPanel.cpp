@@ -1,6 +1,9 @@
 #include "UI/SFSDSLauncherPanel.h"
 
 #include "FSDSReferee.h"
+#include "EmraxMotor.h"
+#include "FSDSCoordinates.h"
+#include "FSDSVehiclePawn.h"
 #include "UI/FSDSMissionControlClient.h"
 #include "UI/FSDSStackStarter.h"
 
@@ -69,6 +72,7 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 	Client = InArgs._Client;
 	Stack = InArgs._Stack;
 	Referee = InArgs._Referee;
+	Pawn = InArgs._Pawn;
 	ComposeDir = InArgs._ComposeDir;
 	ToggleKey = InArgs._ToggleKey;
 	OnClose = InArgs._OnClose;
@@ -116,6 +120,7 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot() [ BuildLogTab() ]
 					+ SWidgetSwitcher::Slot() [ BuildScoringTab() ]
 					+ SWidgetSwitcher::Slot() [ BuildTracksTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildTelemetryTab() ]
 				]
 
 				// Outcome of the last action
@@ -730,9 +735,13 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildTabBar()
 		[
 			MakeTab(LOCTEXT("TabScoring", "Scoring"), ETab::Scoring)
 		]
-		+ SHorizontalBox::Slot().AutoWidth()
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
 		[
 			MakeTab(LOCTEXT("TabTracks", "Tracks"), ETab::Tracks)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			MakeTab(LOCTEXT("TabTelemetry", "Telemetry"), ETab::Telemetry)
 		];
 }
 
@@ -1422,6 +1431,134 @@ void SFSDSLauncherPanel::FetchPreview(const FString& Name)
 			FVector2D((double)Wrapper->GetWidth(), (double)Wrapper->GetHeight()), Bgra);
 		P->PreviewState = P->PreviewBrush.IsValid() ? FString() : TEXT("No preview");
 	}, 15.f);
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildTelemetryTab()
+{
+	// Read from the car itself at paint time: the panel runs in the sim, so
+	// it needs neither the backend nor its websocket for this.
+	auto Row = [this](const FText& Label, TFunction<FString(const AFSDSVehiclePawn&)> Value) -> TSharedRef<SWidget>
+	{
+		return MakeStatusRow(Label,
+			TAttribute<FText>::CreateLambda([this, Value]()
+			{
+				const AFSDSVehiclePawn* P = Pawn.Get();
+				return P ? FText::FromString(Value(*P)) : LOCTEXT("NoCar", "no car");
+			}),
+			FSlateColor(Ink));
+	};
+	// The motor's regen state. Torque is at the motor shaft; negative is
+	// regen. The cap is whichever of the two limits binds at this speed.
+	struct FRegen { float Torque = 0, PowerW = 0, Avail = 0; bool bPowerCapped = false, bValid = false; };
+	auto Regen = [](const AFSDSVehiclePawn& P) -> FRegen
+	{
+		FRegen R;
+		const UEmraxMotor* M = P.Motor;
+		if (!M) return R;
+		R.bValid = true;
+		const float Omega = FMath::Abs(M->GetMechRpm()) * 2.f * PI / 60.f;
+		R.Torque = FMath::Max(0.f, -M->GetTorqueNm());
+		R.PowerW = R.Torque * Omega;
+		const float PowerCapTorque = Omega > 1e-3f ? M->P.MaxRegenPowerW / Omega : TNumericLimits<float>::Max();
+		R.bPowerCapped = PowerCapTorque < M->P.MaxRegenTorqueNm;
+		R.Avail = FMath::Min(M->P.MaxRegenTorqueNm, PowerCapTorque);
+		return R;
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("TelCar", "CAR")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelSpeed", "Speed"), [](const AFSDSVehiclePawn& P)
+			{
+				const float V = P.GetCarState().Speed;
+				return FString::Printf(TEXT("%.2f m/s   %.1f km/h"), V, V * 3.6f);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRpm", "Motor"), [](const AFSDSVehiclePawn& P)
+			{
+				return FString::Printf(TEXT("%.0f rpm"), P.GetCarState().RPM);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelPedals", "Pedals"), [](const AFSDSVehiclePawn& P)
+			{
+				const AFSDSVehiclePawn::FCarControls C = P.GetCarControls();
+				return FString::Printf(TEXT("throttle %.0f%%   brake %.0f%%%s"),
+					FMath::Clamp(C.Throttle, 0.f, 1.f) * 100.f, FMath::Clamp(C.Regen, 0.f, 1.f) * 100.f,
+					C.bHandbrake ? TEXT("   mechanical brake on") : TEXT(""));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelSteer", "Steering"), [](const AFSDSVehiclePawn& P)
+			{
+				const float S = P.GetCarControls().Steering;
+				return FString::Printf(TEXT("%+.2f   %s"), S,
+					FMath::Abs(S) < 0.01f ? TEXT("straight") : S > 0.f ? TEXT("right") : TEXT("left"));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelDriver", "Driver"), [](const AFSDSVehiclePawn& P)
+			{
+				return FString::Printf(TEXT("%s%s"), P.IsApiControlEnabled() ? TEXT("autonomous") : TEXT("manual"),
+					P.IsEbsLatched() ? TEXT(", EBS latched") : TEXT(""));
+			})
+		]
+
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("TelRegen", "REGEN (MOTOR SIDE)")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRegenNow", "Absorbing"), [Regen](const AFSDSVehiclePawn& P)
+			{
+				const FRegen R = Regen(P);
+				if (!R.bValid) return FString(TEXT("no motor model"));
+				return FString::Printf(TEXT("%.1f Nm   %.2f kW"), R.Torque, R.PowerW / 1000.f);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRegenAvail", "Available"), [Regen](const AFSDSVehiclePawn& P)
+			{
+				const FRegen R = Regen(P);
+				if (!R.bValid) return FString();
+				return FString::Printf(TEXT("%.1f Nm   (%s)"), R.Avail,
+					R.bPowerCapped ? TEXT("power cap binds") : TEXT("torque cap binds"));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRegenLimits", "Limits"), [](const AFSDSVehiclePawn& P)
+			{
+				const UEmraxMotor* M = P.Motor;
+				return M ? FString::Printf(TEXT("%.0f Nm, %.1f kW"), M->P.MaxRegenTorqueNm, M->P.MaxRegenPowerW / 1000.f)
+					: FString();
+			})
+		]
+
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("TelPose", "POSITION (ENU, METRES)")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelXyz", "x  y  z"), [](const AFSDSVehiclePawn& P)
+			{
+				const FVector E = FSDSCoord::UEToENU(P.GetCarState().Position);
+				return FString::Printf(TEXT("%.3f   %.3f   %.3f"), E.X, E.Y, E.Z);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelYaw", "Heading"), [](const AFSDSVehiclePawn& P)
+			{
+				const FQuat Q = FSDSCoord::UEQuatToENU(P.GetCarState().Orientation);
+				const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(2.f * (Q.W * Q.Z + Q.X * Q.Y),
+					1.f - 2.f * (Q.Y * Q.Y + Q.Z * Q.Z)));
+				return FString::Printf(TEXT("%.1f deg (0 = east, counter-clockwise)"), Yaw);
+			})
+		];
 }
 
 TSharedRef<SWidget> SFSDSLauncherPanel::BuildStackBlock()

@@ -8,6 +8,7 @@
 class FFSDSMissionControlClient;
 class FFSDSStackStarter;
 class AFSDSReferee;
+class AFSDSVehiclePawn;
 class FJsonObject;
 class SVerticalBox;
 struct FSlateDynamicImageBrush;
@@ -17,7 +18,8 @@ struct FFSDSMcReply;
  * The in-game Mission Control panel: load a track, start and stop a
  * session, reset the car, RES (the Session tab), and the session log with
  * its export (the Log tab), the event score (the Scoring tab), and the
- * tracks: preview, load, delete, generate (the Tracks tab). A client of the backend, like the web UI; the
+ * tracks: preview, load, delete, generate (the Tracks tab), and the car's
+ * live state with the motor's regen (the Telemetry tab). A client of the backend, like the web UI; the
  * backend owns the session sequence.
  *
  * Built from code in Slate (no widget Blueprint to keep in sync with the C++).
@@ -32,6 +34,7 @@ public:
 		SLATE_ARGUMENT(TSharedPtr<FFSDSMissionControlClient>, Client)
 		SLATE_ARGUMENT(TSharedPtr<FFSDSStackStarter>, Stack)
 		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSReferee>, Referee)
+		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSVehiclePawn>, Pawn)
 		SLATE_ARGUMENT(FString, ComposeDir)
 		SLATE_ARGUMENT(FKey, ToggleKey)
 		SLATE_EVENT(FSimpleDelegate, OnClose)
@@ -62,7 +65,7 @@ private:
 	};
 
 	/** The tabs, in the order of the tab bar. */
-	enum class ETab : int32 { Session = 0, Log = 1, Scoring = 2, Tracks = 3 };
+	enum class ETab : int32 { Session = 0, Log = 1, Scoring = 2, Tracks = 3, Telemetry = 4 };
 
 	/** One /api/track/list entry. */
 	struct FTrackInfo
@@ -145,6 +148,7 @@ private:
 	TSharedRef<SWidget> BuildLogTab();
 	TSharedRef<SWidget> BuildScoringTab();
 	TSharedRef<SWidget> BuildTracksTab();
+	TSharedRef<SWidget> BuildTelemetryTab();
 
 	bool CanAct() const;
 	FText BackendText() const;
@@ -163,6 +167,7 @@ private:
 	TSharedPtr<FFSDSMissionControlClient> Client;
 	TSharedPtr<FFSDSStackStarter> Stack;
 	TWeakObjectPtr<AFSDSReferee> Referee;
+	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;
 	FString ComposeDir;
 	FKey ToggleKey;
 	FSimpleDelegate OnClose;

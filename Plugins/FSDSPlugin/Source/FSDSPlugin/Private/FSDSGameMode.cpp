@@ -117,7 +117,7 @@ void AFSDSGameMode::StartPlay()
 
 	// In-game Mission Control panel (toggle key, Tab by default). Drives the
 	// same backend as the web UI; off when there is no viewport.
-	Launcher.Init(GetWorld(), RefereeActor);
+	Launcher.Init(GetWorld(), RefereeActor, VehiclePawn);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)

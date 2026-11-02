@@ -149,6 +149,7 @@ public:
 	void ActivateEbs();
 	void ReleaseEbs();
 	bool IsEbsLatched() const { return bEbsLatched; }
+	bool IsApiControlEnabled() const { return bApiControlEnabled; }
 
 	// --- Components ---
 	/** The plant behind the interface. Chaos today; an FMU later. Not a
