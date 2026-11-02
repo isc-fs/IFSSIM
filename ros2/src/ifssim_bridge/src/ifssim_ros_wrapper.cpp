@@ -829,6 +829,9 @@ void IFSSIMRosWrapper::triggerReconnect()
     while (streaming_ && sensor_stream_fd_ < 0) {
         int fd = openStreamSocket("streamSensors");
         if (fd >= 0) {
+            // The first frame on the new stream may come from a new sim
+            // session whose clock restarted below the old /clock mark.
+            sensor_stream_reconnected_.store(true);
             sensor_stream_fd_.store(fd);
             RCLCPP_INFO(node_->get_logger(), "Sensor stream reconnected");
         } else {
@@ -868,14 +871,33 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     rclcpp::Time now(static_cast<int64_t>(f.timestamp), RCL_ROS_TIME);
     ++sensor_frame_count_;
 
-    // Drive /clock from the sim stamp. /clock must be non-decreasing; the
-    // game tick can repeat a sim ns across consecutive 400 Hz frames, so only
-    // publish when time actually advanced (a repeat is a no-op, not a rewind).
-    if (now > last_clock_stamp_) {
+    // Drive /clock from the sim stamp. /clock must never go backwards inside
+    // a sim session, but a new session must not be locked out by the old
+    // session's high-water mark, or every use_sim_time node freezes (#611).
+    // SimClockGate holds the rules; see sim_clock_gate.h.
+    const bool first_on_new_stream = sensor_stream_reconnected_.exchange(false);
+    const int64_t previous_clock_ns = clock_gate_.mark_ns();
+    const auto clock_step = clock_gate_.update(now.nanoseconds(), first_on_new_stream);
+    if (clock_step == ifssim_bridge::SimClockGate::Step::kNewSession) {
+        const double previous_s = previous_clock_ns * 1e-9;
+        if (first_on_new_stream) {
+            RCLCPP_INFO(node_->get_logger(),
+                "New sim session: clock restarted at %.3f s (the previous session "
+                "reached %.3f s). /clock follows the new session.",
+                now.seconds(), previous_s);
+        } else {
+            RCLCPP_WARN(node_->get_logger(),
+                "Sim clock jumped back %.1f s (%.3f -> %.3f s) without a stream "
+                "reconnect. Treating it as a new sim session and following it on "
+                "/clock. If this repeats mid-session, the sim is sending "
+                "non-monotonic timestamps.",
+                previous_s - now.seconds(), previous_s, now.seconds());
+        }
+    }
+    if (clock_step != ifssim_bridge::SimClockGate::Step::kHold) {
         rosgraph_msgs::msg::Clock clk;
         clk.clock = now;
         clock_pub_->publish(clk);
-        last_clock_stamp_ = now;
     }
 
     // GPS — 10 Hz (every 40 frames of the 400 Hz stream)
@@ -897,15 +919,15 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
 
     // IMU
     {
-        // Monotonic guard — see last_imu_stamp_ comment in the header. GLIM
-        // rejects any IMU sample whose stamp ≤ the previously-accepted one;
-        // bump by 1 ns when node_->now() would regress so the publish stream
-        // is strictly increasing.
-        rclcpp::Time imu_stamp = now;
-        if (last_imu_stamp_.nanoseconds() > 0 && imu_stamp <= last_imu_stamp_) {
-            imu_stamp = last_imu_stamp_ + rclcpp::Duration::from_nanoseconds(1);
-        }
-        last_imu_stamp_ = imu_stamp;
+        // Monotonic guard — see imu_stamp_guard_ in the header. GLIM rejects
+        // any IMU sample whose stamp ≤ the previously-accepted one, so a
+        // repeated tick stamp is bumped by 1 ns. A new sim session restarts
+        // the sequence instead of staying pinned to the old one.
+        const rclcpp::Time imu_stamp(
+            imu_stamp_guard_.next(
+                now.nanoseconds(),
+                clock_step == ifssim_bridge::SimClockGate::Step::kNewSession),
+            RCL_ROS_TIME);
 
         sensor_msgs::msg::Imu msg;
         msg.header.stamp = imu_stamp;
@@ -1086,11 +1108,10 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
         }
     }
     // Monotonic guard — same rationale as the IMU clamp in onSensorFrame.
-    // GLIM expects strictly increasing timestamps on /lidar_points.
-    if (last_lidar_stamp_.nanoseconds() > 0 && lidar_stamp <= last_lidar_stamp_) {
-        lidar_stamp = last_lidar_stamp_ + rclcpp::Duration::from_nanoseconds(1);
-    }
-    last_lidar_stamp_ = lidar_stamp;
+    // GLIM expects strictly increasing timestamps on /lidar_points. This
+    // thread cannot see the sensor stream's reconnect, so a new session is
+    // recognised by its stamp alone (more than 1 s behind the last scan).
+    lidar_stamp = rclcpp::Time(lidar_stamp_guard_.next(lidar_stamp.nanoseconds()), RCL_ROS_TIME);
 
     sensor_msgs::msg::PointCloud2 msg;
     msg.header.stamp = lidar_stamp;

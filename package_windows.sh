@@ -5,7 +5,7 @@
 # layout — but adapted for Win64:
 #
 #   - RunUAT.bat (not RunUAT.sh) under the standard Windows install
-#     of UE_5.7 ("C:\Program Files\Epic Games\UE_5.7\…").
+#     of UE_5.8 ("C:\Program Files\Epic Games\UE_5.8\…").
 #   - Platform=Win64.
 #   - Skips macOS-only codesign step (Windows has no entitlements
 #     equivalent for binding to TCP/41451 — Windows Firewall prompts
@@ -30,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL="*"
 
-UE_ROOT="${UE_ROOT:-/c/Program Files/Epic Games/UE_5.7}"
+UE_ROOT="${UE_ROOT:-/c/Program Files/Epic Games/UE_5.8}"
 RUN_UAT="$UE_ROOT/Engine/Build/BatchFiles/RunUAT.bat"
 
 # Convert a unix-style path to a native Windows path (C:/…) for the
@@ -70,7 +70,7 @@ fi
 
 if [ ! -f "$RUN_UAT" ]; then
     echo "ERROR: RunUAT.bat not found at $RUN_UAT" >&2
-    echo "Set UE_ROOT=/path/to/UE_5.7 (drive letter via /c/, /d/, etc.) if installed elsewhere." >&2
+    echo "Set UE_ROOT=/path/to/UE_5.8 (drive letter via /c/, /d/, etc.) if installed elsewhere." >&2
     exit 1
 fi
 
@@ -112,6 +112,10 @@ PROJECT_WIN="$(to_win "$SCRIPT_DIR/IFSSIM.uproject")"
 echo "[2/3] Staging track CSVs…"
 mkdir -p "$TRACKS_DST"
 cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
+# Environment sidecars travel with their tracks (docs/environment_sidecar.md).
+for f in "$TRACKS_SRC/"*.env.json; do
+    if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
+done
 N_TRACKS=$(ls "$TRACKS_DST"/*.csv 2>/dev/null | wc -l | tr -d ' ')
 echo "    Tracks staged: $N_TRACKS files"
 

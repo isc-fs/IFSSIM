@@ -21,8 +21,13 @@ import run_mission_benchmark as rmb  # noqa: E402
 class FakeWorld:
     """What the fake Mission Control and sim share: the referee, and what was asked of them."""
 
-    def __init__(self, laps_per_poll=1, start_fails=False, never_finishes=False):
+    def __init__(
+        self, laps_per_poll=1, start_fails=False, never_finishes=False, sim_step=None
+    ):
         self.calls: list[str] = []
+        # sim seconds each getSimStatus advances the sim clock by; None: no sim_time (an old build)
+        self.sim_step = sim_step
+        self.sim_t = 100.0
         self.laps = 0
         self.required = 1
         self.running = False
@@ -114,6 +119,9 @@ def serve_sim(world: FakeWorld) -> tuple[str, int]:
                     "qy": 0.0,
                     "qz": 0.0,
                 }
+            elif line == "getSimStatus" and world.sim_step is not None:
+                world.sim_t += world.sim_step
+                out = {"map": "customMap", "fps": 15.0, "sim_time": world.sim_t}
             else:
                 out = {"ok": True}
             self.wfile.write((json.dumps(out) + "\n").encode())
@@ -181,6 +189,14 @@ def _checkout(tmp_path, params=True):
     return root
 
 
+def _mount(spec: str) -> tuple[str, str]:
+    """A ``-v host:container`` spec as (host, container). The container side is a
+    POSIX path, so the last ':' splits them: a Windows host path has its own, after
+    the drive letter."""
+    host, container = spec.rsplit(":", 1)
+    return host, container
+
+
 class FakeDocker:
     """Stands in for ``docker``: records each call; the stack comes up at once."""
 
@@ -205,7 +221,7 @@ class FakeDocker:
                 if a == "-v" and args[i + 1].endswith(
                     ":/dv_pipeline_stack_ws/src/bringup"
                 ):
-                    f = Path(args[i + 1].split(":")[0]) / "config" / "params.yaml"
+                    f = Path(_mount(args[i + 1])[0]) / "config" / "params.yaml"
                     self.params_seen = f.read_text() if f.exists() else None
         elif args[0] == "inspect":
             out = "false" if self.dies else "true"
@@ -401,18 +417,20 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
         run[run.index("--shm-size") + 1] == "1g"
     )  # Fast DDS shared memory, as compose
     mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
-    targets = sorted(m.split(":", 1)[1] for m in mounts if "/src/" in m)
+    targets = sorted(_mount(m)[1] for m in mounts if "/src/" in m)
     assert targets == [
         "/dv_pipeline_stack_ws/src/bringup",
         "/dv_pipeline_stack_ws/src/slam",
     ]
+    hosts = [Path(_mount(m)[0]) for m in mounts if "/src/" in m]
+    assert all(h.is_absolute() and h.parent.name == "pipeline" for h in hosts)
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
     assert ["rm", "-f", rmb.CONTAINER] in docker.calls
     # root-owned files in the copy are removed from a container, as root
     assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
     assert list((tmp_path / "results" / "mission").glob("stack_*.log"))
-    assert not Path(mounts[-1].split(":")[0]).exists()  # the copy is cleaned up
+    assert not hosts[-1].exists()  # the copy is cleaned up
 
 
 def test_overrides_are_merged_into_params_yaml_and_recorded(tmp_path, world, docker):
@@ -557,3 +575,35 @@ def test_the_running_stack(tmp_path, world, docker):
             panda_start="true",
             panda_stop="true",
         )
+
+
+def _result(root):
+    [d] = (root / "results" / "mission").glob("*/*/seed1")
+    return json.loads((d / "results.json").read_text())
+
+
+def test_the_timeout_counts_sim_time_not_real_time(tmp_path):
+    # a fast sim clock (1 s per poll) reaches a 5 s timeout long before 5 s of real time
+    fast = FakeWorld(never_finishes=True, sim_step=1.0)
+    rc, logs = _run(tmp_path / "fast", fast, timeout_s=5.0)
+    res = _result(tmp_path / "fast")
+    assert rc == 1 and any(": timeout" in x for x in logs)
+    assert res["race/run_sim_time_s"] >= 5.0 and res["race/run_time_s"] < 2.0
+    assert not any("counts real time" in x for x in logs)
+
+
+def test_a_stalled_sim_clock_still_ends_on_the_real_time_backstop(tmp_path):
+    frozen = FakeWorld(never_finishes=True, sim_step=0.0)
+    rc, _ = _run(tmp_path, frozen, timeout_s=0.1)
+    res = _result(tmp_path)
+    assert rc == 1 and res["race/run_sim_time_s"] == 0.0
+    # past the 0.1 s timeout in real time (the sim clock never moved), stopped by the backstop
+    assert 0.1 < res["race/run_time_s"] < 0.1 * rmb.WALL_BACKSTOP + 1.0
+
+
+def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
+    w = FakeWorld(never_finishes=True)  # answers getSimStatus without sim_time
+    rc, logs = _run(tmp_path, w, timeout_s=0.1)
+    res = _result(tmp_path)
+    assert rc == 1 and any("counts real time" in x for x in logs)
+    assert "race/run_sim_time_s" not in res and res["race/run_time_s"] < 1.0
