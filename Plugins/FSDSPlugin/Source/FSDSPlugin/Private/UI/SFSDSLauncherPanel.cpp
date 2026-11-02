@@ -723,19 +723,19 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildSessionTab()
 TSharedRef<SWidget> SFSDSLauncherPanel::BuildTabBar()
 {
 	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
 		[
 			MakeTab(LOCTEXT("TabSession", "Session"), ETab::Session)
 		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
 		[
 			MakeTab(LOCTEXT("TabLog", "Log"), ETab::Log)
 		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
 		[
 			MakeTab(LOCTEXT("TabScoring", "Scoring"), ETab::Scoring)
 		]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
 		[
 			MakeTab(LOCTEXT("TabTracks", "Tracks"), ETab::Tracks)
 		]
@@ -749,7 +749,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 {
 	return SNew(SButton)
 		.IsFocusable(false)          // a focused button would eat Space (the brake)
-		.ContentPadding(FMargin(12.f, 3.f))
+		.ContentPadding(FMargin(7.f, 3.f))
 		// Slate darkens a button's colour, so the active tab is marked by its
 		// text (the accent) rather than by a yellow button black text can't
 		// be read on.
