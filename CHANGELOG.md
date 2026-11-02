@@ -18,6 +18,7 @@ shipping pipeline, documentation.
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
   Matches CI and `mission_control_backend`'s Dockerfile.
+
 ### Added
 
 - **Mission Control inside the sim.** Press Tab in the sim window for a panel
