@@ -336,8 +336,11 @@ services:
     # sim_supervisor_node and reaches it directly. Side effects:
     #   • `ports:` is ignored under host networking; backend listens
     #     on host port 8000 directly. The frontend's nginx now
-    #     proxies to host.docker.internal:8000 instead of the
-    #     compose-network DNS name.
+    #     proxies to its network's gateway on port 8000 instead of
+    #     the compose-network DNS name (mc-backend.envsh). On Docker
+    #     Desktop for Windows that port is not published on the
+    #     Windows host itself: reach the API through the frontend,
+    #     http://127.0.0.1:3000/api/.
     #   • extra_hosts is also a no-op (host networking always uses
     #     the host's resolver); kept off this entry.
     network_mode: host
@@ -514,10 +517,13 @@ services:
       dockerfile: docker/mission_control_frontend/Dockerfile
     ports:
       - "127.0.0.1:3000:80"
-    # Backend is on host networking now; nginx upstream targets
-    # host.docker.internal:8000 instead of the compose DNS name.
-    # extra_hosts ensures that name resolves to the host gateway from
-    # inside the frontend container.
+    # Backend is on host networking now; nginx proxies to this
+    # network's gateway on port 8000 instead of the compose DNS name:
+    # the host on Linux, Docker's Linux VM on Docker Desktop, which is
+    # where host-network containers listen. host.docker.internal is the
+    # Windows host on Docker Desktop for Windows, where that port isn't
+    # published (the "disconnected" UI). See mc-backend.envsh;
+    # extra_hosts is only its fallback, when no gateway is found.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
