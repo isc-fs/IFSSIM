@@ -5,13 +5,22 @@
 #include "UI/FSDSStackStarter.h"
 
 #include "Dom/JsonObject.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/DateTime.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Policies/PrettyJsonPrintPolicy.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -87,55 +96,15 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 					]
 				]
 
-				// Status
+				// Tabs
+				+ SVerticalBox::Slot().AutoHeight() [ BuildTabBar() ]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					MakeStatusRow(LOCTEXT("Backend", "Backend"),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::BackendText),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::BackendColor))
+					SNew(SWidgetSwitcher)
+					.WidgetIndex_Lambda([this]() { return (int32)ActiveTab; })
+					+ SWidgetSwitcher::Slot() [ BuildSessionTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildLogTab() ]
 				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					MakeStatusRow(LOCTEXT("Sim", "Simulator"),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::SimText),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::SimColor))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					MakeStatusRow(LOCTEXT("Track", "Track"),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::TrackText), FSlateColor(Ink))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					MakeStatusRow(LOCTEXT("Run", "Run"),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::LapText), FSlateColor(Ink))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					MakeStatusRow(LOCTEXT("Pipeline", "Pipeline"),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::PipelineText),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::PipelineColor))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					MakeStatusRow(LOCTEXT("Res", "RES"),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::ResText),
-						MakeAttributeSP(this, &SFSDSLauncherPanel::ResColor))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SBox)
-					.Visibility_Lambda([this]() { return BagText().IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
-					[
-						MakeStatusRow(LOCTEXT("Bag", "Recording"),
-							MakeAttributeSP(this, &SFSDSLauncherPanel::BagText), FSlateColor(Ink))
-					]
-				]
-
-				+ SVerticalBox::Slot().AutoHeight() [ BuildStackBlock() ]
-				+ SVerticalBox::Slot().AutoHeight() [ BuildTrackBlock() ]
-				+ SVerticalBox::Slot().AutoHeight() [ BuildSessionBlock() ]
-				+ SVerticalBox::Slot().AutoHeight() [ BuildCarBlock() ]
 
 				// Outcome of the last action
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 12, 0, 0)
@@ -190,6 +159,12 @@ FReply SFSDSLauncherPanel::OnKeyDown(const FGeometry& Geometry, const FKeyEvent&
 
 EActiveTimerReturnType SFSDSLauncherPanel::Poll(double, float)
 {
+	// The log only while it is on screen; it has its own in-flight guard.
+	if (ActiveTab == ETab::Log)
+	{
+		FetchLog();
+	}
+
 	if (PollsInFlight > 0 || !Client.IsValid())
 	{
 		return EActiveTimerReturnType::Continue;
@@ -489,6 +464,48 @@ FReply SFSDSLauncherPanel::OnRes()
 	return FReply::Handled();
 }
 
+FReply SFSDSLauncherPanel::OnExportLog()
+{
+	if (!CanAct()) return FReply::Handled();
+	Busy = TEXT("Exporting the session log");
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Get(TEXT("/api/session/export"), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->Busy.Reset();
+
+		const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+		if (!R.Ok() || !R.Body.IsValid() || !R.Body->TryGetArray(Items))
+		{
+			P->Say(FString::Printf(TEXT("Export failed: %s"),
+				R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error), true);
+			return;
+		}
+
+		// The web UI downloads it; the sim has no browser, so it goes where
+		// people look for files: Documents/IFSSIM/SessionLogs.
+		FString Json;
+		TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Json);
+		FJsonSerializer::Serialize(*Items, Writer);
+
+		const FString Dir = FPaths::Combine(FPlatformProcess::UserDir(), TEXT("IFSSIM"), TEXT("SessionLogs"));
+		const FString File = FPaths::ConvertRelativePathToFull(FPaths::Combine(Dir,
+			FString::Printf(TEXT("session_%s.json"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")))));
+		if (FFileHelper::SaveStringToFile(Json, *File, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		{
+			P->Say(FString::Printf(TEXT("Saved %d events to %s"), Items->Num(), *File), false);
+		}
+		else
+		{
+			P->Say(FString::Printf(TEXT("Could not write %s"), *File), true);
+		}
+	}, 10.f);
+	return FReply::Handled();
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 
@@ -535,6 +552,245 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeButton(TAttribute<FText> Label, FLin
 		[
 			SNew(STextBlock).Text(Label).Font(Font(10, TEXT("Bold"))).ColorAndOpacity(FLinearColor::White)
 		];
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildSessionTab()
+{
+	return SNew(SVerticalBox)
+
+		// Status
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Backend", "Backend"),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::BackendText),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::BackendColor))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Sim", "Simulator"),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::SimText),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::SimColor))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Track", "Track"),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::TrackText), FSlateColor(Ink))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Run", "Run"),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::LapText), FSlateColor(Ink))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Pipeline", "Pipeline"),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::PipelineText),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::PipelineColor))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Res", "RES"),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::ResText),
+				MakeAttributeSP(this, &SFSDSLauncherPanel::ResColor))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.Visibility_Lambda([this]() { return BagText().IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			[
+				MakeStatusRow(LOCTEXT("Bag", "Recording"),
+					MakeAttributeSP(this, &SFSDSLauncherPanel::BagText), FSlateColor(Ink))
+			]
+		]
+
+		+ SVerticalBox::Slot().AutoHeight() [ BuildStackBlock() ]
+		+ SVerticalBox::Slot().AutoHeight() [ BuildTrackBlock() ]
+		+ SVerticalBox::Slot().AutoHeight() [ BuildSessionBlock() ]
+		+ SVerticalBox::Slot().AutoHeight() [ BuildCarBlock() ]
+		;
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildTabBar()
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		[
+			MakeTab(LOCTEXT("TabSession", "Session"), ETab::Session)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			MakeTab(LOCTEXT("TabLog", "Log"), ETab::Log)
+		];
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
+{
+	return SNew(SButton)
+		.IsFocusable(false)          // a focused button would eat Space (the brake)
+		.ContentPadding(FMargin(12.f, 3.f))
+		.ButtonColorAndOpacity_Lambda([this, Tab]() { return FSlateColor(ActiveTab == Tab ? Accent : PlainBtn); })
+		.OnClicked_Lambda([this, Tab]()
+		{
+			ActiveTab = Tab;
+			if (Tab == ETab::Log) FetchLog();
+			return FReply::Handled();
+		})
+		[
+			SNew(STextBlock)
+			.Text(Label)
+			.Font(Font(10, TEXT("Bold")))
+			.ColorAndOpacity_Lambda([this, Tab]()
+			{
+				return FSlateColor(ActiveTab == Tab ? FLinearColor::Black : Ink);
+			})
+		];
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildLogTab()
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("LogHeading", "SESSION LOG"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Font(Font(9))
+				.AutoWrapText(true)
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(LogError.IsEmpty() ? Muted : Warn); })
+				.Text_Lambda([this]()
+				{
+					if (!LogError.IsEmpty())
+					{
+						return FText::Format(LOCTEXT("LogError", "Can't read the log: {0}"), FText::FromString(LogError));
+					}
+					return FText::Format(LOCTEXT("LogCount", "{0} events, newest first"), FText::AsNumber(LogEntries.Num()));
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeButton(LOCTEXT("ExportLog", "Export JSON"), PlainBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnExportLog),
+					TAttribute<bool>::CreateLambda([this]() { return CanAct(); }))
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.MaxDesiredHeight(380.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(LogList, SVerticalBox)
+				]
+			]
+		];
+}
+
+void SFSDSLauncherPanel::FetchLog()
+{
+	if (bLogInFlight || !Client.IsValid()) return;
+	bLogInFlight = true;
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Get(TEXT("/api/session/log"), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->bLogInFlight = false;
+
+		// The web UI checks the same thing: an {"error": ...} envelope is
+		// not a log.
+		const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+		if (!R.Ok() || !R.Body.IsValid() || !R.Body->TryGetArray(Items))
+		{
+			P->LogError = R.Error.IsEmpty() ? TEXT("malformed reply") : R.Error;
+			return;
+		}
+		P->LogError.Reset();
+
+		FString Signature;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Signature);
+		FJsonSerializer::Serialize(*Items, Writer);
+		if (Signature == P->LogSignature && P->LogList.IsValid() && P->LogList->NumSlots() > 0) return;
+		P->LogSignature = MoveTemp(Signature);
+
+		P->LogEntries.Reset();
+		for (const TSharedPtr<FJsonValue>& Item : *Items)
+		{
+			const TSharedPtr<FJsonObject>* O = nullptr;
+			if (!Item.IsValid() || !Item->TryGetObject(O)) continue;
+			FLogEntry E;
+			FString Stamp;
+			(*O)->TryGetStringField(TEXT("timestamp"), Stamp);
+			(*O)->TryGetStringField(TEXT("type"), E.Type);
+			(*O)->TryGetStringField(TEXT("message"), E.Text);
+			// "2026-11-02T13:22:05.123456" -> "13:22:05", as the web UI shows it.
+			int32 T = INDEX_NONE;
+			E.Time = Stamp.FindChar(TEXT('T'), T) ? Stamp.Mid(T + 1, 8) : Stamp;
+			P->LogEntries.Add(MoveTemp(E));
+		}
+		P->RebuildLogList();
+	});
+}
+
+void SFSDSLauncherPanel::RebuildLogList()
+{
+	if (!LogList.IsValid()) return;
+	LogList->ClearChildren();
+
+	if (LogEntries.Num() == 0)
+	{
+		LogList->AddSlot().AutoHeight()
+		[
+			SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted)
+			.Text(LOCTEXT("LogEmpty", "No events logged yet. Actions will appear here."))
+		];
+		return;
+	}
+
+	// The web UI's colours per event type.
+	auto TypeColor = [](const FString& Type) -> FLinearColor
+	{
+		if (Type == TEXT("event_set")) return Accent;
+		if (Type == TEXT("event_start")) return Good;
+		if (Type == TEXT("res")) return Bad;
+		if (Type.Contains(TEXT("reset"))) return FLinearColor::FromSRGBColor(FColor(96, 165, 250));
+		if (Type == TEXT("track_load")) return FLinearColor::FromSRGBColor(FColor(192, 132, 252));
+		if (Type == TEXT("track_generate")) return FLinearColor::FromSRGBColor(FColor(34, 211, 238));
+		return Muted;
+	};
+
+	for (int32 i = LogEntries.Num() - 1; i >= 0; --i)
+	{
+		const FLogEntry& E = LogEntries[i];
+		LogList->AddSlot().AutoHeight().Padding(0, 2)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Muted).Text(FText::FromString(E.Time))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(SBox).WidthOverride(104.f)
+				[
+					SNew(STextBlock).Font(Font(9, TEXT("Bold"))).ColorAndOpacity(TypeColor(E.Type))
+					.Text(FText::FromString(E.Type.ToUpper()))
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Ink).AutoWrapText(true)
+				.Text(FText::FromString(E.Text))
+			]
+		];
+	}
 }
 
 TSharedRef<SWidget> SFSDSLauncherPanel::BuildStackBlock()

@@ -9,12 +9,14 @@ class FFSDSMissionControlClient;
 class FFSDSStackStarter;
 class AFSDSReferee;
 class FJsonObject;
+class SVerticalBox;
 struct FFSDSMcReply;
 
 /**
  * The in-game Mission Control panel: load a track, start and stop a
- * session, reset the car, RES. A client of the backend, like the web UI;
- * the backend owns the session sequence.
+ * session, reset the car, RES (the Session tab), and the session log with
+ * its export (the Log tab). A client of the backend, like the web UI; the
+ * backend owns the session sequence.
  *
  * Built from code in Slate (no widget Blueprint to keep in sync with the C++).
  * Nothing in it takes keyboard focus except the panel itself, so the
@@ -48,6 +50,17 @@ private:
 		bool bLaps = false;
 	};
 	using FMissionPtr = TSharedPtr<FMission>;
+
+	/** One /api/session/log entry. */
+	struct FLogEntry
+	{
+		FString Time;     // local HH:MM:SS
+		FString Type;
+		FString Text;
+	};
+
+	/** The tabs, in the order of the tab bar. */
+	enum class ETab : int32 { Session = 0, Log = 1 };
 	using FTrackPtr = TSharedPtr<FString>;
 
 	// --- backend -------------------------------------------------------
@@ -61,6 +74,10 @@ private:
 	bool IsArmed(FName Action) const;
 	void Say(const FString& Msg, bool bError);
 
+	/** The session log, while the Log tab is open. */
+	void FetchLog();
+	void RebuildLogList();
+
 	// --- actions -------------------------------------------------------
 	FReply OnLoadTrack();
 	FReply OnStartSession();
@@ -68,6 +85,7 @@ private:
 	FReply OnReset();
 	FReply OnPause();
 	FReply OnRes();
+	FReply OnExportLog();
 
 	// --- layout --------------------------------------------------------
 	TSharedRef<SWidget> MakeStatusRow(const FText& Label, TAttribute<FText> Value, TAttribute<FSlateColor> Color);
@@ -78,6 +96,10 @@ private:
 	TSharedRef<SWidget> BuildTrackBlock();
 	TSharedRef<SWidget> BuildSessionBlock();
 	TSharedRef<SWidget> BuildCarBlock();
+	TSharedRef<SWidget> BuildTabBar();
+	TSharedRef<SWidget> MakeTab(const FText& Label, ETab Tab);
+	TSharedRef<SWidget> BuildSessionTab();
+	TSharedRef<SWidget> BuildLogTab();
 
 	bool CanAct() const;
 	FText BackendText() const;
@@ -124,6 +146,15 @@ private:
 	TSharedPtr<SComboBox<FMissionPtr>> MissionCombo;
 	int32 NumLaps = 10;
 	bool bRecordBag = false;
+
+	ETab ActiveTab = ETab::Session;
+
+	TArray<FLogEntry> LogEntries;
+	/** The last log reply as text, so the list is rebuilt only when it changes. */
+	FString LogSignature;
+	FString LogError;
+	bool bLogInFlight = false;
+	TSharedPtr<SVerticalBox> LogList;
 
 	/** Non-empty while an action is in flight: what it is doing. */
 	FString Busy;
