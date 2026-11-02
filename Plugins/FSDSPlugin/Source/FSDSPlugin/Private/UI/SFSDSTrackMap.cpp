@@ -158,6 +158,7 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 	const double Step = Map::GridStep(FMath::Max(X1 - X0, Y1 - Y0), 8);
 	auto TickText = [Step](double V)
 	{
+		if (FMath::Abs(V) < Step * 1e-3) V = 0.0;   // no "-0"
 		return Step < 1.0 ? FString::Printf(TEXT("%.1f"), V) : FString::Printf(TEXT("%.0f"), V);
 	};
 	for (double X = FMath::CeilToDouble(X0 / Step) * Step; X <= X1; X += Step)
