@@ -255,6 +255,14 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **On UE 5.8 the car spun at a quarter of steering lock.** The car's physics
+  asset carries a centre-of-mass nudge of 37 cm back and 17 cm down that UE 5.7
+  ignored and UE 5.8 applies, which put about 26% of the weight on the front
+  wheels instead of about 60%. The sim now clears it, so the centre of mass is
+  the one `settings.json` sets, as on 5.7: wheel loads, cornering and turning
+  radius measure the same on both engines (#712). New RPC
+  `getMassProperties` reports the chassis mass, centre of mass and wheel
+  positions in the car's frame.
 - **After a sim restart the car never moved.** When the sim stopped, the
   bridge reconnected its sensor streams at once, but its command connection
   only failed a moment later, on its next send, and nothing reconnected it:

@@ -178,6 +178,30 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 	// that need re-applying.
 	if (!VehicleMovement) return;
 
+	// The centre of mass comes from settings.json, through
+	// CenterOfMassOverride. Chaos places it at CenterOfMassOverride +
+	// COMNudge, and FormulaMesh_PhysicsAsset authors a nudge of
+	// (-36.8, 0, -16.8) cm. UE 5.7 never applied it; UE 5.8 does, which moved
+	// the CoM to just ahead of the rear axle (about 26% of the weight on the
+	// front instead of about 60%): the car spun at a quarter of steering lock
+	// and the front tyres had almost no load (#712). Clear the nudge so the
+	// override is the whole story, as on 5.7. Recalculating the mass
+	// properties calls back into the movement component's own
+	// UpdateMassProperties, which re-applies the override and the mass.
+	if (USkeletalMeshComponent* ChassisMesh = GetMesh())
+	{
+		if (FBodyInstance* Chassis = ChassisMesh->GetBodyInstance())
+		{
+			if (!Chassis->COMNudge.IsNearlyZero())
+			{
+				UE_LOG(LogTemp, Log, TEXT("FSDS: clearing the physics asset's CoM nudge %s cm"),
+					*Chassis->COMNudge.ToString());
+				Chassis->COMNudge = FVector::ZeroVector;
+				Chassis->UpdateMassProperties();
+			}
+		}
+	}
+
 	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
 	if (!Vehicle) return;
 	const FFSDSVehiclePhysics& P = Vehicle->Physics;
