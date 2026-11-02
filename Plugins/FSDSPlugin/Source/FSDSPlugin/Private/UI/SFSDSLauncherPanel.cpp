@@ -97,7 +97,7 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 				]
 
 				// Tabs
-				+ SVerticalBox::Slot().AutoHeight() [ BuildTabBar() ]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8) [ BuildTabBar() ]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
 					SNew(SWidgetSwitcher)
@@ -628,7 +628,13 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 	return SNew(SButton)
 		.IsFocusable(false)          // a focused button would eat Space (the brake)
 		.ContentPadding(FMargin(12.f, 3.f))
-		.ButtonColorAndOpacity_Lambda([this, Tab]() { return FSlateColor(ActiveTab == Tab ? Accent : PlainBtn); })
+		// Slate darkens a button's colour, so the active tab is marked by its
+		// text (the accent) rather than by a yellow button black text can't
+		// be read on.
+		.ButtonColorAndOpacity_Lambda([this, Tab]()
+		{
+			return FSlateColor(ActiveTab == Tab ? PlainBtn : FLinearColor(0.f, 0.f, 0.f, 0.f));
+		})
 		.OnClicked_Lambda([this, Tab]()
 		{
 			ActiveTab = Tab;
@@ -641,7 +647,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 			.Font(Font(10, TEXT("Bold")))
 			.ColorAndOpacity_Lambda([this, Tab]()
 			{
-				return FSlateColor(ActiveTab == Tab ? FLinearColor::Black : Ink);
+				return FSlateColor(ActiveTab == Tab ? Accent : Muted);
 			})
 		];
 }
