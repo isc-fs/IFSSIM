@@ -64,11 +64,12 @@ bool SFSDSTrackMap::LoadCsv(const FString& Path, TArray<FCone>& Out)
 int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSlateRect&,
 	FSlateWindowElementList& Out, int32 LayerId, const FWidgetStyle&, bool) const
 {
-	using namespace FSDSTrackMapStyle;
+	// Qualified: other UI files in the same unity blob bring their own Muted etc.
+	namespace Map = FSDSTrackMapStyle;
 	const FSlateBrush* White = FCoreStyle::Get().GetBrush("WhiteBrush");
 	const FVector2f Size = FVector2f(Geo.GetLocalSize());
 
-	FSlateDrawElement::MakeBox(Out, LayerId, Geo.ToPaintGeometry(), White, ESlateDrawEffect::None, Backdrop);
+	FSlateDrawElement::MakeBox(Out, LayerId, Geo.ToPaintGeometry(), White, ESlateDrawEffect::None, Map::Backdrop);
 
 	if (Cones.Num() == 0 || !Bounds.bIsValid)
 	{
@@ -77,15 +78,15 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 		const FVector2f TextSize = FVector2f(FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text, Font));
 		FSlateDrawElement::MakeText(Out, LayerId + 1,
 			Geo.ToPaintGeometry(TextSize, FSlateLayoutTransform((Size - TextSize) * 0.5f)),
-			Text, Font, ESlateDrawEffect::None, Muted);
+			Text, Font, ESlateDrawEffect::None, Map::Muted);
 		return LayerId + 1;
 	}
 
 	// Fit the cones, keeping metres square. Screen y points down, the
 	// track's y (north) points up.
 	const FVector2D Extent = Bounds.GetSize();
-	const float ScaleX = (Size.X - 2.f * MarginPx) / FMath::Max(Extent.X, 1.0);
-	const float ScaleY = (Size.Y - 2.f * MarginPx) / FMath::Max(Extent.Y, 1.0);
+	const float ScaleX = (Size.X - 2.f * Map::MarginPx) / FMath::Max(Extent.X, 1.0);
+	const float ScaleY = (Size.Y - 2.f * Map::MarginPx) / FMath::Max(Extent.Y, 1.0);
 	const float Scale = FMath::Max(FMath::Min(ScaleX, ScaleY), 0.01f);
 	const FVector2D Centre = Bounds.GetCenter();
 	auto ToScreen = [&](const FVector2D& P)
@@ -98,14 +99,14 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 	const float Dot = FMath::Clamp(0.35f * Scale, 2.5f, 7.f);
 	for (const FCone& C : Cones)
 	{
-		FLinearColor Color = Other;
+		FLinearColor Color = Map::Other;
 		float D = Dot;
 		switch (C.Kind)
 		{
-		case EConeKind::Blue:        Color = Blue; break;
-		case EConeKind::Yellow:      Color = Yellow; break;
-		case EConeKind::SmallOrange: Color = Orange; break;
-		case EConeKind::BigOrange:   Color = Orange; D = Dot * 1.6f; break;
+		case EConeKind::Blue:        Color = Map::Blue; break;
+		case EConeKind::Yellow:      Color = Map::Yellow; break;
+		case EConeKind::SmallOrange: Color = Map::Orange; break;
+		case EConeKind::BigOrange:   Color = Map::Orange; D = Dot * 1.6f; break;
 		default: break;
 		}
 		const FVector2f P = ToScreen(C.Pos);
@@ -117,14 +118,14 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 	// Scale bar: 10 m (or 50 m on big tracks), bottom left.
 	const float BarM = Extent.GetMax() > 150.0 ? 50.f : 10.f;
 	const float BarPx = BarM * Scale;
-	const FVector2f BarAt(MarginPx, Size.Y - MarginPx);
+	const FVector2f BarAt(Map::MarginPx, Size.Y - Map::MarginPx);
 	FSlateDrawElement::MakeBox(Out, LayerId + 1,
 		Geo.ToPaintGeometry(FVector2f(BarPx, 2.f), FSlateLayoutTransform(BarAt)),
-		White, ESlateDrawEffect::None, Muted);
+		White, ESlateDrawEffect::None, Map::Muted);
 	const FText BarText = FText::Format(LOCTEXT("Bar", "{0} m"), FText::AsNumber(FMath::RoundToInt(BarM)));
 	FSlateDrawElement::MakeText(Out, LayerId + 1,
 		Geo.ToPaintGeometry(FVector2f(60.f, 14.f), FSlateLayoutTransform(BarAt + FVector2f(0.f, -16.f))),
-		BarText, FCoreStyle::GetDefaultFontStyle("Regular", 9), ESlateDrawEffect::None, Muted);
+		BarText, FCoreStyle::GetDefaultFontStyle("Regular", 9), ESlateDrawEffect::None, Map::Muted);
 
 	return LayerId + 1;
 }
