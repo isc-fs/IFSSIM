@@ -3,7 +3,10 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "FSDSReferee.h"
+#include "Environment/FSDSEnvironment.h"
 #include "FSDSConeSpawner.generated.h"
+
+class AFSDSEnvironmentActor;
 
 /**
  * Spawns traffic cones on the track at BeginPlay.
@@ -133,9 +136,33 @@ public:
 	 */
 	bool ComputeStartGatePose(FVector& OutLocation, FQuat& OutRotation, float BackupCm = 300.f) const;
 
+	/** The environment loaded with the current track (docs/environment_sidecar.md).
+	 *  Empty unless settings.json Environment.Enabled is true and the track
+	 *  has a valid <track>.env.json. */
+	const FFSDSEnvironment& GetEnvironment() const { return Environment; }
+
+	/** What GetEnvironment() holds: "off" (Environment.Enabled is false),
+	 *  "none" (the track has no sidecar), "loaded", or "invalid" (the sidecar
+	 *  failed to parse; GetEnvironmentError() says why). */
+	const FString& GetEnvironmentStatus() const { return EnvironmentStatus; }
+	const FString& GetEnvironmentError() const { return EnvironmentError; }
+
+	/** The built props of the current environment; null until an environment
+	 *  has been loaded (so never with Environment.Enabled off). */
+	const AFSDSEnvironmentActor* GetEnvironmentActor() const { return EnvironmentActor; }
+
 private:
 	void SpawnTestTrack();
 	void SpawnFromCSV();
+
+	/** Load the current track's sidecar, before any cone spawns. */
+	void LoadEnvironmentSidecar();
+
+	/** Build the loaded sidecar's props, or clear the last track's. */
+	void BuildEnvironment();
+
+	UPROPERTY()
+	TObjectPtr<AFSDSEnvironmentActor> EnvironmentActor = nullptr;
 	void SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 	void SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 
@@ -166,6 +193,10 @@ private:
 	TArray<FVector> BigOrangePositions;
 	TArray<FVector> BlueYellowPositions;
 	TArray<bool> BlueYellowIsBlue;      // parallel to BlueYellowPositions
+
+	FFSDSEnvironment Environment;
+	FString EnvironmentStatus = TEXT("off");
+	FString EnvironmentError;
 
 	UPROPERTY()
 	AFSDSReferee* Referee = nullptr;

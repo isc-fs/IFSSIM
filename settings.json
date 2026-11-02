@@ -13,6 +13,10 @@
     "_comment_shadowsync": "Force the shadow's PLANAR state (x, y, yaw and the planar velocities) equal to the reference's every step, so the comparison asks 'same state, same inputs, same response?' instead of 'how far apart do they drift?'. The drift question cannot be answered by an open-loop shadow at all — the controller is steering the reference, so the shadow diverges without bound however good it is. Vertical state is deliberately NOT synced: the two plants do not share a ride-height convention and the suspension is 56,900 N/m per corner, so injecting the reference's z inflates Fz, inflates mu*Fz with it, and produced 12-14 g of phantom lateral force. Set false only to watch a shadow run free, which is a demo rather than a measurement.",
     "ShadowSync": true
   },
+  "_comment_environment": "Trackside environment (docs/ENVIRONMENT_ROADMAP.md). When Enabled, loading a track also loads the <track>.env.json sidecar next to its CSV: ground extent and props, generated in Python from a seed and a profile (docs/environment_sidecar.md). Off by default so the flat world stays the regression baseline; while off, a sidecar is ignored.",
+  "Environment": {
+    "Enabled": false
+  },
   "Vehicles": {
     "FSCar": {
       "VehicleType": "ChaosCar",
