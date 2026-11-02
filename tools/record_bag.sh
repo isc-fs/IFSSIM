@@ -4,7 +4,7 @@
 # DEV (default) — the canonical dev fixture consumed by tools/replay.sh and
 # tools/dev/pose_cmp.py:
 #   /imu                  — bridge IMU stream (~400 Hz BMI088 model)
-#   /lidar/Lidar1         — bridge LiDAR stream (~10 Hz Hesai ATX 128 ch)
+#   /lidar_points         — bridge LiDAR stream (~10 Hz Hesai ATX 128 ch)
 #   /gps                  — bridge GPS NavSatFix (~10 Hz)
 #   /motor_rpm            — bridge motor RPM Float32 (100 Hz)
 #   /testing_only/odom    — bridge ground-truth Odometry (SIM-ONLY)
@@ -12,7 +12,7 @@
 #                            skip the numba-JIT warmup)
 #
 # CAR-PARITY (--car-parity) — a bag that LIFTS onto the real car
-# (isc-fs/IFS08-DV-uDV) with the car UP ON STANDS ("thinking it's moving").
+# (isc-fs/IFS09-DV-uDV) with the car UP ON STANDS ("thinking it's moving").
 # Records ONLY the two sensors the live car cannot produce on the bench; every
 # other input comes LIVE from the car. See tools/lift_to_car.sh for the replay
 # recipe + the full rationale.
@@ -20,9 +20,9 @@
 #                            stationary on stands: the real IMU reads zero
 #                            motion, so odometry/SLAM need the sim IMU's yaw+accel
 #                            to stay consistent with the replayed LiDAR.
-#   /lidar/Lidar1         — frame_id hesai_lidar. REPLAYED because the Hesai sees
-#                            the empty garage (no cones); remapped to
-#                            /lidar_points at replay time.
+#   /lidar_points         — frame_id hesai_lidar. REPLAYED because the Hesai sees
+#                            the empty garage (no cones). Same topic as the
+#                            car's Hesai driver, so no remap at replay time.
 #
 #   DELIBERATELY OMITTED — the uDV is the ROS<->CAN bridge and publishes these
 #   LIVE from real hardware while the actuators move on the stands; replaying
@@ -67,10 +67,10 @@ fi
 if [ "$CAR_PARITY" -eq 1 ]; then
     # Only the two sensors the car-on-stands can't produce; rpm/steering/TF
     # come live from the car. See the CAR-PARITY note above + tools/lift_to_car.sh.
-    TOPICS="/imu /lidar/Lidar1"
+    TOPICS="/imu /lidar_points"
     echo "==> mode: CAR-PARITY (bench lift set: replay LiDAR+IMU only) — $TOPICS"
 else
-    TOPICS="/imu /lidar/Lidar1 /gps /motor_rpm /testing_only/odom /Conos_raw"
+    TOPICS="/imu /lidar_points /gps /motor_rpm /testing_only/odom /Conos_raw"
 fi
 
 REPO="$(realpath ".")"

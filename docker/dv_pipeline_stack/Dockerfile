@@ -107,7 +107,7 @@ COPY pipeline/ src/
 # Testing deleting build/install directories
 RUN rm -rf build install log && \
     . /opt/ros/humble/setup.sh && \
-    colcon build --symlink-install
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # Copy launch files, teleop, entrypoint, and DDS profile.
 # fastdds_profile.xml used to be bind-mounted at runtime so we could
