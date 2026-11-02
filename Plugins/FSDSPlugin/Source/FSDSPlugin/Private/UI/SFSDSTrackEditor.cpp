@@ -89,7 +89,7 @@ namespace EditorUi
 
 	/** A labelled number box. */
 	template <typename T>
-	TSharedRef<SWidget> Num(const FText& Label, TFunction<T()> Get, TFunction<void(T)> Set, T Min, T Max, T Delta, float Width = 76.f)
+	TSharedRef<SWidget> Num(const FText& Label, TFunction<T()> Get, TFunction<void(T)> Set, T Min, T Max, T Delta, float BoxWidth = 76.f)
 	{
 		return SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight()
@@ -98,7 +98,7 @@ namespace EditorUi
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 			[
-				SNew(SBox).WidthOverride(Width)
+				SNew(SBox).WidthOverride(BoxWidth)
 				[
 					SNew(SSpinBox<T>)
 					.MinValue(Min).MaxValue(Max).Delta(Delta)
@@ -111,7 +111,7 @@ namespace EditorUi
 
 	/** A number that may be unset (empty means "the track's own"). */
 	TSharedRef<SWidget> OptNum(const FText& Label, TFunction<TOptional<float>()> Get, TFunction<void(TOptional<float>)> Set,
-		float Width = 64.f)
+		float BoxWidth = 64.f)
 	{
 		return SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight()
@@ -120,7 +120,7 @@ namespace EditorUi
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 			[
-				SNew(SBox).WidthOverride(Width)
+				SNew(SBox).WidthOverride(BoxWidth)
 				[
 					SNew(SEditableTextBox)
 					.Font(EdFont(10))
