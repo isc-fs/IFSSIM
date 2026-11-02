@@ -66,6 +66,12 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	OnRestart = InArgs._OnRestart;
 	OnMainMenu = InArgs._OnMainMenu;
 	OnQuit = InArgs._OnQuit;
+	OnTestDrive = InArgs._OnTestDrive;
+	OnTracksChanged = InArgs._OnTracksChanged;
+	OnStartStack = InArgs._OnStartStack;
+	Client = InArgs._Client;
+	EditorState = InArgs._EditorState;
+	if (InArgs._StartInEditor) Page = EPage::Editor;
 
 	// Start from the last run's choices, or the first track.
 	if (Last.IsSet())
@@ -102,7 +108,7 @@ FReply SFSDSMenu::OnKeyDown(const FGeometry&, const FKeyEvent& KeyEvent)
 		{
 			OnResume.ExecuteIfBound();
 		}
-		else if (Screen == EScreen::Main)
+		else if (Screen == EScreen::Main && Page != EPage::Editor)
 		{
 			Page = EPage::Drive;
 		}
@@ -239,6 +245,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 							.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
@@ -268,6 +275,16 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					SNew(SWidgetSwitcher)
 					.WidgetIndex_Lambda([this]() { return static_cast<int32>(Page); })
 					+ SWidgetSwitcher::Slot() [ BuildDrivePage() ]
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SFSDSTrackEditor)
+						.State(EditorState)
+						.Client(Client)
+						.Tracks(Tracks)
+						.OnTestDrive(OnTestDrive)
+						.OnSaved(OnTracksChanged)
+						.OnStartStack(OnStartStack)
+					]
 					+ SWidgetSwitcher::Slot() [ BuildResultsPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildSettingsPage() ]
 				]

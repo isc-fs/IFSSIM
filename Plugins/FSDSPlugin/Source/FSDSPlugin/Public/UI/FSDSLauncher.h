@@ -40,9 +40,10 @@ public:
 	/** Also the front-end menu's: it opens the panel for autonomous runs and closes it over itself. */
 	void Open(APlayerController* PC);
 	void Close();
+	/** docker compose up -d, as the panel's Start stack button (the menu's track editor too). */
+	void StartStack();
 
 private:
-	void StartStack();
 	bool Tick(float DeltaTime);
 	void ShowHint();
 	void HideHint();

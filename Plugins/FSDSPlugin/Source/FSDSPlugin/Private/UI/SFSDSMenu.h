@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "UI/FSDSMenu.h"
+#include "UI/FSDSTrackSpec.h"
+#include "UI/SFSDSTrackEditor.h"
 #include "Widgets/SCompoundWidget.h"
 
 class SFSDSTrackMap;
@@ -27,6 +29,12 @@ public:
 		SLATE_ARGUMENT(TOptional<FFSDSDriveRequest>, Last)
 		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSReferee>, Referee)
 		SLATE_ARGUMENT(FText, LauncherKey)
+		SLATE_ARGUMENT(TSharedPtr<FFSDSMissionControlClient>, Client)
+		SLATE_ARGUMENT(TSharedPtr<FSDSTrackSpec::FEditorState>, EditorState)
+		SLATE_ARGUMENT(bool, StartInEditor)
+		SLATE_EVENT(FOnFSDSTestDrive, OnTestDrive)
+		SLATE_EVENT(FSimpleDelegate, OnTracksChanged)
+		SLATE_EVENT(FSimpleDelegate, OnStartStack)
 		SLATE_EVENT(FOnFSDSDrive, OnDrive)
 		SLATE_EVENT(FSimpleDelegate, OnResume)
 		SLATE_EVENT(FSimpleDelegate, OnRestart)
@@ -43,7 +51,7 @@ public:
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
 
 private:
-	enum class EPage : int32 { Drive = 0, Results = 1, Settings = 2 };
+	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3 };
 
 	TSharedRef<SWidget> BuildMain();
 	TSharedRef<SWidget> BuildRunBox();
@@ -75,6 +83,10 @@ private:
 	FText LauncherKey;
 
 	FOnFSDSDrive OnDrive;
+	FOnFSDSTestDrive OnTestDrive;
+	FSimpleDelegate OnTracksChanged, OnStartStack;
+	TSharedPtr<FFSDSMissionControlClient> Client;
+	TSharedPtr<FSDSTrackSpec::FEditorState> EditorState;
 	FSimpleDelegate OnResume, OnRestart, OnMainMenu, OnQuit;
 
 	int32 Selected = INDEX_NONE;

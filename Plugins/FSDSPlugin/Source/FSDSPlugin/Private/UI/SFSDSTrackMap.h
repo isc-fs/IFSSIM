@@ -27,6 +27,9 @@ public:
 	/** Show these cones; an empty list shows the "no track" text. */
 	void SetCones(TArray<FCone> InCones);
 
+	/** A filled circle brush D px across, for cones and markers. */
+	static const FSlateBrush* DotBrush(float D);
+
 	/** Parse a track CSV (type,x,y,...) the way the cone spawner does. */
 	static bool LoadCsv(const FString& Path, TArray<FCone>& Out);
 

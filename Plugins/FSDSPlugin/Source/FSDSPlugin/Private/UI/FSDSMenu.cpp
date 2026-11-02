@@ -6,6 +6,9 @@
 #include "RPC/FSDSRpcServer.h"
 #include "UI/FSDSLauncher.h"
 #include "UI/SFSDSMenu.h"
+#include "UI/FSDSMissionControlClient.h"
+#include "UI/FSDSStackStarter.h"
+#include "UI/FSDSTrackSpec.h"
 
 #include "Camera/CameraActor.h"
 #include "Dom/JsonObject.h"
@@ -83,6 +86,23 @@ void FFSDSMenu::Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn*
 
 	Results = MakeShared<TArray<FFSDSRunResult>>();
 	SeenExternalGen = Rpc->GetExternalSessionGeneration();
+
+	// The track editor talks to the backend as the panel does.
+	const FFSDSSettings& S = FFSDSSettings::Get();
+	FString ApiKey = S.MissionControlApiKey;
+	if (ApiKey.IsEmpty()) ApiKey = FPlatformMisc::GetEnvironmentVariable(TEXT("IFSSIM_MC_API_KEY"));
+	Client = MakeShared<FFSDSMissionControlClient>(S.MissionControlUrl, ApiKey);
+	Editor = MakeShared<FSDSTrackSpec::FEditorState>();
+
+	// The backend saves into the repo's Content/tracks (docker-compose mounts
+	// it); a packaged sim reads its own copy. List the repo's first, so a
+	// track saved in the editor shows up and loads.
+	const FString ComposeDir = S.MissionControlComposeDir.IsEmpty() ? FFSDSStackStarter::FindComposeDir() : S.MissionControlComposeDir;
+	if (!ComposeDir.IsEmpty())
+	{
+		const FString Dir = FPaths::Combine(ComposeDir, TEXT("Content"), TEXT("tracks"));
+		if (FPaths::DirectoryExists(Dir)) RepoTracksDir = Dir;
+	}
 	ScanTracks();
 
 	// Shown on the first tick, once the controller has its pawn and camera.
@@ -109,7 +129,9 @@ void FFSDSMenu::ScanTracks()
 {
 	Tracks.Reset();
 	TSet<FString> Seen;
-	for (const FString& Dir : FFSDSRpcServer::TrackSearchDirs())
+	TArray<FString> Dirs = FFSDSRpcServer::TrackSearchDirs();
+	if (!RepoTracksDir.IsEmpty()) Dirs.Insert(RepoTracksDir, 0);
+	for (const FString& Dir : Dirs)
 	{
 		TArray<FString> Files;
 		IFileManager::Get().FindFiles(Files, *FPaths::Combine(Dir, TEXT("*.csv")), true, false);
@@ -185,6 +207,12 @@ void FFSDSMenu::Show(EMode InMode)
 		.Results(Results)
 		.Last(Current)
 		.Referee(Referee)
+		.Client(Client)
+		.EditorState(Editor)
+		.StartInEditor(Mode == EMode::Main && bReturnToEditor)
+		.OnTestDrive(FOnFSDSTestDrive::CreateRaw(this, &FFSDSMenu::TestDrive))
+		.OnTracksChanged(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::ScanTracks))
+		.OnStartStack(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::StartStack))
 		.LauncherKey(FFSDSLauncher::ToggleKey().GetDisplayName())
 		.OnDrive(FOnFSDSDrive::CreateRaw(this, &FFSDSMenu::Drive))
 		.OnResume(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::Resume))
@@ -193,6 +221,7 @@ void FFSDSMenu::Show(EMode InMode)
 		.OnQuit(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::Quit));
 	Root = Widget;
 	Viewport->AddViewportWidgetContent(Root.ToSharedRef(), MenuZOrder);
+	if (Mode == EMode::Main) bReturnToEditor = false;
 
 	if (APlayerController* PC = GetPC())
 	{
@@ -358,6 +387,29 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 	Hide();
 	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: manual %s on %s (%d cones, %d laps)"),
 		*EventName(Request.Event, Request.bPractice), *Request.Track.Name, Cones, Request.Laps);
+}
+
+void FFSDSMenu::TestDrive(const FString& TrackName)
+{
+	ScanTracks();
+	const FFSDSMenuTrack* T = Tracks.FindByPredicate([&](const FFSDSMenuTrack& X) { return X.Name == TrackName; });
+	if (!T)
+	{
+		if (Widget) Widget->SetMessage(FString::Printf(TEXT("Saved, but %s isn't in the tracks folders the sim reads."), *TrackName), true);
+		return;
+	}
+	FFSDSDriveRequest R;
+	R.Track = *T;
+	R.bPractice = true;     // a loop or an open track alike
+	R.Event = EFSDSEventType::Trackdrive;
+	R.bAutonomous = false;
+	bReturnToEditor = true;
+	Drive(R);
+}
+
+void FFSDSMenu::StartStack()
+{
+	if (Launcher) Launcher->StartStack();
 }
 
 void FFSDSMenu::OnEscape()

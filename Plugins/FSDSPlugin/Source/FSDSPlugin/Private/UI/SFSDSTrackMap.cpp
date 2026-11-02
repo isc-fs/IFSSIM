@@ -57,6 +57,11 @@ namespace FSDSTrackMapStyle
 	}
 }
 
+const FSlateBrush* SFSDSTrackMap::DotBrush(float D)
+{
+	return FSDSTrackMapStyle::DotBrush(D);
+}
+
 void SFSDSTrackMap::Construct(const FArguments&)
 {
 }
