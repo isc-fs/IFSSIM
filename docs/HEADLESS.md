@@ -39,6 +39,12 @@ folder whose `settings.json` the sim reads. The benchmark's own options
 (missions, repeats, start noise, pipeline overrides, `--stack`) are documented
 in `run_mission_benchmark.py`.
 
+By default the benchmark starts its own pipeline container, and refuses while
+another `dv_pipeline_stack` is running (only one pipeline may drive the sim).
+On a dev box where the stack is already up, pass `-- --stack running` to drive
+with it, or `-- --replace-stack` to stop it for the run and start it again
+after.
+
 ## What it writes
 
 In `tools/sim_benchmark/results/` (or `--results-root`):
