@@ -120,6 +120,11 @@ shipping pipeline, documentation.
   of RPC sessions: it is off with `-NoMenu`, `-RenderOffscreen` or
   `"Menu": {"Enabled": false}`, and closes when a client loads a track or resets
   the scenario. The Mission Control panel (Tab) stays, for engineers.
+- **A Track editor in the menu.** Draws tracks in the sim, as the web UI's Draw
+  Track does and through the same track creator (tools/envgen, via Mission
+  Control's backend): click points or draw freehand, see the cones, both cone
+  lines, the start pose and every FS rule issue live, add test sections, save,
+  and Test drive the track in Practice. Drawn tracks reopen for editing.
 - **Telemetry in the in-sim Mission Control panel.** A Telemetry tab with the
   car's live state read straight from the sim: speed, motor rpm, pedals,
   steering, who is driving, position and heading, and the motor's regen (torque
