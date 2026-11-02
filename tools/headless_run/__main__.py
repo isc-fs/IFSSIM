@@ -88,13 +88,17 @@ def _sim_command(a):
     return resolve_command(a.sim, project=a.project, extra=a.sim_arg, settings_dir=a.settings_dir)
 
 
-def _check(a) -> int:
+def _check(a, should_stop) -> int:
     sim = SimProcess(_sim_command(a), host=a.host,
                      log_path=Path(DEFAULT_RESULTS) / "headless" / "check_sim.log")
     try:
         sim.start()
-        ready = sim.wait_ready(a.ready_timeout_s)
-        time.sleep(a.hold_s)
+        ready = sim.wait_ready(a.ready_timeout_s, should_stop=should_stop)
+        t_hold = time.monotonic()
+        while time.monotonic() - t_hold < a.hold_s:
+            if should_stop():
+                raise KeyboardInterrupt
+            time.sleep(0.2)
         status = json.loads(rpc(a.host, "getSimStatus") or "{}")
         # The GPU LiDAR is the part that needs a real GPU offscreen: it logs
         # its first depth readback. No readback = a headless box that can't
@@ -104,9 +108,17 @@ def _check(a) -> int:
             text = sim.log_path.read_text(errors="replace")
             lidar = "first readback OK" in text if "LiDAR GPU" in text else None
         ok = bool(status) and lidar is not False
+        if lidar is None:
+            # Shipping builds can compile these log lines out, so no line is
+            # not proof the GPU works. Say so rather than pass silently.
+            print("warning: no LiDAR GPU lines in the sim log, so the GPU readback is unchecked "
+                  "(a Shipping build may strip them; check a perception run instead)", file=sys.stderr)
         print(json.dumps({"ok": ok, "ready_s": round(ready, 1), "status": status,
                           "lidar_gpu_readback": lidar, "sim_log": str(sim.log_path)}, indent=2))
         return 0 if ok else 3
+    except KeyboardInterrupt:
+        print(json.dumps({"ok": False, "error": "interrupted", "sim_log": str(sim.log_path)}, indent=2))
+        return 130
     except (SimError, OSError, ValueError) as e:
         print(json.dumps({"ok": False, "error": str(e), "sim_log": str(sim.log_path)}, indent=2))
         return 3
@@ -122,9 +134,6 @@ def main(argv=None) -> int:
     except SimError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    if a.cmd == "check":
-        return _check(a)
-
     stop = {"flag": False}
 
     def _on_signal(signum, _frame):
@@ -133,18 +142,26 @@ def main(argv=None) -> int:
         stop["flag"] = True
         print("stopping after cleanup (signal again to force)", file=sys.stderr)
 
-    signal.signal(signal.SIGINT, _on_signal)
-    signal.signal(signal.SIGTERM, _on_signal)
+    # SIGHUP too: a dropped ssh session or closed terminal must still stop the
+    # sim and the benchmark, which run in their own sessions and would
+    # otherwise be orphaned holding the RPC port.
+    for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, _on_signal)
+    should_stop = lambda: stop["flag"]  # noqa: E731
+
+    if a.cmd == "check":
+        return _check(a, should_stop)
 
     cfg = RunConfig(sim_command=cmd, results_root=Path(a.results_root), benchmark_args=bench,
                     mc_url=a.mc_url.rstrip("/"), mc_key=a.mc_key, mc_up=a.mc_up, host=a.host,
                     sim_ready_timeout_s=a.ready_timeout_s, max_run_s=a.max_run_s)
     log = lambda m: print(m, flush=True)  # noqa: E731
     if a.cmd == "run":
-        rec = run_once(cfg, log=log, should_stop=lambda: stop["flag"])
+        rec = run_once(cfg, log=log, should_stop=should_stop)
         return exit_code(rec["outcome"])
     recs = run_loop(cfg, cycles=a.cycles, pause_s=a.pause_s, max_infra_failures=a.max_infra_failures,
-                    log=log, should_stop=lambda: stop["flag"])
+                    log=log, should_stop=should_stop)
     outcomes = [r["outcome"] for r in recs]
     print(json.dumps({o: outcomes.count(o) for o in sorted(set(outcomes))}))
     return 0 if outcomes and all(o == "finished" for o in outcomes) else (exit_code(outcomes[-1]) if outcomes else 3)

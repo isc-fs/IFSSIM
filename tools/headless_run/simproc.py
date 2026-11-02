@@ -25,7 +25,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 RPC_PORT = 41451
 
@@ -54,6 +54,11 @@ def resolve_command(sim: str, project: Optional[str] = None, extra: Optional[Lis
     """Turn ``--sim`` into an argv. Pure, so it is unit-tested."""
     extra = list(extra or [])
     p = Path(sim).expanduser()
+    # Absolute, because the sim starts in --settings-dir: a path relative to
+    # the caller's folder would point nowhere from there. A bare name with no
+    # folder is left for a PATH lookup.
+    if p.parent != Path(".") or p.exists():
+        p = p.absolute()
     if p.suffix == ".app":
         p = p / "Contents" / "MacOS" / p.stem
     if p.name.startswith("UnrealEditor"):
@@ -64,7 +69,8 @@ def resolve_command(sim: str, project: Optional[str] = None, extra: Optional[Lis
         argv = [str(p)]
     # settings.json is read from the launch directory first (FSDSSettings::
     # AutoLoad), so running from the folder that holds it selects it.
-    return SimCommand(argv=argv + BASE_ARGS + extra, cwd=settings_dir)
+    cwd = str(Path(settings_dir).expanduser().absolute()) if settings_dir else None
+    return SimCommand(argv=argv + BASE_ARGS + extra, cwd=cwd)
 
 
 def rpc(host: str, command: str, port: int = RPC_PORT, timeout: float = 5.0) -> str:
@@ -117,18 +123,30 @@ class SimProcess:
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             self._log = open(self.log_path, "wb")
-        self.proc = subprocess.Popen(
-            self.command.argv, cwd=self.command.cwd,
-            stdout=self._log or subprocess.DEVNULL, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            # Own process group, so stop() takes the engine's children with it.
-            start_new_session=(sys.platform != "win32"),
-        )
+        try:
+            self.proc = subprocess.Popen(
+                self.command.argv, cwd=self.command.cwd,
+                stdout=self._log or subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                # Own process group, so stop() takes the engine's children with it.
+                start_new_session=(sys.platform != "win32"),
+            )
+        except OSError as e:     # not executable, missing --settings-dir, ...
+            if self._log:
+                self._log.close()
+                self._log = None
+            raise SimError(f"couldn't start the sim ({' '.join(self.command.argv[:1])}): {e}") from e
 
-    def wait_ready(self, timeout_s: float = 600.0) -> float:
-        """Block until the RPC port answers. First runs compile shaders: be generous."""
+    def wait_ready(self, timeout_s: float = 600.0,
+                   should_stop: Callable[[], bool] = lambda: False) -> float:
+        """Block until the RPC port answers. First runs compile shaders: be generous.
+
+        Raises KeyboardInterrupt as soon as ``should_stop()`` is true, so a stop
+        request doesn't wait for a slow first boot."""
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout_s:
+            if should_stop():
+                raise KeyboardInterrupt
             if self.proc is not None and self.proc.poll() is not None:
                 raise SimError(f"the sim exited during startup (code {self.proc.returncode}); "
                                f"see {self.log_path}")
@@ -146,24 +164,55 @@ class SimProcess:
         return self.proc is not None and self.proc.poll() is None
 
     def stop(self, grace_s: float = 20.0) -> None:
+        """Stop the sim and everything it started, within ``grace_s``.
+
+        Waits on the whole process group, not just its leader: IFSSIM.sh can
+        exit on SIGTERM while the engine it launched is still shutting down and
+        holding the RPC port, which would make the next run's start fail."""
         if self.proc is None:
             return
-        if self.proc.poll() is None:
-            try:
-                if sys.platform == "win32":
-                    self.proc.terminate()
-                else:
-                    os.killpg(self.proc.pid, signal.SIGTERM)
-                self.proc.wait(timeout=grace_s)
-            except (subprocess.TimeoutExpired, ProcessLookupError):
-                if sys.platform == "win32":
+        if sys.platform == "win32":
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=grace_s)
+                except subprocess.TimeoutExpired:
                     self.proc.kill()
-                else:
-                    try:
-                        os.killpg(self.proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                self.proc.wait(timeout=10)
+                    self.proc.wait(timeout=10)
+        else:
+            pgid = self.proc.pid
+            deadline = time.monotonic() + grace_s
+            _signal_group(pgid, signal.SIGTERM)
+            while _group_alive(pgid, self.proc) and time.monotonic() < deadline:
+                time.sleep(0.2)
+            if _group_alive(pgid, self.proc):
+                _signal_group(pgid, signal.SIGKILL)
+                kill_deadline = time.monotonic() + 10.0
+                while _group_alive(pgid, self.proc) and time.monotonic() < kill_deadline:
+                    time.sleep(0.1)
+            if self.proc.poll() is None:
+                self.proc.wait(timeout=5)
         if self._log:
             self._log.close()
             self._log = None
+
+
+def _signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _group_alive(pgid: int, leader: subprocess.Popen) -> bool:
+    """Is any process of the group still running? Reaps the leader first, so
+    its zombie doesn't count. Orphaned children are reaped by init, so once
+    the leader is gone a successful signal means a live process."""
+    leader.poll()
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True

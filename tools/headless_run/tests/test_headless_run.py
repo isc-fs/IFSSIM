@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import socketserver
 import sys
@@ -17,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent))
 
 from headless_run.orchestrate import RunConfig, exit_code, run_loop, run_once  # noqa: E402
-from headless_run.simproc import SimCommand, SimError, port_open, resolve_command  # noqa: E402
+from headless_run.simproc import SimCommand, SimError, SimProcess, port_open, resolve_command  # noqa: E402
 
 
 def free_port() -> int:
@@ -74,6 +75,57 @@ def test_resolve_command(tmp_path):
     ed_app = resolve_command("/UE/UnrealEditor.app", project="/p/IFSSIM.uproject")
     assert ed_app.argv[0] == "/UE/UnrealEditor.app/Contents/MacOS/UnrealEditor" and ed_app.argv[2] == "-game"
     assert resolve_command("./IFSSIM.sh", settings_dir="/s").cwd == "/s"
+
+
+def test_relative_paths_are_made_absolute(tmp_path, monkeypatch):
+    # The sim starts in --settings-dir, so a relative --sim would point nowhere.
+    monkeypatch.chdir(tmp_path)
+    c = resolve_command("build/IFSSIM.sh", settings_dir="cfg")
+    assert c.argv[0] == str(tmp_path / "build" / "IFSSIM.sh")
+    assert c.cwd == str(tmp_path / "cfg")
+    assert resolve_command("IFSSIM.sh").argv[0] == "IFSSIM.sh"     # bare name: PATH lookup
+
+
+def test_a_sim_that_cannot_be_started_is_a_failed_run(tmp_path, backend):
+    c = cfg(tmp_path, free_port(), backend)
+    c.sim_command.cwd = str(tmp_path / "no_such_settings_dir")
+    rec = run_once(c, log=quiet)           # must not raise
+    assert rec["outcome"] == "sim_failed_to_start" and "couldn't start the sim" in rec["error"]
+    assert (Path(rec["run_dir"]) / "run.json").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups")
+def test_stop_waits_for_the_engine_not_just_the_launcher(tmp_path):
+    # Like IFSSIM.sh: the launcher exits on SIGTERM at once, while the engine
+    # it started ignores SIGTERM and keeps the port. stop() must kill it.
+    port = free_port()
+    launcher = tmp_path / "launcher.py"
+    launcher.write_text(
+        "import signal, subprocess, sys\n"
+        f"subprocess.Popen([sys.executable, {str(HERE / 'fake_sim.py')!r}, {str(port)!r}],\n"
+        "                 preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))\n"
+        "signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))\n"
+        "signal.pause()\n")
+    sim = SimProcess(SimCommand(argv=[sys.executable, str(launcher)]), port=port)
+    sim.start()
+    sim.wait_ready(10)
+    t = time.monotonic()
+    sim.stop(grace_s=1.0)
+    assert time.monotonic() - t < 8
+    assert not port_open("127.0.0.1", port)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(sim.proc.pid, 0)
+
+
+def test_a_stop_request_does_not_wait_for_the_sim_to_boot(tmp_path, backend):
+    flag = {"stop": False}
+    import threading as _t
+    _t.Timer(0.5, lambda: flag.__setitem__("stop", True)).start()
+    t = time.monotonic()
+    rec = run_once(cfg(tmp_path, free_port(), backend, sim_args=[0, 30]), log=quiet,
+                   should_stop=lambda: flag["stop"])
+    assert rec["outcome"] == "interrupted"
+    assert time.monotonic() - t < 10
 
 
 def test_a_finished_run_is_recorded_and_the_sim_stopped(tmp_path, backend):

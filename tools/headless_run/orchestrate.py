@@ -166,7 +166,7 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         log(f"[{label or 'run'}] starting the sim" + (" (attach)" if sim.attached else ""))
         try:
             sim.start()
-            rec["sim_ready_s"] = round(sim.wait_ready(cfg.sim_ready_timeout_s), 1)
+            rec["sim_ready_s"] = round(sim.wait_ready(cfg.sim_ready_timeout_s, should_stop=should_stop), 1)
         except SimError as e:
             rec["outcome"], rec["error"] = "sim_failed_to_start", str(e)
             return rec
