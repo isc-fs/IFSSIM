@@ -453,7 +453,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 					+ SHorizontalBox::Slot().AutoWidth()
 					[
 						SNew(STextBlock)
-						.Text(R.bPractice ? FText::GetEmpty() : R.bFinished ? LOCTEXT("Finished", "finished") : LOCTEXT("NotFinished", "not finished"))
+						.Text(R.bFinished ? LOCTEXT("Finished", "finished") : R.bPractice ? FText::GetEmpty() : LOCTEXT("NotFinished", "not finished"))
 						.Font(MenuUi::MenuFont(10, TEXT("Bold")))
 						.ColorAndOpacity(R.bFinished ? MenuUi::Good : MenuUi::Muted)
 					]
@@ -693,7 +693,7 @@ bool SFSDSMenu::Fits(const FFSDSMenuTrack& Track) const
 
 FText SFSDSMenu::EventHint() const
 {
-	if (bPractice) return LOCTEXT("HPractice", "Any track, open ones too. Laps are counted; the run ends when you stop it.");
+	if (bPractice) return LOCTEXT("HPractice", "Any track. Open tracks end at the finish gate; on a loop, laps are counted until you stop.");
 	switch (Event)
 	{
 	case EFSDSEventType::Acceleration: return LOCTEXT("HAccel", "A 75 m straight from a standing start.");
