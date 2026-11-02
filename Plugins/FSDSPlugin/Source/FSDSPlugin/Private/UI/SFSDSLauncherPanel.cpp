@@ -830,7 +830,10 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildScoringTab()
 				.ColorAndOpacity(Accent)
 				.Text_Lambda([this]()
 				{
-					return Scoring ? FText::FromString(FString::Printf(TEXT("%.1f"), Scoring->Score)) : LOCTEXT("NoScore", "--");
+					// With no reference the backend compares the run with itself,
+					// so every run "scores" the maximum: show no number at all.
+					if (!Scoring || !Scoring->bHasReference) return LOCTEXT("NoScore", "--");
+					return FText::FromString(FString::Printf(TEXT("%.1f"), Scoring->Score));
 				})
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(8, 0, 0, 6)
@@ -899,7 +902,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildScoringTab()
 				[
 					SNew(SEditableTextBox)
 					.Font(Font(10))
-					.HintText(LOCTEXT("RefHint", "Auto (best lap)"))
+					.HintText(LOCTEXT("RefHint", "seconds"))
 					.Text_Lambda([this]() { return FText::FromString(ReferenceInput); })
 					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
 					{
@@ -922,15 +925,20 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildScoringTab()
 			[
 				SNew(STextBlock)
 				.Font(Font(9))
-				.ColorAndOpacity(Muted)
+				.AutoWrapText(true)
+				.ColorAndOpacity_Lambda([this]()
+				{
+					return FSlateColor(Scoring && !Scoring->bHasReference && ReferenceInput.IsEmpty() ? Warn : Muted);
+				})
 				.Text_Lambda([this]()
 				{
 					if (!ReferenceInput.IsEmpty()) return FText::Format(LOCTEXT("RefUsing", "Using {0} s (Enter to apply)"), FText::FromString(ReferenceInput));
 					if (Scoring && Scoring->bHasReference)
 					{
-						return FText::FromString(FString::Printf(TEXT("Auto: %.3f s (best lap)"), Scoring->Reference));
+						return FText::FromString(FString::Printf(TEXT("Scoring against %.3f s"), Scoring->Reference));
 					}
-					return LOCTEXT("RefWaiting", "Auto: waiting for the first lap");
+					return LOCTEXT("RefNone",
+						"None set. Without one the run is compared with itself and always gets full points, so no score is shown.");
 				})
 			]
 		]
