@@ -1360,10 +1360,11 @@ void SFSDSLauncherPanel::RebuildTrackInfoList()
 			.OnClicked_Lambda([this, Name]() { SelectTrackInfo(Name); return FReply::Handled(); })
 			[
 				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(1.f)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 10, 0)
 				[
 					SNew(STextBlock)
 					.Font(Font(10, TEXT("Bold")))
+					.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
 					.ColorAndOpacity_Lambda([this, Name]() { return FSlateColor(SelectedInfo == Name ? Accent : Ink); })
 					.Text(FText::FromString(Name))
 				]
