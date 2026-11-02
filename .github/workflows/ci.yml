@@ -162,6 +162,11 @@ jobs:
       - name: pytest (unit tests only)
         run: pytest tests/ -v
 
+      - name: Headless runner tests
+        # tools/headless_run: the sim, backend and benchmark are faked.
+        working-directory: tools
+        run: pytest headless_run/tests -v
+
       # The environment generator in tools/envgen uses shapely, which the
       # backend installs, so all envgen tests run here. The Tracks job runs
       # them without shapely, which proves the track creator needs nothing
