@@ -27,21 +27,21 @@ namespace
 	// Below the Mission Control panel (50) and its hint (49).
 	constexpr int32 HudZOrder = 40;
 
-	const FLinearColor TextColor(0.92f, 0.92f, 0.94f, 1.f);
-	const FLinearColor DimColor(0.62f, 0.64f, 0.68f, 1.f);
-	const FLinearColor Backdrop(0.f, 0.f, 0.f, 0.55f);
-	const FLinearColor ThrottleColor(0.20f, 0.78f, 0.35f, 1.f);
-	const FLinearColor BrakeColor(0.90f, 0.25f, 0.22f, 1.f);
-	const FLinearColor SteerColor(0.30f, 0.62f, 0.95f, 1.f);
-	const FLinearColor EbsColor(0.85f, 0.10f, 0.10f, 1.f);
+	const FLinearColor HudTextColor(0.92f, 0.92f, 0.94f, 1.f);
+	const FLinearColor HudDimColor(0.62f, 0.64f, 0.68f, 1.f);
+	const FLinearColor HudBackdrop(0.f, 0.f, 0.f, 0.55f);
+	const FLinearColor HudThrottleColor(0.20f, 0.78f, 0.35f, 1.f);
+	const FLinearColor HudBrakeColor(0.90f, 0.25f, 0.22f, 1.f);
+	const FLinearColor HudSteerColor(0.30f, 0.62f, 0.95f, 1.f);
+	const FLinearColor HudEbsColor(0.85f, 0.10f, 0.10f, 1.f);
 
-	FSlateFontInfo Font(int32 Size, const TCHAR* Weight = TEXT("Regular"))
+	FSlateFontInfo HudFont(int32 Size, const TCHAR* Weight = TEXT("Regular"))
 	{
 		return FCoreStyle::GetDefaultFontStyle(Weight, Size);
 	}
 
 	/** Flat bars: the default style's fill image is blue and ignores the colour. */
-	const FProgressBarStyle& BarStyle()
+	const FProgressBarStyle& HudBarStyle()
 	{
 		static const FSlateColorBrush Track(FLinearColor(1.f, 1.f, 1.f, 0.12f));
 		static const FSlateColorBrush Fill(FLinearColor::White);
@@ -52,7 +52,7 @@ namespace
 		return Style;
 	}
 
-	FText EventName(EFSDSEventType Event)
+	FText HudEventName(EFSDSEventType Event)
 	{
 		switch (Event)
 		{
@@ -64,7 +64,7 @@ namespace
 		}
 	}
 
-	FText LapTime(float Seconds)
+	FText HudLapTime(float Seconds)
 	{
 		if (Seconds <= 0.f) return LOCTEXT("NoLap", "--");
 		const int32 Min = FMath::FloorToInt(Seconds / 60.f);
@@ -94,7 +94,7 @@ public:
 		[
 			SNew(SBorder)
 			.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-			.BorderBackgroundColor(Backdrop)
+			.BorderBackgroundColor(HudBackdrop)
 			.Padding(FMargin(14.f, 10.f))
 			[
 				SNew(SBox)
@@ -109,8 +109,8 @@ public:
 						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 						[
 							SNew(STextBlock)
-							.Font(Font(10, TEXT("Bold")))
-							.ColorAndOpacity(DimColor)
+							.Font(HudFont(10, TEXT("Bold")))
+							.ColorAndOpacity(HudDimColor)
 							.Text(this, &SFSDSHud::ModeText)
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -118,11 +118,11 @@ public:
 							SNew(SBorder)
 							.Visibility(this, &SFSDSHud::EbsVisibility)
 							.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-							.BorderBackgroundColor(EbsColor)
+							.BorderBackgroundColor(HudEbsColor)
 							.Padding(FMargin(6.f, 1.f))
 							[
 								SNew(STextBlock)
-								.Font(Font(10, TEXT("Bold")))
+								.Font(HudFont(10, TEXT("Bold")))
 								.ColorAndOpacity(FLinearColor::White)
 								.Text(LOCTEXT("Ebs", "EBS"))
 							]
@@ -136,22 +136,22 @@ public:
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom)
 						[
 							SNew(STextBlock)
-							.Font(Font(30, TEXT("Bold")))
-							.ColorAndOpacity(TextColor)
+							.Font(HudFont(30, TEXT("Bold")))
+							.ColorAndOpacity(HudTextColor)
 							.Text(this, &SFSDSHud::SpeedText)
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(6.f, 0.f, 0.f, 6.f)
 						[
 							SNew(STextBlock)
-							.Font(Font(11))
-							.ColorAndOpacity(DimColor)
+							.Font(HudFont(11))
+							.ColorAndOpacity(HudDimColor)
 							.Text(LOCTEXT("Kmh", "km/h"))
 						]
 						+ SHorizontalBox::Slot().FillWidth(1.f).HAlign(HAlign_Right).VAlign(VAlign_Bottom).Padding(0.f, 0.f, 0.f, 6.f)
 						[
 							SNew(STextBlock)
-							.Font(Font(10))
-							.ColorAndOpacity(DimColor)
+							.Font(HudFont(10))
+							.ColorAndOpacity(HudDimColor)
 							.Text(this, &SFSDSHud::DetailText)
 						]
 					]
@@ -159,12 +159,12 @@ public:
 					// Pedals and steering.
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
 					[
-						Bar(LOCTEXT("Throttle", "Throttle"), ThrottleColor,
+						Bar(LOCTEXT("Throttle", "Throttle"), HudThrottleColor,
 							TAttribute<TOptional<float>>(this, &SFSDSHud::Throttle))
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
 					[
-						Bar(LOCTEXT("Brake", "Brake"), BrakeColor,
+						Bar(LOCTEXT("Brake", "Brake"), HudBrakeColor,
 							TAttribute<TOptional<float>>(this, &SFSDSHud::Brake))
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 3.f, 0.f, 0.f)
@@ -176,21 +176,21 @@ public:
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
 					[
 						SNew(STextBlock)
-						.Font(Font(10, TEXT("Bold")))
-						.ColorAndOpacity(TextColor)
+						.Font(HudFont(10, TEXT("Bold")))
+						.ColorAndOpacity(HudTextColor)
 						.Text(this, &SFSDSHud::MissionText)
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 0.f)
 					[
 						SNew(STextBlock)
-						.Font(Font(10))
-						.ColorAndOpacity(DimColor)
+						.Font(HudFont(10))
+						.ColorAndOpacity(HudDimColor)
 						.Text(this, &SFSDSHud::LapText)
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 0.f)
 					[
 						SNew(STextBlock)
-						.Font(Font(10))
+						.Font(HudFont(10))
 						.ColorAndOpacity(this, &SFSDSHud::PenaltyColor)
 						.Text(this, &SFSDSHud::PenaltyText)
 					]
@@ -207,14 +207,14 @@ private:
 			[
 				SNew(SBox).WidthOverride(62.f)
 				[
-					SNew(STextBlock).Font(Font(9)).ColorAndOpacity(DimColor).Text(Label)
+					SNew(STextBlock).Font(HudFont(9)).ColorAndOpacity(HudDimColor).Text(Label)
 				]
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 			[
 				SNew(SBox).HeightOverride(8.f)
 				[
-					SNew(SProgressBar).Style(&BarStyle()).Percent(Percent).FillColorAndOpacity(Color)
+					SNew(SProgressBar).Style(&HudBarStyle()).Percent(Percent).FillColorAndOpacity(Color)
 				]
 			];
 	}
@@ -227,15 +227,15 @@ private:
 			[
 				SNew(SBox).WidthOverride(62.f)
 				[
-					SNew(STextBlock).Font(Font(9)).ColorAndOpacity(DimColor).Text(LOCTEXT("Steering", "Steering"))
+					SNew(STextBlock).Font(HudFont(9)).ColorAndOpacity(HudDimColor).Text(LOCTEXT("Steering", "Steering"))
 				]
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 			[
 				SNew(SBox).HeightOverride(8.f)
 				[
-					SNew(SProgressBar).Style(&BarStyle()).BarFillType(EProgressBarFillType::RightToLeft)
-					.FillColorAndOpacity(SteerColor)
+					SNew(SProgressBar).Style(&HudBarStyle()).BarFillType(EProgressBarFillType::RightToLeft)
+					.FillColorAndOpacity(HudSteerColor)
 					.Percent(this, &SFSDSHud::SteerLeft)
 				]
 			]
@@ -243,8 +243,8 @@ private:
 			[
 				SNew(SBox).HeightOverride(8.f)
 				[
-					SNew(SProgressBar).Style(&BarStyle()).BarFillType(EProgressBarFillType::LeftToRight)
-					.FillColorAndOpacity(SteerColor)
+					SNew(SProgressBar).Style(&HudBarStyle()).BarFillType(EProgressBarFillType::LeftToRight)
+					.FillColorAndOpacity(HudSteerColor)
 					.Percent(this, &SFSDSHud::SteerRight)
 				]
 			];
@@ -314,8 +314,8 @@ private:
 		if (!R) return LOCTEXT("NoReferee", "No mission");
 		const FFSDSRefereeState S = R->GetState();
 		return S.bFinished
-			? FText::Format(LOCTEXT("Finished", "{0}: finished"), EventName(S.EventType))
-			: EventName(S.EventType);
+			? FText::Format(LOCTEXT("Finished", "{0}: finished"), HudEventName(S.EventType))
+			: HudEventName(S.EventType);
 	}
 
 	FText LapText() const
@@ -330,7 +330,7 @@ private:
 		}
 		return FText::Format(LOCTEXT("Laps", "Lap {0}/{1}   last {2}   best {3}"),
 			FText::AsNumber(S.Laps.Num()), FText::AsNumber(S.RequiredLaps),
-			LapTime(S.Laps.Num() ? S.Laps.Last() : 0.f), LapTime(Best));
+			HudLapTime(S.Laps.Num() ? S.Laps.Last() : 0.f), HudLapTime(Best));
 	}
 
 	FText PenaltyText() const
@@ -346,7 +346,7 @@ private:
 	{
 		const AFSDSReferee* R = Referee.Get();
 		const bool bAny = R && (R->GetState().DooCounter > 0 || R->GetState().OffTrackCounter > 0);
-		return bAny ? FSlateColor(FLinearColor(1.f, 0.62f, 0.25f, 1.f)) : FSlateColor(DimColor);
+		return bAny ? FSlateColor(FLinearColor(1.f, 0.62f, 0.25f, 1.f)) : FSlateColor(HudDimColor);
 	}
 
 	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;
