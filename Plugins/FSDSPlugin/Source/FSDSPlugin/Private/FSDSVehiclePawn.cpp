@@ -1,5 +1,9 @@
 #include "FSDSVehiclePawn.h"
+#include "FSDSCollision.h"
 #include "FSDSSettings.h"
+#include "FSDSGameMode.h"
+#include "UI/FSDSLauncher.h"
+#include "GameFramework/PlayerController.h"
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Plant/FSDSChaosPlant.h"
@@ -30,6 +34,13 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 
 	// Get the Chaos vehicle movement component
 	VehicleMovement = CastChecked<UFSDSWheeledVehicleMovementComponent>(GetVehicleMovementComponent());
+
+	// Wheels never drive on props (docs/collision_matrix.md). The suspension
+	// trace ignores both prop object types, so a prop under a wheel is never
+	// taken for ground; a solid prop still stops the chassis, which collides
+	// as Vehicle.
+	VehicleMovement->SetWheelTraceResponseToChannel(FSDSCollision::PropChannel, ECR_Ignore);
+	VehicleMovement->SetWheelTraceResponseToChannel(FSDSCollision::PropLidarOnlyChannel, ECR_Ignore);
 
 	// Try to load the Formula Student skeletal mesh
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> CarMesh(
@@ -1550,6 +1561,19 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 
 	PlayerInputComponent->BindAction("Handbrake", IE_Pressed, this, &AFSDSVehiclePawn::OnHandbrakePressed);
 	PlayerInputComponent->BindAction("Handbrake", IE_Released, this, &AFSDSVehiclePawn::OnHandbrakeReleased);
+
+	// Bound by key, not by an input-settings action, so the key comes from
+	// settings.json ("MissionControl": {"Key": ...}) with nothing to add to
+	// DefaultInput.ini.
+	PlayerInputComponent->BindKey(FFSDSLauncher::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleLauncher);
+}
+
+void AFSDSVehiclePawn::OnToggleLauncher()
+{
+	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
+	{
+		GM->GetLauncher().Toggle(Cast<APlayerController>(GetController()));
+	}
 }
 
 void AFSDSVehiclePawn::OnThrottleInput(float Value)
