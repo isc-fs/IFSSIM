@@ -1,0 +1,101 @@
+name: Sim PR check
+
+# Packages the sim on the GPU box (Development, so the sim keeps its logs) and
+# drives it: a headless start-up check, then the acceleration mission 3 times
+# through this PR's pipeline, scored by the referee. About 30–40 min once the
+# box has an incremental build; the first run builds from scratch (~1.5 h).
+#
+# The runner is a machine on a private network and this repo is public, so
+# the job only runs for branches of this repo (never forks), and only after a
+# maintainer adds the `sim-test` label. New pushes to a labelled PR run it
+# again; remove the label to stop that. One sim run at a time on the box: the
+# script waits for the box's sim-session lock (tools/ci/sim_pr_check.sh).
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches: [dev]
+    paths:
+      - "Source/**"
+      - "Plugins/**"
+      - "Config/**"
+      - "Content/**"
+      - "IFSSIM.uproject"
+      - "settings.json"
+      - "pipeline"
+      - "ros2/**"
+      - "docker/**"
+      - "docker-compose.yml"
+      - "tools/headless_run/**"
+      - "tools/sim_benchmark/**"
+      - "tools/ci/**"
+      - ".github/workflows/sim-pr.yml"
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "acceleration runs"
+        default: "3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sim-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sim:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'sim-test') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'sim-test'))
+    runs-on: [self-hosted, Linux, X64, gpu-1080]
+    timeout-minutes: 300
+    env:
+      UE5_ROOT: /build/UE_5.8
+      STAGE: ${{ github.workspace }}/Saved/StagedBuildsCI
+      COMPOSE_PROJECT_NAME: ifssim-ci
+      # The engine tree is read-only for the runner's user: keep the shader
+      # cache and the build tools' logs out of it.
+      UE-LocalDataCachePath: /build/ifssim-ci/ddc
+      uebp_LogFolder: /build/ifssim-ci/uat-logs
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+          submodules: true
+          # Keep Intermediate/ and Saved/ from the last job: incremental build and cook.
+          clean: false
+
+      - name: Package the sim (Linux, Development)
+        run: |
+          "$UE5_ROOT/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
+            -project="$GITHUB_WORKSPACE/IFSSIM.uproject" -platform=Linux \
+            -configuration=Development -clientconfig=Development \
+            -build -cook -iterate -stage -pak -iostore -compressed -noeditor \
+            -unattended -nop4 -utf8output -stagingdirectory="$STAGE"
+          mkdir -p "$STAGE/Linux/tracks"
+          cp Content/tracks/*.csv "$STAGE/Linux/tracks/"
+          cp Content/tracks/*.env.json "$STAGE/Linux/tracks/" 2>/dev/null || true
+
+      - name: Build the pipeline images
+        run: docker compose build dv_pipeline_stack mission_control_backend
+
+      - name: Drive the sim
+        env:
+          IFSSIM_BUILD: ${{ env.STAGE }}/Linux/IFSSIM.sh
+          IFSSIM_DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+          REPEATS: ${{ inputs.repeats || '3' }}
+          RESULTS: ${{ runner.temp }}/sim-pr-results
+        run: tools/ci/sim_pr_check.sh
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-pr-results
+          path: ${{ runner.temp }}/sim-pr-results
+          retention-days: 14
+          if-no-files-found: ignore
