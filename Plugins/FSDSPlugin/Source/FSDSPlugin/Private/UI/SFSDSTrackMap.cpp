@@ -41,6 +41,20 @@ namespace FSDSTrackMapStyle
 		}
 		return 10.0 * Pow10;
 	}
+
+	/** A filled circle D px across. A rounded box only rounds when its radius
+	 *  is at most half its size, so one brush per (whole-pixel) size. */
+	const FSlateBrush* DotBrush(float D)
+	{
+		static TMap<int32, TUniquePtr<FSlateRoundedBoxBrush>> Brushes;
+		const int32 Px = FMath::Clamp(FMath::RoundToInt(D), 2, 32);
+		TUniquePtr<FSlateRoundedBoxBrush>& B = Brushes.FindOrAdd(Px);
+		if (!B.IsValid())
+		{
+			B = MakeUnique<FSlateRoundedBoxBrush>(FLinearColor::White, Px * 0.5f);
+		}
+		return B.Get();
+	}
 }
 
 void SFSDSTrackMap::Construct(const FArguments&)
@@ -90,7 +104,6 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 {
 	namespace Map = FSDSTrackMapStyle;
 	const FSlateBrush* White = FCoreStyle::Get().GetBrush("WhiteBrush");
-	static const FSlateRoundedBoxBrush Round(FLinearColor::White, 32.f);   // clamped to a circle
 	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
 	const FSlateFontInfo SmallFont = FCoreStyle::GetDefaultFontStyle("Regular", 9);
 	const FVector2f Size = FVector2f(Geo.GetLocalSize());
@@ -190,10 +203,11 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 		case EConeKind::BigOrange:   Color = Map::BigOrange; ++NOrange; D = Dot * 1.6f; break;
 		default: break;
 		}
+		D = (float)FMath::RoundToInt(D);
 		const FVector2f P = ToScreen(C.Pos.X, C.Pos.Y);
 		FSlateDrawElement::MakeBox(Out, LayerId + 2,
 			Geo.ToPaintGeometry(FVector2f(D, D), FSlateLayoutTransform(P - FVector2f(D, D) * 0.5f)),
-			&Round, ESlateDrawEffect::None, Color);
+			Map::DotBrush(D), ESlateDrawEffect::None, Color);
 	}
 
 	// Legend, top right: the cone counts.
@@ -216,7 +230,7 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 			X -= 12.f;
 			FSlateDrawElement::MakeBox(Out, LayerId + 2,
 				Geo.ToPaintGeometry(FVector2f(8.f, 8.f), FSlateLayoutTransform(FVector2f(X, 8.f + TS.Y * 0.5f - 4.f))),
-				&Round, ESlateDrawEffect::None, E.Color);
+				Map::DotBrush(8.f), ESlateDrawEffect::None, E.Color);
 			X -= 16.f;
 		}
 	}
