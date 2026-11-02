@@ -30,8 +30,11 @@ namespace MenuUi
 	const FLinearColor Ground(0.010f, 0.010f, 0.013f, 0.94f);
 	const FLinearColor Card(0.010f, 0.010f, 0.013f, 0.86f);
 	const FLinearColor Dim(0.f, 0.f, 0.f, 0.35f);
-	const FLinearColor GoBtn = FLinearColor::FromSRGBColor(FColor(21, 128, 61));
 	const FLinearColor PlainBtn = FLinearColor::FromSRGBColor(FColor(64, 64, 72));
+	// Slate's button darkens its colour a lot: the big buttons start brighter
+	// so they still read as green and grey.
+	const FLinearColor GoBtn = FLinearColor::FromSRGBColor(FColor(34, 197, 94));
+	const FLinearColor SecondBtn = FLinearColor::FromSRGBColor(FColor(130, 130, 145));
 	const FLinearColor Off(0.f, 0.f, 0.f, 0.f);
 
 	FSlateFontInfo MenuFont(int32 Size, const TCHAR* Weight = TEXT("Regular"))
@@ -439,7 +442,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildTracksPage()
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[
-					MakeBigButton(LOCTEXT("DriveThis", "Drive this track"), MenuUi::PlainBtn,
+					MakeBigButton(LOCTEXT("DriveThis", "Drive this track"), MenuUi::SecondBtn,
 						FSimpleDelegate::CreateLambda([this]() { Page = EPage::Drive; }),
 						TAttribute<bool>::CreateLambda([this]() { return Tracks.IsValidIndex(Selected); }))
 				]
@@ -634,11 +637,11 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 	Buttons->AddSlot().AutoHeight().Padding(0, 4)
 	[
 		MakeBigButton(bPause ? LOCTEXT("Restart", "Restart run") : LOCTEXT("Again", "Drive again"),
-			bPause ? MenuUi::PlainBtn : MenuUi::GoBtn, OnRestart)
+			bPause ? MenuUi::SecondBtn : MenuUi::GoBtn, OnRestart)
 	];
 	Buttons->AddSlot().AutoHeight().Padding(0, 4)
 	[
-		MakeBigButton(LOCTEXT("MainMenu", "Main menu"), MenuUi::PlainBtn, OnMainMenu)
+		MakeBigButton(LOCTEXT("MainMenu", "Main menu"), MenuUi::SecondBtn, OnMainMenu)
 	];
 
 	return SNew(SOverlay)
