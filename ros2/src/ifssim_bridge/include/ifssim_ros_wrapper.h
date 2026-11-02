@@ -71,6 +71,10 @@ private:
     void initializeTimers();
     void startStreaming();
     void triggerReconnect();  // Called by stream threads on disconnect
+    // Reconnects the command client when it is down or the sim restarted.
+    // Runs on the executor, so it never races controlCommandCb.
+    void commandClientWatchdogCb();
+    bool reconnectCommandClient(double timeout_s, bool new_session);
 
     // Streaming threads. The TCP `lidarStreamThread` was removed in
     // #322 (LiDAR moved to chunked UDP via UdpReceiver) and
@@ -190,6 +194,9 @@ private:
     // Set by triggerReconnect when the sensor stream is reopened, consumed
     // by the first frame on the new stream.
     std::atomic<bool> sensor_stream_reconnected_{false};
+    // Set when the sensor stream shows a new sim session: the command
+    // client's socket belonged to the old sim and must be replaced.
+    std::atomic<bool> command_client_stale_{false};
     rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gps_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gss_pub_;
@@ -279,6 +286,7 @@ private:
 
     // Timers
     rclcpp::TimerBase::SharedPtr go_signal_timer_;
+    rclcpp::TimerBase::SharedPtr command_client_timer_;
     rclcpp::TimerBase::SharedPtr extra_info_timer_;
     rclcpp::TimerBase::SharedPtr track_publish_timer_;
     rclcpp::TimerBase::SharedPtr static_tf_timer_;

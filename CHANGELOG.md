@@ -250,6 +250,15 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **After a sim restart the car never moved.** When the sim stopped, the
+  bridge reconnected its sensor streams at once, but its command connection
+  only failed a moment later, on its next send, and nothing reconnected it:
+  every control command after that was dropped without a log line, while
+  perception, planning and control ran normally. It hit every run after the
+  first against a running `dv_pipeline_stack` (restarting the game, or the
+  headless runner's fresh sim per run). The bridge now checks its command
+  connection once a second and replaces it when it is down or when the
+  sensor stream shows a new sim session.
 - **Shipped tracks had blue on the car's right, or a start heading decided by centimetres.**
   The CSV frame is right-handed (+y is left of +x), and the CSV → UE → ROS
   chain is a pure rotation, so a cone's side in the CSV is its side in the sim
