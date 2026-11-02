@@ -255,6 +255,14 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The car could not turn tighter than ~11 m.** Chaos reads a wheel's
+  lateral slip graph as a force (it scales the curve by 10000), but the
+  Pacejka bake writes a friction coefficient, so every tyre topped out at
+  about 140 N sideways whatever its load (a front tyre carries ~520 N). The
+  sim now scales each wheel's graph by its load every tick, so lateral force
+  is mu(slip) x Fz. Full lock at ~3.3 m/s went from a 12 m to a 3.2 m radius,
+  and the stress circles (r5, r9), hairpins, tight slalom and tightening snail
+  drive to the end with no cones down (#697).
 - **On UE 5.8 the car spun at a quarter of steering lock.** The car's physics
   asset carries a centre-of-mass nudge of 37 cm back and 17 cm down that UE 5.7
   ignored and UE 5.8 applies, which put about 26% of the weight on the front

@@ -1402,6 +1402,25 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetBrakeInput(0.f);
 		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
 
+		// Lateral grip has to scale with the load on each tyre (#697).
+		// Chaos reads the lateral slip graph as a FORCE: it multiplies the
+		// curve by 10000 when it builds the wheel (ChaosVehicleWheel.h,
+		// FillWheelSetup) and the tyre force is curve(slip) x
+		// LateralSlipGraphMultiplier (WheelSystem.cpp). The Pacejka bake
+		// writes a friction coefficient (peak TireMu), so with the default
+		// multiplier of 1 every tyre topped out at TireMu x 100 N, whatever
+		// its load: about 140 N against ~520 N on a front tyre, which is why
+		// the car could not turn tighter than ~11 m. Multiplying by the
+		// wheel's current load (Chaos units, N x 100) / 10000 makes the
+		// lateral force mu(slip) x Fz, as the Pacejka model means it. The
+		// friction circle Chaos clips to (Fz x surface mu x FrictionMultiplier,
+		// set up in FSDSPacejka::BakeToWheel) already caps it at TireMu x Fz.
+		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); ++i)
+		{
+			const float LoadChaos = VehicleMovement->GetWheelState(i).SpringForce;
+			VehicleMovement->SetWheelSlipGraphMultiplier(i, FMath::Max(LoadChaos, 0.f) / 10000.f);
+		}
+
 		// Electric: always in gear 1 (single speed)
 		VehicleMovement->SetTargetGear(1, true);
 
