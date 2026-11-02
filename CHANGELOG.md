@@ -413,6 +413,15 @@ shipping pipeline, documentation.
 - **`loadTrack` and `getSettingsPaths` replied with invalid JSON on Windows.**
   The file paths in them went out with bare backslashes; they are escaped
   now, as the error replies already were.
+
+- **A run on an open track now ends at its finish gate, whatever the event.**
+  A track with two orange gates, start at one end and finish at the other
+  (acceleration, the open stress tracks: slaloms, hairpins), only finished
+  under the Acceleration event: under Autocross or Trackdrive the referee waited
+  for a second crossing that never came, so an autonomous or benchmark run there
+  could only end by timeout. The referee now starts the clock when the car sets
+  off and finishes on one pass of the far gate. Loops are unchanged.
+
 - **After a sim restart the car never moved.** When the sim stopped, the
   bridge reconnected its sensor streams at once, but its command connection
   only failed a moment later, on its next send, and nothing reconnected it:

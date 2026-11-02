@@ -281,8 +281,9 @@ bool FFSDSMenu::Tick(float DeltaTime)
 		UpdateOrbit(DeltaTime);
 	}
 
-	// The referee ends the run (all laps done): show how it went.
-	if (IsManualRunLive() && !Current->bPractice && !IsOpen())
+	// The referee ends the run (all laps done, or the far gate of a one-way
+	// track): show how it went. Practice on a loop never ends this way.
+	if (IsManualRunLive() && !IsOpen())
 	{
 		const AFSDSReferee* R = Referee.Get();
 		if (R && R->GetState().bFinished)
@@ -420,7 +421,7 @@ void FFSDSMenu::RecordRun()
 	Run.RequiredLaps = S.RequiredLaps;
 	Run.ConesDown = S.DooCounter;
 	Run.OffCourse = S.OffTrackCounter;
-	Run.bFinished = S.bFinished && !Current->bPractice;
+	Run.bFinished = S.bFinished;
 	Run.bPractice = Current->bPractice;
 	Run.When = FDateTime::Now();
 	Results->Add(MoveTemp(Run));
