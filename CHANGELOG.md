@@ -21,6 +21,10 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Tabs and the session log in the in-sim Mission Control panel.** The panel
+  (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
+  (newest first, coloured per event type) with Export JSON, which saves to
+  `Documents/IFSSIM/SessionLogs` and says where.
 - **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
   with no window, runs the mission benchmark around it and stops it, once
   (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.
