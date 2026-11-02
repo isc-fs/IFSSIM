@@ -5,6 +5,8 @@
 #include "FSDSReferee.h"
 
 class ACameraActor;
+class FFSDSMissionControlClient;
+namespace FSDSTrackSpec { struct FEditorState; }
 class AFSDSVehiclePawn;
 class APlayerController;
 class FFSDSLauncher;
@@ -87,6 +89,9 @@ private:
 
 	void ScanTracks();
 	void Drive(const FFSDSDriveRequest& Request);
+	/** The track editor's Test drive: the saved track, in Practice. */
+	void TestDrive(const FString& TrackName);
+	void StartStack();
 	void Resume();
 	void Restart();
 	void BackToMain();
@@ -117,6 +122,14 @@ private:
 
 	TArray<FFSDSMenuTrack> Tracks;
 	TSharedPtr<TArray<FFSDSRunResult>> Results;
+
+	/** The track editor's backend (tools/envgen builds the cones) and its state. */
+	TSharedPtr<FFSDSMissionControlClient> Client;
+	TSharedPtr<FSDSTrackSpec::FEditorState> Editor;
+	/** The repo's Content/tracks, where the backend saves: listed first. */
+	FString RepoTracksDir;
+	/** After a test drive, Main menu goes back to the editor. */
+	bool bReturnToEditor = false;
 
 	/** The last START, kept for Restart and to preselect the menu. */
 	TOptional<FFSDSDriveRequest> Current;
