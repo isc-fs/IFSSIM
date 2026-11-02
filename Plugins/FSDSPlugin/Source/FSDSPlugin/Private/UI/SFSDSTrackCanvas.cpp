@@ -323,7 +323,7 @@ int32 SFSDSTrackCanvas::OnPaint(const FPaintArgs&, const FGeometry& Geo, const F
 		{
 			TArray<FVector2f> S;
 			for (const FVector2D& V : Pts) S.Add(Un(V));
-			if (bClosed && S.Num() > 0) S.Add(S[0]);
+			if (bClosed && S.Num() > 0) { const FVector2f First = S[0]; S.Add(First); }   // not S.Add(S[0]): it may reallocate under the reference
 			return S;
 		};
 		Line(LayerId + 2, Poly(P->Left), Canvas::LeftLine, 1.f);
@@ -372,7 +372,7 @@ int32 SFSDSTrackCanvas::OnPaint(const FPaintArgs&, const FGeometry& Geo, const F
 		// The drawn path, then its control points with their numbers.
 		TArray<FVector2f> PathPts;
 		for (const FVector2D& V : Spec->Points) PathPts.Add(ToScreen(V, Size));
-		if (bClosed && PathPts.Num() > 2) PathPts.Add(PathPts[0]);
+		if (bClosed && PathPts.Num() > 2) { const FVector2f First = PathPts[0]; PathPts.Add(First); }
 		Line(LayerId + 5, PathPts, Canvas::Path, 1.f);
 
 		for (int32 i = 0; i < Spec->Points.Num(); ++i)
