@@ -17,10 +17,14 @@ centred on the origin. The orange start gate is *not* part of the bbox; it
 rides along with whatever shift the boundary needs, so the car still spawns on
 the start line (the sim derives the spawn pose from the orange cones, not the
 world origin — see FSDSConeSpawner::ComputeStartGatePose).
+
+A track's environment sidecar (`<track>.env.json`) is in the CSV's frame, so
+it moves with the cones.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from typing import List, Optional, Tuple
 
@@ -114,10 +118,49 @@ def ensure_centered(path: str, tol: float = CENTERED_TOL_M) -> bool:
         parts[2] = repr(y - cy)
         out.append(",".join(parts) + ("\n" if line.endswith("\n") else ""))
 
+    # The environment sidecar is in the CSV's frame: move it first, so a
+    # failure leaves both files in the old frame rather than one in each.
+    shift_sidecar(sidecar_path(path), cx, cy)
+
     # temp file + replace so an interrupted write can't leave a half-rewritten
     # track on disk.
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         f.writelines(out)
+    os.replace(tmp, path)
+    return True
+
+
+def sidecar_path(track_csv: str) -> str:
+    """<dir>/<stem>.env.json for <dir>/<stem>.csv (docs/environment_sidecar.md)."""
+    root, _ = os.path.splitext(track_csv)
+    return root + ".env.json"
+
+
+def shift_sidecar(path: str, cx: float, cy: float) -> bool:
+    """Move a sidecar's props and ground extent by (-cx, -cy), as the cones move.
+
+    Returns True if a sidecar was there and was rewritten. A sidecar that isn't
+    valid JSON is left alone: the plugin reports it as invalid either way.
+    """
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path) as f:
+            env = json.load(f)
+    except ValueError:
+        return False
+    for p in env.get("props") or []:
+        if isinstance(p, dict) and "x" in p and "y" in p:
+            p["x"] = round(p["x"] - cx, 3)
+            p["y"] = round(p["y"] - cy, 3)
+    ext = (env.get("ground") or {}).get("extent")
+    if isinstance(ext, dict):
+        for k, d in (("x_min", cx), ("x_max", cx), ("y_min", cy), ("y_max", cy)):
+            if k in ext:
+                ext[k] = round(ext[k] - d, 3)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(json.dumps(env, indent=2) + "\n")
     os.replace(tmp, path)
     return True

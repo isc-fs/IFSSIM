@@ -114,10 +114,16 @@ void AFSDSGameMode::StartPlay()
 	UdpBroadcaster.SetVehiclePawn(VehiclePawn);
 	UdpBroadcaster.SetReferee(RefereeActor);
 	UdpBroadcaster.Start(TEXT("127.0.0.1"), 41452, 41500);
+
+	// In-game Mission Control panel (toggle key, Tab by default). Drives the
+	// same backend as the web UI; off when there is no viewport.
+	Launcher.Init(GetWorld(), RefereeActor);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	Launcher.Shutdown();
+
 	// Null pawn pointers before stopping threads to prevent dangling access
 	RpcServer.SetVehiclePawn(nullptr);
 	UdpBroadcaster.SetVehiclePawn(nullptr);

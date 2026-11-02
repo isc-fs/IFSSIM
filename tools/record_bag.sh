@@ -12,7 +12,7 @@
 #                            skip the numba-JIT warmup)
 #
 # CAR-PARITY (--car-parity) — a bag that LIFTS onto the real car
-# (isc-fs/IFS08-DV-uDV) with the car UP ON STANDS ("thinking it's moving").
+# (isc-fs/IFS09-DV-uDV) with the car UP ON STANDS ("thinking it's moving").
 # Records ONLY the two sensors the live car cannot produce on the bench; every
 # other input comes LIVE from the car. See tools/lift_to_car.sh for the replay
 # recipe + the full rationale.

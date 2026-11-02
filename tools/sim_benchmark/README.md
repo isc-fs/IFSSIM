@@ -11,9 +11,12 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-bench-run).
 - `specs/` — preset run specs for `bench-run`.
 - `run_mission_benchmark.py` — the pipeline drives the missions in the simulator, scored by the referee; defaults in `missions.yaml`. See [Mission benchmarks](#mission-benchmarks).
-- `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching).
+- `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching). Also scores the perception stressors from `docs/ENVIRONMENT_ROADMAP.md`: big-orange classification, an offline replay of the control node's stop latch, and per-scan structure; `--reference <run>` reports deltas against a baseline run. Clouds are decoded with `cone_detection_node`'s own reader, so real-car `/lidar_points` bags (`--lidar-topic /lidar_points`) decode as they do on the car.
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
+- `perception_sanity.py` — records what each cone-detection stage did to one scan (ground removal, DBSCAN clusters with each cluster's gate verdict, cone fits with both templates). `run_perception_benchmark.py` writes it as `perception_sanity.json` for the first scan (`--sanity-scan N` for another, `-1` for none), and IFS-DV-BENCHWEB shows it as the three "Sanity check" charts in a simulator bag's perception section.
+- `perception_sanity_plots.py` — the same capture as a standalone HTML page, for any bag including real ones: `python tools/sim_benchmark/perception_sanity_plots.py --bag <sim_bag> --bag <real_bag>`
 - `run_slam_benchmark.py` — offline SLAM replay vs sim GT (gated track cones, pose error vs `/testing_only/odom`).
+- `run_onboard_replay.py` — live pipeline replay of an **onboard** bag (no sim GT) + HTML report of pipeline outputs.
 - `slam_metrics.py` / `slam_report.py` — GT cone injection, trajectory and error plots.
 - `control_benchmark_node.py` — online GT control error harness.
 - `../track_driver.py` — GT pure-pursuit driver (uses `pipeline/control` Pure Pursuit).
@@ -37,6 +40,33 @@ outside `pipeline/` so it is not carried into the car submodule.
    - `python run_perception_benchmark.py results/capture/<bag_name>`
    - `python tools/sim_benchmark/run_slam_benchmark.py <bag_path>` → `results/slam/<strategy>_<ts>/report.html`
      (needs `/testing_only/track`, `/odom`, `/imu`; see capture notes below)
+   - Onboard / car bags (no `/testing_only/*`):
+     `python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag_name>`
+     Plays `/imu` `/lidar_points` `/motor_rpm` `/steering_angle` into the live
+     autonomy nodes. Add `--report` to record pipeline outputs and write
+     `results/onboard/<mission>_<ts>/report.html` (detection counts, odom/SLAM
+     trajectories, map, autonomy vs pilot steering). Without `--report` there
+     is no second bag. There is no precision/recall — there is no GT.
+     `--duration-s 30` clips a long bag; `--rate 1.0` keeps control timing.
+
+     To watch in Lichtblick / Foxglove while it plays:
+
+     ```bash
+     python tools/sim_benchmark/run_onboard_replay.py results/capture/<bag_name> --live
+     ```
+
+     The replay container publishes `foxglove_bridge` on **ws://localhost:8766**
+     (8766 so it does not collide with the sim stack on 8765). Open
+     http://localhost:8080 → Open connection → Foxglove WebSocket → that URL.
+     Layout `lichtblick/onboard_live.json` (Perception / Filter / Map / Path /
+     Control / Odom / IMU / Mission / Performance tabs). Perception BEV shows
+     `/lidar_points/above_ground` (RANSAC outliers, what clustering sees);
+     perspective shows `/lidar_points/ground` (full rotated crop, including
+     ground inliers). Both share the `base_link` plane with `/Conos_raw`.
+     Diagnostic clouds/Float32s are subscription-gated so unused viz does not
+     burn rotate/pack/bridge CPU.
+     The bag starts as soon as Lichtblick connects (or after `--live-wait-s`,
+     default 20 s, if nobody connects). `--loop` repeats until Ctrl-C.
    - Bag and results paths must live under `tools/sim_benchmark/`. Use `--no-docker` inside a sourced ROS shell to run locally.
 
    **Perception GT alignment.** GT odom is looked up at the LiDAR `header.stamp`, which is
@@ -61,6 +91,11 @@ outside `pipeline/` so it is not carried into the car submodule.
    - **BEV plots**: GT (blue) vs prediction (red), match lines, ego marker (sample frames)
    - **Histograms / time series**: error distribution, recall and error over time
    - **Performance**: latency and cone counts per frame
+   - **Perception stress**:
+     - big-orange precision/recall, false big oranges per frame, and frames with two or more of them (one such frame can stop the car);
+     - the replayed stop latch: whether it fired, where, and whether that was at a real gate. It mirrors `control_node._on_orange`: two or more big oranges after `stop_latch_min_travel` (read from `params.yaml`), gated on `/slam/final_lap` when the bag has it;
+     - scan structure: clusters per scan, ground fraction and above-ground points inside the detector's 25 m crop;
+     - with `--reference`, a delta table against the reference run.
    - **Pipeline profile** (optional): stage table, stacked bar chart, `profile.json` /
      `profile_stages.csv` via
      `python tools/sim_benchmark/run_perception_benchmark.py <bag> --profile --profile-frames 80`
@@ -165,6 +200,12 @@ Each run is a folder under `results/mission/<mission>_<track>/<commit>/seed<k>/`
 with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `telemetry.csv`), the
 layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
 noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
+
+**Timeouts count sim time.** A run's `timeout_s` is measured on the sim's game clock (`getSimStatus`
+`sim_time`), so a sim running slower than real time (an editor build at 15 fps runs at a quarter of
+real time) still gets its full budget. Six times `timeout_s` of real time ends the run anyway, in
+case the sim stalls. A sim build that doesn't report `sim_time` falls back to real time and the
+log says so. `results.json` carries `race/run_sim_time_s` next to the real-time `race/run_time_s`.
 
 **Pipeline parameter overrides** (`--pipeline-overrides <file.json>`, `{node: {param: value}}`; the
 `pipeline:` section of a run spec): checked against the pipeline's `bringup/config/params.yaml`

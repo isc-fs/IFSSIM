@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Validate every track CSV under Content/tracks/ — runs as a CI gate.
+Validate every track CSV, and every environment sidecar, under Content/tracks/
+— runs as a CI gate.
 
 A track CSV is a simple text file: each line is `cone_type,x,y` (in
 metres, ENU). cone_type ∈ {blue, yellow, big_orange, small_orange}.
@@ -8,13 +9,19 @@ Anything malformed (missing fields, non-numeric coordinates, unknown
 cone type, blank file) is a regression that would silently break
 loadTrack at runtime.
 
+A sidecar (`<track>.env.json`, docs/environment_sidecar.md) is the
+environment around a track's cones. It is checked by the same rules the plugin
+applies when it loads one (Environment/FSDSEnvironment.cpp), so a bad sidecar
+fails here rather than at runtime, and it must sit next to its track's CSV.
+
 Exit code:
-  0 — every CSV under the search root parses clean
+  0 — every CSV and sidecar under the search root parses clean
   1 — at least one file failed validation; details on stderr
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -27,6 +34,12 @@ VALID_CONE_TYPES = frozenset({"blue", "yellow", "big_orange", "small_orange"})
 # are almost certainly a unit-confusion bug (cm vs m). Tighten if real
 # tracks ever push closer to this.
 MAX_COORD_M = 500.0
+
+ENV_FORMAT = "ifssim-env/1"
+ENV_SUFFIX = ".env.json"
+# Same bound as FSDSEnvironment::MaxCoordM: the ground extent reaches past the
+# cones, so it is looser than MAX_COORD_M.
+MAX_ENV_COORD_M = 1000.0
 
 
 def validate_one(path: Path) -> List[str]:
@@ -81,8 +94,93 @@ def validate_one(path: Path) -> List[str]:
     return errors
 
 
+def _is_number(v) -> bool:
+    # JSON true/false are not numbers (bool is an int subclass in Python).
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _unknown_keys(obj: dict, known: set, where: str) -> List[str]:
+    return [f"{where}: unknown key {k!r}" for k in obj if k not in known]
+
+
+def _coord(obj: dict, key: str, where: str) -> Tuple[float, List[str]]:
+    v = obj.get(key)
+    if not _is_number(v):
+        return 0.0, [f"{where}: {key!r} must be a number"]
+    if abs(v) > MAX_ENV_COORD_M:
+        return 0.0, [f"{where}: {key!r} = {v} m is outside ±{MAX_ENV_COORD_M:.0f} m (cm instead of m?)"]
+    return float(v), []
+
+
+def validate_sidecar(path: Path) -> List[str]:
+    """Errors for one <track>.env.json; empty list = clean. Mirrors
+    FSDSEnvironment::Parse."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return [f"{path}: not valid JSON: {e}"]
+    if not isinstance(doc, dict):
+        return [f"{path}: must be a JSON object"]
+
+    errors = _unknown_keys(doc, {"format", "seed", "profile", "ground", "props"}, f"{path}")
+    if doc.get("format") != ENV_FORMAT:
+        errors.append(f"{path}: 'format' must be {ENV_FORMAT!r} (got {doc.get('format')!r})")
+    seed = doc.get("seed")
+    if not _is_number(seed) or seed != int(seed) or seed < 0:
+        errors.append(f"{path}: 'seed' must be a non-negative integer")
+    if not isinstance(doc.get("profile"), str) or not doc.get("profile"):
+        errors.append(f"{path}: 'profile' must be a non-empty string")
+
+    if "ground" in doc:
+        ground = doc["ground"]
+        if not isinstance(ground, dict):
+            errors.append(f"{path}: 'ground' must be an object")
+        else:
+            errors += _unknown_keys(ground, {"extent"}, f"{path}: ground")
+            extent = ground.get("extent")
+            if not isinstance(extent, dict):
+                errors.append(f"{path}: ground: 'extent' must be an object")
+            else:
+                where = f"{path}: ground.extent"
+                errors += _unknown_keys(extent, {"x_min", "y_min", "x_max", "y_max"}, where)
+                vals = {}
+                for k in ("x_min", "y_min", "x_max", "y_max"):
+                    vals[k], errs = _coord(extent, k, where)
+                    errors += errs
+                if len(vals) == 4 and (vals["x_min"] >= vals["x_max"] or vals["y_min"] >= vals["y_max"]):
+                    errors.append(f"{where}: min must be below max on both axes")
+
+    if "props" in doc:
+        props = doc["props"]
+        if not isinstance(props, list):
+            errors.append(f"{path}: 'props' must be an array")
+        else:
+            for i, prop in enumerate(props):
+                where = f"{path}: props[{i}]"
+                if not isinstance(prop, dict):
+                    errors.append(f"{where}: must be an object")
+                    continue
+                errors += _unknown_keys(prop, {"class", "x", "y", "yaw_deg"}, where)
+                if not isinstance(prop.get("class"), str) or not prop.get("class"):
+                    errors.append(f"{where}: 'class' must be a non-empty string")
+                for k in ("x", "y"):
+                    errors += _coord(prop, k, where)[1]
+                if "yaw_deg" in prop and not _is_number(prop["yaw_deg"]):
+                    errors.append(f"{where}: 'yaw_deg' must be a number")
+
+    track_csv = path.with_name(path.name[: -len(ENV_SUFFIX)] + ".csv")
+    if not track_csv.is_file():
+        errors.append(f"{path}: no track next to it ({track_csv.name}); the plugin loads a sidecar "
+                      f"only with its track")
+    return errors
+
+
 def find_csvs(root: Path) -> Iterable[Path]:
     return sorted(root.rglob("*.csv"))
+
+
+def find_sidecars(root: Path) -> Iterable[Path]:
+    return sorted(root.rglob("*" + ENV_SUFFIX))
 
 
 def main(argv: List[str]) -> int:
@@ -95,10 +193,15 @@ def main(argv: List[str]) -> int:
     if not paths:
         print(f"track-validator: no CSV files under {root}", file=sys.stderr)
         return 1
+    sidecars = list(find_sidecars(root))
 
     all_errors: List[Tuple[Path, List[str]]] = []
     for p in paths:
         errs = validate_one(p)
+        if errs:
+            all_errors.append((p, errs))
+    for p in sidecars:
+        errs = validate_sidecar(p)
         if errs:
             all_errors.append((p, errs))
 
@@ -109,7 +212,7 @@ def main(argv: List[str]) -> int:
                 print(f"  {e}", file=sys.stderr)
         return 1
 
-    print(f"track-validator: {len(paths)} file(s) clean")
+    print(f"track-validator: {len(paths)} CSV file(s) and {len(sidecars)} sidecar(s) clean")
     return 0
 
 
