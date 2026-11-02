@@ -31,7 +31,7 @@ IFSSIM/
 │   └── test_*_physics.m    per-subsystem physics checks
 │
 ├── pipeline/               AUTONOMY. Git submodule, its own repo:
-│                           isc-fs/IFS08-DV-PIPELINE
+│                           isc-fs/IFS09-DV-PIPELINE
 ├── ros2/src/ifssim_bridge/ the bridge between sim and ROS 2
 │
 ├── tools/mission_control/  session orchestration (FastAPI + React)

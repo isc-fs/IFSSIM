@@ -32,6 +32,7 @@ bool FFSDSSettings::AutoLoad()
 		if (FPaths::FileExists(Path))
 		{
 			UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Loading from %s"), *Path);
+			LoadedFromPath = FPaths::ConvertRelativePathToFull(Path);
 			return LoadFromFile(Path);
 		}
 	}
@@ -96,6 +97,16 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 	}
 	Root->TryGetStringField(TEXT("SpectatorServerPassword"), SpectatorServerPassword);
 
+	const TSharedPtr<FJsonObject>* McObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("MissionControl"), McObj))
+	{
+		(*McObj)->TryGetStringField(TEXT("Url"), MissionControlUrl);
+		(*McObj)->TryGetStringField(TEXT("ApiKey"), MissionControlApiKey);
+		(*McObj)->TryGetStringField(TEXT("ComposeDir"), MissionControlComposeDir);
+		(*McObj)->TryGetBoolField(TEXT("Panel"), bLauncherPanel);
+		(*McObj)->TryGetStringField(TEXT("Key"), LauncherKey);
+	}
+
 	// Plant selection. A top-level "Plant" block, because which simulator
 	// runs the car is not a property of the car.
 	const TSharedPtr<FJsonObject>* PlantObj;
@@ -122,6 +133,16 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 			*PlantType, *PlantFmuPath, RoadProbeUpM, RoadProbeDownM, RoadDefaultMu);
 	}
 
+	// Trackside environment. Only the switch is read here; what a track's
+	// environment contains is in its sidecar (FSDSEnvironment.h).
+	const TSharedPtr<FJsonObject>* EnvObj;
+	if (Root->TryGetObjectField(TEXT("Environment"), EnvObj))
+	{
+		(*EnvObj)->TryGetBoolField(TEXT("Enabled"), bEnvironmentEnabled);
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Environment %s"),
+		bEnvironmentEnabled ? TEXT("enabled (track sidecars are loaded)") : TEXT("off (flat world)"));
+
 	// Vehicles
 	const TSharedPtr<FJsonObject>* VehiclesObj;
 	if (Root->TryGetObjectField(TEXT("Vehicles"), VehiclesObj))
@@ -131,7 +152,7 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 			const TSharedPtr<FJsonObject>* VehicleObj;
 			if (Pair.Value->TryGetObject(VehicleObj))
 			{
-				ParseVehicle(Pair.Key, *VehicleObj);
+				ParseVehicle(FString(*Pair.Key), *VehicleObj);
 			}
 		}
 	}
@@ -165,7 +186,7 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 			const TSharedPtr<FJsonObject>* SensorObj;
 			if (Pair.Value->TryGetObject(SensorObj))
 			{
-				ParseSensor(Pair.Key, *SensorObj, Vehicle);
+				ParseSensor(FString(*Pair.Key), *SensorObj, Vehicle);
 			}
 		}
 	}
@@ -339,8 +360,5 @@ const FFSDSVehicleSettings* FFSDSSettings::GetDefaultVehicle() const
 		return &Vehicles[TEXT("FSCar")];
 
 	// Return first vehicle
-	for (auto& Pair : Vehicles)
-		return &Pair.Value;
-
-	return nullptr;
+	return &Vehicles.CreateConstIterator().Value();
 }

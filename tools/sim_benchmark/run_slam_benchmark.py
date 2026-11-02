@@ -3,7 +3,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from common import bag_storage_id, default_results_root, make_run_dir, write_csv, write_json
+from common import (
+    bag_storage_id,
+    default_results_root,
+    make_run_dir,
+    write_csv,
+    write_json,
+)
 from perception_metrics import (
     DEFAULT_LIDAR_SCAN_PERIOD_NS,
     aligned_time_ns,
@@ -11,6 +17,7 @@ from perception_metrics import (
     latch_track_layout,
     msg_time_ns,
 )
+import pipeline_overrides
 from report_html import write_run_report
 from odom_from_bag import ODOM_SENSOR_TOPICS, synthesize_supervisor_odom
 from slam_metrics import (
@@ -89,7 +96,9 @@ def main() -> None:
         "with the current (fixed) OdometryFilter. Use when the bag's /odom was "
         "recorded live by a buggy filter.",
     )
-    ap.add_argument("--sync-ms", type=float, default=50.0, help="(unused) kept for CLI compat.")
+    ap.add_argument(
+        "--sync-ms", type=float, default=50.0, help="(unused) kept for CLI compat."
+    )
     ap.add_argument(
         "--gt-range-m",
         type=float,
@@ -124,7 +133,15 @@ def main() -> None:
         "with a soft /odom backstop. Use to A/B the two.",
     )
     ap.add_argument("--results-root", default=default_results_root())
+    ap.add_argument(
+        "--pipeline-overrides",
+        help="JSON file of parameter overrides (pipeline_overrides.py); uses slam_node. "
+        "Applied after --motion-model, so its motion_model wins.",
+    )
     args = ap.parse_args()
+    overrides = pipeline_overrides.load(args.pipeline_overrides)
+    pipeline_overrides.only(overrides, "slam_node")
+    slam_overrides = overrides.get("slam_node", {})
 
     events, buckets = _load_bag_events(args.bag)
     if not buckets["/imu"]:
@@ -174,8 +191,10 @@ def main() -> None:
     has_supervisor_odom = bool(buckets["/odom"])
     sync_ns = int(args.sync_ms * 1e6)
     odom_msgs = sorted(
-        ((msg_time_ns(bag_t, msg), msg)
-         for bag_t, msg in buckets["/testing_only/odom"]),
+        (
+            (msg_time_ns(bag_t, msg), msg)
+            for bag_t, msg in buckets["/testing_only/odom"]
+        ),
         key=lambda item: item[0],
     )
     world_track = latch_track_layout(buckets["/testing_only/track"])
@@ -200,8 +219,11 @@ def main() -> None:
         strategy=args.strategy,
         sync_ns=sync_ns,
         motion_model=args.motion_model,
+        param_overrides=slam_overrides,
         **gt_kwargs,
     )
+    pipeline_overrides.write_effective(run_dir, "slam_node", res.params, slam_overrides)
+    motion_model = res.params.get("motion_model", args.motion_model)
     write_csv(run_dir / "samples.csv", samples_to_rows(res.samples))
     write_csv(run_dir / "trajectory.csv", trajectory_to_rows(res.trajectory))
     write_csv(run_dir / "pose_steps.csv", pose_steps_to_rows(res.pose_steps))
@@ -241,7 +263,7 @@ def main() -> None:
         "module": "slam",
         "strategy": args.strategy,
         "bag": args.bag,
-        "motion_model": args.motion_model,
+        "motion_model": motion_model,
         "has_supervisor_odom": has_supervisor_odom,
         "odom_source": odom_source,
         "cone_trigger": GT_CONE_TRIGGER_TOPIC
@@ -269,7 +291,7 @@ def main() -> None:
 
     report = write_run_report(summary, run_dir, Path(args.results_root))
     write_json(run_dir / "results.json", summary)
-    print(f"SLAM motion model: {args.motion_model}")
+    print(f"SLAM motion model: {motion_model}")
     print(f"Wrote {run_dir / 'results.json'}")
     print(f"Wrote {report}")
     if odom_source == "synthesized":

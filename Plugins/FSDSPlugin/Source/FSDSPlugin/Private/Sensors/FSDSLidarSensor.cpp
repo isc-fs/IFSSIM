@@ -63,13 +63,23 @@ static TAutoConsoleVariable<float> CVarLidarGPUExtraOversample(
 // cones from ground returns. Anyone who needs the LUT path enables
 // this CVar at boot time (e.g. via -ExecCmds in UECommandLine.txt or
 // from settings.json's startup hooks).
+static TAutoConsoleVariable<int32> CVarLidarDebugColorChannel(
+	TEXT("fsds.LidarGPU.DebugColorChannel"),
+	0,
+	TEXT("Debug: report a raw channel of the LiDAR's colour capture as the ")
+	TEXT("intensity, to check what the stencil encoder writes. 0 = off, ")
+	TEXT("1 = R (stencil ID / 255), 2 = G (luminance). Needs ")
+	TEXT("fsds.LidarGPU.StencilEncoder 1 at startup."),
+	ECVF_Default);
+
 static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
 	TEXT("fsds.LidarGPU.StencilEncoder"),
-	0,
-	TEXT("0 = depth-only LiDAR (no color capture, no #488 stippling). ")
-	TEXT("1 = full reflectance LUT path (creates color capture, ships ")
-	TEXT("per-cone-material 905 nm reflectance via M_LiDARStencilEncoder, ")
-	TEXT("but reintroduces the asphalt/car-paint stippling tracked in #488)."),
+	1,
+	TEXT("Read once, at startup (-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0). ")
+	TEXT("1 (default) = per-material 905 nm reflectance: the colour capture ")
+	TEXT("renders each scan and M_LiDARStencilEncoder feeds the LUT. ")
+	TEXT("0 = no colour capture, so intensity carries no material information; ")
+	TEXT("use it if the faint viewport stippling of #488 shows in a packaged build."),
 	ECVF_Default);
 
 UFSDSLidarSensor::UFSDSLidarSensor()
@@ -654,7 +664,8 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// because the decode shader (line ~1168, `Params->ColorTexture`) needs
 	// a valid color texture handle to bind even when reflectance LUT is
 	// disabled. What's gated by `fsds.LidarGPU.StencilEncoder` is the
-	// per-tick CaptureScene() call (see TickGPUPath below). Default OFF
+	// per-tick CaptureScene() call (see TickGPUPath below). On by default
+	// since the LUT works (#698); with it OFF
 	// → the GPU color capture exists but never renders → the color
 	// render target stays cleared-to-black → the decode shader reads
 	// zero alpha → reflectance LUT lookup gracefully falls back to
@@ -793,6 +804,18 @@ void UFSDSLidarSensor::InitializeGPUPath()
 			// as a sensor baseline).
 			const bool bEncoderEnabled = CVarLidarStencilEncoder.GetValueOnGameThread() > 0;
 			bReflectanceLUTActive = bEncoderEnabled;
+			if (bEncoderEnabled)
+			{
+				// UE applies a post-process material only to a view with a
+				// view state (UMaterialInterface::OverrideBlendableSettings
+				// returns early without one), and a capture that neither
+				// captures every frame nor persists its rendering state has
+				// none. So the encoder never ran: R came back as the scene's
+				// red, not the stencil ID, and every hit fell back to G
+				// (#698). Only the colour capture persists; the #488 dots
+				// come from the depth capture persisting (see above).
+				GPUColorCapture->bAlwaysPersistRenderingState = true;
+			}
 			UE_LOG(LogTemp, Log,
 				TEXT("FSDS LiDAR GPU: stencil-encoder post-process material loaded — reflectance LUT %s (fsds.LidarGPU.StencilEncoder=%d, #488 fix)"),
 				bEncoderEnabled ? TEXT("ACTIVE (#321 D-Phase-2)") : TEXT("OFF (color capture disabled, falling back to Rec.709 luminance)"),
@@ -957,8 +980,9 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 	// LiDAR's POV. That render is the contamination vector — without
 	// it the RT stays cleared-to-black and the decode shader's
 	// reflectance lookup gracefully falls back to luminance baseline.
-	// Opt in via -ExecCmds="fsds.LidarGPU.StencilEncoder 1" if you
-	// need per-cone reflectance and can tolerate the #488 stippling.
+	// On by default (per-material reflectance). Opt out at startup with
+	// -ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0 if
+	// the #488 stippling shows in a packaged build.
 	if (GPUColorCapture && CVarLidarStencilEncoder.GetValueOnGameThread() > 0)
 	{
 		GPUColorCapture->CaptureScene();
@@ -1147,6 +1171,13 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.ReflectanceLUT[FSDSConeStencil::Yellow]      = 0.50f;
 	U.ReflectanceLUT[FSDSConeStencil::OrangeLarge] = 0.65f;
 	U.ReflectanceLUT[FSDSConeStencil::OrangeSmall] = 0.65f;
+	// Trackside props (#683). Carbon-black rubber and dark plastic return
+	// little at 905 nm, bare aluminium about half; retroreflective sheeting
+	// returns far more than any diffuse surface, so it saturates.
+	U.ReflectanceLUT[FSDSPropStencil::Rubber]          = 0.06f;
+	U.ReflectanceLUT[FSDSPropStencil::DarkPlastic]     = 0.12f;
+	U.ReflectanceLUT[FSDSPropStencil::Aluminium]       = 0.45f;
+	U.ReflectanceLUT[FSDSPropStencil::Retroreflective] = 1.00f;
 
 	// Gate the LUT on whether the post-process material loaded
 	// successfully in InitializeGPUPath. If yes, the alpha channel of
@@ -1156,6 +1187,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// shader branch on `UseReflectanceLUT` is constant across the
 	// dispatch so there's no warp-divergence cost.
 	U.UseReflectanceLUT = bReflectanceLUTActive ? 1u : 0u;
+	// Debug: report a raw colour-capture channel as the intensity (#698).
+	if (const int32 Debug = CVarLidarDebugColorChannel.GetValueOnAnyThread(); Debug == 1 || Debug == 2)
+	{
+		U.UseReflectanceLUT = 1u + (uint32)Debug;
+	}
 
 	const int32 SlotIdx = NextDispatchSlot;
 	FReadbackSlot& Slot = ReadbackSlots[SlotIdx];

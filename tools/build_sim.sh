@@ -12,7 +12,7 @@
 #   ./tools/build_sim.sh --yes        # never ask, just do it
 #   ./tools/build_sim.sh --fast       # skip the ~1 GB release zip
 #
-# One thing this script cannot do for you: install Unreal Engine 5.7.
+# One thing this script cannot do for you: install Unreal Engine 5.8.
 # It needs an Epic Games account and a licence you have to accept in
 # person. The script detects whether it is there and tells you exactly
 # what to click if it is not.
@@ -256,13 +256,13 @@ esac
 
 # ------------------------------------------------------- 4. the engine
 
-step "4/6  Unreal Engine 5.7"
+step "4/6  Unreal Engine 5.8"
 
 # The project pins its engine in IFSSIM.uproject. Read it rather than
 # hardcoding, so this keeps working after an engine bump.
 WANT_UE="$(grep -o '"EngineAssociation"[^,]*' "$REPO_ROOT/IFSSIM.uproject" 2>/dev/null \
            | sed 's/.*"\([0-9.]*\)".*/\1/')"
-WANT_UE="${WANT_UE:-5.7}"
+WANT_UE="${WANT_UE:-5.8}"
 
 # RunUAT is the thing we actually need; its presence is the real test.
 uat_for() {
@@ -320,7 +320,7 @@ else
         linux)
             info "  Epic ships no Linux binary — the engine must be built from source:"
             info "    1. Link your GitHub account to Epic:  https://www.unrealengine.com/ue-on-github"
-            info "    2. git clone -b 5.7 https://github.com/EpicGames/UnrealEngine"
+            info "    2. git clone -b 5.8 https://github.com/EpicGames/UnrealEngine"
             info "    3. cd UnrealEngine && ./Setup.sh && ./GenerateProjectFiles.sh && make"
             info "       (about an hour on 16 cores)"
             info "    4. UE_ROOT=/path/to/UnrealEngine $0" ;;
