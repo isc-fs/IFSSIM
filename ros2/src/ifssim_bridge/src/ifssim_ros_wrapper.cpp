@@ -408,6 +408,7 @@ void IFSSIMRosWrapper::initializeTimers()
 {
     // Camera timer removed in perf/strip-cameras.
     go_signal_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::goSignalTimerCb, this));
+    command_client_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::commandClientWatchdogCb, this));
     static_tf_timer_ = node_->create_wall_timer(1000ms, std::bind(&IFSSIMRosWrapper::staticTfCb, this));
     // /tire_loads at 20 Hz — fast enough that the autonomy controller
     // (40 Hz) sees each Fz update at most one tick stale, slow enough
@@ -879,6 +880,10 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     const int64_t previous_clock_ns = clock_gate_.mark_ns();
     const auto clock_step = clock_gate_.update(now.nanoseconds(), first_on_new_stream);
     if (clock_step == ifssim_bridge::SimClockGate::Step::kNewSession) {
+        // The command client may still hold the old sim's socket: the stream
+        // threads reconnect it only if it already looked broken when they
+        // noticed the sim was gone, and nothing else would.
+        command_client_stale_.store(true);
         const double previous_s = previous_clock_ns * 1e-9;
         if (first_on_new_stream) {
             RCLCPP_INFO(node_->get_logger(),
@@ -1469,6 +1474,46 @@ void IFSSIMRosWrapper::ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg)
     if (!ebs_triggered_) return;  // already cleared, nothing to do
     ebs_triggered_ = false;
     RCLCPP_INFO(node_->get_logger(), "EBS latch released — control commands re-enabled");
+}
+
+void IFSSIMRosWrapper::commandClientWatchdogCb()
+{
+    // The stream threads reconnect the command client only if it already
+    // looks broken when a stream drops. When the sim restarts, the streams
+    // drop first and the command socket fails a moment later, on its next
+    // send; after that every control command was dropped silently until the
+    // next stream drop. Check once a second instead.
+    const bool new_session = command_client_stale_.exchange(false);
+    if (!new_session && client_ && client_->isConnected()) return;
+
+    // A stream thread may be reconnecting already (it holds the lock while
+    // the sim is down); don't block the executor, try again next tick.
+    std::unique_lock<std::mutex> lock(reconnect_mutex_, std::try_to_lock);
+    if (!lock.owns_lock() || !reconnectCommandClient(1.0, new_session)) {
+        if (new_session) command_client_stale_.store(true);
+        return;
+    }
+    RCLCPP_INFO(node_->get_logger(), "Command client reconnected (%s)",
+        new_session ? "new sim session" : "it was down");
+}
+
+bool IFSSIMRosWrapper::reconnectCommandClient(double timeout_s, bool new_session)
+{
+    auto fresh = std::make_unique<TcpClient>();
+    if (!fresh->connect(host_, port_, timeout_s)) return false;
+    // An EBS latch from the previous sim session must not keep dropping the
+    // new session's commands. Within a session the latch stays.
+    if (new_session) ebs_triggered_ = false;
+    fresh->sendBool("enableApiControl");
+    std::string pose_resp = fresh->sendCommand("simGetVehiclePose");
+    if (!pose_resp.empty() && pose_resp.find("\"error\"") == std::string::npos) {
+        home_pose_.x = fresh->parseDouble(pose_resp, "x");
+        home_pose_.y = fresh->parseDouble(pose_resp, "y");
+        home_pose_.z = fresh->parseDouble(pose_resp, "z");
+        home_pose_.valid = true;
+    }
+    client_ = std::move(fresh);
+    return true;
 }
 
 void IFSSIMRosWrapper::resetSrvCb(
