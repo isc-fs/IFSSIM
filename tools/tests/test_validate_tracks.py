@@ -131,9 +131,11 @@ class StartPoseTest(unittest.TestCase):
         self.assertEqual(self.errors(_loop()), [])
 
     def test_mirrored_start_fails(self):
+        # The sim turns the car so blue is on its left, which points it away
+        # from the cones: the track would be driven backwards.
         errors = self.errors(_loop(blue_left=False))
         self.assertEqual(len(errors), 1, errors)
-        self.assertIn("blue is not on the car's left", errors[0])
+        self.assertIn("no blue and yellow cones within 8 m ahead", errors[0])
 
     def test_start_on_a_tight_circle_is_clean(self):
         # Both lines curve left, so cones ahead sit left of the car's heading
@@ -143,11 +145,11 @@ class StartPoseTest(unittest.TestCase):
                 self.assertEqual(self.errors(_loop(radius=radius)), [])
 
     def test_track_drawn_the_other_way_fails(self):
-        # Pairs only behind the gate: the sim turns the car round to face
-        # them, and then blue is on its right.
+        # Pairs only behind the gate, blue on +y: blue-on-the-left faces the
+        # car +x, away from every cone.
         errors = self.errors(_loop(reverse=True))
         self.assertEqual(len(errors), 1, errors)
-        self.assertIn("blue is not on the car's left", errors[0])
+        self.assertIn("no blue and yellow cones within 8 m ahead", errors[0])
 
     def test_no_big_orange_is_not_checked(self):
         self.assertEqual(self.errors([("blue", 1.0, 1.0), ("yellow", 1.0, -1.0)]), [])

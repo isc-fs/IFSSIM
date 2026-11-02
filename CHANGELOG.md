@@ -21,6 +21,11 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
+  with no window, runs the mission benchmark around it and stops it, once
+  (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.
+  `check` tells whether a machine can run the sim offscreen, LiDAR included.
+  See `docs/HEADLESS.md`.
 - **Mission Control inside the sim.** Press Tab in the sim window for a panel
   that loads a track, starts and stops a session, resets the car and works
   RES, through the same backend as the web UI. When the backend is down it
@@ -271,8 +276,18 @@ shipping pipeline, documentation.
     farther cone could swap in. Comparing blue with yellow, not with the
     heading, keeps starts on tight curves (the `stress_circle_*` tracks)
     passing.
-    `skidpad.csv` is exempt for now. Its gate is deeper than it is wide, so
-    PCA spawns the car 90° off, and fixing that needs a sim-side change.
+- **Skidpad spawned the car 90° off (needs a UE recompile).** On a one-gate
+  track `ComputeStartGatePose` took PCA's smaller-variance axis as forward.
+  Skidpad's gate is 4 m along the lane and 3 m across it, so that axis was
+  cross-track. It now uses the FS rule on every one-gate track: forward is
+  the gate axis more perpendicular to the offset from the 2 nearest yellow
+  cones to the 2 nearest blue cones (within 8 m), signed so blue is on the
+  car's left. The 4-nearest-cones sign test is kept only for tracks without
+  both colours near the gate. Skidpad now spawns at (12, 0) facing +x. Loops
+  keep their gate axis, and no longer depend on how the cones are spaced
+  around the gate. `tools/envgen/startpose.py` carries the same change. The
+  validator no longer exempts skidpad, and also fails a one-gate track whose
+  yellow-to-blue offset is more than 35° off square to the gate.
 - **The sim's EBS reset reaches the bridge.** `sim_supervisor` published
   `/signal/ebs_reset` before its lifecycle activated, and a lifecycle
   publisher drops messages until then, so the reset never went out. An EBS
