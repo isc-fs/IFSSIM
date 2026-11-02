@@ -1,4 +1,5 @@
-"""Tests for tools/validate_tracks.py's sidecar checks (docs/environment_sidecar.md).
+"""Tests for tools/validate_tracks.py: start-pose checks and sidecar checks
+(docs/environment_sidecar.md).
 
 The cases mirror the plugin's FSDS.Environment.Reject automation test, so the CI
 gate and the runtime loader reject the same sidecars.
@@ -29,7 +30,10 @@ VALID = {
         {"class": "tripod", "x": 40.0, "y": 2.25},
     ],
 }
-CSV = "big_orange,0,2\nbig_orange,0,-2\nblue,5,1.75\nyellow,5,-1.75\n"
+# One start gate with blue on the left, laid out like envgen/corridor.py's
+# start zone, so it also passes the start-pose check.
+CSV = ("big_orange,0,2\nbig_orange,0,-2\nbig_orange,0.5,2\nbig_orange,0.5,-2\n"
+       "blue,2,1.75\nyellow,2,-1.75\nblue,3.5,1.75\nyellow,3.5,-1.75\n")
 
 
 class SidecarTest(unittest.TestCase):
@@ -91,6 +95,62 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual(vt.main(["validate_tracks.py", str(self.root)]), 0)
         self.check({**VALID, "seed": -1})
         self.assertEqual(vt.main(["validate_tracks.py", str(self.root)]), 1)
+
+
+def _loop(blue_left: bool = True, reverse: bool = False, radius: float = 0.0):
+    """A one-gate start: 4 big orange across x=0..0.5, cone pairs ahead along +x.
+
+    radius > 0 bends both lines left on a circle of that radius (a stress-circle
+    start); reverse puts the pairs behind the gate instead of ahead.
+    """
+    import math
+    rows = [("big_orange", 0.0, 2.0), ("big_orange", 0.0, -2.0),
+            ("big_orange", 0.5, 2.0), ("big_orange", 0.5, -2.0)]
+    side = 1.75 if blue_left else -1.75
+    for s in (2.0, 3.5, 5.0, 6.5):
+        for colour, lat in (("blue", side), ("yellow", -side)):
+            along = -s if reverse else s
+            if radius:
+                # Arc of the centreline, offset by lat toward the centre (+y).
+                th = along / radius
+                r = radius - lat
+                x, y = r * math.sin(th), radius - r * math.cos(th)
+            else:
+                x, y = along, lat
+            rows.append((colour, x, y))
+    return rows
+
+
+class StartPoseTest(unittest.TestCase):
+    """Where the sim spawns the car: facing the track, blue on its left."""
+
+    def errors(self, cones):
+        return vt.check_start_pose(Path("t.csv"), cones)
+
+    def test_straight_start_with_blue_left_is_clean(self):
+        self.assertEqual(self.errors(_loop()), [])
+
+    def test_mirrored_start_fails(self):
+        errors = self.errors(_loop(blue_left=False))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("blue is not on the car's left", errors[0])
+
+    def test_start_on_a_tight_circle_is_clean(self):
+        # Both lines curve left, so cones ahead sit left of the car's heading
+        # on both colours; only blue-vs-yellow decides the side.
+        for radius in (5.0, 9.0, 15.0):
+            with self.subTest(radius=radius):
+                self.assertEqual(self.errors(_loop(radius=radius)), [])
+
+    def test_track_drawn_the_other_way_fails(self):
+        # Pairs only behind the gate: the sim turns the car round to face
+        # them, and then blue is on its right.
+        errors = self.errors(_loop(reverse=True))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("blue is not on the car's left", errors[0])
+
+    def test_no_big_orange_is_not_checked(self):
+        self.assertEqual(self.errors([("blue", 1.0, 1.0), ("yellow", 1.0, -1.0)]), [])
 
 
 class FixtureTest(unittest.TestCase):
