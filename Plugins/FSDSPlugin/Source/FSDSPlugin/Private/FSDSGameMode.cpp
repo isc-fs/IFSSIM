@@ -125,11 +125,16 @@ void AFSDSGameMode::StartPlay()
 
 	// The HUD: the car's and the mission's state in a corner (H by default).
 	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);
+
+	// The front-end menu the sim opens on; steps aside for RPC sessions.
+	Menu.Init(GetWorld(), RefereeActor, VehiclePawn, &RpcServer, &Launcher);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	Hud.Shutdown();
+
+	Menu.Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

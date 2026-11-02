@@ -107,6 +107,17 @@ shipping pipeline, documentation.
 - **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
 - **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
 
+- **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
+  Skidpad, Autocross, Trackdrive, with laps), the track (a top-down map of its
+  cones) and who drives, then START. A manual run needs only the sim, no Docker:
+  the menu loads the track with `loadTrack`'s own code and hands the car to the
+  keyboard. Esc pauses (Resume, Restart run, Main menu); when the referee ends
+  the run, a results box shows its laps and cones, and the Results page keeps
+  every manual run since the sim started. Autonomous opens Mission Control,
+  where the pipeline's session starts as before. The menu stays out of the way
+  of RPC sessions: it is off with `-NoMenu`, `-RenderOffscreen` or
+  `"Menu": {"Enabled": false}`, and closes when a client loads a track or resets
+  the scenario. The Mission Control panel (Tab) stays, for engineers.
 - **Telemetry in the in-sim Mission Control panel.** A Telemetry tab with the
   car's live state read straight from the sim: speed, motor rpm, pedals,
   steering, who is driving, position and heading, and the motor's regen (torque

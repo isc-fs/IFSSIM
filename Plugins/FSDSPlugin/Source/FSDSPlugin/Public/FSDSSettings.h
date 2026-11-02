@@ -285,6 +285,12 @@ public:
 	bool bHudEnabled = true;
 	FString HudKey = TEXT("H");
 
+	// --- Front-end menu ----------------------------------------------------
+	//
+	// "Menu": { "Enabled" }. The full-screen menu the sim opens on (event,
+	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
+	bool bMenuEnabled = true;
+
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;
 

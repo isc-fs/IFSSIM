@@ -1,0 +1,90 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "UI/FSDSMenu.h"
+#include "Widgets/SCompoundWidget.h"
+
+class SFSDSTrackMap;
+class SScrollBox;
+class SVerticalBox;
+
+DECLARE_DELEGATE_OneParam(FOnFSDSDrive, const FFSDSDriveRequest&);
+
+/**
+ * The menu's screens. Main: the full-screen front end (Drive, Tracks,
+ * Results, Settings). Pause and Finished: a box over the paused or ended
+ * run. FFSDSMenu owns it and does the work; this only draws and asks.
+ */
+class SFSDSMenu : public SCompoundWidget
+{
+public:
+	enum class EScreen : uint8 { Main, Pause, Finished };
+
+	SLATE_BEGIN_ARGS(SFSDSMenu) {}
+		SLATE_ARGUMENT(EScreen, Screen)
+		SLATE_ARGUMENT(TArray<FFSDSMenuTrack>, Tracks)
+		SLATE_ARGUMENT(TSharedPtr<const TArray<FFSDSRunResult>>, Results)
+		SLATE_ARGUMENT(TOptional<FFSDSDriveRequest>, Last)
+		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSReferee>, Referee)
+		SLATE_ARGUMENT(FText, LauncherKey)
+		SLATE_EVENT(FOnFSDSDrive, OnDrive)
+		SLATE_EVENT(FSimpleDelegate, OnResume)
+		SLATE_EVENT(FSimpleDelegate, OnRestart)
+		SLATE_EVENT(FSimpleDelegate, OnMainMenu)
+		SLATE_EVENT(FSimpleDelegate, OnQuit)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs);
+
+	/** A line under START, e.g. why a track would not load. */
+	void SetMessage(const FString& Msg, bool bError);
+
+	virtual bool SupportsKeyboardFocus() const override { return true; }
+	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
+
+private:
+	enum class EPage : int32 { Drive = 0, Tracks = 1, Results = 2, Settings = 3 };
+
+	TSharedRef<SWidget> BuildMain();
+	TSharedRef<SWidget> BuildRunBox();
+	TSharedRef<SWidget> BuildDrivePage();
+	TSharedRef<SWidget> BuildTracksPage();
+	TSharedRef<SWidget> BuildResultsPage();
+	TSharedRef<SWidget> BuildSettingsPage();
+
+	TSharedRef<SWidget> MakeNavButton(const FText& Label, EPage Page);
+	TSharedRef<SWidget> MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick);
+	TSharedRef<SWidget> MakeBigButton(const FText& Label, FLinearColor Color, FSimpleDelegate OnClick,
+		TAttribute<bool> Enabled = true);
+	TSharedRef<SWidget> MakeHeading(const FText& Title);
+
+	void RebuildTrackLists();
+	void SelectTrack(int32 Index);
+	void SetEvent(EFSDSEventType Event);
+	FText TrackSummary(int32 Index) const;
+
+	EScreen Screen = EScreen::Main;
+	EPage Page = EPage::Drive;
+
+	TArray<FFSDSMenuTrack> Tracks;
+	TSharedPtr<const TArray<FFSDSRunResult>> Results;
+	TOptional<FFSDSDriveRequest> Last;
+	TWeakObjectPtr<AFSDSReferee> Referee;
+	FText LauncherKey;
+
+	FOnFSDSDrive OnDrive;
+	FSimpleDelegate OnResume, OnRestart, OnMainMenu, OnQuit;
+
+	int32 Selected = INDEX_NONE;
+	EFSDSEventType Event = EFSDSEventType::Autocross;
+	int32 Laps = 10;
+	bool bAutonomous = false;
+
+	FString Message;
+	bool bMessageError = false;
+
+	TSharedPtr<SScrollBox> DriveList;
+	TSharedPtr<SScrollBox> TracksList;
+	TSharedPtr<SFSDSTrackMap> DriveMap;
+	TSharedPtr<SFSDSTrackMap> TracksMap;
+};
