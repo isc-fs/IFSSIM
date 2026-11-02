@@ -22,8 +22,10 @@ shipping pipeline, documentation.
 ### Added
 
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
-  Skidpad, Autocross, Trackdrive, with laps), the track (a top-down map of its
-  cones) and who drives, then START. A manual run needs only the sim, no Docker:
+  Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
+  suits it (a gridded top-down map of its cones, in metres), and who drives,
+  then START. Practice takes any track, open test tracks included, and has no
+  lap target. A manual run needs only the sim, no Docker:
   the menu loads the track with `loadTrack`'s own code and hands the car to the
   keyboard. Esc pauses (Resume, Restart run, Main menu); when the referee ends
   the run, a results box shows its laps and cones, and the Results page keeps

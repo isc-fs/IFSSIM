@@ -22,6 +22,7 @@ struct FFSDSMenuTrack
 	int32 Yellow = 0;
 	int32 Orange = 0;
 	bool bDrawn = false; // has a .track.json (made with the track creator)
+	bool bClosed = true; // a loop; the .track.json says when it isn't
 };
 
 /** What START asks for. */
@@ -30,6 +31,7 @@ struct FFSDSDriveRequest
 	FFSDSMenuTrack Track;
 	EFSDSEventType Event = EFSDSEventType::Autocross;
 	int32 Laps = 1;
+	bool bPractice = false;   // any track, no lap target, no results box
 	bool bAutonomous = false;
 };
 
@@ -43,6 +45,7 @@ struct FFSDSRunResult
 	int32 ConesDown = 0;
 	int32 OffCourse = 0;
 	bool bFinished = false;
+	bool bPractice = false;
 	FDateTime When;
 };
 
@@ -72,7 +75,8 @@ public:
 	/** Esc while driving: pause a manual run, or bring the menu back. */
 	void OnEscape();
 
-	static FString EventName(EFSDSEventType Event);
+	/** "Acceleration", ..., or "Practice". */
+	static FString EventName(EFSDSEventType Event, bool bPractice = false);
 
 private:
 	enum class EMode : uint8 { Main, Pause, Finished };

@@ -71,7 +71,8 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	if (Last.IsSet())
 	{
 		Event = Last->Event;
-		Laps = Last->Event == EFSDSEventType::Trackdrive ? Last->Laps : Laps;
+		bPractice = Last->bPractice;
+		Laps = Last->Event == EFSDSEventType::Trackdrive && !Last->bPractice ? Last->Laps : Laps;
 		bAutonomous = Last->bAutonomous;
 		Selected = Tracks.IndexOfByPredicate([this](const FFSDSMenuTrack& T) { return T.Name == Last->Track.Name; });
 	}
@@ -83,19 +84,7 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 
 	if (Screen == EScreen::Main)
 	{
-		RebuildTrackLists();
-		if (Selected == INDEX_NONE && Tracks.Num() > 0)
-		{
-			SelectTrack(0);
-		}
-		else
-		{
-			SelectTrack(Selected);
-		}
-		if (Last.IsSet())
-		{
-			Event = Last->Event;   // SelectTrack may have guessed; the last run wins
-		}
+		SetEvent(Event, bPractice);   // fills the list, keeps the last track if it fits
 	}
 }
 
@@ -250,7 +239,6 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 							.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavTracks", "Tracks"), EPage::Tracks) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
@@ -280,7 +268,6 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					SNew(SWidgetSwitcher)
 					.WidgetIndex_Lambda([this]() { return static_cast<int32>(Page); })
 					+ SWidgetSwitcher::Slot() [ BuildDrivePage() ]
-					+ SWidgetSwitcher::Slot() [ BuildTracksPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildResultsPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildSettingsPage() ]
 				]
@@ -290,9 +277,11 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 
 TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 {
-	auto EventChoice = [this](const FText& Label, EFSDSEventType E)
+	auto EventChoice = [this](const FText& Label, EFSDSEventType E, bool bP)
 	{
-		return MakeChoice(Label, [this, E]() { return Event == E; }, [this, E]() { SetEvent(E); });
+		return MakeChoice(Label,
+			[this, E, bP]() { return bPractice == bP && (bP || Event == E); },
+			[this, E, bP]() { SetEvent(E, bP); });
 	};
 
 	return SNew(SHorizontalBox)
@@ -310,16 +299,23 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 				+ SVerticalBox::Slot().AutoHeight()
 				[
 					SNew(SUniformGridPanel).SlotPadding(FMargin(3.f))
-					+ SUniformGridPanel::Slot(0, 0) [ EventChoice(LOCTEXT("EvAccel", "Acceleration"), EFSDSEventType::Acceleration) ]
-					+ SUniformGridPanel::Slot(1, 0) [ EventChoice(LOCTEXT("EvSkid", "Skidpad"), EFSDSEventType::Skidpad) ]
-					+ SUniformGridPanel::Slot(0, 1) [ EventChoice(LOCTEXT("EvAuto", "Autocross"), EFSDSEventType::Autocross) ]
-					+ SUniformGridPanel::Slot(1, 1) [ EventChoice(LOCTEXT("EvTrack", "Trackdrive"), EFSDSEventType::Trackdrive) ]
+					+ SUniformGridPanel::Slot(0, 0) [ EventChoice(LOCTEXT("EvAccel", "Acceleration"), EFSDSEventType::Acceleration, false) ]
+					+ SUniformGridPanel::Slot(1, 0) [ EventChoice(LOCTEXT("EvSkid", "Skidpad"), EFSDSEventType::Skidpad, false) ]
+					+ SUniformGridPanel::Slot(2, 0) [ EventChoice(LOCTEXT("EvAuto", "Autocross"), EFSDSEventType::Autocross, false) ]
+					+ SUniformGridPanel::Slot(0, 1) [ EventChoice(LOCTEXT("EvTrack", "Trackdrive"), EFSDSEventType::Trackdrive, false) ]
+					+ SUniformGridPanel::Slot(1, 1) [ EventChoice(LOCTEXT("EvPractice", "Practice"), EFSDSEventType::Trackdrive, true) ]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+				[
+					SNew(STextBlock)
+					.Text_Lambda([this]() { return EventHint(); })
+					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 				]
 				// Laps, Trackdrive only.
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
 				[
 					SNew(SHorizontalBox)
-					.Visibility_Lambda([this]() { return Event == EFSDSEventType::Trackdrive ? EVisibility::Visible : EVisibility::Collapsed; })
+					.Visibility_Lambda([this]() { return Event == EFSDSEventType::Trackdrive && !bPractice ? EVisibility::Visible : EVisibility::Collapsed; })
 					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 					[
 						SNew(STextBlock).Text(LOCTEXT("Laps", "Laps")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
@@ -383,7 +379,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 							FFSDSDriveRequest R;
 							R.Track = Tracks[Selected];
 							R.Event = Event;
-							R.Laps = Event == EFSDSEventType::Trackdrive ? Laps : 1;
+							R.bPractice = bPractice;
+							R.Laps = Event == EFSDSEventType::Trackdrive && !bPractice ? Laps : 1;
 							R.bAutonomous = bAutonomous;
 							OnDrive.ExecuteIfBound(R);
 						}),
@@ -415,55 +412,6 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 		];
 }
 
-TSharedRef<SWidget> SFSDSMenu::BuildTracksPage()
-{
-	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth()
-		[
-			SNew(SBox).WidthOverride(400.f)
-			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(STextBlock).Text(LOCTEXT("TracksTitle", "Tracks"))
-					.Font(MenuUi::MenuFont(20, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
-				[
-					SNew(STextBlock)
-					.Text(FText::Format(LOCTEXT("TracksHint",
-						"Every track the sim can load. Generate and delete tracks in Mission Control ({0})."), LauncherKey))
-					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
-				]
-				+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("AllTracks", "ALL TRACKS")) ]
-				+ SVerticalBox::Slot().FillHeight(1.f)
-				[
-					SAssignNew(TracksList, SScrollBox)
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
-				[
-					MakeBigButton(LOCTEXT("DriveThis", "Drive this track"), MenuUi::SecondBtn,
-						FSimpleDelegate::CreateLambda([this]() { Page = EPage::Drive; }),
-						TAttribute<bool>::CreateLambda([this]() { return Tracks.IsValidIndex(Selected); }))
-				]
-			]
-		]
-		+ SHorizontalBox::Slot().FillWidth(1.f).Padding(28, 0, 0, 0)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().FillHeight(1.f)
-			[
-				SAssignNew(TracksMap, SFSDSTrackMap)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
-			[
-				SNew(STextBlock)
-				.Text_Lambda([this]() { return TrackSummary(Selected); })
-				.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
-			]
-		];
-}
-
 TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 {
 	TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
@@ -478,8 +426,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 			Best = Best > 0.f ? FMath::Min(Best, L) : L;
 		}
 		const FString Head = FString::Printf(TEXT("%s   %s  ·  %s"),
-			*R.When.ToString(TEXT("%H:%M")), *R.Track, *FFSDSMenu::EventName(R.Event));
-		FString Body = FString::Printf(TEXT("Laps %d/%d"), R.Laps.Num(), R.RequiredLaps);
+			*R.When.ToString(TEXT("%H:%M")), *R.Track, *FFSDSMenu::EventName(R.Event, R.bPractice));
+		FString Body = R.bPractice ? FString::Printf(TEXT("Laps %d"), R.Laps.Num())
+			: FString::Printf(TEXT("Laps %d/%d"), R.Laps.Num(), R.RequiredLaps);
 		if (R.Laps.Num() > 0)
 		{
 			Body += FString::Printf(TEXT("   best %s   total %s"), *MenuUi::Seconds(Best), *MenuUi::Seconds(Total));
@@ -504,7 +453,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 					+ SHorizontalBox::Slot().AutoWidth()
 					[
 						SNew(STextBlock)
-						.Text(R.bFinished ? LOCTEXT("Finished", "finished") : LOCTEXT("NotFinished", "not finished"))
+						.Text(R.bPractice ? FText::GetEmpty() : R.bFinished ? LOCTEXT("Finished", "finished") : LOCTEXT("NotFinished", "not finished"))
 						.Font(MenuUi::MenuFont(10, TEXT("Bold")))
 						.ColorAndOpacity(R.bFinished ? MenuUi::Good : MenuUi::Muted)
 					]
@@ -601,7 +550,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 {
 	const bool bPause = Screen == EScreen::Pause;
 	const FString What = Last.IsSet()
-		? FString::Printf(TEXT("%s  ·  %s"), *Last->Track.Name, *FFSDSMenu::EventName(Last->Event))
+		? FString::Printf(TEXT("%s  ·  %s"), *Last->Track.Name, *FFSDSMenu::EventName(Last->Event, Last->bPractice))
 		: FString();
 
 	auto Stat = [this](const FText& Label, TFunction<FString(const FFSDSRefereeState&)> Value) -> TSharedRef<SWidget>
@@ -672,9 +621,10 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("ThisRun", "THIS RUN")) ]
 					+ SVerticalBox::Slot().AutoHeight()
 					[
-						Stat(LOCTEXT("SLaps", "Laps"), [](const FFSDSRefereeState& S)
+						Stat(LOCTEXT("SLaps", "Laps"), [bP = Last.IsSet() && Last->bPractice](const FFSDSRefereeState& S)
 						{
-							return FString::Printf(TEXT("%d / %d"), S.Laps.Num(), S.RequiredLaps);
+							return bP ? FString::FromInt(S.Laps.Num())
+								: FString::Printf(TEXT("%d / %d"), S.Laps.Num(), S.RequiredLaps);
 						})
 					]
 					+ SVerticalBox::Slot().AutoHeight()
@@ -727,88 +677,120 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 // ---------------------------------------------------------------------------
 // Tracks
 
-void SFSDSMenu::RebuildTrackLists()
+bool SFSDSMenu::Fits(const FFSDSMenuTrack& Track) const
 {
-	for (TSharedPtr<SScrollBox> List : { DriveList, TracksList })
+	const FString Name = Track.Name.ToLower();
+	const bool bAccel = Name.Contains(TEXT("acceleration"));
+	const bool bSkid = Name.Contains(TEXT("skidpad"));
+	if (bPractice) return true;
+	switch (Event)
 	{
-		if (!List.IsValid()) continue;
-		List->ClearChildren();
-		for (int32 i = 0; i < Tracks.Num(); ++i)
-		{
-			const FFSDSMenuTrack& T = Tracks[i];
-			const FString Counts = FString::Printf(TEXT("%d cones"), T.Blue + T.Yellow + T.Orange);
-			List->AddSlot().Padding(0, 1)
+	case EFSDSEventType::Acceleration: return bAccel;
+	case EFSDSEventType::Skidpad:      return bSkid;
+	default:                           return !bAccel && !bSkid && Track.bClosed;   // a lap needs a loop
+	}
+}
+
+FText SFSDSMenu::EventHint() const
+{
+	if (bPractice) return LOCTEXT("HPractice", "Any track, open ones too. Laps are counted; the run ends when you stop it.");
+	switch (Event)
+	{
+	case EFSDSEventType::Acceleration: return LOCTEXT("HAccel", "A 75 m straight from a standing start.");
+	case EFSDSEventType::Skidpad:      return LOCTEXT("HSkid", "The figure of eight: two laps right, two left.");
+	case EFSDSEventType::Autocross:    return LOCTEXT("HAuto", "One timed lap of a closed track.");
+	case EFSDSEventType::Trackdrive:   return LOCTEXT("HTrack", "Several laps of a closed track.");
+	default:                           return FText::GetEmpty();
+	}
+}
+
+void SFSDSMenu::RebuildTrackList()
+{
+	if (!DriveList.IsValid()) return;
+	DriveList->ClearChildren();
+	int32 Shown = 0;
+	for (int32 i = 0; i < Tracks.Num(); ++i)
+	{
+		const FFSDSMenuTrack& T = Tracks[i];
+		if (!Fits(T)) continue;
+		++Shown;
+		const FString Counts = FString::Printf(TEXT("%d cones"), T.Blue + T.Yellow + T.Orange);
+		DriveList->AddSlot().Padding(0, 1)
+		[
+			SNew(SButton)
+			.IsFocusable(false)
+			.ContentPadding(FMargin(10.f, 5.f))
+			.ButtonColorAndOpacity_Lambda([this, i]()
+			{
+				return FSlateColor(Selected == i ? MenuUi::PlainBtn : MenuUi::Off);
+			})
+			.OnClicked_Lambda([this, i]()
+			{
+				SelectTrack(i);
+				return FReply::Handled();
+			})
 			[
-				SNew(SButton)
-				.IsFocusable(false)
-				.ContentPadding(FMargin(10.f, 5.f))
-				.ButtonColorAndOpacity_Lambda([this, i]()
-				{
-					return FSlateColor(Selected == i ? MenuUi::PlainBtn : MenuUi::Off);
-				})
-				.OnClicked_Lambda([this, i]()
-				{
-					SelectTrack(i);
-					return FReply::Handled();
-				})
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 12, 0)
 				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 12, 0)
-					[
-						SNew(STextBlock)
-						.Text(FText::FromString(T.Name))
-						.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
-						.Font(MenuUi::MenuFont(11, TEXT("Bold")))
-						.ColorAndOpacity_Lambda([this, i]() { return FSlateColor(Selected == i ? MenuUi::Accent : MenuUi::Ink); })
-					]
-					+ SHorizontalBox::Slot().AutoWidth()
-					[
-						SNew(STextBlock).Text(FText::FromString(Counts)).Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
-					]
+					SNew(STextBlock)
+					.Text(FText::FromString(T.Name))
+					.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+					.Font(MenuUi::MenuFont(11, TEXT("Bold")))
+					.ColorAndOpacity_Lambda([this, i]() { return FSlateColor(Selected == i ? MenuUi::Accent : MenuUi::Ink); })
 				]
-			];
-		}
-		if (Tracks.Num() == 0)
-		{
-			List->AddSlot()
-			[
-				SNew(STextBlock).Text(LOCTEXT("NoTracks", "No tracks found in the tracks folders."))
-				.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Bad)
-			];
-		}
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(STextBlock).Text(FText::FromString(Counts)).Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
+				]
+			]
+		];
+	}
+	if (Shown == 0)
+	{
+		DriveList->AddSlot()
+		[
+			SNew(STextBlock).Text(LOCTEXT("NoTracks", "No track for this event in the tracks folders."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Bad)
+		];
 	}
 }
 
 void SFSDSMenu::SelectTrack(int32 Index)
 {
-	if (!Tracks.IsValidIndex(Index)) return;
-	Selected = Index;
+	Selected = Tracks.IsValidIndex(Index) ? Index : INDEX_NONE;
 	Message.Reset();
-
-	// The event follows the track where the track decides it.
-	const FString Name = Tracks[Index].Name.ToLower();
-	if (Name.Contains(TEXT("acceleration"))) Event = EFSDSEventType::Acceleration;
-	else if (Name.Contains(TEXT("skidpad"))) Event = EFSDSEventType::Skidpad;
-	else if (Event == EFSDSEventType::Acceleration || Event == EFSDSEventType::Skidpad) Event = EFSDSEventType::Autocross;
 
 	TArray<SFSDSTrackMap::FCone> Cones;
-	SFSDSTrackMap::LoadCsv(Tracks[Index].Path, Cones);
-	if (DriveMap.IsValid()) DriveMap->SetCones(Cones);
-	if (TracksMap.IsValid()) TracksMap->SetCones(MoveTemp(Cones));
+	if (Selected != INDEX_NONE)
+	{
+		SFSDSTrackMap::LoadCsv(Tracks[Selected].Path, Cones);
+	}
+	if (DriveMap.IsValid()) DriveMap->SetCones(MoveTemp(Cones));
 }
 
-void SFSDSMenu::SetEvent(EFSDSEventType InEvent)
+void SFSDSMenu::SetEvent(EFSDSEventType InEvent, bool bInPractice)
 {
 	Event = InEvent;
+	bPractice = bInPractice;
 	Message.Reset();
+	RebuildTrackList();
+
+	// Keep the track if it suits the event, else the first one that does.
+	if (!Tracks.IsValidIndex(Selected) || !Fits(Tracks[Selected]))
+	{
+		Selected = Tracks.IndexOfByPredicate([this](const FFSDSMenuTrack& T) { return Fits(T); });
+	}
+	SelectTrack(Selected);
 }
 
 FText SFSDSMenu::TrackSummary(int32 Index) const
 {
 	if (!Tracks.IsValidIndex(Index)) return FText::GetEmpty();
 	const FFSDSMenuTrack& T = Tracks[Index];
-	FString S = FString::Printf(TEXT("%s   %d blue, %d yellow, %d orange"), *T.Name, T.Blue, T.Yellow, T.Orange);
+	FString S = T.Name;   // the counts are in the map's legend
 	if (T.bDrawn) S += TEXT("   ·   made with the track creator");
+	if (!T.bClosed) S += TEXT("   ·   open, Practice only");
 	return FText::FromString(S);
 }
 

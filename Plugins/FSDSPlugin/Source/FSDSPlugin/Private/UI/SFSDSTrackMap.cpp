@@ -1,5 +1,6 @@
 #include "UI/SFSDSTrackMap.h"
 
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "Fonts/FontMeasure.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Misc/FileHelper.h"
@@ -8,15 +9,38 @@
 
 #define LOCTEXT_NAMESPACE "FSDSTrackMap"
 
+// Always qualified (namespace Map = ...): other UI files in the same unity
+// blob bring their own Muted etc. into scope.
 namespace FSDSTrackMapStyle
 {
-	const FLinearColor Backdrop(0.020f, 0.020f, 0.026f, 1.f);
-	const FLinearColor Blue = FLinearColor::FromSRGBColor(FColor(59, 130, 246));
-	const FLinearColor Yellow = FLinearColor::FromSRGBColor(FColor(250, 204, 21));
-	const FLinearColor Orange = FLinearColor::FromSRGBColor(FColor(249, 115, 22));
+	// Mission Control's track preview: dark plot, faint amber grid.
+	const FLinearColor Backdrop = FLinearColor::FromSRGBColor(FColor(17, 17, 17));
+	const FLinearColor Grid = FLinearColor::FromSRGBColor(FColor(255, 184, 28)).CopyWithNewOpacity(0.15f);
+	const FLinearColor Axis = FLinearColor::FromSRGBColor(FColor(51, 51, 51));
+	const FLinearColor Label = FLinearColor::FromSRGBColor(FColor(136, 136, 136));
+	const FLinearColor Blue = FLinearColor::FromSRGBColor(FColor(68, 136, 255));
+	const FLinearColor Yellow = FLinearColor::FromSRGBColor(FColor(255, 184, 28));
+	const FLinearColor BigOrange = FLinearColor::FromSRGBColor(FColor(255, 102, 0));
+	const FLinearColor SmallOrange = FLinearColor::FromSRGBColor(FColor(255, 136, 0));
 	const FLinearColor Other = FLinearColor::FromSRGBColor(FColor(160, 160, 170));
-	const FLinearColor Muted = FLinearColor::FromSRGBColor(FColor(150, 150, 160));
-	constexpr float MarginPx = 16.f;
+
+	// Room for the axis labels: y on the left, x below.
+	constexpr float PadLeft = 46.f;
+	constexpr float PadBottom = 34.f;
+	constexpr float PadTop = 30.f;   // the legend
+	constexpr float PadRight = 14.f;
+
+	/** A round step (1, 2, 5, 10, 20, 25, 50...) giving about Target lines over Span metres. */
+	double GridStep(double Span, int32 Target)
+	{
+		const double Raw = FMath::Max(Span / FMath::Max(Target, 1), 0.5);
+		const double Pow10 = FMath::Pow(10.0, FMath::FloorToDouble(FMath::LogX(10.0, Raw)));
+		for (double M : { 1.0, 2.0, 2.5, 5.0, 10.0 })
+		{
+			if (M * Pow10 >= Raw) return M * Pow10;
+		}
+		return 10.0 * Pow10;
+	}
 }
 
 void SFSDSTrackMap::Construct(const FArguments&)
@@ -64,70 +88,140 @@ bool SFSDSTrackMap::LoadCsv(const FString& Path, TArray<FCone>& Out)
 int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSlateRect&,
 	FSlateWindowElementList& Out, int32 LayerId, const FWidgetStyle&, bool) const
 {
-	// Qualified: other UI files in the same unity blob bring their own Muted etc.
 	namespace Map = FSDSTrackMapStyle;
 	const FSlateBrush* White = FCoreStyle::Get().GetBrush("WhiteBrush");
+	static const FSlateRoundedBoxBrush Round(FLinearColor::White, 32.f);   // clamped to a circle
+	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+	const FSlateFontInfo SmallFont = FCoreStyle::GetDefaultFontStyle("Regular", 9);
 	const FVector2f Size = FVector2f(Geo.GetLocalSize());
+
+	auto Text = [&](int32 Layer, const FString& S, FVector2f At, const FLinearColor& Color, const FSlateFontInfo& Font)
+	{
+		const FText T = FText::FromString(S);
+		const FVector2f TS = FVector2f(Measure->Measure(T, Font));
+		FSlateDrawElement::MakeText(Out, Layer, Geo.ToPaintGeometry(TS, FSlateLayoutTransform(At)), T, Font,
+			ESlateDrawEffect::None, Color);
+		return TS;
+	};
+	auto MeasureText = [&](const FString& S, const FSlateFontInfo& Font)
+	{
+		return FVector2f(Measure->Measure(FText::FromString(S), Font));
+	};
 
 	FSlateDrawElement::MakeBox(Out, LayerId, Geo.ToPaintGeometry(), White, ESlateDrawEffect::None, Map::Backdrop);
 
 	if (Cones.Num() == 0 || !Bounds.bIsValid)
 	{
-		const FText Text = LOCTEXT("NoTrack", "No track selected");
+		const FString S = LOCTEXT("NoTrack", "No track selected").ToString();
 		const FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Regular", 11);
-		const FVector2f TextSize = FVector2f(FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Text, Font));
-		FSlateDrawElement::MakeText(Out, LayerId + 1,
-			Geo.ToPaintGeometry(TextSize, FSlateLayoutTransform((Size - TextSize) * 0.5f)),
-			Text, Font, ESlateDrawEffect::None, Map::Muted);
+		Text(LayerId + 1, S, (Size - MeasureText(S, Font)) * 0.5f, Map::Label, Font);
 		return LayerId + 1;
 	}
 
-	// Fit the cones, keeping metres square. Screen y points down, the
-	// track's y (north) points up.
-	const FVector2D Extent = Bounds.GetSize();
-	const float ScaleX = (Size.X - 2.f * Map::MarginPx) / FMath::Max(Extent.X, 1.0);
-	const float ScaleY = (Size.Y - 2.f * Map::MarginPx) / FMath::Max(Extent.Y, 1.0);
-	const float Scale = FMath::Max(FMath::Min(ScaleX, ScaleY), 0.01f);
-	const FVector2D Centre = Bounds.GetCenter();
-	auto ToScreen = [&](const FVector2D& P)
-	{
-		return FVector2f(Size.X * 0.5f + (P.X - Centre.X) * Scale, Size.Y * 0.5f - (P.Y - Centre.Y) * Scale);
-	};
+	// The plot area, and the cones fitted into it with metres square. Screen
+	// y points down, the track's y points up.
+	const FVector2f PlotMin(Map::PadLeft, Map::PadTop);
+	const FVector2f PlotMax(Size.X - Map::PadRight, Size.Y - Map::PadBottom);
+	const FVector2f PlotSize = PlotMax - PlotMin;
+	if (PlotSize.X < 40.f || PlotSize.Y < 40.f) return LayerId;
 
-	// A cone is ~0.23 m across; keep it visible on big tracks and
-	// small on tiny ones.
-	const float Dot = FMath::Clamp(0.35f * Scale, 2.5f, 7.f);
+	// A little air around the cones so none sits on the frame.
+	const FVector2D Extent = Bounds.GetSize();
+	const double Air = FMath::Max(Extent.GetMax() * 0.04, 1.0);
+	const double SpanX = Extent.X + 2.0 * Air;
+	const double SpanY = Extent.Y + 2.0 * Air;
+	const float Scale = (float)FMath::Max(FMath::Min(PlotSize.X / SpanX, PlotSize.Y / SpanY), 0.01);
+	const FVector2D Centre = Bounds.GetCenter();
+	const FVector2f PlotCentre = PlotMin + PlotSize * 0.5f;
+	auto ToScreen = [&](double X, double Y)
+	{
+		return FVector2f(PlotCentre.X + float((X - Centre.X) * Scale), PlotCentre.Y - float((Y - Centre.Y) * Scale));
+	};
+	// The metres visible at the plot's edges.
+	const double X0 = Centre.X - PlotSize.X * 0.5 / Scale, X1 = Centre.X + PlotSize.X * 0.5 / Scale;
+	const double Y0 = Centre.Y - PlotSize.Y * 0.5 / Scale, Y1 = Centre.Y + PlotSize.Y * 0.5 / Scale;
+
+	// Grid and axis labels, one step for both axes so squares stay square.
+	const double Step = Map::GridStep(FMath::Max(X1 - X0, Y1 - Y0), 8);
+	auto TickText = [Step](double V)
+	{
+		return Step < 1.0 ? FString::Printf(TEXT("%.1f"), V) : FString::Printf(TEXT("%.0f"), V);
+	};
+	for (double X = FMath::CeilToDouble(X0 / Step) * Step; X <= X1; X += Step)
+	{
+		const float Sx = ToScreen(X, 0.0).X;
+		FSlateDrawElement::MakeLines(Out, LayerId + 1, Geo.ToPaintGeometry(),
+			TArray<FVector2f>{ FVector2f(Sx, PlotMin.Y), FVector2f(Sx, PlotMax.Y) }, ESlateDrawEffect::None, Map::Grid, true, 1.f);
+		const FString S = TickText(X);
+		Text(LayerId + 1, S, FVector2f(Sx - MeasureText(S, SmallFont).X * 0.5f, PlotMax.Y + 4.f), Map::Label, SmallFont);
+	}
+	for (double Y = FMath::CeilToDouble(Y0 / Step) * Step; Y <= Y1; Y += Step)
+	{
+		const float Sy = ToScreen(0.0, Y).Y;
+		FSlateDrawElement::MakeLines(Out, LayerId + 1, Geo.ToPaintGeometry(),
+			TArray<FVector2f>{ FVector2f(PlotMin.X, Sy), FVector2f(PlotMax.X, Sy) }, ESlateDrawEffect::None, Map::Grid, true, 1.f);
+		const FString S = TickText(Y);
+		const FVector2f TS = MeasureText(S, SmallFont);
+		Text(LayerId + 1, S, FVector2f(PlotMin.X - TS.X - 6.f, Sy - TS.Y * 0.5f), Map::Label, SmallFont);
+	}
+	// Frame, and the axis names.
+	FSlateDrawElement::MakeLines(Out, LayerId + 1, Geo.ToPaintGeometry(),
+		TArray<FVector2f>{ PlotMin, FVector2f(PlotMax.X, PlotMin.Y), PlotMax, FVector2f(PlotMin.X, PlotMax.Y), PlotMin },
+		ESlateDrawEffect::None, Map::Axis, true, 1.f);
+	{
+		const FString S = LOCTEXT("XAxis", "x (m)").ToString();
+		Text(LayerId + 1, S, FVector2f(PlotMax.X - MeasureText(S, SmallFont).X, PlotMax.Y + 18.f), Map::Label, SmallFont);
+		Text(LayerId + 1, LOCTEXT("YAxis", "y (m)").ToString(), FVector2f(4.f, PlotMin.Y - 16.f), Map::Label, SmallFont);
+	}
+
+	// Cones. A cone is ~0.23 m across: drawn a bit bigger, so a big track
+	// still shows them.
+	const float Dot = FMath::Clamp(0.45f * Scale, 4.f, 9.f);
+	int32 NBlue = 0, NYellow = 0, NOrange = 0;
 	for (const FCone& C : Cones)
 	{
 		FLinearColor Color = Map::Other;
 		float D = Dot;
 		switch (C.Kind)
 		{
-		case EConeKind::Blue:        Color = Map::Blue; break;
-		case EConeKind::Yellow:      Color = Map::Yellow; break;
-		case EConeKind::SmallOrange: Color = Map::Orange; break;
-		case EConeKind::BigOrange:   Color = Map::Orange; D = Dot * 1.6f; break;
+		case EConeKind::Blue:        Color = Map::Blue; ++NBlue; break;
+		case EConeKind::Yellow:      Color = Map::Yellow; ++NYellow; break;
+		case EConeKind::SmallOrange: Color = Map::SmallOrange; ++NOrange; break;
+		case EConeKind::BigOrange:   Color = Map::BigOrange; ++NOrange; D = Dot * 1.6f; break;
 		default: break;
 		}
-		const FVector2f P = ToScreen(C.Pos);
-		FSlateDrawElement::MakeBox(Out, LayerId + 1,
+		const FVector2f P = ToScreen(C.Pos.X, C.Pos.Y);
+		FSlateDrawElement::MakeBox(Out, LayerId + 2,
 			Geo.ToPaintGeometry(FVector2f(D, D), FSlateLayoutTransform(P - FVector2f(D, D) * 0.5f)),
-			White, ESlateDrawEffect::None, Color);
+			&Round, ESlateDrawEffect::None, Color);
 	}
 
-	// Scale bar: 10 m (or 50 m on big tracks), bottom left.
-	const float BarM = Extent.GetMax() > 150.0 ? 50.f : 10.f;
-	const float BarPx = BarM * Scale;
-	const FVector2f BarAt(Map::MarginPx, Size.Y - Map::MarginPx);
-	FSlateDrawElement::MakeBox(Out, LayerId + 1,
-		Geo.ToPaintGeometry(FVector2f(BarPx, 2.f), FSlateLayoutTransform(BarAt)),
-		White, ESlateDrawEffect::None, Map::Muted);
-	const FText BarText = FText::Format(LOCTEXT("Bar", "{0} m"), FText::AsNumber(FMath::RoundToInt(BarM)));
-	FSlateDrawElement::MakeText(Out, LayerId + 1,
-		Geo.ToPaintGeometry(FVector2f(60.f, 14.f), FSlateLayoutTransform(BarAt + FVector2f(0.f, -16.f))),
-		BarText, FCoreStyle::GetDefaultFontStyle("Regular", 9), ESlateDrawEffect::None, Map::Muted);
+	// Legend, top right: the cone counts.
+	{
+		struct FEntry { FString Name; int32 N; FLinearColor Color; };
+		const FEntry Entries[] = {
+			{ TEXT("Blue"), NBlue, Map::Blue },
+			{ TEXT("Yellow"), NYellow, Map::Yellow },
+			{ TEXT("Orange"), NOrange, Map::BigOrange },
+		};
+		float X = PlotMax.X;
+		for (int32 i = UE_ARRAY_COUNT(Entries) - 1; i >= 0; --i)
+		{
+			const FEntry& E = Entries[i];
+			if (E.N == 0) continue;
+			const FString S = FString::Printf(TEXT("%s (%d)"), *E.Name, E.N);
+			const FVector2f TS = MeasureText(S, SmallFont);
+			X -= TS.X;
+			Text(LayerId + 2, S, FVector2f(X, 8.f), Map::Label, SmallFont);
+			X -= 12.f;
+			FSlateDrawElement::MakeBox(Out, LayerId + 2,
+				Geo.ToPaintGeometry(FVector2f(8.f, 8.f), FSlateLayoutTransform(FVector2f(X, 8.f + TS.Y * 0.5f - 4.f))),
+				&Round, ESlateDrawEffect::None, E.Color);
+			X -= 16.f;
+		}
+	}
 
-	return LayerId + 1;
+	return LayerId + 2;
 }
 
 #undef LOCTEXT_NAMESPACE

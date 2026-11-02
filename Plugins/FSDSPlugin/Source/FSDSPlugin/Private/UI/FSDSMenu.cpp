@@ -8,6 +8,9 @@
 #include "UI/SFSDSMenu.h"
 
 #include "Camera/CameraActor.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
@@ -30,6 +33,9 @@ namespace
 	constexpr float OrbitHeightCm = 220.f;
 	constexpr float OrbitLookUpCm = 60.f;
 	constexpr float OrbitRadPerS = 0.12f;
+
+	// Practice has no lap target; the referee needs one, so a big one.
+	constexpr int32 PracticeLaps = 99;
 }
 
 FFSDSMenu::FFSDSMenu() = default;
@@ -39,8 +45,9 @@ FFSDSMenu::~FFSDSMenu()
 	Shutdown();
 }
 
-FString FFSDSMenu::EventName(EFSDSEventType Event)
+FString FFSDSMenu::EventName(EFSDSEventType Event, bool bPractice)
 {
+	if (bPractice) return TEXT("Practice");
 	switch (Event)
 	{
 	case EFSDSEventType::Acceleration: return TEXT("Acceleration");
@@ -115,7 +122,19 @@ void FFSDSMenu::ScanTracks()
 			FFSDSMenuTrack T;
 			T.Name = Name;
 			T.Path = FPaths::ConvertRelativePathToFull(FPaths::Combine(Dir, File));
-			T.bDrawn = FPaths::FileExists(FPaths::Combine(Dir, Name + TEXT(".track.json")));
+			// A drawn track's spec says whether it is a loop; a track without
+			// one (the FS events, generated tracks) is taken as one.
+			const FString SpecPath = FPaths::Combine(Dir, Name + TEXT(".track.json"));
+			FString Spec;
+			if (FFileHelper::LoadFileToString(Spec, *SpecPath))
+			{
+				T.bDrawn = true;
+				TSharedPtr<FJsonObject> Obj;
+				if (FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Spec), Obj) && Obj.IsValid())
+				{
+					Obj->TryGetBoolField(TEXT("closed"), T.bClosed);
+				}
+			}
 			TArray<FString> Lines;
 			FFileHelper::LoadFileToStringArray(Lines, *T.Path);
 			for (const FString& Line : Lines)
@@ -263,7 +282,7 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	}
 
 	// The referee ends the run (all laps done): show how it went.
-	if (IsManualRunLive() && !IsOpen())
+	if (IsManualRunLive() && !Current->bPractice && !IsOpen())
 	{
 		const AFSDSReferee* R = Referee.Get();
 		if (R && R->GetState().bFinished)
@@ -318,8 +337,15 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 	}
 
 	// After the load: the load resets the referee, and Acceleration starts
-	// its timer when the event is set.
-	R->SetEventType(Request.Event, Request.Laps);
+	// its timer when the event is set. Practice counts laps but never ends.
+	if (Request.bPractice)
+	{
+		R->SetEventType(EFSDSEventType::Trackdrive, PracticeLaps);
+	}
+	else
+	{
+		R->SetEventType(Request.Event, Request.Laps);
+	}
 
 	// The driver has the car: EBS off, keyboard in.
 	P->ReleaseEbs();
@@ -330,7 +356,7 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 	bRunRecorded = false;
 	Hide();
 	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: manual %s on %s (%d cones, %d laps)"),
-		*EventName(Request.Event), *Request.Track.Name, Cones, Request.Laps);
+		*EventName(Request.Event, Request.bPractice), *Request.Track.Name, Cones, Request.Laps);
 }
 
 void FFSDSMenu::OnEscape()
@@ -394,7 +420,8 @@ void FFSDSMenu::RecordRun()
 	Run.RequiredLaps = S.RequiredLaps;
 	Run.ConesDown = S.DooCounter;
 	Run.OffCourse = S.OffTrackCounter;
-	Run.bFinished = S.bFinished;
+	Run.bFinished = S.bFinished && !Current->bPractice;
+	Run.bPractice = Current->bPractice;
 	Run.When = FDateTime::Now();
 	Results->Add(MoveTemp(Run));
 }
