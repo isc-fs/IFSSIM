@@ -118,10 +118,14 @@ void AFSDSGameMode::StartPlay()
 	// In-game Mission Control panel (toggle key, Tab by default). Drives the
 	// same backend as the web UI; off when there is no viewport.
 	Launcher.Init(GetWorld(), RefereeActor, VehiclePawn);
+
+	// The front-end menu the sim opens on; steps aside for RPC sessions.
+	Menu.Init(GetWorld(), RefereeActor, VehiclePawn, &RpcServer, &Launcher);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	Menu.Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

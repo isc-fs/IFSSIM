@@ -21,6 +21,17 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
+  Skidpad, Autocross, Trackdrive, with laps), the track (a top-down map of its
+  cones) and who drives, then START. A manual run needs only the sim, no Docker:
+  the menu loads the track with `loadTrack`'s own code and hands the car to the
+  keyboard. Esc pauses (Resume, Restart run, Main menu); when the referee ends
+  the run, a results box shows its laps and cones, and the Results page keeps
+  every manual run since the sim started. Autonomous opens Mission Control,
+  where the pipeline's session starts as before. The menu stays out of the way
+  of RPC sessions: it is off with `-NoMenu`, `-RenderOffscreen` or
+  `"Menu": {"Enabled": false}`, and closes when a client loads a track or resets
+  the scenario. The Mission Control panel (Tab) stays, for engineers.
 - **Telemetry in the in-sim Mission Control panel.** A Telemetry tab with the
   car's live state read straight from the sim: speed, motor rpm, pedals,
   steering, who is driving, position and heading, and the motor's regen (torque

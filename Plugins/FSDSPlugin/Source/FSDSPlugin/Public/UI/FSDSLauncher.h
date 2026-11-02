@@ -37,9 +37,11 @@ public:
 	/** The key from settings ("Key"), or Tab when that isn't a key name. */
 	static FKey ToggleKey();
 
-private:
+	/** Also the front-end menu's: it opens the panel for autonomous runs and closes it over itself. */
 	void Open(APlayerController* PC);
 	void Close();
+
+private:
 	void StartStack();
 	bool Tick(float DeltaTime);
 	void ShowHint();

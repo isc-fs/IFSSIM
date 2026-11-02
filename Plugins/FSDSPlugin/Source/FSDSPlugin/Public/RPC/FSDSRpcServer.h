@@ -49,11 +49,28 @@ public:
 
 	bool IsRunning() const { return bRunning; }
 
+	// --- For the in-sim menu: the RPC's own code, called on the game thread. ---
+
+	/** Resolve a track name or path the way loadTrack does. */
+	static FString ResolveTrackPath(const FString& NameOrPath);
+	/** Where loadTrack looks for a bare track name, in search order. */
+	static TArray<FString> TrackSearchDirs();
+	/** loadTrack: spawn the cones, reset the referee, put the car on the start gate. */
+	FString LoadTrackLocal(const FString& NameOrPath);
+	/** resetScenario without a seed: the car back on the start gate, counters cleared. */
+	FString ResetScenarioLocal();
+	/** enableApiControl / disableApiControl. */
+	void SetApiControl(bool bEnabled);
+	/** Bumped each time a client loads a track or resets the scenario over RPC. */
+	uint32 GetExternalSessionGeneration() const { return ExternalSessionGen.load(); }
+
 private:
 	void BindMethods();
 	void ServerThreadFunc();
 	void HandleClient(FSocket* ClientSocket);
 	FString ProcessRequest(const FString& Request);
+	FString LoadTrackOnGameThread(const FString& TrackPath);
+	FString ResetScenarioOnGameThread(bool bHasSeed, int32 NewSeed, bool bAtTickStart);
 	bool ProcessBinaryRequest(const FString& Request, FSocket* ClientSocket);
 
 	/** Streaming modes — hold connection open and push data continuously.
@@ -109,6 +126,7 @@ private:
 	std::mutex ClientThreadsMutex;
 	std::atomic<bool> bRunning{false};
 	std::atomic<bool> bApiControlEnabled{false};
+	std::atomic<uint32> ExternalSessionGen{0};
 	std::atomic<bool> bSimPaused{false};
 	uint16 ServerPort = 41451;
 

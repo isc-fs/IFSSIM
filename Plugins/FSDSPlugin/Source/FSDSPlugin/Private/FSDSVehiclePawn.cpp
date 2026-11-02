@@ -1566,6 +1566,17 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	// settings.json ("MissionControl": {"Key": ...}) with nothing to add to
 	// DefaultInput.ini.
 	PlayerInputComponent->BindKey(FFSDSLauncher::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleLauncher);
+
+	// Esc: pause a manual run, or bring back the front-end menu.
+	PlayerInputComponent->BindKey(EKeys::Escape, IE_Pressed, this, &AFSDSVehiclePawn::OnMenuKey);
+}
+
+void AFSDSVehiclePawn::OnMenuKey()
+{
+	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
+	{
+		GM->GetMenu().OnEscape();
+	}
 }
 
 void AFSDSVehiclePawn::OnToggleLauncher()
