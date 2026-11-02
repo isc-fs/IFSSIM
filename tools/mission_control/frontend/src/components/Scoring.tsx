@@ -116,7 +116,10 @@ export default function Scoring() {
       {/* Score Header */}
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6 text-center">
         <div className="text-gray-500 text-xs uppercase tracking-wider mb-2">Event Score</div>
-        <div className="text-6xl font-bold text-[#ffb81c]">{scoring.score.toFixed(1)}</div>
+        <div className="text-6xl font-bold text-[#ffb81c]">
+          {/* With no reference the backend compares the run with itself: always full points. */}
+          {scoring.t_best_reference != null ? scoring.score.toFixed(1) : '--'}
+        </div>
         <div className="text-gray-500 text-sm">/ {scoring.max_points} points</div>
         <div className="text-lg text-white capitalize mt-2">{scoring.event}</div>
       </div>
@@ -148,7 +151,7 @@ export default function Scoring() {
         <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Reference Time (T_best)</h2>
         <div className="flex items-center gap-3">
           <input
-            type="number" step="0.1" placeholder="Auto (best lap)"
+            type="number" step="0.1" placeholder="seconds"
             value={tBest} onChange={e => setTBest(e.target.value)}
             className="w-40 px-3 py-1.5 bg-[#111] border border-[#444] rounded text-white text-sm"
           />
@@ -156,8 +159,8 @@ export default function Scoring() {
             {tBest
               ? `Using ${tBest}s`
               : scoring.t_best_reference != null
-                ? `Auto: ${scoring.t_best_reference.toFixed(3)}s (best lap)`
-                : 'Auto: (waiting for first lap)'}
+                ? `Scoring against ${scoring.t_best_reference.toFixed(3)}s`
+                : 'None set. Without one the run is compared with itself and always gets full points, so no score is shown.'}
           </span>
         </div>
       </div>
