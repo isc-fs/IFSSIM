@@ -238,6 +238,17 @@ def test_t_best_none_uses_team_own_time_as_baseline() -> None:
     assert r["score"] == pytest.approx(MAX_POINTS["autocross"], abs=0.1)
 
 
+def test_run_faster_than_t_best_scores_pmax_not_more() -> None:
+    """A run beating the reference becomes Tmin: Pmax, never above it."""
+    r = compute_scoring("trackdrive", lap_times=[25.0, 25.0, 25.0], doo=0, oc=0, t_best=80.0)
+    assert r["score"] == pytest.approx(MAX_POINTS["trackdrive"], abs=0.1)
+
+
+def test_no_completed_lap_scores_zero_even_with_a_reference() -> None:
+    r = compute_scoring("trackdrive", lap_times=[], doo=0, oc=0, t_best=80.0)
+    assert r["score"] == 0.0
+
+
 def test_response_shape_is_stable() -> None:
     """All keys the frontend reads are present, regardless of input."""
     r = compute_scoring("trackdrive", lap_times=[], doo=0, oc=0)

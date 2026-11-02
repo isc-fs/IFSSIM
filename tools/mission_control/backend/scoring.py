@@ -142,10 +142,16 @@ def compute_scoring(
     disqualified = bool(dq_reasons)
 
     # D 9.1.1 scoring
-    if disqualified:
+    if disqualified or not lap_times:
+        # No completed lap is no time to score (and a corrected time of 0 s
+        # would otherwise beat any reference).
         score = 0.0
     else:
         t_min = t_best if (t_best and t_best > 0) else t_corrected
+        # D 9.1.1: Tmin is the fastest corrected time of all teams, this run
+        # included, so a run faster than the reference is the new Tmin and
+        # scores Pmax; without this the formula extrapolated past Pmax.
+        t_min = min(t_min, t_corrected)
         t_max = t_min * TMAX_FACTOR.get(event, 1.5)
         p_min = max_points * PMIN_FACTOR.get(event, 0.1)
         score = _score_formula(t_corrected, t_min, t_max, max_points, p_min)
