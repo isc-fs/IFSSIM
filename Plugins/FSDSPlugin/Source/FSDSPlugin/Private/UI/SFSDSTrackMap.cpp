@@ -21,7 +21,7 @@ namespace FSDSTrackMapStyle
 	const FLinearColor Blue = FLinearColor::FromSRGBColor(FColor(68, 136, 255));
 	const FLinearColor Yellow = FLinearColor::FromSRGBColor(FColor(255, 184, 28));
 	const FLinearColor BigOrange = FLinearColor::FromSRGBColor(FColor(255, 102, 0));
-	const FLinearColor SmallOrange = FLinearColor::FromSRGBColor(FColor(255, 136, 0));
+	const FLinearColor SmallOrange = FLinearColor::FromSRGBColor(FColor(220, 70, 10));   // clear of yellow
 	const FLinearColor Other = FLinearColor::FromSRGBColor(FColor(160, 160, 170));
 
 	// Room for the axis labels: y on the left, x below.
