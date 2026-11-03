@@ -367,6 +367,7 @@ class TrackCreate(BaseModel):
 class TrackPreview(BaseModel):
     spec: dict
     strict: bool = False
+    venue: Optional[str] = None   # also keep the cones on this venue's lot (docs/venues.md)
 
 class TeleportRequest(BaseModel):
     x: float
@@ -1434,6 +1435,7 @@ def track_delete(name: str):
         spec_file = _creator.spec_path(filepath)
         if os.path.exists(spec_file):
             os.remove(spec_file)
+        _creator.remove_venue_sidecar(filepath)
         return {"deleted": name}
     return JSONResponse({"error": "Not found"}, status_code=404)
 
@@ -1445,7 +1447,8 @@ def track_delete(name: str):
 
 @app.post("/api/track/preview_spec")
 def track_preview_spec(req: TrackPreview):
-    code, body = _creator.preview(req.spec, strict=req.strict)
+    code, body = _creator.preview(req.spec, strict=req.strict, venue=req.venue,
+                                  tracks_dir=TRACKS_DIR)
     return body if code == 200 else JSONResponse(body, status_code=code)
 
 
