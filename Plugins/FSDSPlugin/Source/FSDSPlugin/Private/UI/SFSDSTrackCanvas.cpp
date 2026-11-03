@@ -20,7 +20,8 @@ namespace FSDSTrackCanvasStyle
 	const FLinearColor Blue = FLinearColor::FromSRGBColor(FColor(59, 130, 246));
 	const FLinearColor Yellow = FLinearColor::FromSRGBColor(FColor(250, 204, 21));
 	const FLinearColor BigOrange = FLinearColor::FromSRGBColor(FColor(249, 115, 22));
-	const FLinearColor SmallOrange = FLinearColor::FromSRGBColor(FColor(253, 186, 116));
+	// Deep orange, not the web editor's peach: that reads as yellow next to a yellow cone.
+	const FLinearColor SmallOrange = FLinearColor::FromSRGBColor(FColor(220, 70, 10));
 	const FLinearColor StartArrow = FLinearColor::FromSRGBColor(FColor(239, 68, 68));
 	const FLinearColor IssueError = FLinearColor::FromSRGBColor(FColor(239, 68, 68));
 	const FLinearColor IssueWarn = FLinearColor::FromSRGBColor(FColor(245, 158, 11));
