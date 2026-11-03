@@ -68,6 +68,13 @@ namespace FSDSTrackSpec
 		FString SavedName;
 	};
 
+	/** A track nobody replaces by hand: the built-in events, and the stress
+	 *  library (`python -m envgen stress`, file prefix stress_). Mission Control's
+	 *  backend refuses to overwrite or delete them too. */
+	bool IsProtectedName(const FString& Name);
+	/** A name to save a protected track's variant under: snail_r20_copy for stress_snail_r20. */
+	FString CopyName(const FString& Name);
+
 	TSharedRef<FJsonObject> ToJson(const FSpec& Spec);
 	/** Parse a .track.json (or a spec object). False if it isn't one. */
 	bool FromJson(const TSharedPtr<FJsonObject>& Obj, FSpec& Out);
