@@ -5,8 +5,8 @@ run-name: >-
 
 # Drives the sim on the GPU box: a headless start-up check, then the missions
 # in tools/ci/sim_check.json through this PR's pipeline, scored by the referee
-# (now acceleration 3 times and skidpad, which decide the check, and one
-# autocross track, reported only). The result, compared with the last dev run
+# (now acceleration 3 times, which decides the check, then skidpad and one
+# autocross track, reported only until they're reliable). The result, compared with the last dev run
 # and with a map of each mission, goes to a comment on the PR and a row in the
 # `sim-report` issue (tools/ci/sim_publish.py).
 #

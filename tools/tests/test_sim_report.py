@@ -16,7 +16,7 @@ sys.path.insert(0, str(REPO / "tools" / "ci"))
 import sim_publish  # noqa: E402
 import sim_report  # noqa: E402
 
-CONFIG = {"required": ["acceleration", "skidpad"], "informational": ["autocross"]}
+CONFIG = {"required": ["acceleration", "skidpad"], "informational": ["autocross"]}  # not the real one
 
 
 def write_run(root: Path, scenario: str, event: str, seed: int, finished: bool, lap: float | None):

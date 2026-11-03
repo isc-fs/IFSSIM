@@ -49,7 +49,7 @@ def plot_group(group: dict, runs: list[dict], run_dir: Path, out: Path) -> None:
     xs = [c["x"] for c in cones] + [p["x"] for _, t in paths for p in t if "x" in p]
     ys = [c["y"] for c in cones] + [p["y"] for _, t in paths for p in t if "y" in p]
     if not xs:
-        return
+        raise ValueError("no telemetry or cones recorded")
     # Long, thin tracks (acceleration) lie along the page: rotate them 90 degrees.
     turn = (max(ys) - min(ys)) > 1.5 * (max(xs) - min(xs))
 
