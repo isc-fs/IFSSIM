@@ -63,6 +63,7 @@ import csv
 import json
 import math
 import os
+import hashlib
 import random
 import shutil
 import socket
@@ -345,9 +346,12 @@ STACK_READY = (
 STACK_UP_TIMEOUT_S = 1200.0  # rebuild (C++ too) + a cold Numba cache
 # The stack's colcon build/ and install/ live in named volumes between runs, one pair per image:
 # a new volume starts as a copy of the image's own build, so the first run rebuilds what the
-# checkout changed and later runs only what changed since (~26 s down to a few). A new image
-# gets fresh volumes and the old ones are removed. Clear them by hand with
+# checkout changed and later runs only what changed since. A new image gets fresh volumes and
+# the old ones are removed. Clear them by hand with
 # `docker volume rm $(docker volume ls -q -f name=bench_ws_)`.
+# colcon re-runs every Python package's setup.py even with nothing to rebuild (~22 s for the
+# stack), so the stack also gets a hash of its sources (DV_SRC_HASH) and the entrypoint skips
+# colcon when the cached build was made from the same ones.
 BUILD_CACHE = "bench_ws_"
 PARAMS = Path("bringup") / "config" / "params.yaml"
 COMPONENT_ALIASES = {"cone_detection": "cone_detection_node"}
@@ -365,6 +369,16 @@ def docker(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         raise BenchmarkError(f"docker {args[0]}: {e}") from None
+
+
+def source_hash(src: Path) -> str:
+    """A hash of every file under src (paths and contents), to tell the stack's entrypoint
+    whether its cached build was made from these sources."""
+    h = hashlib.sha256()
+    for f in sorted(p for p in src.rglob("*") if p.is_file()):
+        h.update(f.relative_to(src).as_posix().encode() + b"\0")
+        h.update(f.read_bytes())
+    return h.hexdigest()
 
 
 def build_cache(image: str) -> list[tuple[str, str]]:
@@ -559,8 +573,11 @@ class Stack:
                 p for p in src.iterdir() if (p / "package.xml").is_file()
             ):
                 run += ["-v", f"{pkg}:{WS}/src/{pkg.name}"]
-            for volume, folder in build_cache(self.image):
+            cache = build_cache(self.image)
+            for volume, folder in cache:
                 run += ["-v", f"{volume}:{WS}/{folder}"]
+            if cache:
+                run += ["-e", f"DV_SRC_HASH={source_hash(src)}"]
             run += ["-e", "DV_REBUILD_ON_STARTUP=true", self.image]
             ready = STACK_READY
         else:  # the latte panda runs the pipeline: here only the sim bridge

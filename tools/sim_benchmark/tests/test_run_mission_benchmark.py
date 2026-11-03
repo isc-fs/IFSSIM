@@ -455,13 +455,27 @@ def test_the_stacks_build_is_kept_between_runs_of_one_image(tmp_path, world, doc
     assert "bench_ws_0123456789ab_build:/dv_pipeline_stack_ws/build" in mounts
     assert "bench_ws_0123456789ab_install:/dv_pipeline_stack_ws/install" in mounts
     assert docker.volumes == ["bench_ws_0123456789ab_build", "bench_numba_cache"]
+    assert any(a.startswith("DV_SRC_HASH=") for a in run)  # so unchanged sources skip colcon
+
+
+def test_the_source_hash_follows_paths_and_contents(tmp_path):
+    src = tmp_path / "src"
+    (src / "pkg").mkdir(parents=True)
+    (src / "pkg" / "a.py").write_text("x = 1\n")
+    first = rmb.source_hash(src)
+    assert rmb.source_hash(src) == first
+    (src / "pkg" / "a.py").write_text("x = 2\n")
+    assert rmb.source_hash(src) != first
+    (src / "pkg" / "a.py").write_text("x = 1\n")
+    (src / "pkg" / "a.py").rename(src / "pkg" / "b.py")
+    assert rmb.source_hash(src) != first
 
 
 def test_an_image_that_cant_be_inspected_builds_without_the_cache(tmp_path, world, docker):
     rc, _ = _run(tmp_path, world)
     assert rc == 0
     run = docker.run_args()
-    assert not any(a.startswith("bench_ws_") for a in run)
+    assert not any(a.startswith(("bench_ws_", "DV_SRC_HASH=")) for a in run)
 
 
 def test_overrides_are_merged_into_params_yaml_and_recorded(tmp_path, world, docker):
