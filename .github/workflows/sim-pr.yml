@@ -73,16 +73,14 @@ jobs:
     runs-on: [self-hosted, Linux, X64, gpu-1080]
     timeout-minutes: 300
     env:
-      UE5_ROOT: /build/UE_5.8
+      # CI's own copy of the box's engine, owned by the runner's user: a build
+      # writes into the engine tree, and the box's own engine stays read-only.
+      UE5_ROOT: /build/ifssim-ci/UE_5.8
       STAGE: ${{ github.workspace }}/Saved/StagedBuildsCI
       COMPOSE_PROJECT_NAME: ifssim-ci
       DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
-      # The engine tree is read-only for the runner's user except for a few
-      # build-output folders: keep the shader cache out of it, and use the
-      # build tools the engine already has (-nocompileuat) instead of
-      # recompiling them into Engine/Source.
+      # Shader cache kept outside the engine copy, so re-copying the engine keeps it.
       UE-LocalDataCachePath: /build/ifssim-ci/ddc
-      uebp_LogFolder: /build/ifssim-ci/uat-logs
 
     steps:
       - uses: actions/checkout@v6

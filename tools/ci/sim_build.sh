@@ -51,7 +51,7 @@ package() {
     -project="$PWD/IFSSIM.uproject" -platform=Linux \
     -configuration=Development -clientconfig=Development \
     -build -cook -iterate -stage -pak -iostore -compressed -noeditor \
-    -unattended -nop4 -utf8output -nocompileuat -stagingdirectory="$STAGE"
+    -unattended -nop4 -utf8output -stagingdirectory="$STAGE"
 }
 
 # Copies the new build to $SHARED/dev-<commit> and points $SHARED/dev at it in
