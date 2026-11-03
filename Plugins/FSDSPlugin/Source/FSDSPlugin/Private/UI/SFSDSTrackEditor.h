@@ -8,6 +8,7 @@
 class FFSDSMissionControlClient;
 class SFSDSTrackCanvas;
 class SVerticalBox;
+class SBox;
 
 DECLARE_DELEGATE_OneParam(FOnFSDSTestDrive, const FString& /*TrackName*/);
 
@@ -35,6 +36,9 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
+	/** The tracks folders changed, e.g. after a save: redraw the open list. */
+	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks);
+
 private:
 	TSharedRef<SWidget> BuildLeft();
 	TSharedRef<SWidget> BuildRight();
@@ -59,6 +63,7 @@ private:
 	FSimpleDelegate OnSaved, OnStartStack;
 
 	TSharedPtr<SFSDSTrackCanvas> Canvas;
+	TSharedPtr<SBox> OpenListBox;
 	TSharedPtr<SVerticalBox> SectionsBox;
 	TSharedPtr<SVerticalBox> IssuesBox;
 

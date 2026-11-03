@@ -47,6 +47,9 @@ public:
 	/** A line under START, e.g. why a track would not load. */
 	void SetMessage(const FString& Msg, bool bError);
 
+	/** The tracks folders changed, e.g. a track was saved in the editor. */
+	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks);
+
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
 
@@ -77,6 +80,7 @@ private:
 	EPage Page = EPage::Drive;
 
 	TArray<FFSDSMenuTrack> Tracks;
+	TSharedPtr<class SFSDSTrackEditor> EditorPage;
 	TSharedPtr<const TArray<FFSDSRunResult>> Results;
 	TOptional<FFSDSDriveRequest> Last;
 	TWeakObjectPtr<AFSDSReferee> Referee;
