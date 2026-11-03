@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UI/FSDSVenue.h"
 #include "Widgets/SLeafWidget.h"
 
 /**
@@ -26,6 +27,8 @@ public:
 
 	/** Show these cones; an empty list shows the "no track" text. */
 	void SetCones(TArray<FCone> InCones);
+	/** Draw a venue around the cones; Shift moves it into the CSV's frame. Null for none. */
+	void SetVenue(const TSharedPtr<const FSDSVenue::FVenue>& InVenue, const FVector2D& InShift);
 
 	/** A filled circle brush D px across, for cones and markers. */
 	static const FSlateBrush* DotBrush(float D);
@@ -39,6 +42,10 @@ public:
 	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(320.f, 320.f); }
 
 private:
+	void UpdateBounds();
+
 	TArray<FCone> Cones;
+	TSharedPtr<const FSDSVenue::FVenue> Venue;
+	FVector2D VenueShift = FVector2D::ZeroVector;
 	FBox2D Bounds = FBox2D(ForceInit);
 };

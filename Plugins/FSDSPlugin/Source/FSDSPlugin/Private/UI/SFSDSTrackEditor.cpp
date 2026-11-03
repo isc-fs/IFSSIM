@@ -146,6 +146,7 @@ void SFSDSTrackEditor::Construct(const FArguments& InArgs)
 	State = InArgs._State.IsValid() ? InArgs._State : MakeShared<FSDSTrackSpec::FEditorState>();
 	Client = InArgs._Client;
 	Tracks = InArgs._Tracks;
+	Venues = InArgs._Venues;
 	OnTestDrive = InArgs._OnTestDrive;
 	OnSaved = InArgs._OnSaved;
 	OnStartStack = InArgs._OnStartStack;
@@ -160,6 +161,7 @@ void SFSDSTrackEditor::Construct(const FArguments& InArgs)
 		]
 	];
 	RebuildSections();
+	if (Canvas) Canvas->SetVenue(FindVenue(State->Venue));
 
 	// Is the backend there? The first preview tells too, but a blank page has none.
 	if (Client.IsValid())
@@ -240,16 +242,72 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildLeft()
 					? LOCTEXT("HintFree", "Drag to draw the whole path in one stroke; it becomes control points you can then move in Click points.")
 					: LOCTEXT("HintClick", "Click to add a point (after the selected one). Drag a point to move it, drag the background "
 						"or right-drag to pan, scroll to zoom. Delete removes the selected point. Point 0 (green) is the start; "
-						"the car drives toward point 1. The green square is the floor.");
+						"the car drives toward point 1. The green square is the floor. On a venue, keep the cones inside its lot (the grey outline).");
 			})
 			.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Muted).AutoWrapText(true)
 		];
 }
 
-void SFSDSTrackEditor::SetTracks(const TArray<FFSDSMenuTrack>& InTracks)
+void SFSDSTrackEditor::SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues)
 {
 	Tracks = InTracks;
+	Venues = InVenues;
+	if (!State->Venue.IsEmpty() && !FindVenue(State->Venue).IsValid()) State->Venue.Reset();
+	if (Canvas) Canvas->SetVenue(FindVenue(State->Venue));
+	if (VenueRowBox.IsValid()) VenueRowBox->SetContent(BuildVenueRow());
 	if (OpenListBox.IsValid()) OpenListBox->SetContent(BuildOpenList());
+}
+
+TSharedRef<SWidget> SFSDSTrackEditor::BuildVenueRow()
+{
+	TSharedRef<SUniformGridPanel> Grid = SNew(SUniformGridPanel).SlotPadding(FMargin(2.f));
+	auto Add = [&](int32 i, const FText& Label, const FString& Name)
+	{
+		Grid->AddSlot(i % 3, i / 3)
+		[
+			EditorUi::Choice(Label, [this, Name]() { return State->Venue == Name; }, [this, Name]() { SetVenue(Name); })
+		];
+	};
+	Add(0, LOCTEXT("NoVenue", "Open floor"), FString());
+	for (int32 i = 0; i < Venues.Num(); ++i)
+	{
+		Add(i + 1, FText::FromString(Venues[i]->Title), Venues[i]->Name);
+	}
+	return Grid;
+}
+
+TSharedPtr<const FSDSVenue::FVenue> SFSDSTrackEditor::FindVenue(const FString& Name) const
+{
+	for (const FSDSVenue::FVenueRef& V : Venues)
+	{
+		if (V->Name == Name) return V;
+	}
+	return nullptr;
+}
+
+FString SFSDSTrackEditor::NameForVenue(const FString& Name) const
+{
+	FString Bare = Name;
+	if (FindVenue(FSDSVenue::VenueOfTrack(Name)).IsValid())
+	{
+		Name.Split(FSDSVenue::Sep, nullptr, &Bare);   // drop another venue's prefix
+	}
+	if (State->Venue.IsEmpty() || Bare.IsEmpty()) return Bare;
+	return State->Venue + FSDSVenue::Sep + Bare;
+}
+
+void SFSDSTrackEditor::SetVenue(const FString& Name)
+{
+	if (State->Venue == Name) return;
+	State->Venue = Name;
+	State->Name = NameForVenue(State->Name);
+	if (Canvas)
+	{
+		Canvas->SetVenue(FindVenue(Name));
+		Canvas->FitView();
+	}
+	if (OpenListBox.IsValid()) OpenListBox->SetContent(BuildOpenList());
+	SpecChanged();   // the lot is part of the checks: preview again
 }
 
 TSharedRef<SWidget> SFSDSTrackEditor::BuildOpenList()
@@ -259,6 +317,7 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildOpenList()
 	for (const FFSDSMenuTrack& T : Tracks)
 	{
 		if (!T.bDrawn) continue;
+		if (!State->Venue.IsEmpty() && T.Venue != State->Venue) continue;   // on a venue: its tracks
 		++N;
 		List->AddSlot().AutoHeight().Padding(0, 1)
 		[
@@ -301,6 +360,13 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 		+ SScrollBox::Slot()
 		[
 			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SVerticalBox)
+				.Visibility_Lambda([this]() { return Venues.Num() > 0 ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SVerticalBox::Slot().AutoHeight() [ EditorUi::Heading(LOCTEXT("VenueH", "LOCATION")) ]
+				+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(VenueRowBox, SBox) [ BuildVenueRow() ] ]
+			]
 			+ SVerticalBox::Slot().AutoHeight() [ EditorUi::Heading(LOCTEXT("OpenH", "OPEN A DRAWN TRACK")) ]
 			+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(OpenListBox, SBox) [ BuildOpenList() ] ]
 
@@ -415,7 +481,11 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 				[
 					SNew(SEditableTextBox)
 					.Font(EditorUi::EdFont(11))
-					.HintText(LOCTEXT("NameHint", "track name, e.g. hairpin_missing_blue"))
+					.HintText_Lambda([this]()
+					{
+						return State->Venue.IsEmpty() ? LOCTEXT("NameHint", "track name, e.g. hairpin_missing_blue")
+							: FText::Format(LOCTEXT("NameHintVenue", "track name: saved as {0}__<name>"), FText::FromString(State->Venue));
+					})
 					.Text_Lambda([this]() { return FText::FromString(State->Name); })
 					.OnTextChanged_Lambda([this](const FText& T) { State->Name = T.ToString().TrimStartAndEnd(); OverwriteArmedUntil = 0.0; })
 				]
@@ -628,6 +698,7 @@ void SFSDSTrackEditor::RequestPreview()
 
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetObjectField(TEXT("spec"), FSDSTrackSpec::ToJson(*State->Spec));
+	if (!State->Venue.IsEmpty()) Body->SetStringField(TEXT("venue"), State->Venue);
 	bInFlight = true;
 	TWeakPtr<SFSDSTrackEditor> Weak = StaticCastSharedRef<SFSDSTrackEditor>(AsShared());
 	Client->Post(TEXT("/api/track/preview_spec"), Body, [Weak](const FFSDSMcReply& R)
@@ -714,6 +785,7 @@ bool SFSDSTrackEditor::CanSave() const
 void SFSDSTrackEditor::Save(bool bOverwrite)
 {
 	if (!Client.IsValid() || State->Name.IsEmpty()) return;
+	State->Name = NameForVenue(State->Name);   // a venue track is saved as <venue>__<name>
 	TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("name"), State->Name);
 	Body->SetObjectField(TEXT("spec"), FSDSTrackSpec::ToJson(*State->Spec));
@@ -760,7 +832,12 @@ void SFSDSTrackEditor::Save(bool bOverwrite)
 			O->TryGetStringField(TEXT("name"), File);
 		}
 		E->State->SavedName = FPaths::GetBaseFilename(File);
-		E->Message = FString::Printf(TEXT("Saved %s: %d cones, %.0f m."), *File, (int32)Cones, Len);
+		FString VenueName;
+		const TSharedPtr<const FSDSVenue::FVenue> V = O.IsValid() && O->TryGetStringField(TEXT("venue"), VenueName)
+			? E->FindVenue(VenueName) : nullptr;
+		E->Message = V.IsValid()
+			? FString::Printf(TEXT("Saved %s: %d cones, %.0f m, with %s's %d objects around it."), *File, (int32)Cones, Len, *V->Title, V->Props.Num())
+			: FString::Printf(TEXT("Saved %s: %d cones, %.0f m."), *File, (int32)Cones, Len);
 		E->bMessageError = false;
 		E->OnSaved.ExecuteIfBound();
 	}, 20.f);
@@ -777,6 +854,9 @@ void SFSDSTrackEditor::Open(const FFSDSMenuTrack& Track)
 		return;
 	}
 	*State->Spec = MoveTemp(Loaded);   // in place: the canvas holds the same spec
+	State->Venue = Track.Venue;
+	if (Canvas) Canvas->SetVenue(FindVenue(Track.Venue));
+	if (OpenListBox.IsValid()) OpenListBox->SetContent(BuildOpenList());
 	const bool bProtected = FSDSTrackSpec::IsProtectedName(Track.Name);
 	// A stress or built-in track opens as a template: its changes go to a copy.
 	State->Name = bProtected ? FSDSTrackSpec::CopyName(Track.Name) : Track.Name;

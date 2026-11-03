@@ -9,6 +9,7 @@
 #include "UI/FSDSMissionControlClient.h"
 #include "UI/FSDSStackStarter.h"
 #include "UI/FSDSTrackSpec.h"
+#include "UI/FSDSVenue.h"
 
 #include "Camera/CameraActor.h"
 #include "Dom/JsonObject.h"
@@ -131,6 +132,7 @@ void FFSDSMenu::ScanTracks()
 	TSet<FString> Seen;
 	TArray<FString> Dirs = FFSDSRpcServer::TrackSearchDirs();
 	if (!RepoTracksDir.IsEmpty()) Dirs.Insert(RepoTracksDir, 0);
+	Venues = FSDSVenue::Scan(Dirs);
 	for (const FString& Dir : Dirs)
 	{
 		TArray<FString> Files;
@@ -143,6 +145,8 @@ void FFSDSMenu::ScanTracks()
 
 			FFSDSMenuTrack T;
 			T.Name = Name;
+			const FString VenueName = FSDSVenue::VenueOfTrack(Name);
+			if (FSDSVenue::Find(Venues, VenueName)) T.Venue = VenueName;
 			T.Path = FPaths::ConvertRelativePathToFull(FPaths::Combine(Dir, File));
 			// A drawn track's spec says whether it is a loop; a track without
 			// one (the FS events, generated tracks) is taken as one.
@@ -172,7 +176,7 @@ void FFSDSMenu::ScanTracks()
 		}
 	}
 	Tracks.Sort([](const FFSDSMenuTrack& A, const FFSDSMenuTrack& B) { return A.Name < B.Name; });
-	if (Widget) Widget->SetTracks(Tracks);   // the open menu holds its own copy
+	if (Widget) Widget->SetTracks(Tracks, Venues);   // the open menu holds its own copy
 }
 
 APlayerController* FFSDSMenu::GetPC() const
@@ -205,6 +209,7 @@ void FFSDSMenu::Show(EMode InMode)
 	SAssignNew(Widget, SFSDSMenu)
 		.Screen(Screen)
 		.Tracks(Tracks)
+		.Venues(Venues)
 		.Results(Results)
 		.Last(Current)
 		.Referee(Referee)

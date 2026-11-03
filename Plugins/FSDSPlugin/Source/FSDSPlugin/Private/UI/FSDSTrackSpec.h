@@ -66,6 +66,8 @@ namespace FSDSTrackSpec
 		FString Name;
 		/** The name it was last saved as, while the drawing hasn't changed since. */
 		FString SavedName;
+		/** The venue it is drawn on (docs/venues.md), or empty. Its name carries the prefix. */
+		FString Venue;
 	};
 
 	/** A track nobody replaces by hand: the built-in events, and the stress
