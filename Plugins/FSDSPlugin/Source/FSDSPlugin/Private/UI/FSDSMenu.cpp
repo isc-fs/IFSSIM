@@ -201,6 +201,7 @@ void FFSDSMenu::Show(EMode InMode)
 	Hide();
 	Mode = InMode;
 	if (Launcher) Launcher->Close();
+	if (Mode == EMode::Main) ScanTracks();   // as the folders are now, not as they were at start-up
 
 	SFSDSMenu::EScreen Screen = SFSDSMenu::EScreen::Main;
 	if (Mode == EMode::Pause) Screen = SFSDSMenu::EScreen::Pause;
