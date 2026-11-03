@@ -43,6 +43,8 @@ The plugin builds each class from its real mesh when one is installed, and other
 | `tyre_wall` | four stacks of tyres in a row, along `yaw_deg` | 2.4 × 0.6 m, 0.6 m tall |
 | `cone_stack` | four spare small cones nested, about as tall as a big orange cone | Ø 0.23 m, 0.50 m tall |
 
+Venues add `tree`, `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only) and `berm`: see [venues.md](venues.md).
+
 ## Generating one
 
 `tools/envgen` writes a sidecar from a seed and a profile:
