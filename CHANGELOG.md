@@ -21,6 +21,14 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Venues, starting with a parking lot.** A venue is a fixed place several
+  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
+  tracks are drawn) and what stands around it, and `python -m envgen venue`
+  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
+  plugin builds it like any environment. New prop classes for it: `tree`,
+  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
+  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
+  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
   Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
   suits it (a gridded top-down map of its cones, in metres), and who drives,
