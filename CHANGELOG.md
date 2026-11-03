@@ -153,6 +153,15 @@ shipping pipeline, documentation.
   off-course. H hides and shows it; `"HUD": {"Enabled", "Key"}` in
   settings.json; off in headless runs and with `-NoHUD`. See
   `docs/OPERATING.md`.
+
+- **Venues, starting with a parking lot.** A venue is a fixed place several
+  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
+  tracks are drawn) and what stands around it, and `python -m envgen venue`
+  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
+  plugin builds it like any environment. New prop classes for it: `tree`,
+  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
+  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
+  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
   with no window, runs the mission benchmark around it and stops it, once
   (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.

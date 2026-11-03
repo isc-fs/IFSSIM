@@ -6,6 +6,7 @@
     python3 -m envgen startpose ../Content/tracks/*.csv     # where the sim spawns
     python3 -m envgen stress -o ../Content/tracks           # the stress-track library
     python3 -m envgen env ../Content/tracks/<track>.csv --seed 7 --profile stress
+    python3 -m envgen venue ../Content/tracks/venues/parking_a.venue.json   # docs/venues.md
 
 `create` writes the CSV and, next to it, the spec it came from
 (`<name>.track.json`), so the track can be reopened in the editor. It refuses
@@ -135,6 +136,11 @@ def _env(args) -> int:
     return 0
 
 
+def _venue(args) -> int:
+    from .venue import build  # shapely, like env
+    return build(args.venue, args.tracks, check_only=args.check)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="envgen", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -158,9 +164,13 @@ def main(argv=None) -> int:
     e.add_argument("--profile", default="stress", choices=sorted(PROFILES))
     e.add_argument("--out", help="where to write (default: <track>.env.json next to the CSV)")
     e.add_argument("--stdout", action="store_true", help="print instead of writing")
+    v = sub.add_parser("venue", help="check a venue and write its tracks' sidecars (docs/venues.md)")
+    v.add_argument("venue", help="the venue file, Content/tracks/venues/<venue>.venue.json")
+    v.add_argument("--tracks", help="where its <venue>__*.csv tracks are (default: the folder above venues/)")
+    v.add_argument("--check", action="store_true", help="report only, write nothing")
     args = ap.parse_args(argv)
     return {"create": _create, "startpose": _startpose, "stress": _stress,
-            "env": _env}[args.cmd](args)
+            "env": _env, "venue": _venue}[args.cmd](args)
 
 
 if __name__ == "__main__":

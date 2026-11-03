@@ -70,6 +70,9 @@ Content/tracks/*.csv
 # drives on (tools/characterise): acceleration.csv itself loads the Montmeló
 # world through its sidecar (docs/worlds.md).
 !Content/tracks/characterisation.csv
+
+# ...and venue tracks, <venue>__<track>.csv: part of their venue (docs/venues.md).
+!Content/tracks/*__*.csv
 Content/tracks/.ifssim_state.json
 
 # UE5 editor scratch — *_BuiltData.uasset is regenerated lighting / nav
