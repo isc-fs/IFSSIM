@@ -57,6 +57,15 @@ def test_create_refuses_overwrite_builtins_and_bad_names(tmp_path):
     assert tc.create("t", LOOP, str(tmp_path), BUILTINS)[0] == 409
     assert tc.create("t", LOOP, str(tmp_path), BUILTINS, overwrite=True)[0] == 200
     assert tc.create("acceleration", LOOP, str(tmp_path), BUILTINS)[0] == 400
+
+
+def test_the_stress_library_is_never_replaced(tmp_path):
+    # The editor opens a stress track to change it: saving must not overwrite it.
+    code, body = tc.create("stress_circle_r15", LOOP, str(tmp_path), BUILTINS, overwrite=True)
+    assert code == 400 and "stress-track library" in body["error"]
+    assert list(tmp_path.iterdir()) == []
+    assert tc.create("stress_circle_r15_mine", LOOP, str(tmp_path), BUILTINS)[0] == 400
+    assert tc.create("my_stress_circle", LOOP, str(tmp_path), BUILTINS)[0] == 200
     assert tc.create("../escape", LOOP, str(tmp_path), BUILTINS)[0] == 400
 
 

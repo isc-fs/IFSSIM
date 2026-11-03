@@ -19,7 +19,7 @@ import sys
 from typing import Any, Dict, Optional, Tuple
 
 from benchmark_control_runner import _tools_dir
-from track_validators import TrackNameError, resolve_track_path, validate_track_stem
+from track_validators import TrackNameError, protected_reason, resolve_track_path, validate_track_stem
 
 SPEC_SUFFIX = ".track.json"
 
@@ -74,8 +74,9 @@ def create(name: str, spec: Any, tracks_dir: str, builtins, overwrite: bool = Fa
     except TrackNameError as e:
         return 400, {"error": str(e)}
     csv_name = f"{stem}.csv"
-    if csv_name in builtins:
-        return 400, {"error": f"{csv_name} is a built-in track"}
+    reason = protected_reason(csv_name, builtins)
+    if reason:
+        return 400, {"error": reason}
     try:
         csv_path = resolve_track_path(csv_name, tracks_dir)
     except TrackNameError as e:

@@ -1269,6 +1269,7 @@ def vehicle_teleport(req: TeleportRequest):
 # the `HTTPException(400)` shape the endpoints expect.
 from track_validators import (
     TrackNameError,
+    protected_reason,
     validate_track_name as _vt_name,
     validate_track_stem as _vt_stem,
     resolve_track_path as _rt_path,
@@ -1324,6 +1325,8 @@ def track_list():
             "blue": len(cones["blue"]), "yellow": len(cones["yellow"]),
             "orange": len(cones["big_orange"]) + len(cones["small_orange"]),
             "builtin": name in BUILTIN_TRACKS,
+            # can't be replaced or deleted (built-in, or the stress library)
+            "protected": protected_reason(name, BUILTIN_TRACKS) is not None,
             "event_type": BUILTIN_TRACKS.get(name),
             # drawn in the track creator: its spec can be reopened
             "editable": _creator.has_spec(f),
@@ -1426,8 +1429,9 @@ def track_delete(name: str):
     # — replaced with the shared `_validate_track_name` helper for
     # consistency.
     name = _validate_track_name(name)
-    if name in BUILTIN_TRACKS:
-        return JSONResponse({"error": "Cannot delete built-in track"}, status_code=400)
+    reason = protected_reason(name, BUILTIN_TRACKS)
+    if reason:
+        return JSONResponse({"error": f"Cannot delete: {reason}"}, status_code=400)
     filepath = _resolve_track_path(name)
     if os.path.exists(filepath):
         os.remove(filepath)
