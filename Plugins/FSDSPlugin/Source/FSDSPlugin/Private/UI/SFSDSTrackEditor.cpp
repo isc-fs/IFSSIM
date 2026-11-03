@@ -437,6 +437,13 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 					]
 				]
 			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ProtectedName", "Built-in and stress_ tracks can't be replaced: save under another name."))
+				.Visibility_Lambda([this]() { return FSDSTrackSpec::IsProtectedName(State->Name) ? EVisibility::Visible : EVisibility::Collapsed; })
+				.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Warn).AutoWrapText(true)
+			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
 			[
 				SNew(SButton)
@@ -695,7 +702,7 @@ FSlateColor SFSDSTrackEditor::CheckColor() const
 bool SFSDSTrackEditor::CanSave() const
 {
 	return !bSaving && bBackendUp && Preview.IsValid() && Preview->NumErrors() == 0 && !bDirty && !bInFlight
-		&& !State->Name.IsEmpty();
+		&& !State->Name.IsEmpty() && !FSDSTrackSpec::IsProtectedName(State->Name);
 }
 
 void SFSDSTrackEditor::Save(bool bOverwrite)
@@ -764,12 +771,16 @@ void SFSDSTrackEditor::Open(const FFSDSMenuTrack& Track)
 		return;
 	}
 	*State->Spec = MoveTemp(Loaded);   // in place: the canvas holds the same spec
-	State->Name = Track.Name;
+	const bool bProtected = FSDSTrackSpec::IsProtectedName(Track.Name);
+	// A stress or built-in track opens as a template: its changes go to a copy.
+	State->Name = bProtected ? FSDSTrackSpec::CopyName(Track.Name) : Track.Name;
 	if (Canvas) { Canvas->ClearSelection(); Canvas->FitView(); }
 	RebuildSections();
 	SpecChanged();
 	State->SavedName = Track.Name;     // as on disk: it can be test driven at once
-	Message = FString::Printf(TEXT("Opened %s."), *Track.Name);
+	Message = bProtected
+		? FString::Printf(TEXT("Opened %s. It's a reference track: your changes save as %s."), *Track.Name, *State->Name)
+		: FString::Printf(TEXT("Opened %s."), *Track.Name);
 	bMessageError = false;
 }
 

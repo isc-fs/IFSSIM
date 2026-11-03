@@ -2,6 +2,7 @@
 
 #include "Dom/JsonValue.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -37,6 +38,19 @@ namespace FSDSTrackSpec
 			FVector2D P;
 			if (ReadPair(V, P)) Out.Add(P);
 		}
+	}
+
+	bool IsProtectedName(const FString& Name)
+	{
+		const FString N = FPaths::GetBaseFilename(Name).ToLower();
+		return N == TEXT("acceleration") || N == TEXT("skidpad") || N.StartsWith(TEXT("stress_"));
+	}
+
+	FString CopyName(const FString& Name)
+	{
+		FString Base = FPaths::GetBaseFilename(Name);
+		if (Base.StartsWith(TEXT("stress_"))) Base.RightChopInline(7);
+		return Base + TEXT("_copy");
 	}
 
 	int32 FPreview::NumErrors() const
