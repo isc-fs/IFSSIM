@@ -4,6 +4,7 @@
 #include "UI/FSDSMenu.h"
 #include "UI/FSDSTrackSpec.h"
 #include "UI/FSDSVenue.h"
+#include "UI/SFSDSLocationPicker.h"
 #include "Widgets/SCompoundWidget.h"
 
 class FFSDSMissionControlClient;
@@ -45,7 +46,6 @@ private:
 	TSharedRef<SWidget> BuildLeft();
 	TSharedRef<SWidget> BuildRight();
 	TSharedRef<SWidget> BuildOpenList();
-	TSharedRef<SWidget> BuildVenueRow();
 	/** Draw on a venue (or none): its backdrop, its lot checks, its name prefix. */
 	void SetVenue(const FString& Name);
 	TSharedPtr<const FSDSVenue::FVenue> FindVenue(const FString& Name) const;
@@ -73,7 +73,7 @@ private:
 
 	TSharedPtr<SFSDSTrackCanvas> Canvas;
 	TSharedPtr<SBox> OpenListBox;
-	TSharedPtr<SBox> VenueRowBox;
+	TSharedPtr<SFSDSLocationPicker> VenuePicker;
 	TSharedPtr<SVerticalBox> SectionsBox;
 	TSharedPtr<SVerticalBox> IssuesBox;
 

@@ -33,6 +33,16 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **The menu's Location is a dropdown, and the track list groups by venue.**
+  Drive and the Track editor pick the venue from one dropdown (with each
+  venue's track count on Drive), so more venues don't push the page down. On
+  Anywhere, Drive lists the open floor's tracks first, then each venue's under
+  its name; a search box filters the list once it is long.
+- **Autocross lists open tracks.** One timed run from the start gate to the
+  finish gate, as the referee already timed them; Trackdrive still needs a loop.
+- **Practice is manual only.** The Autonomous button is hidden while Practice
+  is picked: Mission Control has no practice mission.
+
 - **`dv_pipeline_stack` now compiles C++ packages as Release.** The
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
