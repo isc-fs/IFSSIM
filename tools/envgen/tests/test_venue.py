@@ -18,7 +18,9 @@ sys.path.insert(0, str(TOOLS))
 
 pytest.importorskip("shapely")
 
-from envgen.generate import dumps  # noqa: E402
+from envgen import track as trackmod  # noqa: E402
+from envgen.catalogue import CLASSES  # noqa: E402
+from envgen.generate import dumps, footprint  # noqa: E402
 from envgen.venue import (VenueError, build, check_track, check_venue, load_venue,  # noqa: E402
                           parse_venue, sidecar, track_offset)
 import validate_tracks as vt  # noqa: E402
@@ -50,7 +52,9 @@ def test_its_tracks_sidecars_are_up_to_date():
         spec = json.loads(csv.with_suffix(".track.json").read_text())
         assert check_track(v, spec) == []
         offset, _ = track_offset(spec)
-        assert csv.with_name(csv.stem + ".env.json").read_text() == dumps(sidecar(v, offset))
+        expected = dumps(sidecar(v, offset, trackmod.load(csv), int(spec.get("seed", 1))))
+        assert csv.with_name(csv.stem + ".env.json").read_text() == expected, \
+            f"{csv.name}: run python -m envgen venue {PARKING_A.relative_to(REPO)}"
 
 
 def test_rows_expand_and_face_along_themselves():
@@ -70,6 +74,25 @@ def test_the_sidecar_moves_the_venue_with_the_track(tmp_path):
     path = tmp_path / "t.env.json"
     path.write_text(dumps(env))
     assert vt.validate_sidecar(path) == []
+
+
+def test_a_track_gets_clutter_near_its_cones_and_on_the_lot(tmp_path):
+    v = parse_venue(SMALL)
+    offset, created = track_offset(INSIDE)
+    csv = tmp_path / "t.csv"
+    csv.write_text(created.csv)
+    tr = trackmod.load(csv)
+    env = sidecar(v, offset, tr, seed=4)
+    own = env["props"][len(v.props):]
+    assert env["props"][:len(v.props)] == sidecar(v, offset)["props"]   # the venue's come first
+    assert own and {p["class"] for p in own} <= {"tyre_wall", "bollard", "bin", "cone_stack", "tripod"}
+    for p in own:   # on the lot, in the venue's frame
+        fp = footprint(CLASSES[p["class"]], p["x"] - offset[0], p["y"] - offset[1], p["yaw_deg"])
+        assert v.lot.contains(fp), p
+    assert sidecar(v, offset, tr, seed=4) == env                # deterministic
+    assert sidecar(v, offset, tr, seed=5)["props"] != env["props"]
+    (tmp_path / "t.env.json").write_text(dumps(env))
+    assert vt.validate_sidecar(tmp_path / "t.env.json") == []
 
 
 @pytest.mark.parametrize("bad, why", [
@@ -105,5 +128,6 @@ def test_a_venue_track_needs_its_drawing(tmp_path):
     (tmp_path / "test_lot__a.csv").write_text("blue,0,0,0,0,0,0\n")
     assert build(venue_dir / "test_lot.venue.json", log=lambda *_: None) == 1
     (tmp_path / "test_lot__a.track.json").write_text(json.dumps(INSIDE))
+    (tmp_path / "test_lot__a.csv").write_text(track_offset(INSIDE)[1].csv)   # the drawing, built
     assert build(venue_dir / "test_lot.venue.json", log=lambda *_: None) == 0
     assert (tmp_path / "test_lot__a.env.json").exists()
