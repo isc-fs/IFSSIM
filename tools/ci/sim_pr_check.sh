@@ -42,25 +42,41 @@ echo "waiting for the sim-session lock ($LOCK)"
 flock -w "$LOCK_WAIT_S" 9 || { echo "the lock wasn't free after ${LOCK_WAIT_S} s" >&2; exit 3; }
 echo "lock held"
 
-# shellcheck disable=SC2329  # run by the EXIT trap
+# Marks the box's sim as this CI's while a check runs it. A cancelled job is
+# killed without running its traps (the runner kills the step's process tree),
+# which leaves the sim container up and this file behind: the next check then
+# knows that sim is CI's own and removes it. A sim with no marker was started
+# by someone else and is never touched.
+OWNER="${SIM_OWNER_FILE:-/build/ifssim-ci/ci-sim.owner}"
+ours=0
+
+# shellcheck disable=SC2329  # run by the traps
 cleanup() {
+  [ "$ours" = 1 ] || return 0
   docker rm -f ifssim-sim bench-dv-stack >/dev/null 2>&1 || true
   (cd "$ROOT" && docker compose down --remove-orphans >/dev/null 2>&1) || true
+  rm -f "$OWNER"
 }
 trap cleanup EXIT
-# A cancelled job gets SIGINT/SIGTERM: stop the sim before the lock goes.
+# A cancel that does reach us (SIGINT/SIGTERM): stop the sim before the lock goes.
 trap 'cleanup; exit 130' INT TERM
 
-# A sim still up is usually a cancelled run's that is still stopping: give it
-# two minutes. One started by hand without the lock isn't ours to stop.
+sim_up() { docker ps -q --filter name='^ifssim-sim$' | grep -q .; }
+if sim_up && [ -f "$OWNER" ]; then
+  echo "removing the sim a cancelled check left running"
+  docker rm -f ifssim-sim bench-dv-stack >/dev/null 2>&1 || true
+fi
+# Anyone else's: it may be stopping on its own, so give it two minutes.
 for _ in $(seq 60); do
-  docker ps -q --filter name='^ifssim-sim$' | grep -q . || break
+  sim_up || break
   sleep 2
 done
-if docker ps -q --filter name='^ifssim-sim$' | grep -q .; then
-  echo "::error::another sim (container ifssim-sim) is running on the box; stop it and re-run"
+if sim_up; then
+  echo "::error::another sim (container ifssim-sim) is running on the box; it isn't this CI's, so stop it by hand and re-run"
   exit 3
 fi
+ours=1
+touch "$OWNER"
 
 # Mission Control's backend listens on host port 8000, so stop another
 # project's (a manual run's; its own --mc-up starts it again).
