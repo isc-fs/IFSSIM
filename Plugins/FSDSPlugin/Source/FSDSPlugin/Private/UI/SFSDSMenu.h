@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "UI/FSDSMenu.h"
 #include "UI/FSDSTrackSpec.h"
+#include "UI/FSDSVenue.h"
 #include "UI/SFSDSTrackEditor.h"
 #include "Widgets/SCompoundWidget.h"
 
@@ -25,6 +26,7 @@ public:
 	SLATE_BEGIN_ARGS(SFSDSMenu) {}
 		SLATE_ARGUMENT(EScreen, Screen)
 		SLATE_ARGUMENT(TArray<FFSDSMenuTrack>, Tracks)
+		SLATE_ARGUMENT(TArray<FSDSVenue::FVenueRef>, Venues)
 		SLATE_ARGUMENT(TSharedPtr<const TArray<FFSDSRunResult>>, Results)
 		SLATE_ARGUMENT(TOptional<FFSDSDriveRequest>, Last)
 		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSReferee>, Referee)
@@ -48,7 +50,7 @@ public:
 	void SetMessage(const FString& Msg, bool bError);
 
 	/** The tracks folders changed, e.g. a track was saved in the editor. */
-	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks);
+	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues);
 
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
@@ -69,6 +71,10 @@ private:
 	TSharedRef<SWidget> MakeHeading(const FText& Title);
 
 	void RebuildTrackList();
+	TSharedRef<SWidget> BuildLocationRow();
+	/** Where to drive: a venue's name, or empty for every track. */
+	void SetLocation(const FString& InLocation);
+	TSharedPtr<const FSDSVenue::FVenue> FindVenue(const FString& Name) const;
 	void SelectTrack(int32 Index);
 	void SetEvent(EFSDSEventType Event, bool bInPractice);
 	/** Whether a track suits the chosen event. */
@@ -80,6 +86,9 @@ private:
 	EPage Page = EPage::Drive;
 
 	TArray<FFSDSMenuTrack> Tracks;
+	TArray<FSDSVenue::FVenueRef> Venues;
+	FString Location;
+	TSharedPtr<class SBox> LocationRow;
 	TSharedPtr<class SFSDSTrackEditor> EditorPage;
 	TSharedPtr<const TArray<FFSDSRunResult>> Results;
 	TOptional<FFSDSDriveRequest> Last;
