@@ -919,10 +919,18 @@ void SFSDSMenu::SelectTrack(int32 Index)
 	}
 	if (DriveMap.IsValid())
 	{
-		// A venue track shows its surroundings, placed by its sidecar.
+		// A venue track shows its surroundings, placed by its sidecar, and
+		// the clutter of its own the sidecar adds near its cones.
 		TSharedPtr<const FSDSVenue::FVenue> V = Selected != INDEX_NONE ? FindVenue(Tracks[Selected].Venue) : nullptr;
 		FVector2D Shift = FVector2D::ZeroVector;
-		if (V.IsValid() && !FSDSVenue::TrackShift(*V, Tracks[Selected].Path, Shift)) V.Reset();
+		TArray<FSDSVenue::FProp> Own;
+		if (V.IsValid() && !FSDSVenue::TrackShift(*V, Tracks[Selected].Path, Shift, &Own)) V.Reset();
+		if (V.IsValid() && Own.Num() > 0)
+		{
+			TSharedRef<FSDSVenue::FVenue> WithOwn = MakeShared<FSDSVenue::FVenue>(*V);
+			WithOwn->Props.Append(Own);
+			V = WithOwn;
+		}
 		DriveMap->SetVenue(V, Shift);
 		DriveMap->SetCones(MoveTemp(Cones));
 	}

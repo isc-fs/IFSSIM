@@ -58,8 +58,11 @@ namespace FSDSVenue
 	 * on its own cones when it is built, and its env sidecar holds the venue's
 	 * props moved by that same shift (envgen.venue.sidecar), so the shift is
 	 * read off the sidecar. False without a sidecar that matches the venue.
+	 *
+	 * The track's own clutter follows the venue's props in the sidecar; with
+	 * OutOwn, it comes back too, in the venue's frame.
 	 */
-	bool TrackShift(const FVenue& V, const FString& TrackCsvPath, FVector2D& Out);
+	bool TrackShift(const FVenue& V, const FString& TrackCsvPath, FVector2D& Out, TArray<FProp>* OutOwn = nullptr);
 
 	/** Draw the lot and the props. ToScreen maps venue metres to local pixels. */
 	void Paint(const FVenue& V, TFunctionRef<FVector2f(const FVector2D&)> ToScreen, float PxPerM,

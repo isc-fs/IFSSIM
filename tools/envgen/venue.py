@@ -8,6 +8,11 @@ gets an environment sidecar (`<track>.env.json`, docs/environment_sidecar.md)
 holding the venue's props, so the plugin needs nothing new: it builds the
 sidecar as it builds any other.
 
+Each track also gets clutter of its own (`clutter`): tyre walls, bollards,
+bins, spare cones and timing tripods close to its cones, as the generator places
+them for any track (profile CLUTTER_PROFILE), but only on the lot, so they
+never meet the venue's props. They come after the venue's in the sidecar.
+
 A track's CSV is recentred on its own cones (corridor.CENTER_FLOOR, and Mission
 Control on load), so the venue moves with it: the sidecar's props are the
 venue's, shifted by the same offset. The offset comes from rebuilding the
@@ -25,16 +30,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from shapely import affinity
 from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
-from .catalogue import CLASSES
-from .generate import FLOOR_HALF_M, FORMAT as ENV_FORMAT, dumps, footprint
+from . import track as trackmod
+from .catalogue import CLASSES, PROFILES
+from .generate import FLOOR_HALF_M, FORMAT as ENV_FORMAT, PROP_CLEARANCE_M, _Placer, dumps, footprint, place
 from .spec import SpecError, parse_spec
 
 FORMAT = "ifssim-venue/1"
 SEP = "__"                 # <venue>__<track>.csv
 MAX_COORD_M = 500.0
+
+# A venue track's own props, near its cones (catalogue.PROFILES).
+CLUTTER_PROFILE = "venue_clutter"
 
 # Props that may overlap others: a sidewalk is a flat slab under the 0.30 m
 # rule (LiDAR-only), so a lamp's arm over it or a bench on its edge is fine.
@@ -227,17 +237,33 @@ def venue_path(name: str, tracks_dir: str | Path) -> Path:
 
 
 # ---------------------------------------------------------------- output
-def sidecar(v: Venue, offset: Tuple[float, float]) -> Dict[str, Any]:
-    """The env sidecar for one of the venue's tracks: its props, moved with the track."""
+def clutter(v: Venue, tr: trackmod.Track, offset: Tuple[float, float], seed: int) -> List[Dict[str, Any]]:
+    """The track's own props, in its built frame: near its cones, and on the lot.
+
+    The lot (moved with the track) less the generator's prop clearance is the
+    only place they may stand, so they keep clear of the venue's props, which
+    all stand off it (check_venue).
+    """
+    lot = affinity.translate(v.lot, *offset).buffer(-PROP_CLEARANCE_M)
+    return place(_Placer(tr, allowed=lot), PROFILES[CLUTTER_PROFILE], seed)
+
+
+def sidecar(v: Venue, offset: Tuple[float, float], track: Optional[trackmod.Track] = None,
+            seed: int = 0) -> Dict[str, Any]:
+    """The env sidecar for one of the venue's tracks: its props, moved with the
+    track, then (given the built track) the track's own clutter from `seed`."""
     ox, oy = offset
     x0, y0, x1, y1 = v.extent()
+    props = [_prop(p["class"], p["x"] + ox, p["y"] + oy, p["yaw_deg"]) for p in v.props]
+    if track is not None:
+        props += clutter(v, track, offset, seed)
     return {
         "format": ENV_FORMAT,
-        "seed": 0,                       # nothing random: the venue is fixed
+        "seed": seed,
         "profile": f"venue_{v.name}",
         "ground": {"extent": {"x_min": round(x0 + ox, 3), "y_min": round(y0 + oy, 3),
                               "x_max": round(x1 + ox, 3), "y_max": round(y1 + oy, 3)}},
-        "props": [_prop(p["class"], p["x"] + ox, p["y"] + oy, p["yaw_deg"]) for p in v.props],
+        "props": props,
     }
 
 
@@ -246,11 +272,16 @@ def sidecar_path(csv_path: str | Path) -> Path:
     return csv_path.with_name(csv_path.stem + ".env.json")
 
 
-def write_sidecar(v: Venue, csv_path: str | Path, offset: Tuple[float, float]) -> Path:
-    """Write a venue track's sidecar beside its CSV, atomically."""
+def write_sidecar(v: Venue, csv_path: str | Path, offset: Tuple[float, float], seed: int = 1) -> Path:
+    """Write a venue track's sidecar beside its CSV (written first), atomically.
+
+    The clutter is placed against the CSV as written, as the generator places
+    props for any track; `seed` is the track spec's, so redrawing with another
+    seed moves it.
+    """
     out = sidecar_path(csv_path)
     tmp = out.with_name(out.name + ".tmp")
-    tmp.write_text(dumps(sidecar(v, offset)))
+    tmp.write_text(dumps(sidecar(v, offset, trackmod.load(csv_path), seed)))
     tmp.replace(out)
     return out
 
@@ -294,5 +325,9 @@ def build(venue_path: str | Path, tracks_dir: Optional[str | Path] = None, check
         bad += len(errors)
         if errors or check_only:
             continue
-        log(f"  wrote {write_sidecar(v, csv, offset).name}")
+        try:
+            log(f"  wrote {write_sidecar(v, csv, offset, int(spec.get('seed', 1))).name}")
+        except (OSError, ValueError) as e:   # a CSV that isn't the drawing's, say
+            log(f"  {csv.name}: [error] {e}")
+            bad += 1
     return 1 if bad else 0
