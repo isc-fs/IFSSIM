@@ -43,6 +43,44 @@ def read_csv(path: Path) -> list[dict]:
     return out
 
 
+def gates(cones: list[dict]) -> list[dict]:
+    """The timing gates: big orange cones paired across the track (each with its
+    nearest big orange), and pairs whose middles are close merged into one gate."""
+    big = [c for c in cones if int(c.get("color", -1)) == 2]
+
+    def d2(a, b):
+        return (a["x"] - b["x"]) ** 2 + (a["y"] - b["y"]) ** 2
+
+    pairs = set()
+    for i, a in enumerate(big):
+        others = [j for j in range(len(big)) if j != i]
+        if not others:
+            continue
+        j = min(others, key=lambda j: d2(a, big[j]))
+        if min((k for k in range(len(big)) if k != j), key=lambda k: d2(big[j], big[k])) == i:
+            pairs.add(tuple(sorted((i, j))))
+    out: list[dict] = []
+    for i, j in sorted(pairs):
+        a, b = big[i], big[j]
+        mid = ((a["x"] + b["x"]) / 2, (a["y"] + b["y"]) / 2)
+        g = next((g for g in out if (g["x"] - mid[0]) ** 2 + (g["y"] - mid[1]) ** 2 < 10 ** 2), None)
+        if g is None:
+            g = {"x": mid[0], "y": mid[1], "lines": []}
+            out.append(g)
+        g["lines"].append((a, b))
+        # The gate's middle: the mean of its pairs' middles.
+        n = len(g["lines"])
+        g["x"] = sum((p["x"] + q["x"]) / 2 for p, q in g["lines"]) / n
+        g["y"] = sum((p["y"] + q["y"]) / 2 for p, q in g["lines"]) / n
+    return out
+
+
+def nearest(gs: list[dict], p: dict | None) -> dict | None:
+    if not gs or p is None:
+        return None
+    return min(gs, key=lambda g: (g["x"] - p["x"]) ** 2 + (g["y"] - p["y"]) ** 2)
+
+
 def plot_group(group: dict, runs: list[dict], run_dir: Path, out: Path) -> None:
     cones = read_csv(run_dir / runs[0]["dir"] / "cones.csv")
     paths = [(r, read_csv(run_dir / r["dir"] / "telemetry.csv")) for r in runs]
@@ -66,6 +104,28 @@ def plot_group(group: dict, runs: list[dict], run_dir: Path, out: Path) -> None:
         color, size = CONE.get(int(c.get("color", 4)), CONE[4])
         px, py = xy(c["x"], c["y"])
         ax.scatter(px, py, s=size, c=color, marker="^", linewidths=0, zorder=2)
+    # Start and finish: the gate nearest where the runs start, and the one nearest
+    # where finished runs stop (the same gate when the track is a loop).
+    gs = gates(cones)
+    firsts = [t[0] for _, t in paths if t and "x" in t[0]]
+    ends = [t[-1] for r, t in paths if t and r["finished"]]
+    start_g = nearest(gs, firsts[0] if firsts else None)
+    finish_g = nearest(gs, ends[0] if ends else None)
+    if finish_g is None and len(gs) == 1:
+        finish_g = start_g  # one gate: a loop, it's both
+    elif finish_g is None and start_g is not None:
+        finish_g = max(gs, key=lambda g: (g["x"] - start_g["x"]) ** 2 + (g["y"] - start_g["y"]) ** 2)
+    for g in gs:
+        for a, b in g["lines"]:
+            ax.plot(*zip(xy(a["x"], a["y"]), xy(b["x"], b["y"])), color=INK, lw=1.6, zorder=2)
+    for g, text in ((start_g, "START"), (finish_g, "FINISH")):
+        if g is None or (text == "FINISH" and g is start_g):
+            continue
+        if text == "START" and g is finish_g:
+            text = "START / FINISH"
+        ax.annotate(text, xy(g["x"], g["y"]), xytext=(0, 14), textcoords="offset points",
+                    ha="center", fontsize=8, fontweight="bold", color=INK, zorder=6,
+                    bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": GRID, "lw": 0.8})
     for i, (r, tel) in enumerate(paths):
         pts = [xy(p["x"], p["y"]) for p in tel if "x" in p and "y" in p]
         if not pts:
@@ -76,6 +136,12 @@ def plot_group(group: dict, runs: list[dict], run_dir: Path, out: Path) -> None:
                 ls="-" if r["finished"] else "--", label=label)
         ax.scatter(*pts[-1], s=40, c=color, marker="o" if r["finished"] else "X",
                    edgecolors="white", linewidths=1.5, zorder=4)
+        # Where the run started, and which way it set off.
+        ax.scatter(*pts[0], s=46, facecolors="white", edgecolors=color, linewidths=2, zorder=5)
+        ahead = next((q for q in pts[1:] if (q[0] - pts[0][0]) ** 2 + (q[1] - pts[0][1]) ** 2 > 2.0 ** 2), None)
+        if ahead is not None:
+            ax.annotate("", xy=ahead, xytext=pts[0], zorder=5,
+                        arrowprops={"arrowstyle": "-|>", "color": color, "lw": 1.6, "mutation_scale": 12})
         ts = [p["t"] - tel[0]["t"] for p in tel if "speed" in p]
         vs = [p["speed"] for p in tel if "speed" in p]
         sp.plot(ts, vs, color=color, lw=2, label=label)
