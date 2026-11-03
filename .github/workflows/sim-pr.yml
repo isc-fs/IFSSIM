@@ -1,12 +1,17 @@
 name: Sim PR check
 
-# Packages the sim on the GPU box (Development, so the sim keeps its logs) and
-# drives it: a headless start-up check, then the acceleration mission 3 times
-# through this PR's pipeline, scored by the referee. About 30–40 min once the
-# box has an incremental build; the first run builds from scratch (~1.5 h).
+# Drives the sim on the GPU box: a headless start-up check, then the
+# acceleration mission 3 times through this PR's pipeline, scored by the
+# referee.
+#
+# The sim is only packaged (Linux, Development, so it keeps its logs) when its
+# build inputs changed; tools/ci/sim_build.sh decides. A PR that only touches
+# the pipeline, ROS or tools reuses the box's last build of dev and takes
+# ~10 min. Pushes to dev that change the sim package it and publish that build
+# for the PRs. A first build from scratch is ~1–1.5 h; later ones are incremental.
 #
 # The runner is a machine on a private network and this repo is public, so
-# the job only runs for branches of this repo (never forks), and only after a
+# PRs only run for branches of this repo (never forks), and only after a
 # maintainer adds the `sim-test` label. New pushes to a labelled PR run it
 # again; remove the label to stop that. One sim run at a time on the box: the
 # script waits for the box's sim-session lock (tools/ci/sim_pr_check.sh).
@@ -30,11 +35,26 @@ on:
       - "tools/sim_benchmark/**"
       - "tools/ci/**"
       - ".github/workflows/sim-pr.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "Source/**"
+      - "Plugins/**"
+      - "Config/**"
+      - "Content/**"
+      - "!Content/tracks/**"
+      - "IFSSIM.uproject"
+      - "tools/ci/sim_build.sh"
+      - ".github/workflows/sim-pr.yml"
   workflow_dispatch:
     inputs:
       repeats:
         description: "acceleration runs"
         default: "3"
+      package:
+        description: "package the sim even if the shared dev build would do"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -46,7 +66,7 @@ concurrency:
 jobs:
   sim:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
        contains(github.event.pull_request.labels.*.name, 'sim-test') &&
        (github.event.action != 'labeled' || github.event.label.name == 'sim-test'))
@@ -72,16 +92,11 @@ jobs:
           # Keep Intermediate/ and Saved/ from the last job: incremental build and cook.
           clean: false
 
-      - name: Package the sim (Linux, Development)
-        run: |
-          "$UE5_ROOT/Engine/Build/BatchFiles/RunUAT.sh" BuildCookRun \
-            -project="$GITHUB_WORKSPACE/IFSSIM.uproject" -platform=Linux \
-            -configuration=Development -clientconfig=Development \
-            -build -cook -iterate -stage -pak -iostore -compressed -noeditor \
-            -unattended -nop4 -utf8output -nocompileuat -stagingdirectory="$STAGE"
-          mkdir -p "$STAGE/Linux/tracks"
-          cp Content/tracks/*.csv "$STAGE/Linux/tracks/"
-          cp Content/tracks/*.env.json "$STAGE/Linux/tracks/" 2>/dev/null || true
+      - name: Pick or package the sim
+        env:
+          PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' }}
+          FORCE_PACKAGE: ${{ inputs.package || false }}
+        run: tools/ci/sim_build.sh
 
       # The stack is built under its own tag: docker-compose.yml pins its image name to
       # ifssim-dv_pipeline_stack:latest, and building that would replace the box's own.
@@ -92,7 +107,6 @@ jobs:
 
       - name: Drive the sim
         env:
-          IFSSIM_BUILD: ${{ env.STAGE }}/Linux/IFSSIM.sh
           IFSSIM_DV_IMAGE: ${{ env.DV_IMAGE }}
           REPEATS: ${{ inputs.repeats || '3' }}
           RESULTS: ${{ runner.temp }}/sim-pr-results
