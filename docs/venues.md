@@ -21,7 +21,17 @@ A venue is data, built by the plugin at `loadTrack` like any environment. It is 
    Every track is recentred on its own cones, by envgen and again by Mission Control on load. So a sidecar holds the venue's props shifted by that track's offset, which `envgen` gets by rebuilding the track's spec. This is why a venue track has to be drawn.
 4. **The plugin** loads the sidecar with the track, as it does any environment. Today that only happens with `"Environment": {"Enabled": true}` in settings.json (roadmap rule 5).
 
-Rerun step 3 after changing the venue or one of its tracks. `tools/envgen/tests/test_venue.py` fails if a committed sidecar is out of date.
+## Drawing a track on a venue
+
+In the sim's menu, **Track editor**, pick the venue under **Location**:
+- **The backdrop:** the lot's outline and its props are drawn behind the canvas, in the venue's frame, which is the frame you draw in.
+- **The check:** every preview is checked against the lot too (`preview_spec` with `venue`), so cones off it are an error in the issues list, like a fold, and Save stays off.
+- **The name:** the track is saved as `<venue>__<name>`; type only the name.
+- **The sidecar:** Mission Control's backend writes the track's `env.json` as it saves it (`envgen.venue.write_sidecar`), and deletes it with the track. You don't run step 3 by hand.
+
+Opening a venue track picks its venue. On **Drive**, **Location** lists the venues: pick one to see only its tracks, drawn with the lot and props around the cones. The menu reads the venue files itself (`FSDSVenue`), so Drive needs no backend; packaging stages `Content/tracks/venues/` with the tracks.
+
+Rerun step 3 after changing a venue file: every one of its tracks needs its sidecar written again. `tools/envgen/tests/test_venue.py` fails if a committed sidecar is out of date.
 
 ## The classes a venue adds
 
@@ -53,14 +63,8 @@ That makes 144 props. One track so far: `parking_a__loop`, a 206 m loop with 100
 
 ## What is next
 
-1. **Drive it in the menu.**
-   - A "Location" choice on the Drive page lists the venues; picking one shows only its tracks.
-   - The map draws the lot and the props around the cones.
-   - A venue's environment loads even with `Environment.Enabled` off, since the props are the point (decision 1 below).
-2. **Draw on it in the track editor.**
-   - The canvas shows the lot and the props as a backdrop, in the venue's frame.
-   - Saving names the track `<venue>__...`.
-   - The venue's sidecar is written on save, by the backend calling `envgen.venue`, so a new track gets its surroundings at once.
+1. ~~Drive it in the menu~~ and ~~draw on it in the track editor~~: done, see above.
+2. **Load a venue's environment even with `Environment.Enabled` off**, since the props are the point (decision 1 below).
 3. **More venues.** Two or three parking lots of different sizes and layouts, each with room for several tracks.
 4. **A real hill** once terrain (roadmap P3) lands: a slope inside or beside the lot that the car drives over.
 5. **Real meshes** for the new classes, if the primitives prove too simple for the LiDAR. From CARLA (CC-BY, the roadmap's preferred source) or from our own models.
