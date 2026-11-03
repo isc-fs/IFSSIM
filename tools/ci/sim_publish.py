@@ -120,7 +120,7 @@ def upsert_comment(repo: str, pr: int, token: str, body: str) -> str:
 # ------------------------------------------------------------------ 3. report issue
 INTRO = """{marker}
 Every sim check on the GPU box adds a row to the history below: PRs in this repo and in \
-isc-fs/IFS09-DV-PIPELINE with the `sim-test` label, and pushes to `dev`. **Latest dev** is \
+isc-fs/IFS09-DV-PIPELINE with the `sim-test` label, and pushes to `dev`. **Latest run** shows the newest of them with its maps; **Latest dev** is \
 what the PR checks compare with. Written by `tools/ci/sim_publish.py`; edits here are overwritten.
 
 Required missions decide the check; *italic* ones are informational.
@@ -134,17 +134,24 @@ def section(body: str, name: str) -> str:
     return ""
 
 
-def issue_body(old: str, row: str, latest: str | None) -> str:
+def issue_body(old: str, row: str, latest_dev: str | None, latest_run: str | None = None) -> str:
+    """The issue's body: `row` goes first in the history; `latest_run` and
+    `latest_dev` replace their sections (None keeps what's there)."""
     rows = [ln for ln in section(old, "history").splitlines() if ln.startswith("| 2")]
+    # Rows from before the Maps column: give them an empty one.
+    rows = [ln.rsplit(" | ", 1)[0] + " | – | " + ln.rsplit(" | ", 1)[1] if ln.count(" | ") == 6 else ln
+            for ln in rows]
     rows = [r for r in [row] + rows if r][:HISTORY_ROWS]
-    latest = latest if latest is not None else (section(old, "latest") or "No dev run yet.")
+    run = latest_run if latest_run is not None else (section(old, "run") or "No run yet.")
+    dev = latest_dev if latest_dev is not None else (section(old, "latest") or "No dev run yet.")
     return "\n".join([
         INTRO.format(marker=ISSUE_MARKER),
-        "## Latest dev", "<!-- latest -->", latest, "<!-- /latest -->", "",
+        "## Latest run", "<!-- run -->", run, "<!-- /run -->", "",
+        "## Latest dev", "<!-- latest -->", dev, "<!-- /latest -->", "",
         "## History", f"Newest first, the last {HISTORY_ROWS} runs.", "",
         "<!-- history -->",
-        "| When (UTC) | What | IFSSIM | Pipeline | Result | Missions | Run |",
-        "|---|---|---|---|---|---|---|",
+        "| When (UTC) | What | IFSSIM | Pipeline | Result | Missions | Maps | Run |",
+        "|---|---|---|---|---|---|---|---|",
         *rows,
         "<!-- /history -->",
     ])
@@ -167,16 +174,30 @@ def find_or_create_issue(repo: str, token: str) -> dict:
     })
 
 
+def section_text(report: dict, run_url: str, source: str = "") -> str:
+    """A run as the issue shows it in full: headline, tables and maps."""
+    what = f" · {source}" if source else ""
+    return "\n".join([sim_report.headline(report) + what + f" · [run]({run_url})", "",
+                      sim_report.tables(report, None), sim_report.maps(report.get("images") or {})])
+
+
+def map_links(report: dict) -> str:
+    images = report.get("images") or {}
+    return " · ".join(f"[{g['mission']}]({images[g['scenario']]})"
+                      for g in report["groups"] if g["scenario"] in images) or "–"
+
+
 def update_issue(repo: str, token: str, report: dict, source: str, run_url: str,
-                 latest: str | None) -> str:
+                 latest_dev: str | None) -> str:
     issue = find_or_create_issue(repo, token)
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-    row = "| {} | {} | `{}` | `{}` | {} | {} | [run]({}) |".format(
+    row = "| {} | {} | `{}` | `{}` | {} | {} | {} | [run]({}) |".format(
         when, source, report.get("ifssim") or "?", report.get("pipeline") or "?",
         {"pass": "✅ passed", "fail": "❌ failed"}.get(report["verdict"], "⚠️ couldn't run"),
-        sim_report.history_cell(report), run_url,
+        sim_report.history_cell(report), map_links(report), run_url,
     )
-    body = issue_body(issue.get("body") or "", row, latest)
+    body = issue_body(issue.get("body") or "", row, latest_dev,
+                      section_text(report, run_url, f"{source}, {when} UTC"))
     api("PATCH", f"/repos/{repo}/issues/{issue['number']}", token, {"body": body})
     return issue["html_url"]
 
@@ -230,8 +251,7 @@ def main(argv: list[str] | None = None) -> int:
 
     latest = None
     if args.save_baseline and report["verdict"] in ("pass", "fail"):
-        latest = "\n".join([sim_report.headline(report) + f" · [run]({args.run_url})", "",
-                            sim_report.tables(report, None), sim_report.maps(images)])
+        latest = section_text(report, args.run_url)
     try:
         print("report issue:", update_issue(repo, token, report, args.source, args.run_url, latest))
     except ApiError as e:

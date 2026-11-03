@@ -103,6 +103,25 @@ class IssueHistory(unittest.TestCase):
         self.assertEqual(len(rows), sim_publish.HISTORY_ROWS)
         self.assertEqual(rows[0], f"| 2026-11-03 {sim_publish.HISTORY_ROWS + 4:05d} |")
 
+    def test_the_latest_run_section_is_replaced_each_time(self):
+        body = sim_publish.issue_body("", "| 2026-11-01 00:00 | a |", None, "run one")
+        body = sim_publish.issue_body(body, "| 2026-11-02 00:00 | b |", None, "run two")
+        self.assertIn("run two", body)
+        self.assertNotIn("run one", body)
+        self.assertIn("No dev run yet.", body)
+
+    def test_old_rows_get_an_empty_maps_cell(self):
+        old = sim_publish.issue_body("", "", None).replace(
+            "<!-- /history -->", "| 2026-11-01 00:00 | #1 | `a` | `b` | ok | m | [run](u) |\n<!-- /history -->")
+        rows = [ln for ln in sim_publish.issue_body(old, "", None).splitlines() if ln.startswith("| 2")]
+        self.assertEqual(rows, ["| 2026-11-01 00:00 | #1 | `a` | `b` | ok | m | – | [run](u) |"])
+
+    def test_history_rows_link_their_maps(self):
+        report = {"groups": [{"mission": "skidpad", "scenario": "skidpad_skidpad"},
+                             {"mission": "autocross", "scenario": "autocross_t"}],
+                  "images": {"skidpad_skidpad": "https://x/s.png"}}
+        self.assertEqual(sim_publish.map_links(report), "[skidpad](https://x/s.png)")
+
     def test_a_new_issue_has_no_empty_rows(self):
         body = sim_publish.issue_body("", "", None)
         self.assertNotIn("\n\n<!-- /history -->", body)
