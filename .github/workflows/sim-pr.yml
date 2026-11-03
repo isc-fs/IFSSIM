@@ -56,6 +56,7 @@ jobs:
       UE5_ROOT: /build/UE_5.8
       STAGE: ${{ github.workspace }}/Saved/StagedBuildsCI
       COMPOSE_PROJECT_NAME: ifssim-ci
+      DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
       # The engine tree is read-only for the runner's user: keep the shader
       # cache and the build tools' logs out of it.
       UE-LocalDataCachePath: /build/ifssim-ci/ddc
@@ -80,13 +81,17 @@ jobs:
           cp Content/tracks/*.csv "$STAGE/Linux/tracks/"
           cp Content/tracks/*.env.json "$STAGE/Linux/tracks/" 2>/dev/null || true
 
+      # The stack is built under its own tag: docker-compose.yml pins its image name to
+      # ifssim-dv_pipeline_stack:latest, and building that would replace the box's own.
       - name: Build the pipeline images
-        run: docker compose build dv_pipeline_stack mission_control_backend
+        run: |
+          docker build -f docker/dv_pipeline_stack/Dockerfile -t "$DV_IMAGE" .
+          docker compose build mission_control_backend
 
       - name: Drive the sim
         env:
           IFSSIM_BUILD: ${{ env.STAGE }}/Linux/IFSSIM.sh
-          IFSSIM_DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+          IFSSIM_DV_IMAGE: ${{ env.DV_IMAGE }}
           REPEATS: ${{ inputs.repeats || '3' }}
           RESULTS: ${{ runner.temp }}/sim-pr-results
         run: tools/ci/sim_pr_check.sh
