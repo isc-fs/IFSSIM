@@ -1,0 +1,120 @@
+name: Sim PR check
+
+# Drives the sim on the GPU box: a headless start-up check, then the
+# acceleration mission 3 times through this PR's pipeline, scored by the
+# referee.
+#
+# The sim is only packaged (Linux, Development, so it keeps its logs) when its
+# build inputs changed; tools/ci/sim_build.sh decides. A PR that only touches
+# the pipeline, ROS or tools reuses the box's last build of dev and takes
+# ~10 min. Pushes to dev that change the sim package it and publish that build
+# for the PRs. A first build from scratch is ~1–1.5 h; later ones are incremental.
+#
+# The runner is a machine on a private network and this repo is public, so
+# PRs only run for branches of this repo (never forks), and only after a
+# maintainer adds the `sim-test` label. New pushes to a labelled PR run it
+# again; remove the label to stop that. One sim run at a time on the box: the
+# script waits for the box's sim-session lock (tools/ci/sim_pr_check.sh).
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches: [dev]
+    paths:
+      - "Source/**"
+      - "Plugins/**"
+      - "Config/**"
+      - "Content/**"
+      - "IFSSIM.uproject"
+      - "settings.json"
+      - "pipeline"
+      - "ros2/**"
+      - "docker/**"
+      - "docker-compose.yml"
+      - "tools/headless_run/**"
+      - "tools/sim_benchmark/**"
+      - "tools/ci/**"
+      - ".github/workflows/sim-pr.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "Source/**"
+      - "Plugins/**"
+      - "Config/**"
+      - "Content/**"
+      - "!Content/tracks/**"
+      - "IFSSIM.uproject"
+      - "tools/ci/sim_build.sh"
+      - ".github/workflows/sim-pr.yml"
+  workflow_dispatch:
+    inputs:
+      repeats:
+        description: "acceleration runs"
+        default: "3"
+      package:
+        description: "package the sim even if the shared dev build would do"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sim-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sim:
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'sim-test') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'sim-test'))
+    runs-on: [self-hosted, Linux, X64, gpu-1080]
+    timeout-minutes: 300
+    env:
+      # CI's own copy of the box's engine, owned by the runner's user: a build
+      # writes into the engine tree, and the box's own engine stays read-only.
+      UE5_ROOT: /build/ifssim-ci/UE_5.8
+      STAGE: ${{ github.workspace }}/Saved/StagedBuildsCI
+      COMPOSE_PROJECT_NAME: ifssim-ci
+      DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+      # Shader cache kept outside the engine copy, so re-copying the engine keeps it.
+      UE-LocalDataCachePath: /build/ifssim-ci/ddc
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+          submodules: true
+          # Keep Intermediate/ and Saved/ from the last job: incremental build and cook.
+          clean: false
+
+      - name: Pick or package the sim
+        env:
+          PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/dev' }}
+          FORCE_PACKAGE: ${{ inputs.package || false }}
+        run: tools/ci/sim_build.sh
+
+      # The stack is built under its own tag: docker-compose.yml pins its image name to
+      # ifssim-dv_pipeline_stack:latest, and building that would replace the box's own.
+      - name: Build the pipeline images
+        run: |
+          docker build -f docker/dv_pipeline_stack/Dockerfile -t "$DV_IMAGE" .
+          docker compose build mission_control_backend
+
+      - name: Drive the sim
+        env:
+          IFSSIM_DV_IMAGE: ${{ env.DV_IMAGE }}
+          REPEATS: ${{ inputs.repeats || '3' }}
+          RESULTS: ${{ runner.temp }}/sim-pr-results
+        run: tools/ci/sim_pr_check.sh
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-pr-results
+          path: ${{ runner.temp }}/sim-pr-results
+          retention-days: 14
+          if-no-files-found: ignore
