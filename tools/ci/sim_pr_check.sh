@@ -48,6 +48,19 @@ cleanup() {
   (cd "$ROOT" && docker compose down --remove-orphans >/dev/null 2>&1) || true
 }
 trap cleanup EXIT
+# A cancelled job gets SIGINT/SIGTERM: stop the sim before the lock goes.
+trap 'cleanup; exit 130' INT TERM
+
+# A sim still up is usually a cancelled run's that is still stopping: give it
+# two minutes. One started by hand without the lock isn't ours to stop.
+for _ in $(seq 60); do
+  docker ps -q --filter name='^ifssim-sim$' | grep -q . || break
+  sleep 2
+done
+if docker ps -q --filter name='^ifssim-sim$' | grep -q .; then
+  echo "::error::another sim (container ifssim-sim) is running on the box; stop it and re-run"
+  exit 3
+fi
 
 # Mission Control's backend listens on host port 8000, so stop another
 # project's (a manual run's; its own --mc-up starts it again).
