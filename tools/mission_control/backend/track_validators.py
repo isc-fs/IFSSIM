@@ -19,6 +19,22 @@ from typing import Optional
 
 
 _TRACK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.csv$")
+
+# The stress-track library (`python -m envgen stress`, file prefix in
+# tools/envgen/primitives.py): reference tracks the generator rebuilds, kept in
+# the repo. Nobody edits, replaces or deletes them by hand; a drawn variant is
+# saved under its own name.
+PROTECTED_PREFIXES = ("stress_",)
+
+
+def protected_reason(csv_name: str, builtins) -> Optional[str]:
+    """Why a track can't be replaced or deleted, or None if it can."""
+    if csv_name in builtins:
+        return f"{csv_name} is a built-in track"
+    if csv_name.startswith(PROTECTED_PREFIXES):
+        return (f"{csv_name} is in the stress-track library (python -m envgen stress); "
+                f"save your version under another name")
+    return None
 _TRACK_STEM_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
