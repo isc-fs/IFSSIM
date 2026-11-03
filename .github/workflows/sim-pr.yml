@@ -1,4 +1,7 @@
 name: Sim PR check
+run-name: >-
+  ${{ inputs.pipeline_pr && format('Sim check: pipeline PR #{0}', inputs.pipeline_pr)
+      || github.event.pull_request.title || github.event.head_commit.message || 'Sim PR check' }}
 
 # Drives the sim on the GPU box: a headless start-up check, then the
 # acceleration mission 3 times through this PR's pipeline, scored by the
@@ -15,6 +18,13 @@ name: Sim PR check
 # maintainer adds the `sim-test` label. New pushes to a labelled PR run it
 # again; remove the label to stop that. One sim run at a time on the box: the
 # script waits for the box's sim-session lock (tools/ci/sim_pr_check.sh).
+#
+# Pipeline PRs: isc-fs/IFS09-DV-PIPELINE's sim-check.yml starts this workflow
+# on dev with `pipeline_sha` (the PR's head) and `pipeline_pr`. The check then
+# drives that pipeline commit instead of the pinned one, and posts its result
+# on that commit as the `sim check` status. Posting it needs the
+# SIM_CHECK_TOKEN secret (Commit statuses: write on the pipeline repo); without
+# it the run still happens, only the status is missing.
 
 on:
   pull_request:
@@ -55,12 +65,21 @@ on:
         description: "package the sim even if the shared dev build would do"
         type: boolean
         default: false
+      pipeline_sha:
+        description: "IFS09-DV-PIPELINE commit to drive instead of the pinned one (full SHA)"
+        default: ""
+      pipeline_pr:
+        description: "IFS09-DV-PIPELINE PR number it comes from"
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: sim-pr-${{ github.event.pull_request.number || github.ref }}
+  group: >-
+    sim-pr-${{ github.event.pull_request.number
+      || (inputs.pipeline_pr && format('pipeline-{0}', inputs.pipeline_pr))
+      || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -81,6 +100,7 @@ jobs:
       DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
       # Shader cache kept outside the engine copy, so re-copying the engine keeps it.
       UE-LocalDataCachePath: /build/ifssim-ci/ddc
+      PIPELINE_SHA: ${{ inputs.pipeline_sha }}
 
     steps:
       - uses: actions/checkout@v6
@@ -89,6 +109,22 @@ jobs:
           submodules: true
           # Keep Intermediate/ and Saved/ from the last job: incremental build and cook.
           clean: false
+
+      - name: Mark the pipeline commit as pending
+        if: inputs.pipeline_sha
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.SIM_CHECK_TOKEN }}
+        run: tools/ci/pipeline_status.sh pending "running on the GPU box"
+
+      - name: Use the pipeline commit under test
+        if: inputs.pipeline_sha
+        run: |
+          [[ "$PIPELINE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo "::error::pipeline_sha must be a full 40-character commit SHA"; exit 1; }
+          git -C pipeline fetch -q --no-tags --depth=1 origin "$PIPELINE_SHA"
+          git -C pipeline checkout -q --detach "$PIPELINE_SHA"
+          echo "pipeline: $(git -C pipeline log -1 --oneline)"
 
       - name: Pick or package the sim
         env:
@@ -118,3 +154,16 @@ jobs:
           path: ${{ runner.temp }}/sim-pr-results
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Post the result on the pipeline commit
+        if: always() && inputs.pipeline_sha
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.SIM_CHECK_TOKEN }}
+          RESULT: ${{ job.status }}
+        run: |
+          case "$RESULT" in
+            success) tools/ci/pipeline_status.sh success "all acceleration runs finished" ;;
+            failure) tools/ci/pipeline_status.sh failure "a run didn't finish or the sim failed; see the run" ;;
+            *)       tools/ci/pipeline_status.sh error "the run was $RESULT" ;;
+          esac
