@@ -179,22 +179,51 @@ def track_offset(spec: Dict[str, Any]) -> Tuple[Tuple[float, float], Any]:
     return created.track.offset, created
 
 
-def check_track(v: Venue, spec: Dict[str, Any]) -> List[str]:
-    """A track must stay on the lot, and the venue on the sim's floor once moved with it."""
-    errors: List[str] = []
-    (ox, oy), created = track_offset(spec)
+def lot_issues(v: Venue, created: Any) -> List[Dict[str, Any]]:
+    """A built track's cones off the lot, as track-creator issues (errors).
+
+    Shaped like envgen.rules' issues, so the track editor lists them and rings
+    them like any other: `xy` is in the built track's frame, as theirs is.
+    """
+    ox, oy = created.track.offset
     inner = v.lot.buffer(-v.margin_m)
-    outside = [(t, x - ox, y - oy) for t, x, y in created.track.cones
+    outside = [(t, x, y) for t, x, y in created.track.cones
                if not inner.contains(Point(x - ox, y - oy))]
+    issues: List[Dict[str, Any]] = []
     if outside:
         t, x, y = outside[0]
-        errors.append(f"{len(outside)} cone(s) off the lot (keep {v.margin_m:.1f} m inside it), "
-                      f"e.g. a {t} cone at ({x:.1f}, {y:.1f})")
+        issues.append({"code": "off_lot", "severity": "error",
+                       "message": f"{len(outside)} cone(s) off the lot (keep {v.margin_m:.1f} m "
+                                  f"inside it), e.g. a {t} cone at ({x - ox:.1f}, {y - oy:.1f})",
+                       "xy": [round(x, 2), round(y, 2)]})
     x0, y0, x1, y1 = v.extent()
     floor = box(-FLOOR_HALF_M, -FLOOR_HALF_M, FLOOR_HALF_M, FLOOR_HALF_M)
     if not floor.contains(box(x0 + ox, y0 + oy, x1 + ox, y1 + oy)):
-        errors.append(f"with this track the venue doesn't fit on the sim's floor (+-{FLOOR_HALF_M:.0f} m)")
-    return errors
+        issues.append({"code": "venue_off_floor", "severity": "error",
+                       "message": f"with this track {v.title} doesn't fit on the sim's floor "
+                                  f"(+-{FLOOR_HALF_M:.0f} m)"})
+    return issues
+
+
+def check_track(v: Venue, spec: Dict[str, Any]) -> List[str]:
+    """A track must stay on the lot, and the venue on the sim's floor once moved with it."""
+    _, created = track_offset(spec)
+    return [i["message"] for i in lot_issues(v, created)]
+
+
+def venue_of(track_stem: str, tracks_dir: str | Path) -> Optional[Venue]:
+    """The venue a `<venue>__<track>` belongs to, or None for any other track.
+
+    A name with the separator but no such venue is an ordinary track.
+    """
+    if SEP not in track_stem:
+        return None
+    path = venue_path(track_stem.split(SEP, 1)[0], tracks_dir)
+    return load_venue(path) if path.exists() else None
+
+
+def venue_path(name: str, tracks_dir: str | Path) -> Path:
+    return Path(tracks_dir) / "venues" / f"{name}.venue.json"
 
 
 # ---------------------------------------------------------------- output
@@ -210,6 +239,20 @@ def sidecar(v: Venue, offset: Tuple[float, float]) -> Dict[str, Any]:
                               "x_max": round(x1 + ox, 3), "y_max": round(y1 + oy, 3)}},
         "props": [_prop(p["class"], p["x"] + ox, p["y"] + oy, p["yaw_deg"]) for p in v.props],
     }
+
+
+def sidecar_path(csv_path: str | Path) -> Path:
+    csv_path = Path(csv_path)
+    return csv_path.with_name(csv_path.stem + ".env.json")
+
+
+def write_sidecar(v: Venue, csv_path: str | Path, offset: Tuple[float, float]) -> Path:
+    """Write a venue track's sidecar beside its CSV, atomically."""
+    out = sidecar_path(csv_path)
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_text(dumps(sidecar(v, offset)))
+    tmp.replace(out)
+    return out
 
 
 def venue_tracks(v: Venue, tracks_dir: str | Path) -> List[Path]:
@@ -251,7 +294,5 @@ def build(venue_path: str | Path, tracks_dir: Optional[str | Path] = None, check
         bad += len(errors)
         if errors or check_only:
             continue
-        out = csv.with_name(csv.stem + ".env.json")
-        out.write_text(dumps(sidecar(v, offset)))
-        log(f"  wrote {out.name}")
+        log(f"  wrote {write_sidecar(v, csv, offset).name}")
     return 1 if bad else 0
