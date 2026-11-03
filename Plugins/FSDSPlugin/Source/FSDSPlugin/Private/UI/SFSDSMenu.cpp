@@ -147,6 +147,9 @@ TSharedRef<SWidget> SFSDSMenu::MakeNavButton(const FText& Label, EPage InPage)
 		.OnClicked_Lambda([this, InPage]()
 		{
 			Page = InPage;
+			// Tracks may have come or gone outside the menu (Mission Control,
+			// envgen, a file manager): read the folders again.
+			if (InPage == EPage::Drive || InPage == EPage::Editor) OnTracksChanged.ExecuteIfBound();
 			return FReply::Handled();
 		})
 		[
