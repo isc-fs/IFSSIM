@@ -57,6 +57,10 @@ class RunConfig:
     sim_ready_timeout_s: float = 900.0         # first boot compiles shaders
     mc_timeout_s: float = 180.0
     max_run_s: float = 0.0                     # 0: no cap beyond the benchmark's own timeouts
+    # No mission starts until the sim has been up this long. One that starts ~10 s after the sim
+    # came up loses its SLAM heading and drives off the track (7 of 7 runs on the GPU box, against
+    # 0 of 100 at ~60 s). Until 2026-11 the stack's ~36 s colcon rebuild did this wait by accident.
+    settle_s: float = 30.0
     benchmark_cmd: List[str] = field(default_factory=lambda: [sys.executable, str(BENCHMARK)])
     poll_s: float = 2.0
 
@@ -167,6 +171,7 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         try:
             sim.start()
             rec["sim_ready_s"] = round(sim.wait_ready(cfg.sim_ready_timeout_s, should_stop=should_stop), 1)
+            t_ready = time.monotonic()
         except SimError as e:
             rec["outcome"], rec["error"] = "sim_failed_to_start", str(e)
             return rec
@@ -183,6 +188,17 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         except (SimError, subprocess.CalledProcessError, FileNotFoundError) as e:
             rec["outcome"], rec["error"] = "backend_unreachable", str(e)
             return rec
+
+        wait = 0.0 if sim.attached else cfg.settle_s - (time.monotonic() - t_ready)
+        if wait > 0:
+            log(f"[{label or 'run'}] letting the sim settle for {wait:.0f} s")
+            t_settle = time.monotonic()
+            while time.monotonic() - t_settle < wait:
+                if should_stop():
+                    rec["outcome"] = "interrupted"
+                    return rec
+                time.sleep(min(cfg.poll_s, wait))
+        rec["settle_s"] = round(max(wait, 0.0), 1)
 
         argv = cfg.benchmark_cmd + [
             "--sim", f"{cfg.host}:{cfg.port}", "--mc-url", cfg.mc_url,

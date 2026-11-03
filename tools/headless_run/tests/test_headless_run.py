@@ -57,7 +57,7 @@ def cfg(tmp_path, port, mc_url, sim_args=(), bench_args=(), **kw):
     return RunConfig(sim_command=sim, results_root=tmp_path, port=port, mc_url=mc_url,
                      benchmark_cmd=[sys.executable, str(HERE / "fake_bench.py")],
                      benchmark_args=list(bench_args), sim_ready_timeout_s=10, mc_timeout_s=3,
-                     poll_s=0.2, **kw)
+                     poll_s=0.2, **{"settle_s": 0.0, **kw})
 
 
 def quiet(_msg):
@@ -203,3 +203,10 @@ def test_each_run_keeps_its_own_results(tmp_path, backend):
     assert runs[0] != runs[1]
     assert all(Path(r[0], "manifest.json").exists() for r in runs)
     assert all(Path(r[0]).is_relative_to(Path(rec["run_dir"])) for r, rec in zip(runs, recs))
+
+
+def test_no_mission_starts_before_the_sim_has_settled(tmp_path, backend):
+    t0 = time.monotonic()
+    rec = run_once(cfg(tmp_path, free_port(), backend, settle_s=1.5), log=quiet)
+    assert rec["outcome"] == "finished"
+    assert 0 < rec["settle_s"] <= 1.5 and time.monotonic() - t0 >= 1.5

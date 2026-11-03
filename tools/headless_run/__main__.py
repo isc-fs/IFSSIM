@@ -74,6 +74,9 @@ def _parser() -> argparse.ArgumentParser:
                        help="start Mission Control's backend (docker compose up -d mission_control_backend)")
         p.add_argument("--max-run-s", type=float, default=0.0,
                        help="hard cap on one run, on top of the benchmark's own per-mission timeouts")
+        p.add_argument("--settle-s", type=float, default=30.0,
+                       help="start no mission until the sim has been up this long: earlier, SLAM "
+                            "loses its heading (not applied with --sim attach)")
         if name == "loop":
             p.add_argument("--cycles", type=int, default=0, help="0 = until stopped")
             p.add_argument("--pause-s", type=float, default=10.0)
@@ -155,7 +158,8 @@ def main(argv=None) -> int:
 
     cfg = RunConfig(sim_command=cmd, results_root=Path(a.results_root), benchmark_args=bench,
                     mc_url=a.mc_url.rstrip("/"), mc_key=a.mc_key, mc_up=a.mc_up, host=a.host,
-                    sim_ready_timeout_s=a.ready_timeout_s, max_run_s=a.max_run_s)
+                    sim_ready_timeout_s=a.ready_timeout_s, max_run_s=a.max_run_s,
+                    settle_s=a.settle_s)
     log = lambda m: print(m, flush=True)  # noqa: E731
     if a.cmd == "run":
         rec = run_once(cfg, log=log, should_stop=should_stop)
