@@ -12,7 +12,8 @@ For each mission, track and repeat (in that order), one run:
   5. follow the referee (``/api/event/state``) until it says finished, or the timeout;
   6. write the run: ``<results>/mission/<mission>_<track>/<code>/seed<k>/`` with ``manifest.json``
      (code, scenario, referee state), ``results.json`` (race metrics), ``laps.csv``,
-     ``events.csv`` and a coarse ``telemetry.csv``, the layout bench-view's Sim pages read.
+     ``events.csv``, a coarse ``telemetry.csv`` (the layout bench-view's Sim pages read) and
+     ``cones.csv`` (the track's cones, in telemetry's frame).
 
 WHERE THE PIPELINE RUNS (``--pipeline-on``):
 
@@ -999,6 +1000,17 @@ def write_run(
         d / "telemetry.csv",
         res.telemetry,
         ["t", "x", "y", "speed", "throttle", "steering"],
+    )
+    # The track's cones as the referee placed them: the same frame (ENU metres) as
+    # telemetry.csv's x, y, so the two plot together with no transform.
+    _write_csv(
+        d / "cones.csv",
+        [
+            {"x": c.get("x"), "y": c.get("y"), "color": c.get("color")}
+            for c in ref.get("cone_positions") or []
+            if isinstance(c, dict)
+        ],
+        ["x", "y", "color"],
     )
     spec = os.environ.get("BENCH_SPEC")
     if spec and Path(spec).is_file():

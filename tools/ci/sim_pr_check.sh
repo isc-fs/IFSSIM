@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The sim PR check as the GPU runner runs it (.github/workflows/sim-pr.yml):
-# a headless start-up check, then the acceleration mission $REPEATS times
-# through this checkout's pipeline, scored by the referee.
+# a headless start-up check, then the missions tools/ci/sim_check.json lists,
+# through this checkout's pipeline, scored by the referee; then the report
+# (tools/ci/sim_report.py) and its track maps (tools/ci/sim_plot.py).
 #
 # It holds the box's sim-session lock for the whole run, so it waits for any
 # other sim run on the box (they share the RPC port, the pipeline container
@@ -11,18 +12,23 @@
 #   IFSSIM_BUILD   the packaged sim (…/Linux/IFSSIM.sh); required
 #   IFSSIM_SIM     the box's container wrapper for it (default /usr/local/bin/ifssim-sim)
 #   RESULTS        results root (default tools/sim_benchmark/results/ci)
-#   REPEATS        acceleration runs (default 3)
+#   REPEATS        acceleration runs (default: sim_check.json's)
+#   REPORT         where the report and maps go (default $RESULTS/report)
+#   BASELINE       the last dev run's report.json, to compare with
+#                  (default /build/ifssim-ci/baseline/report.json)
+#   DV_IMAGE       the pipeline image built for this run; draws the maps
 #   SESSION_LOCK   default /var/tmp/ifssim-session.lock
 #   LOCK_WAIT_S    how long to wait for it (default 14400)
 #
-# Exit codes follow headless_run: 0 every run finished, 1 some didn't,
-# 3 the machine failed (sim didn't start or crashed, lock never free).
+# Exit codes: 0 every run of the required missions finished, 1 some didn't,
+# 3 the machine failed (sim didn't start, nothing ran, lock never free).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SIM="${IFSSIM_SIM:-/usr/local/bin/ifssim-sim}"
 RESULTS="${RESULTS:-$ROOT/tools/sim_benchmark/results/ci}"
-REPEATS="${REPEATS:-3}"
+REPORT="${REPORT:-$RESULTS/report}"
+BASELINE="${BASELINE:-/build/ifssim-ci/baseline/report.json}"
 LOCK="${SESSION_LOCK:-/var/tmp/ifssim-session.lock}"
 LOCK_WAIT_S="${LOCK_WAIT_S:-14400}"
 : "${IFSSIM_BUILD:?set IFSSIM_BUILD to the packaged IFSSIM.sh}"
@@ -58,10 +64,35 @@ if ! python3 -m headless_run check --sim "$SIM" --settings-dir "$ROOT"; then
   exit 3
 fi
 
-rc=0
-python3 -m headless_run run --sim "$SIM" --settings-dir "$ROOT" --mc-up \
-  --results-root "$RESULTS" --max-run-s 1800 \
-  -- --missions acceleration --repeats "$REPEATS" || rc=$?
+# The missions and their overrides; REPEATS (the workflow's input) changes acceleration's.
+overrides="$RESULTS/mission_overrides.json"
+missions="$(python3 - "$ROOT/tools/ci/sim_check.json" "$overrides" "${REPEATS:-}" <<'PY'
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+over = cfg.get("overrides", {})
+if sys.argv[3]:
+    over.setdefault("acceleration", {})["repeats"] = int(sys.argv[3])
+json.dump(over, open(sys.argv[2], "w"))
+print(",".join(cfg["required"] + cfg.get("informational", [])))
+PY
+)"
+echo "missions: $missions"
 
-python3 "$ROOT/tools/ci/sim_pr_summary.py" "$RESULTS" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+# --poll-s 0.2: the car's path is sampled 5 times a second (the maps need it).
+python3 -m headless_run run --sim "$SIM" --settings-dir "$ROOT" --mc-up \
+  --results-root "$RESULTS" --max-run-s 2400 \
+  -- --missions "$missions" --mission-overrides "$overrides" --poll-s 0.2 || true
+
+rc=0
+python3 "$ROOT/tools/ci/sim_report.py" "$RESULTS" --out "$REPORT" --baseline "$BASELINE" \
+  > /dev/null || rc=$?
+cat "$REPORT/summary.md" >> "${GITHUB_STEP_SUMMARY:-/dev/null}" 2>/dev/null || true
+
+# The maps need matplotlib, which the pipeline image has and the box doesn't.
+if [ -n "${DV_IMAGE:-}" ] && [ -f "$REPORT/report.json" ]; then
+  docker run --rm --user "$(id -u):$(id -g)" --network none --entrypoint python3 \
+    -v "$ROOT/tools/ci:/ci:ro" -v "$RESULTS:/results" -v "$REPORT:/report" -e MPLCONFIGDIR=/tmp \
+    "$DV_IMAGE" /ci/sim_plot.py /report --results /results \
+    || echo "::warning::the track maps weren't drawn"
+fi
 exit "$rc"

@@ -3,14 +3,17 @@ run-name: >-
   ${{ inputs.pipeline_pr && format('Sim check: pipeline PR #{0}', inputs.pipeline_pr)
       || github.event.pull_request.title || github.event.head_commit.message || 'Sim PR check' }}
 
-# Drives the sim on the GPU box: a headless start-up check, then the
-# acceleration mission 3 times through this PR's pipeline, scored by the
-# referee.
+# Drives the sim on the GPU box: a headless start-up check, then the missions
+# in tools/ci/sim_check.json through this PR's pipeline, scored by the referee
+# (now acceleration 3 times and skidpad, which decide the check, and one
+# autocross track, reported only). The result, compared with the last dev run
+# and with a map of each mission, goes to a comment on the PR and a row in the
+# `sim-report` issue (tools/ci/sim_publish.py).
 #
 # The sim is only packaged (Linux, Development, so it keeps its logs) when its
 # build inputs changed; tools/ci/sim_build.sh decides. A PR that only touches
 # the pipeline, ROS or tools reuses the box's last build of dev and takes
-# ~10 min. Pushes to dev that change the sim package it and publish that build
+# ~15 min. Pushes to dev that change the sim package it and publish that build
 # for the PRs. A first build from scratch is ~1–1.5 h; later ones are incremental.
 #
 # The runner is a machine on a private network and this repo is public, so
@@ -22,9 +25,9 @@ run-name: >-
 # Pipeline PRs: isc-fs/IFS09-DV-PIPELINE's sim-check.yml starts this workflow
 # on dev with `pipeline_sha` (the PR's head) and `pipeline_pr`. The check then
 # drives that pipeline commit instead of the pinned one, and posts its result
-# on that commit as the `sim check` status. Posting it needs the
-# SIM_CHECK_TOKEN secret (Commit statuses: write on the pipeline repo); without
-# it the run still happens, only the status is missing.
+# on that commit as the `sim check` status, and the report as a comment on
+# that PR. Both need the SIM_CHECK_TOKEN secret (Commit statuses and Pull
+# requests: write on the pipeline repo); without it the run still happens.
 
 on:
   pull_request:
@@ -54,13 +57,21 @@ on:
       - "Content/**"
       - "!Content/tracks/**"
       - "IFSSIM.uproject"
-      - "tools/ci/sim_build.sh"
+      # Anything that changes how the car drives, too: these runs are the dev
+      # result the PR checks compare with.
+      - "settings.json"
+      - "pipeline"
+      - "ros2/**"
+      - "docker/**"
+      - "tools/headless_run/**"
+      - "tools/sim_benchmark/**"
+      - "tools/ci/**"
       - ".github/workflows/sim-pr.yml"
   workflow_dispatch:
     inputs:
       repeats:
-        description: "acceleration runs"
-        default: "3"
+        description: "acceleration runs (empty: tools/ci/sim_check.json's)"
+        default: ""
       package:
         description: "package the sim even if the shared dev build would do"
         type: boolean
@@ -72,8 +83,12 @@ on:
         description: "IFS09-DV-PIPELINE PR number it comes from"
         default: ""
 
+# contents: the track maps go to the ci-assets branch; issues and pull-requests:
+# the PR comment and the sim-report issue (tools/ci/sim_publish.py).
 permissions:
-  contents: read
+  contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: >-
@@ -142,8 +157,10 @@ jobs:
       - name: Drive the sim
         env:
           IFSSIM_DV_IMAGE: ${{ env.DV_IMAGE }}
-          REPEATS: ${{ inputs.repeats || '3' }}
+          REPEATS: ${{ inputs.repeats }}
           RESULTS: ${{ runner.temp }}/sim-pr-results
+          REPORT: ${{ runner.temp }}/sim-pr-results/report
+          BASELINE: /build/ifssim-ci/baseline/report.json
         run: tools/ci/sim_pr_check.sh
 
       - name: Upload the results
@@ -155,6 +172,35 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # The PR comment (this repo's PR or the pipeline PR), the sim-report issue,
+      # and on dev the result later PRs compare with.
+      - name: Publish the report
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_TOKEN: ${{ inputs.pipeline_pr && secrets.SIM_CHECK_TOKEN || '' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PIPELINE_PR: ${{ inputs.pipeline_pr }}
+          REPORT: ${{ runner.temp }}/sim-pr-results/report
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -f "$REPORT/report.json" ] || { echo "no report: nothing to publish"; exit 0; }
+          args=(--report-dir "$REPORT" --run-url "$RUN_URL"
+                --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                --baseline /build/ifssim-ci/baseline/report.json)
+          if [[ "$PIPELINE_PR" =~ ^[0-9]+$ ]]; then
+            args+=(--pr-repo isc-fs/IFS09-DV-PIPELINE --pr "$PIPELINE_PR"
+                   --source "[pipeline #$PIPELINE_PR](https://github.com/isc-fs/IFS09-DV-PIPELINE/pull/$PIPELINE_PR)")
+          elif [ -n "$PR_NUMBER" ]; then
+            args+=(--pr-repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --source "#$PR_NUMBER")
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/dev ]; then
+            args+=(--source "dev push" --save-baseline /build/ifssim-ci/baseline)
+          else
+            args+=(--source "manual, $GITHUB_REF_NAME")
+          fi
+          python3 tools/ci/sim_publish.py "${args[@]}"
+
       - name: Post the result on the pipeline commit
         if: always() && inputs.pipeline_sha
         continue-on-error: true
@@ -163,7 +209,7 @@ jobs:
           RESULT: ${{ job.status }}
         run: |
           case "$RESULT" in
-            success) tools/ci/pipeline_status.sh success "all acceleration runs finished" ;;
+            success) tools/ci/pipeline_status.sh success "every required mission finished" ;;
             failure) tools/ci/pipeline_status.sh failure "a run didn't finish or the sim failed; see the run" ;;
             *)       tools/ci/pipeline_status.sh error "the run was $RESULT" ;;
           esac
