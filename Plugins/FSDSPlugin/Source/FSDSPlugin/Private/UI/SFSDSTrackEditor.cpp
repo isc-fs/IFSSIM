@@ -254,26 +254,8 @@ void SFSDSTrackEditor::SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const T
 	Venues = InVenues;
 	if (!State->Venue.IsEmpty() && !FindVenue(State->Venue).IsValid()) State->Venue.Reset();
 	if (Canvas) Canvas->SetVenue(FindVenue(State->Venue));
-	if (VenueRowBox.IsValid()) VenueRowBox->SetContent(BuildVenueRow());
+	if (VenuePicker.IsValid()) VenuePicker->SetVenues(Venues);
 	if (OpenListBox.IsValid()) OpenListBox->SetContent(BuildOpenList());
-}
-
-TSharedRef<SWidget> SFSDSTrackEditor::BuildVenueRow()
-{
-	TSharedRef<SUniformGridPanel> Grid = SNew(SUniformGridPanel).SlotPadding(FMargin(2.f));
-	auto Add = [&](int32 i, const FText& Label, const FString& Name)
-	{
-		Grid->AddSlot(i % 3, i / 3)
-		[
-			EditorUi::Choice(Label, [this, Name]() { return State->Venue == Name; }, [this, Name]() { SetVenue(Name); })
-		];
-	};
-	Add(0, LOCTEXT("NoVenue", "Open floor"), FString());
-	for (int32 i = 0; i < Venues.Num(); ++i)
-	{
-		Add(i + 1, FText::FromString(Venues[i]->Title), Venues[i]->Name);
-	}
-	return Grid;
 }
 
 TSharedPtr<const FSDSVenue::FVenue> SFSDSTrackEditor::FindVenue(const FString& Name) const
@@ -365,7 +347,14 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 				SNew(SVerticalBox)
 				.Visibility_Lambda([this]() { return Venues.Num() > 0 ? EVisibility::Visible : EVisibility::Collapsed; })
 				+ SVerticalBox::Slot().AutoHeight() [ EditorUi::Heading(LOCTEXT("VenueH", "LOCATION")) ]
-				+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(VenueRowBox, SBox) [ BuildVenueRow() ] ]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SAssignNew(VenuePicker, SFSDSLocationPicker)
+					.NoneLabel(LOCTEXT("NoVenue", "Open floor"))
+					.Venues(Venues)
+					.Selected_Lambda([this]() { return State->Venue; })
+					.OnPicked_Lambda([this](const FString& V) { SetVenue(V); })
+				]
 			]
 			+ SVerticalBox::Slot().AutoHeight() [ EditorUi::Heading(LOCTEXT("OpenH", "OPEN A DRAWN TRACK")) ]
 			+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(OpenListBox, SBox) [ BuildOpenList() ] ]

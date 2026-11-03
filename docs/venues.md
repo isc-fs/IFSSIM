@@ -29,7 +29,7 @@ In the sim's menu, **Track editor**, pick the venue under **Location**:
 - **The name:** the track is saved as `<venue>__<name>`; type only the name.
 - **The sidecar:** Mission Control's backend writes the track's `env.json` as it saves it (`envgen.venue.write_sidecar`), and deletes it with the track. You don't run step 3 by hand.
 
-Opening a venue track picks its venue. On **Drive**, **Location** lists the venues: pick one to see only its tracks, drawn with the lot and props around the cones. The menu reads the venue files itself (`FSDSVenue`), so Drive needs no backend; packaging stages `Content/tracks/venues/` with the tracks.
+Opening a venue track picks its venue. On **Drive**, the **Location** dropdown lists the venues: pick one to see only its tracks (on Anywhere the list is grouped by venue), drawn with the lot and props around the cones. The menu reads the venue files itself (`FSDSVenue`), so Drive needs no backend; packaging stages `Content/tracks/venues/` with the tracks.
 
 Rerun step 3 after changing a venue file: every one of its tracks needs its sidecar written again. `tools/envgen/tests/test_venue.py` fails if a committed sidecar is out of date.
 
