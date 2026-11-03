@@ -172,6 +172,7 @@ void FFSDSMenu::ScanTracks()
 		}
 	}
 	Tracks.Sort([](const FFSDSMenuTrack& A, const FFSDSMenuTrack& B) { return A.Name < B.Name; });
+	if (Widget) Widget->SetTracks(Tracks);   // the open menu holds its own copy
 }
 
 APlayerController* FFSDSMenu::GetPC() const

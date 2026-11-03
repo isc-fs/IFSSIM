@@ -246,6 +246,12 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildLeft()
 		];
 }
 
+void SFSDSTrackEditor::SetTracks(const TArray<FFSDSMenuTrack>& InTracks)
+{
+	Tracks = InTracks;
+	if (OpenListBox.IsValid()) OpenListBox->SetContent(BuildOpenList());
+}
+
 TSharedRef<SWidget> SFSDSTrackEditor::BuildOpenList()
 {
 	TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
@@ -296,7 +302,7 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 		[
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight() [ EditorUi::Heading(LOCTEXT("OpenH", "OPEN A DRAWN TRACK")) ]
-			+ SVerticalBox::Slot().AutoHeight() [ BuildOpenList() ]
+			+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(OpenListBox, SBox) [ BuildOpenList() ] ]
 
 			+ SVerticalBox::Slot().AutoHeight() [ EditorUi::Heading(LOCTEXT("TrackH", "TRACK")) ]
 			+ SVerticalBox::Slot().AutoHeight()

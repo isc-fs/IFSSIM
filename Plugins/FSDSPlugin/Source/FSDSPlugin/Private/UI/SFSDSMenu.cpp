@@ -277,7 +277,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					+ SWidgetSwitcher::Slot() [ BuildDrivePage() ]
 					+ SWidgetSwitcher::Slot()
 					[
-						SNew(SFSDSTrackEditor)
+						SAssignNew(EditorPage, SFSDSTrackEditor)
 						.State(EditorState)
 						.Client(Client)
 						.Tracks(Tracks)
@@ -771,6 +771,16 @@ void SFSDSMenu::RebuildTrackList()
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Bad)
 		];
 	}
+}
+
+void SFSDSMenu::SetTracks(const TArray<FFSDSMenuTrack>& InTracks)
+{
+	// Keep the selected track by name: indices shift when one is added.
+	const FString Keep = Tracks.IsValidIndex(Selected) ? Tracks[Selected].Name : FString();
+	Tracks = InTracks;
+	Selected = Tracks.IndexOfByPredicate([&](const FFSDSMenuTrack& T) { return T.Name == Keep; });
+	if (EditorPage.IsValid()) EditorPage->SetTracks(Tracks);
+	SetEvent(Event, bPractice);   // redraws the list, and picks a track if the old one went
 }
 
 void SFSDSMenu::SelectTrack(int32 Index)
