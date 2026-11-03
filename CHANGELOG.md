@@ -107,6 +107,13 @@ shipping pipeline, documentation.
 - **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
 - **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
 
+- **Venues in the menu.** The Drive page has a Location row (Anywhere, or a
+  venue) that lists only that venue's tracks, and its map draws the lot and
+  everything around the cones. In the Track editor, pick a venue to draw on
+  it: the lot and its props sit behind the drawing, cones off the lot are an
+  error while you draw, and the track is saved as `<venue>__<name>` with its
+  environment sidecar written by the backend at the same time (and deleted
+  with it). See docs/venues.md.
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
   Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
   suits it (a gridded top-down map of its cones, in metres), and who drives,
