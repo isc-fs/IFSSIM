@@ -208,6 +208,8 @@ class FakeDocker:
         self.params_seen = (
             None  # the params.yaml mounted into the stack, read when it starts
         )
+        self.image_id = ""  # what `docker image inspect` reports ("" = it fails)
+        self.volumes: list[str] = []  # named volumes that exist
 
     def __call__(self, *args, timeout=120.0):
         self.calls.append(list(args))
@@ -223,6 +225,12 @@ class FakeDocker:
                 ):
                     f = Path(_mount(args[i + 1])[0]) / "config" / "params.yaml"
                     self.params_seen = f.read_text() if f.exists() else None
+        elif args[:2] == ("image", "inspect"):
+            out, code = (self.image_id, 0) if self.image_id else ("", 1)
+        elif args[:2] == ("volume", "ls"):
+            out = "\n".join(self.volumes)
+        elif args[:2] == ("volume", "rm"):
+            self.volumes.remove(args[2])
         elif args[0] == "inspect":
             out = "false" if self.dies else "true"
         elif args[0] == "logs":
@@ -431,6 +439,43 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
     assert list((tmp_path / "results" / "mission").glob("stack_*.log"))
     assert not hosts[-1].exists()  # the copy is cleaned up
+
+
+def test_the_stacks_build_is_kept_between_runs_of_one_image(tmp_path, world, docker):
+    docker.image_id = "sha256:0123456789abcdef"
+    docker.volumes = [
+        "bench_ws_0123456789ab_build",  # this image's: kept
+        "bench_ws_fedcba987654_build",  # an older image's: removed
+        "bench_numba_cache",  # not ours
+    ]
+    rc, _ = _run(tmp_path, world)
+    assert rc == 0
+    run = docker.run_args()
+    mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
+    assert "bench_ws_0123456789ab_build:/dv_pipeline_stack_ws/build" in mounts
+    assert "bench_ws_0123456789ab_install:/dv_pipeline_stack_ws/install" in mounts
+    assert docker.volumes == ["bench_ws_0123456789ab_build", "bench_numba_cache"]
+    assert any(a.startswith("DV_SRC_HASH=") for a in run)  # so unchanged sources skip colcon
+
+
+def test_the_source_hash_follows_paths_and_contents(tmp_path):
+    src = tmp_path / "src"
+    (src / "pkg").mkdir(parents=True)
+    (src / "pkg" / "a.py").write_text("x = 1\n")
+    first = rmb.source_hash(src)
+    assert rmb.source_hash(src) == first
+    (src / "pkg" / "a.py").write_text("x = 2\n")
+    assert rmb.source_hash(src) != first
+    (src / "pkg" / "a.py").write_text("x = 1\n")
+    (src / "pkg" / "a.py").rename(src / "pkg" / "b.py")
+    assert rmb.source_hash(src) != first
+
+
+def test_an_image_that_cant_be_inspected_builds_without_the_cache(tmp_path, world, docker):
+    rc, _ = _run(tmp_path, world)
+    assert rc == 0
+    run = docker.run_args()
+    assert not any(a.startswith(("bench_ws_", "DV_SRC_HASH=")) for a in run)
 
 
 def test_overrides_are_merged_into_params_yaml_and_recorded(tmp_path, world, docker):

@@ -57,7 +57,7 @@ def cfg(tmp_path, port, mc_url, sim_args=(), bench_args=(), **kw):
     return RunConfig(sim_command=sim, results_root=tmp_path, port=port, mc_url=mc_url,
                      benchmark_cmd=[sys.executable, str(HERE / "fake_bench.py")],
                      benchmark_args=list(bench_args), sim_ready_timeout_s=10, mc_timeout_s=3,
-                     poll_s=0.2, **kw)
+                     poll_s=0.2, **{"settle_s": 0.0, **kw})
 
 
 def quiet(_msg):
@@ -203,3 +203,18 @@ def test_each_run_keeps_its_own_results(tmp_path, backend):
     assert runs[0] != runs[1]
     assert all(Path(r[0], "manifest.json").exists() for r in runs)
     assert all(Path(r[0]).is_relative_to(Path(rec["run_dir"])) for r, rec in zip(runs, recs))
+
+
+def test_no_mission_starts_before_the_sim_keeps_real_time(tmp_path, backend):
+    # the fake sim's clock runs at half speed for its first 2 s
+    rec = run_once(cfg(tmp_path, free_port(), backend, sim_args=(0, 0.2, 2.0),
+                       settle_s=20.0, settle_window_s=1.0), log=quiet)
+    assert rec["outcome"] == "finished"
+    assert rec["settle_rtf"] >= 0.98 and 2.0 <= rec["settle_s"] < 10 and "settle_timeout" not in rec
+
+
+def test_a_sim_that_never_keeps_real_time_is_waited_for_at_most_settle_s(tmp_path, backend):
+    rec = run_once(cfg(tmp_path, free_port(), backend, sim_args=(0, 0.2, 60.0),
+                       settle_s=2.0, settle_window_s=1.0), log=quiet)
+    assert rec["outcome"] == "finished"
+    assert rec["settle_timeout"] and 0.4 < rec["settle_rtf"] < 0.6
