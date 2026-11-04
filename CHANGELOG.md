@@ -14,6 +14,15 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Onboard replays use the Fast DDS buffer profile.**
+  `run_onboard_replay.py` sets `FASTRTPS_DEFAULT_PROFILES_FILE`, as
+  `docker-compose.yml` already does for the live stack. Without it Fast DDS
+  drops the 4.5 MB LiDAR messages and perception/SLAM ran at ~5 Hz on the
+  real-car bag; with it ~9 Hz. Scoped to replays because the profile's 64 MB
+  SHM segment needs the `--shm-size=1g` only replays pass. The
+  `dv_pipeline_stack` image also installs PyPI `dbscan` 1.0.0 (`--no-deps`)
+  for perception's `cluster_backend=pypi`.
+
 - **`dv_pipeline_stack` now compiles C++ packages as Release.** The
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
