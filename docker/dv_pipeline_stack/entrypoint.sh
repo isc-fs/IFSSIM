@@ -29,11 +29,23 @@ rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
 # .msg regeneration, C++ source changes — require this. Off by default
 # because it adds ~3–10s to startup; opt in via DV_REBUILD_ON_STARTUP=true
 # in compose / shell env.
+#
+# DV_SRC_HASH (set by the sim benchmark, which keeps build/ and install/ in
+# volumes between runs): a hash of the mounted sources. When the last build
+# was made from the same ones, colcon is skipped; it would still re-run every
+# Python package's setup.py (~20 s) to change nothing.
 if [ "${DV_REBUILD_ON_STARTUP:-false}" = "true" ]; then
-    echo "DV_REBUILD_ON_STARTUP=true — running colcon build before startup..."
-    cd /dv_pipeline_stack_ws
-    colcon build --symlink-install
-    cd - >/dev/null
+    stamp=/dv_pipeline_stack_ws/build/.dv_src_hash
+    if [ -n "${DV_SRC_HASH:-}" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$DV_SRC_HASH" ]; then
+        echo "DV_REBUILD_ON_STARTUP=true — sources unchanged since the last build, skipping colcon"
+    else
+        echo "DV_REBUILD_ON_STARTUP=true — running colcon build before startup..."
+        cd /dv_pipeline_stack_ws
+        rm -f "$stamp"
+        colcon build --symlink-install
+        if [ -n "${DV_SRC_HASH:-}" ]; then echo "$DV_SRC_HASH" > "$stamp"; fi
+        cd - >/dev/null
+    fi
 fi
 
 source /dv_pipeline_stack_ws/install/setup.bash

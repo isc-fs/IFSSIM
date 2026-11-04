@@ -176,6 +176,9 @@ follow the referee, stop), over Mission Control's HTTP API and the sim's RPC, so
 built from. The image is `$IFSSIM_DV_IMAGE` (the launcher's worker sets it), else `--image`, else the
 one `docker compose build` makes. The first start takes a few minutes (colcon build, Numba warm-up);
 the container is removed at the end and its log kept as `results/mission/stack_*.log`.
+The colcon build is kept between runs in two volumes per image (`bench_ws_<image id>_build` and
+`_install`), so later starts only rebuild what changed; a new image gets new ones and the old ones
+are removed. To force a clean build: `docker volume rm $(docker volume ls -q -f name=bench_ws_)`.
 `--stack running` uses the `dv_pipeline_stack` already running instead (quick tries; the recorded
 commit is then only this checkout's, which may not be what that container runs).
 

@@ -277,6 +277,9 @@ shipping pipeline, documentation.
   radius measure the same on both engines (#712). New RPC
   `getMassProperties` reports the chassis mass, centre of mass and wheel
   positions in the car's frame.
+- **`loadTrack` and `getSettingsPaths` replied with invalid JSON on Windows.**
+  The file paths in them went out with bare backslashes; they are escaped
+  now, as the error replies already were.
 - **After a sim restart the car never moved.** When the sim stopped, the
   bridge reconnected its sensor streams at once, but its command connection
   only failed a moment later, on its next send, and nothing reconnected it:

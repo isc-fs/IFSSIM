@@ -82,6 +82,17 @@ static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
 	TEXT("use it if the faint viewport stippling of #488 shows in a packaged build."),
 	ECVF_Default);
 
+// Off by default: reading the R32f depth target back as colour is not
+// supported by the Vulkan RHI, so on Linux a Development build asserts
+// on it and quits a few seconds into the drive.
+static TAutoConsoleVariable<int32> CVarLidarDumpRT(
+	TEXT("fsds.LidarGPU.DumpRT"),
+	0,
+	TEXT("Debug: 1 = after the 5th GPU scan, save the LiDAR depth and colour ")
+	TEXT("captures to Saved/LidarGPU/{DepthRT.exr, ColorRT.png}. 0 (default) = off. ")
+	TEXT("The depth save asserts on Vulkan (Linux) in non-Shipping builds."),
+	ECVF_Default);
+
 UFSDSLidarSensor::UFSDSLidarSensor()
 {
 	PrimaryComponentTick.bCanEverTick = true;
@@ -1005,7 +1016,8 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 		GPULastReportTime   = T1;
 	}
 
-	if (!bGPUDumpedRT && GPUCaptureCount >= 5 && GPUDepthRT)
+	if (!bGPUDumpedRT && GPUCaptureCount >= 5 && GPUDepthRT
+		&& CVarLidarDumpRT.GetValueOnGameThread() != 0)
 	{
 		const FString OutDir  = FPaths::ProjectSavedDir() / TEXT("LidarGPU");
 		UKismetRenderingLibrary::ExportRenderTarget(GetWorld(), GPUDepthRT, OutDir, TEXT("DepthRT.exr"));
