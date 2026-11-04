@@ -265,6 +265,7 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.
 - **RPC replies with an apostrophe or a control character in a string were
   not valid JSON.** The replies are built by hand, and strings were escaped
   with UE's `ReplaceCharWithEscapedChar`, which writes `'` as `\'` (no JSON

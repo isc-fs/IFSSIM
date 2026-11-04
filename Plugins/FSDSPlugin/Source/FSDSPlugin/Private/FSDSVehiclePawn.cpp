@@ -493,23 +493,30 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 		TEXT("Commanded steering now reaches the solver unmodified."));
 
 	// --- Wheels ---
+	// Only the class and bone are chosen here. Where each wheel sits comes
+	// from settings.json (Wheelbase, WeightDistFront, TrackFront/Rear):
+	// UFSDSWheeledVehicleMovementComponent::OnCreatePhysicsState sets every
+	// AdditionalOffset from the bone positions just before Chaos builds the
+	// vehicle. The mesh's own wheel bones are 1.18 m apart, not 1.627 m, and
+	// the hand-set +-8 cm lateral offsets that used to live here are gone with
+	// them. The visible wheels stay at the bones until the mesh is re-rigged.
 	VehicleMovement->WheelSetups.SetNum(4);
 
 	VehicleMovement->WheelSetups[0].WheelClass = UFSDSWheelFront::StaticClass();
 	VehicleMovement->WheelSetups[0].BoneName = FName("WheelFL");
-	VehicleMovement->WheelSetups[0].AdditionalOffset = FVector(0.f, -8.f, 0.f);
+	VehicleMovement->WheelSetups[0].AdditionalOffset = FVector::ZeroVector;
 
 	VehicleMovement->WheelSetups[1].WheelClass = UFSDSWheelFront::StaticClass();
 	VehicleMovement->WheelSetups[1].BoneName = FName("WheelFR");
-	VehicleMovement->WheelSetups[1].AdditionalOffset = FVector(0.f, 8.f, 0.f);
+	VehicleMovement->WheelSetups[1].AdditionalOffset = FVector::ZeroVector;
 
 	VehicleMovement->WheelSetups[2].WheelClass = UFSDSWheelRear::StaticClass();
 	VehicleMovement->WheelSetups[2].BoneName = FName("WheelRL");
-	VehicleMovement->WheelSetups[2].AdditionalOffset = FVector(0.f, -8.f, 0.f);
+	VehicleMovement->WheelSetups[2].AdditionalOffset = FVector::ZeroVector;
 
 	VehicleMovement->WheelSetups[3].WheelClass = UFSDSWheelRear::StaticClass();
 	VehicleMovement->WheelSetups[3].BoneName = FName("WheelRR");
-	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector(0.f, 8.f, 0.f);
+	VehicleMovement->WheelSetups[3].AdditionalOffset = FVector::ZeroVector;
 
 	// === Chaos's OWN aerodynamics — turned OFF ===
 	//
@@ -574,38 +581,35 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// is a team number, and settings.json is where to change it.
 	const FFSDSVehicleSettings* MassVehicle = FFSDSSettings::Get().GetDefaultVehicle();
 	const float ConfiguredMass = MassVehicle ? MassVehicle->Physics.Mass : 275.f;
-	const float ConfiguredWheelbase = MassVehicle ? MassVehicle->Physics.Wheelbase : 1.627f;
-	const float ConfiguredWeightDistFront = MassVehicle ? MassVehicle->Physics.WeightDistFront : 0.438f;
-
 	VehicleMovement->Mass = ConfiguredMass;
 	VehicleMovement->InertiaTensorScale = FVector(1.0f, 1.4f, 1.1f);
 
-	// CoG offset along X, derived rather than hardcoded. Front axle load
-	// fraction Wf = b/L (b = CoG-to-rear-axle distance), so measured from the
-	// mesh centre at L/2 the CoG sits at L*(Wf - 0.5) — negative is rearward.
-	// At Wf=0.438, L=1.627 m that is -10.1 cm, which is what the old hardcoded
-	// -10.f cm meant; deriving it removes another duplicated constant and makes
-	// it track settings.json.
-	const float CoGOffsetXCm = ConfiguredWheelbase * (ConfiguredWeightDistFront - 0.5f) * 100.f;
-	VehicleMovement->CenterOfMassOverride = FVector(CoGOffsetXCm, 0.f, 0.f);
+	// The centre of mass is the body origin, and the wheels are placed around
+	// it (UFSDSWheeledVehicleMovementComponent::PlaceWheelsFromSettings): front
+	// axle Wheelbase*(1-WeightDistFront) ahead, rear axle Wheelbase*
+	// WeightDistFront behind. Two reasons it is the origin rather than an
+	// offset from it:
+	//
+	//   - It used to be Wheelbase*(WeightDistFront-0.5) from the origin, which
+	//     assumed the origin was midway between the axles. It is 19 cm ahead
+	//     of the bone midpoint, so the car carried about 57% of its weight on
+	//     the front instead of 43.8%.
+	//   - Chaos sizes each spring's preload as if the centre of mass were at
+	//     the origin (SetupSuspension -> ComputeSprungMasses takes no centre
+	//     of mass). Anywhere else and the car sits pitched at rest.
+	VehicleMovement->CenterOfMassOverride = FVector::ZeroVector;
 	VehicleMovement->bEnableCenterOfMassOverride = true;
 
-	// KNOWN GAP, not fixed here: only the X component of the CoG is overridden.
-	// CoG HEIGHT comes from whatever the physics asset computes, while
-	// settings.json declares CoGHeight = 0.3 m (NOT the 0.344 C++ default —
-	// the file overrides it) and ComputeTireLoadsParametric
-	// uses that number for longitudinal load transfer. That is the same
-	// two-models-disagree pattern as the 2.3x spring-rate divergence. Setting
-	// the Z component changes ride height and load transfer together, so it
-	// needs a validation lap and belongs with the plant work.
+	// KNOWN GAP, not fixed here: the override also pins the CoG HEIGHT to the
+	// origin's height, while settings.json declares CoGHeight = 0.3 m
+	// and ComputeTireLoadsParametric uses that number for load transfer.
+	// Setting Z changes ride height and load transfer together, so it needs a
+	// validation lap and belongs with the plant work.
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS: mass %.1f kg from settings.json (was a hardcoded 290 that ")
-		TEXT("settings could not override), CoG X offset %.1f cm derived from ")
-		TEXT("wheelbase %.3f m and front weight distribution %.1f%%. CoG HEIGHT is ")
-		TEXT("still whatever the physics asset computes, NOT the declared %.3f m."),
-		ConfiguredMass, CoGOffsetXCm, ConfiguredWheelbase,
-		ConfiguredWeightDistFront * 100.f,
-		MassVehicle ? MassVehicle->Physics.CoGHeight : 0.344f);
+		TEXT("FSDS: mass %.1f kg from settings.json; centre of mass at the body ")
+		TEXT("origin, wheels placed around it from Wheelbase and WeightDistFront. ")
+		TEXT("CoG HEIGHT is NOT the declared %.3f m."),
+		ConfiguredMass, MassVehicle ? MassVehicle->Physics.CoGHeight : 0.344f);
 
 	// Disable Chaos's vehicle-specific aggressive sleep. Chaos's
 	// ProcessSleeping() (ChaosVehicleMovementComponent.cpp:1252) puts

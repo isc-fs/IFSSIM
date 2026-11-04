@@ -117,4 +117,36 @@ public:
 	 * Making them visible is the prerequisite for choosing them.
 	 */
 	void LogInheritedWheelDefaults() const;
+
+	/**
+	 * Places the wheels from settings.json before Chaos builds the vehicle,
+	 * then checks where the solver actually put them.
+	 *
+	 * Chaos puts each wheel at its bone in the car mesh. The mesh's wheel
+	 * bones are 1.18 m apart, while the IFS-08 has a 1.627 m wheelbase, and
+	 * the controller, odometry and SLAM all assume the real car. So the
+	 * simulated car turned about 1.38x tighter than any model of it predicted.
+	 *
+	 * This runs on every rebuild, including the one ResetVehicleState does,
+	 * because the offsets are recomputed from the bones every time.
+	 */
+	virtual void OnCreatePhysicsState() override;
+
+private:
+	/**
+	 * Sets each wheel's AdditionalOffset in X and Y so the wheel sits where
+	 * settings.json puts it: front axle Wheelbase*(1-WeightDistFront) ahead of
+	 * the body origin, rear axle Wheelbase*WeightDistFront behind it, at
+	 * +-Track/2. That puts the centre of mass at the body origin, which is
+	 * also where Chaos assumes it is when it sizes the spring preloads
+	 * (SetupSuspension -> ComputeSprungMasses takes no centre of mass).
+	 * Height stays at the bone.
+	 */
+	void PlaceWheelsFromSettings();
+
+	/** Reads the wheel positions Chaos uses back and logs an Error if they are not where settings.json says. */
+	void VerifyWheelPlacement();
+
+	/** Offsets from the last placement, so a rebuild only logs when they change. */
+	TArray<FVector> LastPlacedOffsets;
 };
