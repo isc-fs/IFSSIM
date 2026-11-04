@@ -68,6 +68,31 @@ def test_emergency_latches_until_operator_off():
     assert next_as_state(AS_EMERGENCY, OFF, False, DV_IDLE, True) == AS_OFF
 
 
+def test_disarm_clears_emergency_while_pipeline_still_reports_it():
+    """The pipeline keeps /dv/status at DV_EMERGENCY while the AS is in
+    Emergency, so disarming must clear it regardless, as ASMS off does on the
+    car. Before, the two waited on each other and the next mission never
+    started (IFS09-DV-PIPELINE#32)."""
+    assert next_as_state(AS_EMERGENCY, OFF, False, DV_EMERGENCY, True) == AS_OFF
+    assert next_as_state(AS_EMERGENCY, OFF, True, DV_EMERGENCY, True) == AS_OFF
+
+
+def test_stale_pipeline_emergency_does_not_trip_a_disarmed_car():
+    """Once off, a DV_EMERGENCY the pipeline hasn't cleared yet must not
+    re-trip the car: it only counts while armed (firmware rule)."""
+    assert next_as_state(AS_OFF, OFF, False, DV_EMERGENCY, True) == AS_OFF
+    assert next_as_state(AS_OFF, READY, False, DV_EMERGENCY, True) == AS_READY
+
+
+def test_pipeline_emergency_trips_while_armed():
+    assert next_as_state(AS_READY, READY, False, DV_EMERGENCY, True) == AS_EMERGENCY
+    assert next_as_state(AS_READY, GO, False, DV_EMERGENCY, True) == AS_EMERGENCY
+
+
+def test_estop_trips_even_when_off_but_armed_intent():
+    assert next_as_state(AS_OFF, READY, True, DV_IDLE, True) == AS_EMERGENCY
+
+
 # --------------------------------------------------------------------
 # Off / arming
 # --------------------------------------------------------------------
