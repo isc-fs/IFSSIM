@@ -58,6 +58,42 @@ static void NotifyPlantsOfTeleport(AFSDSVehiclePawn* Pawn, const FVector& PosUe,
 	Pawn->ResetPlants(PosContract, QuatContract);
 }
 
+/**
+ * Escape a string for a JSON string literal (the replies are built with
+ * Printf). UE's ReplaceCharWithEscapedChar is not a JSON escape: it turns '
+ * into \', which no JSON parser accepts, and leaves other control characters
+ * bare. Here: \" and \\, the short forms for \b \f \n \r \t, and \u00XX for
+ * any other character below 0x20.
+ */
+static FString JsonEscape(const FString& In)
+{
+	FString Out;
+	Out.Reserve(In.Len() + 8);
+	for (const TCHAR C : In)
+	{
+		switch (C)
+		{
+		case TCHAR('"'):  Out += TEXT("\\\""); break;
+		case TCHAR('\\'): Out += TEXT("\\\\"); break;
+		case TCHAR('\b'): Out += TEXT("\\b"); break;
+		case TCHAR('\f'): Out += TEXT("\\f"); break;
+		case TCHAR('\n'): Out += TEXT("\\n"); break;
+		case TCHAR('\r'): Out += TEXT("\\r"); break;
+		case TCHAR('\t'): Out += TEXT("\\t"); break;
+		default:
+			if (static_cast<uint32>(C) < 0x20)
+			{
+				Out += FString::Printf(TEXT("\\u%04x"), static_cast<uint32>(C));
+			}
+			else
+			{
+				Out.AppendChar(C);
+			}
+		}
+	}
+	return Out;
+}
+
 
 namespace
 {
@@ -434,9 +470,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const FString P3 = FPaths::Combine(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM")), TEXT("settings.json"));
 		return FString::Printf(
 			TEXT("{\"launch\":\"%s\",\"launch_exists\":%s,\"project\":\"%s\",\"project_exists\":%s,\"user\":\"%s\",\"user_exists\":%s}"),
-			*P1, FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
-			*P2, FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
-			*P3, FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
+			*JsonEscape(P1), FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
+			*JsonEscape(P2), FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
+			*JsonEscape(P3), FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
 	}
 	else if (Method == TEXT("enableApiControl"))
 	{
@@ -741,7 +777,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			TEXT("\"wheelSteer\":[%.5f,%.5f,%.5f,%.5f],")
 			TEXT("\"inContact\":[%d,%d,%d,%d]}"),
 			S.bPlantOk ? TEXT("true") : TEXT("false"),
-			*VehiclePawn->GetPlantName(), S.PlantStatus,
+			*JsonEscape(VehiclePawn->GetPlantName()), S.PlantStatus,
 			S.Position[0], S.Position[1], S.Position[2],
 			S.Quat[0], S.Quat[1], S.Quat[2], S.Quat[3],
 			S.VelWorld[0], S.VelWorld[1], S.VelWorld[2],
@@ -753,6 +789,63 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			S.WheelSteer[0], S.WheelSteer[1], S.WheelSteer[2], S.WheelSteer[3],
 			S.bWheelInContact[0]?1:0, S.bWheelInContact[1]?1:0,
 			S.bWheelInContact[2]?1:0, S.bWheelInContact[3]?1:0);
+	}
+	else if (Method == TEXT("getMassProperties"))
+	{
+		// What the chassis body really has, as Chaos holds it: mass, centre of
+		// mass and the wheel positions, in the car's frame (x forward, y left,
+		// z up, metres). The front/rear split follows from where the CoM sits
+		// between the axles, which is what the configured mass and CoG are
+		// meant to produce, and what the wheel loads should agree with.
+		if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle pawn\"}");
+		const FString Timeout = TEXT("{\"ok\":false,\"error\":\"timeout\"}");
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle pawn\"}");
+			USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
+			UChaosWheeledVehicleMovementComponent* Move =
+				Cast<UChaosWheeledVehicleMovementComponent>(VehiclePawn->GetVehicleMovementComponent());
+			FBodyInstance* Body = Mesh ? Mesh->GetBodyInstance() : nullptr;
+			if (!Body || !Move) return TEXT("{\"ok\":false,\"error\":\"no chassis body\"}");
+
+			const FTransform Actor = VehiclePawn->GetActorTransform();
+			// UE is left-handed (y right), centimetres; flip y for the car frame.
+			auto ToCar = [&Actor](const FVector& World)
+			{
+				const FVector L = Actor.InverseTransformPosition(World);
+				return FVector(L.X * 0.01, -L.Y * 0.01, L.Z * 0.01);
+			};
+			const FVector Com = ToCar(Body->GetCOMPosition());
+
+			FString Wheels;
+			double FrontX = 0, RearX = 0; int NFront = 0, NRear = 0;
+			for (int32 i = 0; i < Move->WheelSetups.Num(); ++i)
+			{
+				const FName Bone = Move->WheelSetups[i].BoneName;
+				const FVector W = ToCar(Mesh->GetBoneLocation(Bone, EBoneSpaces::WorldSpace));
+				Wheels += FString::Printf(TEXT("%s{\"bone\":\"%s\",\"pos\":[%.4f,%.4f,%.4f]}"),
+					i ? TEXT(",") : TEXT(""), *JsonEscape(Bone.ToString()), W.X, W.Y, W.Z);
+				if (i < 2) { FrontX += W.X; ++NFront; } else { RearX += W.X; ++NRear; }
+			}
+			FrontX = NFront ? FrontX / NFront : 0; RearX = NRear ? RearX / NRear : 0;
+			const double Base = FrontX - RearX;
+			const double FrontShare = Base != 0 ? (Com.X - RearX) / Base : 0;
+
+			const FVector Nudge = Body->COMNudge * 0.01;
+			const FVector Override = Move->CenterOfMassOverride * 0.01;
+			return FString::Printf(
+				TEXT("{\"ok\":true,\"bodyMass\":%.2f,\"configuredMass\":%.2f,")
+				TEXT("\"com\":[%.4f,%.4f,%.4f],\"comOverride\":[%.4f,%.4f,%.4f],\"overrideOn\":%s,")
+				TEXT("\"comNudge\":[%.4f,%.4f,%.4f],\"inertia\":[%.3f,%.3f,%.3f],")
+				TEXT("\"frontShareFromCom\":%.4f,\"wheels\":[%s]}"),
+				Body->GetBodyMass(), Move->Mass,
+				Com.X, Com.Y, Com.Z, Override.X, -Override.Y, Override.Z,
+				Move->bEnableCenterOfMassOverride ? TEXT("true") : TEXT("false"),
+				Nudge.X, -Nudge.Y, Nudge.Z,
+				Body->GetBodyInertiaTensor().X * 1e-4, Body->GetBodyInertiaTensor().Y * 1e-4,
+				Body->GetBodyInertiaTensor().Z * 1e-4,
+				FrontShare, *Wheels);
+		}, 10.0, Timeout, TEXT("getMassProperties"));
 	}
 	else if (Method.StartsWith(TEXT("plantDrive")))
 	{
@@ -781,7 +874,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!Plant.Initialise())
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"init\",\"error\":\"%s\"}"),
-				*Plant.GetLastError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Plant.GetLastError()));
 		}
 
 		FFSDSPlantInput In;
@@ -808,7 +901,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			{
 				return FString::Printf(
 					TEXT("{\"ok\":false,\"stage\":\"step\",\"atStep\":%d,\"error\":\"%s\"}"),
-					i, *Plant.GetLastError().ReplaceCharWithEscapedChar());
+					i, *JsonEscape(Plant.GetLastError()));
 			}
 		}
 
@@ -821,7 +914,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			TEXT("\"fz\":[%.1f,%.1f,%.1f,%.1f],")
 			TEXT("\"slipRatio\":[%.5f,%.5f,%.5f,%.5f],")
 			TEXT("\"motorRpm\":%.2f,\"battSoc\":%.9f}"),
-			*Plant.GetName(), Steps, Seconds, Throttle, Steer,
+			*JsonEscape(Plant.GetName()), Steps, Seconds, Throttle, Steer,
 			Out.Position[0], Out.Position[1], Out.Position[2],
 			Out.VelBody[0], Out.VelBody[1], Out.OmegaBody[2],
 			Out.WheelOmega[0], Out.WheelOmega[1], Out.WheelOmega[2], Out.WheelOmega[3],
@@ -859,7 +952,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!Package.Open(FmuPath))
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"open\",\"error\":\"%s\"}"),
-				*Package.GetError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Package.GetError()));
 		}
 
 		const FString Lib = Package.GetBinaryPathForHost();
@@ -872,7 +965,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!Fmu.Load(Lib))
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"load\",\"error\":\"%s\"}"),
-				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Fmu.GetLastError()));
 		}
 
 		const FString ResourcePath = FPaths::Combine(Package.GetExtractedDir(), TEXT("resources"));
@@ -880,14 +973,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		                     Package.GetInfo().InstantiationToken, ResourcePath))
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"instantiate\",\"error\":\"%s\"}"),
-				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Fmu.GetLastError()));
 		}
 
 		const double H = 1.0 / 60.0;   // the platform communication step
 		if (!Fmu.EnterInitializationMode(0.0, 10.0) || !Fmu.ExitInitializationMode())
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"init\",\"error\":\"%s\"}"),
-				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Fmu.GetLastError()));
 		}
 
 		double T = 0.0;
@@ -895,7 +988,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!Fmu.DoStep(T, H))
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"stage\":\"step\",\"error\":\"%s\"}"),
-				*Fmu.GetLastError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Fmu.GetLastError()));
 		}
 		T += H;
 		double YAfterFirst = 0.0;
@@ -955,11 +1048,11 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			TEXT("\"stepSize\":%.9g,\"yAfterFirstStep\":%.17g,")
 			TEXT("\"yRunA\":%.17g,\"yRunB\":%.17g,\"stateRoundTrip\":%s,\"stateNote\":\"%s\"}"),
 			bOk ? TEXT("true") : TEXT("false"),
-			*Fmu.GetVersion(),
-			*FPaths::GetCleanFilename(Lib),
+			*JsonEscape(Fmu.GetVersion()),
+			*JsonEscape(FPaths::GetCleanFilename(Lib)),
 			H, YAfterFirst, YRunA, YRunB,
 			bStateMatched ? TEXT("true") : TEXT("false"),
-			*StateNote);
+			*JsonEscape(StateNote));
 	}
 	else if (Method.StartsWith(TEXT("inspectFmu")))
 	{
@@ -998,7 +1091,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (!Package.Open(FmuPath))
 		{
 			return FString::Printf(TEXT("{\"ok\":false,\"error\":\"%s\"}"),
-				*Package.GetError().ReplaceCharWithEscapedChar());
+				*JsonEscape(Package.GetError()));
 		}
 
 		// The platform's communication step. Fixed 60 Hz — see
@@ -1013,9 +1106,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (!GatesJson.IsEmpty()) GatesJson += TEXT(",");
 			GatesJson += FString::Printf(
 				TEXT("{\"name\":\"%s\",\"passed\":%s,\"required\":%s,\"detail\":\"%s\"}"),
-				*G.Name, G.bPassed ? TEXT("true") : TEXT("false"),
+				*JsonEscape(G.Name), G.bPassed ? TEXT("true") : TEXT("false"),
 				G.bRequired ? TEXT("true") : TEXT("false"),
-				*G.Detail.ReplaceCharWithEscapedChar());
+				*JsonEscape(G.Detail));
+		}
+
+		FString BinariesJson;
+		for (const FString& B : I.BinaryPlatforms)
+		{
+			BinariesJson += FString::Printf(TEXT("%s\"%s\""),
+				BinariesJson.IsEmpty() ? TEXT("") : TEXT(","), *JsonEscape(B));
 		}
 
 		return FString::Printf(
@@ -1028,12 +1128,13 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			bPassed ? TEXT("true") : TEXT("false"),
 			I.Version == EFSDSFmiVersion::FMI3 ? TEXT("3.0")
 				: I.Version == EFSDSFmiVersion::FMI2 ? TEXT("2.0") : TEXT("unknown"),
-			*I.ModelName, *I.ModelIdentifier, *I.GenerationTool, *I.InstantiationToken,
-			*I.StateAttributeFound,
+			*JsonEscape(I.ModelName), *JsonEscape(I.ModelIdentifier),
+			*JsonEscape(I.GenerationTool), *JsonEscape(I.InstantiationToken),
+			*JsonEscape(I.StateAttributeFound),
 			I.bCanGetAndSetState ? TEXT("true") : TEXT("false"),
 			I.FixedInternalStepSize,
-			*FString::Printf(TEXT("\"%s\""), *FString::Join(I.BinaryPlatforms, TEXT("\",\""))),
-			*Package.GetBinaryPathForHost().ReplaceCharWithEscapedChar(),
+			*BinariesJson,
+			*JsonEscape(Package.GetBinaryPathForHost()),
 			I.bHasSourceCode ? TEXT("true") : TEXT("false"),
 			I.bHasResources ? TEXT("true") : TEXT("false"),
 			I.NumInputs, I.NumOutputs, I.NumParameters, *GatesJson);
@@ -1103,7 +1204,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// IFS-08 has no cameras and the autonomy never consumed any
 		// /camera/* topics). Return an explicit not-implemented so any
 		// stale client surfaces the change instead of silently failing.
-		return FString::Printf(TEXT("{\"error\":\"cameras removed; method not implemented: %s\"}"), *Method);
+		return FString::Printf(TEXT("{\"error\":\"cameras removed; method not implemented: %s\"}"), *JsonEscape(Method));
 	}
 	else if (Method == TEXT("listCameras"))
 	{
@@ -1143,7 +1244,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			}
 		}
 
-		if (!bFound) return FString::Printf(TEXT("{\"error\":\"no sensor named %s\"}"), *Name);
+		if (!bFound) return FString::Printf(TEXT("{\"error\":\"no sensor named %s\"}"), *JsonEscape(Name));
 
 		// UE (X=fwd, Y=right, Z=up, cm) → ROS body (X=fwd, Y=left, Z=up, m)
 		const float X = UeOffsetCm.X / 100.f;
@@ -1280,7 +1381,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						if (Filter == TEXT("*") || ActorName.Contains(Filter))
 						{
 							if (!bFirst) Result += TEXT(",");
-							Result += FString::Printf(TEXT("\"%s\""), *ActorName);
+							Result += FString::Printf(TEXT("\"%s\""), *JsonEscape(ActorName));
 							bFirst = false;
 						}
 					}
@@ -1597,7 +1698,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 							TEXT("\"trueZ\":%.4f,\"gotZ\":%.4f,")
 							TEXT("\"trueN\":[%.3f,%.3f,%.3f],\"gotN\":[%.3f,%.3f,%.3f]}"),
 							Detail.IsEmpty() ? TEXT("") : TEXT(","),
-							*P.Name, X, Y, TrueZ, GotZ,
+							*JsonEscape(P.Name), X, Y, TrueZ, GotZ,
 							P.Normal[0], P.Normal[1], P.Normal[2],
 							GotN[0], GotN[1], GotN[2]);
 					}
@@ -1629,7 +1730,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				TEXT("\"centres\":[%s]}"),
 				bOk ? TEXT("true") : TEXT("false"),
 				Checked, Missed, BadHeight, BadNormal,
-				WorstHeight, WorstNormal, *WorstWhere,
+				WorstHeight, WorstNormal, *JsonEscape(WorstWhere),
 				BadResidual, WorstPlanarRes,
 				bSeamOk ? TEXT("true") : TEXT("false"), SeamRes, *Detail);
 		}, 20.0, FString(TEXT("{\"ok\":false,\"error\":\"game-thread timeout\"}")),
@@ -1686,7 +1787,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		Method == TEXT("simPlotStrings") || Method == TEXT("simPlotTransforms") ||
 		Method == TEXT("simPlotTransformsWithNames") || Method == TEXT("simFlushPersistentMarkers"))
 	{
-		return FString::Printf(TEXT("{\"error\":\"method not implemented: %s\"}"), *Method);
+		return FString::Printf(TEXT("{\"error\":\"method not implemented: %s\"}"), *JsonEscape(Method));
 	}
 
 	// === Segmentation — not implemented ===
@@ -1697,7 +1798,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		Method == TEXT("simGetSegmentationObjectID") ||
 		Method == TEXT("simSwapTextures"))
 	{
-		return FString::Printf(TEXT("{\"error\":\"method not implemented: %s\"}"), *Method);
+		return FString::Printf(TEXT("{\"error\":\"method not implemented: %s\"}"), *JsonEscape(Method));
 	}
 
 	// === Cone diagnostic: report which cone meshes loaded successfully (game thread) ===
@@ -1856,7 +1957,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		if (UdpBroadcaster)
 		{
 			UdpBroadcaster->SetTargetIP(TargetIP);
-			return FString::Printf(TEXT("{\"registered\":\"%s\"}"), *TargetIP);
+			return FString::Printf(TEXT("{\"registered\":\"%s\"}"), *JsonEscape(TargetIP));
 		}
 		return TEXT("{\"error\":\"no UDP broadcaster\"}");
 	}
@@ -1880,7 +1981,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		else if (EventName == TEXT("skidpad")) EventType = EFSDSEventType::Skidpad;
 		else if (EventName == TEXT("autocross")) EventType = EFSDSEventType::Autocross;
 		else if (EventName == TEXT("trackdrive")) EventType = EFSDSEventType::Trackdrive;
-		else return FString::Printf(TEXT("{\"error\":\"unknown event: %s\"}"), *EventName);
+		else return FString::Printf(TEXT("{\"error\":\"unknown event: %s\"}"), *JsonEscape(EventName));
 
 		AsyncTask(ENamedThreads::GameThread, [this, EventType, NumLaps]() {
 			if (Referee) Referee->SetEventType(EventType, NumLaps);
@@ -1907,7 +2008,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// sim running slower than real time doesn't fail runs it finishes.
 		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
 		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f}"),
-			*MapName, FPS,
+			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
 			SimTime);
@@ -2505,8 +2606,8 @@ FString FFSDSRpcServer::LoadTrackOnGameThread(const FString& TrackPath)
 	// the details, including why a sidecar was invalid).
 	return FString::Printf(
 		TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
-		*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"),
-		*Spawner->GetEnvironmentStatus());
+		*JsonEscape(TrackPath), NumCones, bAligned ? TEXT("true") : TEXT("false"),
+		*JsonEscape(Spawner->GetEnvironmentStatus()));
 }
 
 FString FFSDSRpcServer::ResetScenarioOnGameThread(bool bHasSeed, int32 NewSeed, bool bAtTickStart)

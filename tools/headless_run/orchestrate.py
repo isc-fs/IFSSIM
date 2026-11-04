@@ -57,6 +57,14 @@ class RunConfig:
     sim_ready_timeout_s: float = 900.0         # first boot compiles shaders
     mc_timeout_s: float = 180.0
     max_run_s: float = 0.0                     # 0: no cap beyond the benchmark's own timeouts
+    # No mission starts until the sim keeps real time. For ~30 s after boot UE compiles its PSO
+    # cache on every core and the sim runs at 0.7-0.9x; a car driven then starts to oscillate and
+    # leaves the track (the same happens to a slowed-down sim at any age). Until 2026-11 the
+    # stack's ~36 s colcon rebuild hid this. Waits until sim_time advanced at >= settle_rtf of the
+    # wall clock over settle_window_s, at most settle_s (then goes ahead, noted in the record).
+    settle_s: float = 120.0                    # 0: don't wait
+    settle_rtf: float = 0.98
+    settle_window_s: float = 5.0
     benchmark_cmd: List[str] = field(default_factory=lambda: [sys.executable, str(BENCHMARK)])
     poll_s: float = 2.0
 
@@ -103,6 +111,33 @@ def wait_backend_sees_sim(cfg: RunConfig, should_stop: Callable[[], bool]) -> fl
         time.sleep(2.0)
     raise SimError(f"Mission Control at {cfg.mc_url} didn't see the sim within {cfg.mc_timeout_s:.0f} s "
                    "(is the backend up? --mc-up starts it)")
+
+
+def wait_real_time(cfg: RunConfig, should_stop: Callable[[], bool]) -> Dict:
+    """Waits until the sim's clock keeps up with the wall clock (see RunConfig.settle_s).
+    Returns settle_s (the wait), settle_rtf (the last rate measured) and settle_timeout."""
+    t0 = time.monotonic()
+    samples: List = []  # (wall, sim_time)
+    rtf = 0.0
+    while True:
+        if should_stop():
+            raise KeyboardInterrupt
+        now = time.monotonic()
+        try:
+            st = json.loads(rpc(cfg.host, "getSimStatus", port=cfg.port) or "{}")
+            samples.append((now, float(st["sim_time"])))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        old = [s for s in samples if samples[-1][0] - s[0] >= cfg.settle_window_s]
+        if old:
+            (w0, s0), (w1, s1) = old[-1], samples[-1]
+            rtf = (s1 - s0) / (w1 - w0)
+            if s1 > 1.0 and rtf >= cfg.settle_rtf:
+                return {"settle_s": round(now - t0, 1), "settle_rtf": round(rtf, 3)}
+        if now - t0 >= cfg.settle_s:
+            return {"settle_s": round(now - t0, 1), "settle_rtf": round(rtf, 3),
+                    "settle_timeout": True}
+        time.sleep(min(cfg.poll_s, 0.5))
 
 
 def _manifests_since(root: Path, since: float) -> set:
@@ -183,6 +218,12 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         except (SimError, subprocess.CalledProcessError, FileNotFoundError) as e:
             rec["outcome"], rec["error"] = "backend_unreachable", str(e)
             return rec
+
+        if not sim.attached and cfg.settle_s > 0:
+            log(f"[{label or 'run'}] waiting for the sim to keep real time")
+            rec.update(wait_real_time(cfg, should_stop))
+            log(f"[{label or 'run'}] sim at {rec['settle_rtf']:.2f}x real time after "
+                f"{rec['settle_s']:.0f} s" + (" (gave up waiting)" if rec.get("settle_timeout") else ""))
 
         argv = cfg.benchmark_cmd + [
             "--sim", f"{cfg.host}:{cfg.port}", "--mc-url", cfg.mc_url,

@@ -276,6 +276,13 @@ public:
 	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
 	bool bMenuEnabled = true;
 
+	// --- HUD (in-game overlay of the car's state) ----------------------
+	//
+	// "HUD": { "Enabled", "Key" }. Shown at start when Enabled; the key
+	// (H by default) shows and hides it. See UI/FSDSHud.h.
+	bool bHudEnabled = true;
+	FString HudKey = TEXT("H");
+
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;
 
