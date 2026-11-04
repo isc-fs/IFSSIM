@@ -33,6 +33,22 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **The sim shows how close to real time it runs.** Every frame is a fixed
+  1/60 s of simulation, so a PC that can't draw 60 frames a second slows the
+  simulation down, and the pipeline, which computes in real time, gets more
+  time per simulated second than on the car. The HUD has a "Real time" line:
+  simulated seconds per real second over the last two seconds, and the frame
+  rate, orange below 0.95 and red below 0.8. `getSimStatus` reports it
+  (`real_time_factor`, `real_fps`), and each mission benchmark run records
+  `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
+  results don't hold).
+- **The menu costs less in the background.** While the menu is up and nothing
+  drives, the sim draws 30 frames a second (Settings, Performance: 60, 30 or
+  15, kept between launches), and 5 while its window is minimised. On the main
+  menu the sim took about 16% of a 12-thread CPU and half a GTX 1660 SUPER,
+  minimised or not. Runs always go at full rate, and so does an autonomous
+  session with the menu up over it.
+
 - **Parking lot A is fenced in, and its tracks get clutter of their own.** Tyre
   walls line the long edges of the lot (bins and bollards in their gaps) and a
   new `fence` class, a steel crowd barrier, the short ones. The south sidewalk,

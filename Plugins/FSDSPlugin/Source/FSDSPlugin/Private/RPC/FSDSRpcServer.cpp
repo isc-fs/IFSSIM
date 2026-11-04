@@ -1,4 +1,5 @@
 #include "RPC/FSDSRpcServer.h"
+#include "FSDSRealTime.h"
 #include "FMI/FSDSFmuPackage.h"
 #include "FMI/FSDSFmi3.h"
 #include "Plant/FSDSFmuPlant.h"
@@ -2097,12 +2098,16 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// sim running slower than real time doesn't fail runs it finishes.
 		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
 		// quality: the rendering preset (docs/rendering_presets.md); a
-		// benchmark should refuse "showcase".
-		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,\"quality\":\"%s\"}"),
+		// benchmark should refuse "showcase". real_time_factor: simulated
+		// seconds per real second over the last couple of seconds
+		// (FFSDSRealTime), 0 while unknown (paused).
+		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,"
+			"\"quality\":\"%s\",\"real_time_factor\":%.3f,\"real_fps\":%.1f}"),
 			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
-			SimTime, FSDSQuality::Name(FSDSQuality::Current()));
+			SimTime, FSDSQuality::Name(FSDSQuality::Current()), Rt.Factor(), Rt.Fps());
 	}
 
 	// === Version ===

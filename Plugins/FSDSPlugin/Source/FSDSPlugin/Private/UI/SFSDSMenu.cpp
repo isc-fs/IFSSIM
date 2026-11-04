@@ -593,6 +593,42 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Controls", "CONTROLS")) ]
 		+ SVerticalBox::Slot().AutoHeight() [ Keys ]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Performance", "PERFORMANCE")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("MenuFps", "Menu frame rate"))
+					.Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("Fps60", "60"), []() { return FFSDSMenu::GetMenuFrameRate() == 60; }, []() { FFSDSMenu::SetMenuFrameRate(60); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("Fps30", "30"), []() { return FFSDSMenu::GetMenuFrameRate() == 30; }, []() { FFSDSMenu::SetMenuFrameRate(30); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("Fps15", "15"), []() { return FFSDSMenu::GetMenuFrameRate() == 15; }, []() { FFSDSMenu::SetMenuFrameRate(15); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("MenuFpsHint",
+				"While this menu is up and nothing drives, the sim draws this many frames a second "
+				"({0} when its window is minimised), so it costs less in the background. A run always "
+				"goes at the sim's full rate: every frame is a fixed physics step, so fewer frames would "
+				"slow the simulation down and give the pipeline more time than on the car. The HUD's "
+				"\"Real time\" line shows how close a run is to real time."), FText::AsNumber(FFSDSMenu::MinimisedFrameRate)))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Config", "CONFIGURATION")) ]
 		+ SVerticalBox::Slot().AutoHeight()
 		[

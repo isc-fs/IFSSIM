@@ -97,6 +97,11 @@ MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 # finish. This many times timeout_s of real time still ends the run, in case the sim
 # stalls and its clock stops.
 WALL_BACKSTOP = 6.0
+# A run's real-time factor (sim seconds per real second) below this marks its
+# timing results as not holding: every frame is a fixed 1/60 s of sim time, so a
+# slower sim gives the pipeline more time per sim second than it has on the car.
+# The sim's HUD shows the same threshold (FFSDSRealTime::GoodFactor).
+REAL_TIME_OK = 0.95
 
 
 class BenchmarkError(Exception):
@@ -891,6 +896,10 @@ def race_metrics(res: RunResult) -> dict[str, float]:
     }
     if res.sim_seconds is not None:
         out["race/run_sim_time_s"] = res.sim_seconds
+        if res.seconds > 0:
+            factor = res.sim_seconds / res.seconds
+            out["race/real_time_factor"] = round(factor, 3)
+            out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK else 0
     if laps:
         out |= {
             "race/lap_time_best_s": min(laps),
