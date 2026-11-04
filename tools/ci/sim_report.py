@@ -322,7 +322,7 @@ def how(f: dict) -> str:
     bits = [f["kind"]]
     if f.get("speed") is not None and f["kind"] == "left the track":
         bits.append(f"at {f['speed']:.1f} m/s")
-    if f.get("t_s") is not None:
+    if f.get("t_s") is not None and f["kind"] != "never moved":
         bits.append(f"after {f['t_s']:.0f} s")
     if f.get("dnf"):
         bits.append(f"({f['dnf']})")

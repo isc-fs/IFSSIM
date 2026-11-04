@@ -137,7 +137,8 @@ def locate(cones: list[dict], tel: list[dict]) -> dict | None:
     if found is None:
         p = last_moving
         s, d, half, _ = tr.project(p["x"], p["y"])
-        found, kind = (p, s, d, half, last_moving_travelled), "stopped"
+        moved = any(q.get("speed", 0.0) > 0.3 for q in pts)
+        found, kind = (p, s, d, half, last_moving_travelled), "stopped" if moved else "never moved"
 
     p, s, d, half, travelled = found
     # The corner the car was in or about to take: the tightest point from a

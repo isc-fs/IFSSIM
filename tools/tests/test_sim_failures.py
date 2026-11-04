@@ -67,6 +67,11 @@ class Locate(unittest.TestCase):
         self.assertEqual(f["kind"], "stopped")
         self.assertAlmostEqual(f["progress_m"], 25.0, delta=1.0)
 
+    def test_a_car_that_never_moved(self):
+        tel = [dict(p, speed=0.0, t=float(k)) for k, p in enumerate(drive(0.0) * 10)]
+        f = sim_failures.locate(circle_cones(), tel)
+        self.assertEqual((f["kind"], f["progress_m"]), ("never moved", 0.0))
+
     def test_nothing_to_go_on(self):
         self.assertIsNone(sim_failures.locate([], drive(10)))
         self.assertIsNone(sim_failures.locate(circle_cones(), []))
