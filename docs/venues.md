@@ -61,11 +61,12 @@ Why the collisions are what they are:
 
 `Content/tracks/venues/parking_a.venue.json`:
 - **The lot:** 80 × 54 m of open asphalt.
-- **North and south edges:** a line of tyre walls along the lot with 0.6 m gaps, bins and bollards in some of them; behind it a 20 cm sidewalk, lamp posts every 18 m, a line of trees, and benches.
+- **North edge:** a line of tyre walls along the lot with 0.6 m gaps, bins and bollards in some of them; behind it a 20 cm sidewalk, lamp posts every 18 m, a line of trees, and a bench.
+- **South edge:** the 20 cm sidewalk right at the lot's edge, in the open, with bins and bollards on its front edge, then a line of crowd barriers along its back, lamp posts, trees and benches. The car sees the kerb and the raised pavement beside the lot, a second horizontal plane for the ground fit (RANSAC) to tell from the floor; a car that leaves the lot crosses the sidewalk (LiDAR-only) and stops at the barriers.
 - **West edge:** a line of crowd barriers, and a column of 17 parked cars behind it.
 - **East edge:** a line of crowd barriers, and five earth banks behind it.
 
-That makes 241 props, plus each track's own clutter: 13 more around `parking_a__loop`, a 206 m loop with 100 cones.
+That makes 250 props, plus each track's own clutter: 13 more around `parking_a__loop`, a 206 m loop with 100 cones.
 
 ## What is next
 
