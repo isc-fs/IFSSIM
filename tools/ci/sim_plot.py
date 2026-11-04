@@ -28,6 +28,7 @@ CONE = {0: ("#e3b505", 18), 1: ("#2563c9", 18), 2: ("#f07f13", 34), 3: ("#f07f13
 # One colour per run, kept clear of the cone colours.
 RUNS = ["#7b2cbf", "#0f9d76", "#d6336c", "#5c677d", "#8f5b1e"]
 INK, MUTED, GRID = "#1f2328", "#59636e", "#e6e8eb"
+FAIL = "#c92a2a"
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -142,6 +143,14 @@ def plot_group(group: dict, runs: list[dict], run_dir: Path, out: Path) -> None:
         if ahead is not None:
             ax.annotate("", xy=ahead, xytext=pts[0], zorder=5,
                         arrowprops={"arrowstyle": "-|>", "color": color, "lw": 1.6, "mutation_scale": 12})
+        # Where it went wrong (sim_failures.py), for a run that didn't finish.
+        f = r.get("failure")
+        if f and "x" in f:
+            fx, fy = xy(f["x"], f["y"])
+            ax.scatter(fx, fy, s=150, facecolors="none", edgecolors=FAIL, linewidths=2.2, zorder=6)
+            ax.annotate(f"{f['kind']} · {f['progress_m']:.0f} m", (fx, fy), xytext=(10, -14),
+                        textcoords="offset points", fontsize=8, fontweight="bold", color=FAIL, zorder=6,
+                        bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": FAIL, "lw": 0.8})
         ts = [p["t"] - tel[0]["t"] for p in tel if "speed" in p]
         vs = [p["speed"] for p in tel if "speed" in p]
         sp.plot(ts, vs, color=color, lw=2, label=label)

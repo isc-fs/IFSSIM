@@ -13,6 +13,8 @@
 #   IFSSIM_SIM     the box's container wrapper for it (default /usr/local/bin/ifssim-sim)
 #   RESULTS        results root (default tools/sim_benchmark/results/ci)
 #   REPEATS        acceleration runs (default: sim_check.json's)
+#   RANDOM_SEEDS   comma-separated seeds for the random tracks, to drive given
+#                  ones again (default: new ones from GITHUB_RUN_ID)
 #   REPORT         where the report and maps go (default $RESULTS/report)
 #   BASELINE       the last dev run's report.json, to compare with
 #                  (default /build/ifssim-ci/baseline/report.json)
@@ -93,14 +95,48 @@ if ! python3 -m headless_run check --sim "$SIM" --settings-dir "$ROOT"; then
   exit 3
 fi
 
-# The missions and their overrides; REPEATS (the workflow's input) changes acceleration's.
+# Random tracks (tools/ci/gen_tracks.py), one per seed, written into this
+# checkout's Content/tracks, where the sim reads tracks from. The generator and
+# its dependencies are in the Mission Control image (built by the workflow).
+rm -f "$ROOT"/Content/tracks/ci_rand_*.csv
+rand_count="$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("random_tracks") or {}).get("count", 0))' \
+  "$ROOT/tools/ci/sim_check.json")"
+seeds="${RANDOM_SEEDS:-}"
+if [ -n "$seeds" ] && ! [[ "$seeds" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "::error::RANDOM_SEEDS must be comma-separated numbers, got '$seeds'"
+  exit 3
+fi
+if [ -z "$seeds" ] && [ "$rand_count" -gt 0 ]; then
+  # 20 apart: a seed whose track is unusable is replaced by the next one up.
+  base=$(( (${GITHUB_RUN_ID:-$(date +%s)} % 100000) * 100 ))
+  seeds="$(seq -s, "$base" 20 $(( base + 20 * (rand_count - 1) )))"
+fi
+random_tracks=""
+if [ -n "$seeds" ]; then
+  echo "random track seeds: $seeds"
+  if out="$(cd "$ROOT" && docker compose run --rm --no-deps -T --user "$(id -u):$(id -g)" \
+      -e MPLCONFIGDIR=/tmp -v "$ROOT/tools/ci:/ci:ro" --entrypoint python3 \
+      mission_control_backend /ci/gen_tracks.py --gen /track_gen --out /tracks --seeds "$seeds")"; then
+    random_tracks="$(printf '%s\n' "$out" | tail -n1)"
+  else
+    echo "::warning::the random tracks weren't generated; autocross runs on its fixed track only"
+  fi
+fi
+echo "random tracks: ${random_tracks:-none}"
+
+# The missions and their overrides; REPEATS (the workflow's input) changes
+# acceleration's, and the random tracks join their mission's tracks.
 overrides="$RESULTS/mission_overrides.json"
-missions="$(python3 - "$ROOT/tools/ci/sim_check.json" "$overrides" "${REPEATS:-}" <<'PY'
+missions="$(python3 - "$ROOT/tools/ci/sim_check.json" "$overrides" "${REPEATS:-}" "$random_tracks" <<'PY'
 import json, sys
 cfg = json.load(open(sys.argv[1]))
 over = cfg.get("overrides", {})
 if sys.argv[3]:
     over.setdefault("acceleration", {})["repeats"] = int(sys.argv[3])
+extra = [t for t in sys.argv[4].split(",") if t]
+if extra:
+    m = over.setdefault((cfg.get("random_tracks") or {}).get("mission", "autocross"), {})
+    m["tracks"] = list(m.get("tracks", [])) + extra
 json.dump(over, open(sys.argv[2], "w"))
 print(",".join(cfg["required"] + cfg.get("informational", [])))
 PY
