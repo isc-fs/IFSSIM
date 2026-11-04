@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from sim_client import SimConnection
-from scoring import compute_scoring
+from scoring import compute_scoring, valid_reference
 
 # #465 — bag-record helpers. Pure-Python, no FastAPI coupling, so the
 # test suite can drive subprocess calls with mocks. See bag_recorder.py
@@ -1544,6 +1544,9 @@ def scoring_summary(
     t_best: Optional[float] = Query(None),
     uss: bool = Query(False),
 ):
+    if t_best is not None and not valid_reference(t_best):
+        raise HTTPException(status_code=422, detail="t_best must be a number greater than 0")
+
     ref = sim.get_referee_state()
     if not ref:
         return {"error": "No referee data"}
