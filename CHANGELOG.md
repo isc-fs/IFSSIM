@@ -265,6 +265,10 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Generated tracks are centred at write time** (Mission Control and the
+  standalone track manager), so the CSV on disk and its preview already fit
+  the sim floor; the load-time recentre stays as a safety net. Salvaged from
+  #614.
 - **The car could not turn tighter than ~11 m.** Chaos reads a wheel's
   lateral slip graph as a force (it scales the curve by 10000), but the
   Pacejka bake writes a friction coefficient, so every tyre topped out at

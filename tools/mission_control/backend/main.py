@@ -1525,6 +1525,17 @@ def track_generate(params: TrackGenerate):
             except Exception:
                 pass
 
+            # The generator pins the start gate at (0, 0), so the loop
+            # sprawls off to one side and large tracks overrun the sim's
+            # origin-centred floor. Recentre now so the CSV on disk and its
+            # preview are already correct (load-time pass stays as a net).
+            try:
+                from track_centering import ensure_centered
+                ensure_centered(dest)
+            except Exception as e:
+                _state_logger.warning(
+                    "track centering skipped for %s: %s", name_base, e)
+
             cones = parse_track_csv(dest)
             total = sum(len(v) for v in cones.values())
             log_event("track_generate", f"Generated {name_base}.csv ({total} cones)")
