@@ -265,6 +265,13 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **RPC replies with an apostrophe or a control character in a string were
+  not valid JSON.** The replies are built by hand, and strings were escaped
+  with UE's `ReplaceCharWithEscapedChar`, which writes `'` as `\'` (no JSON
+  parser accepts it), or not escaped at all: track and plant names, FMU
+  metadata, error text, and request words echoed back in errors. A
+  `JsonEscape` helper now escapes every string that goes into a reply.
+
 - **The car could not turn tighter than ~11 m.** Chaos reads a wheel's
   lateral slip graph as a force (it scales the curve by 10000), but the
   Pacejka bake writes a friction coefficient, so every tyre topped out at
