@@ -4,6 +4,7 @@
 #include "VehicleUtility.h"   // Chaos::MToCm
 #include "PhysicsProxy/SingleParticlePhysicsProxy.h"
 #include "Physics/PhysicsInterfaceCore.h"
+#include "FSDSSettings.h"
 
 // Field-by-field notes on what the engine's public setters reach, verified in
 // ChaosWheeledVehicleMovementComponent.cpp (UE 5.7):
@@ -256,4 +257,108 @@ void UFSDSWheeledVehicleMovementComponent::LogInheritedWheelDefaults() const
 		TEXT("EBS is modelled as instant lock-up. Needs a real IFS-08 number ")
 		TEXT("before any stopping-distance claim. See docs/fmu_plant_migration.md."));
 	UE_LOG(LogTemp, Warning, TEXT("FSDS: ---- end unchosen wheel parameters ----"));
+}
+
+// ---------------------------------------------------------------------------
+// Wheel placement
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	// Where settings.json puts each wheel, in the root body's frame (cm, UE
+	// axes: +X forward, +Y right). Order matches WheelSetups: FL, FR, RL, RR.
+	// The centre of mass is the origin, so the front axle sits a = L*(1-Wf)
+	// ahead of it and the rear axle b = L*Wf behind it (Wf = b/L).
+	bool TargetWheelXY(int32 WheelIndex, FVector2D& Out)
+	{
+		const FFSDSVehicleSettings* V = FFSDSSettings::Get().GetDefaultVehicle();
+		if (!V || WheelIndex < 0 || WheelIndex > 3) return false;
+		const FFSDSVehiclePhysics& P = V->Physics;
+		if (P.Wheelbase <= 0.f || P.WeightDistFront <= 0.f || P.WeightDistFront >= 1.f
+			|| P.TrackFront <= 0.f || P.TrackRear <= 0.f)
+		{
+			return false;
+		}
+		const bool bFront = WheelIndex < 2;
+		const bool bLeft = (WheelIndex % 2) == 0;
+		const double X = bFront ? P.Wheelbase * (1.0 - P.WeightDistFront) * 100.0
+		                        : -P.Wheelbase * P.WeightDistFront * 100.0;
+		const double HalfTrack = (bFront ? P.TrackFront : P.TrackRear) * 50.0;
+		Out = FVector2D(X, bLeft ? -HalfTrack : HalfTrack);
+		return true;
+	}
+}
+
+void UFSDSWheeledVehicleMovementComponent::OnCreatePhysicsState()
+{
+	PlaceWheelsFromSettings();
+	Super::OnCreatePhysicsState();
+	VerifyWheelPlacement();
+}
+
+void UFSDSWheeledVehicleMovementComponent::PlaceWheelsFromSettings()
+{
+	TArray<FVector> Offsets;
+	FString Report;
+	for (int32 i = 0; i < WheelSetups.Num(); i++)
+	{
+		FChaosWheelSetup& Setup = WheelSetups[i];
+		const UChaosVehicleWheel* Cdo = Setup.WheelClass ? Setup.WheelClass.GetDefaultObject() : nullptr;
+		FVector2D Target;
+		if (!Cdo || Setup.BoneName == NAME_None || !TargetWheelXY(i, Target))
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("FSDS: wheel %d not placed from settings.json (no wheel class, bone or ")
+				TEXT("valid Wheelbase/WeightDistFront/Track); it stays at its bone"), i);
+			Offsets.Add(Setup.AdditionalOffset);
+			continue;
+		}
+
+		// Same lookup Chaos does in GetWheelRestingPosition, without our offset.
+		const FVector AtBone = LocateBoneOffset(Setup.BoneName, Cdo->Offset);
+		Setup.AdditionalOffset.X = Target.X - AtBone.X;
+		Setup.AdditionalOffset.Y = Target.Y - AtBone.Y;
+		Offsets.Add(Setup.AdditionalOffset);
+		Report += FString::Printf(TEXT("  %s bone (%.1f, %.1f) -> (%.1f, %.1f)"),
+			*Setup.BoneName.ToString(), AtBone.X, AtBone.Y, Target.X, Target.Y);
+	}
+
+	if (Offsets != LastPlacedOffsets)
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: wheels placed from settings.json, cm in the body frame:%s"), *Report);
+		LastPlacedOffsets = MoveTemp(Offsets);
+	}
+}
+
+void UFSDSWheeledVehicleMovementComponent::VerifyWheelPlacement()
+{
+	if (WheelSetups.Num() < 4) return;
+
+	bool bOk = true;
+	FString Report;
+	FVector Rest[4];
+	for (int32 i = 0; i < 4; i++)
+	{
+		Rest[i] = GetWheelRestingPosition(WheelSetups[i]);
+		FVector2D Target;
+		if (!TargetWheelXY(i, Target)) return;   // already reported by PlaceWheelsFromSettings
+		const double Err = FVector2D::Distance(FVector2D(Rest[i].X, Rest[i].Y), Target);
+		if (Err > 1.0) bOk = false;
+		Report += FString::Printf(TEXT(" w%d=(%.1f, %.1f, %.1f)"), i, Rest[i].X, Rest[i].Y, Rest[i].Z);
+	}
+
+	const double WheelbaseCm = 0.5 * ((Rest[0].X + Rest[1].X) - (Rest[2].X + Rest[3].X));
+	const double FrontShare = -0.5 * (Rest[2].X + Rest[3].X) / WheelbaseCm;
+	if (bOk)
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS: physics wheelbase %.1f cm, %.1f%% of the weight on the front axle;%s"),
+			WheelbaseCm, FrontShare * 100.0, *Report);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("FSDS: physics wheels are NOT where settings.json puts them (more than 1 cm off): ")
+			TEXT("wheelbase %.1f cm;%s"), WheelbaseCm, *Report);
+	}
 }
