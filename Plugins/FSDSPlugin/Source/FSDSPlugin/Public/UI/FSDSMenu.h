@@ -83,6 +83,17 @@ public:
 	/** "Acceleration", ..., or "Practice". */
 	static FString EventName(EFSDSEventType Event, bool bPractice = false);
 
+	/**
+	 * The frame rate while the menu is open and nothing drives (Settings,
+	 * Performance): 60, 30 or 15, kept in the user's GameUserSettings.ini.
+	 * Driving always runs at the sim's own rate: every frame is a fixed
+	 * physics step, so a lower one would slow the simulation itself.
+	 */
+	static int32 GetMenuFrameRate();
+	static void SetMenuFrameRate(int32 Fps);
+	/** While the menu is open and the window is minimised. */
+	static constexpr int32 MinimisedFrameRate = 5;
+
 private:
 	enum class EMode : uint8 { Main, Pause, Finished };
 
@@ -101,6 +112,11 @@ private:
 	void Quit();
 	void RecordRun();
 	void HoldCar();
+
+	/** Cap the frame rate while the menu is up and nothing drives; the sim's own otherwise. */
+	void UpdateFrameCap();
+	/** Under a cap: sleep out the rest of the frame. */
+	void ThrottleFrame();
 
 	void StartOrbit();
 	void StopOrbit();
@@ -142,6 +158,11 @@ private:
 	bool bPausedGame = false;
 
 	uint32 SeenExternalGen = 0;
+
+	/** The cap now in force; 0 for none. */
+	int32 AppliedCap = 0;
+	/** When the last capped frame ended (FPlatformTime::Seconds), 0 for none yet. */
+	double LastFrameWall = 0.0;
 
 	TWeakObjectPtr<ACameraActor> OrbitCam;
 	float OrbitAngle = 0.f;

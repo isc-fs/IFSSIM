@@ -16,6 +16,11 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Engine/GameViewportClient.h"
+#include "Engine/Engine.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Widgets/SWindow.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/PlayerController.h"
@@ -40,6 +45,36 @@ namespace
 
 	// Practice has no lap target; the referee needs one, so a big one.
 	constexpr int32 PracticeLaps = 99;
+
+	// The menu frame rate's home in GameUserSettings.ini.
+	const TCHAR* PrefsSection = TEXT("FSDSMenu");
+	const TCHAR* FrameRateKey = TEXT("FrameRate");
+	constexpr int32 DefaultMenuFrameRate = 30;
+}
+
+namespace
+{
+	// Read once, then kept: the menu asks every frame.
+	int32 CachedMenuFrameRate = 0;
+}
+
+int32 FFSDSMenu::GetMenuFrameRate()
+{
+	if (CachedMenuFrameRate == 0)
+	{
+		int32 Fps = DefaultMenuFrameRate;
+		if (GConfig) GConfig->GetInt(PrefsSection, FrameRateKey, Fps, GGameUserSettingsIni);
+		CachedMenuFrameRate = (Fps == 60 || Fps == 30 || Fps == 15) ? Fps : DefaultMenuFrameRate;
+	}
+	return CachedMenuFrameRate;
+}
+
+void FFSDSMenu::SetMenuFrameRate(int32 Fps)
+{
+	CachedMenuFrameRate = Fps;
+	if (!GConfig) return;
+	GConfig->SetInt(PrefsSection, FrameRateKey, Fps, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
 }
 
 FFSDSMenu::FFSDSMenu() = default;
@@ -121,6 +156,7 @@ void FFSDSMenu::Shutdown()
 	}
 	Hide();
 	StopOrbit();
+	UpdateFrameCap();   // closed: back to the sim's own rate
 	bEnabled = false;
 }
 
@@ -267,6 +303,7 @@ void FFSDSMenu::Hide()
 	Root.Reset();
 	Widget.Reset();
 	StopOrbit();
+	UpdateFrameCap();   // at once, before the run's first frame
 
 	if (APlayerController* PC = GetPC())
 	{
@@ -316,6 +353,8 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	{
 		UpdateOrbit(DeltaTime);
 	}
+	UpdateFrameCap();
+	ThrottleFrame();
 
 	// The referee ends the run (all laps done, or the far gate of a one-way
 	// track): show how it went. Practice on a loop never ends this way.
@@ -484,6 +523,52 @@ void FFSDSMenu::RecordRun()
 	Run.bPractice = Current->bPractice;
 	Run.When = FDateTime::Now();
 	Results->Add(MoveTemp(Run));
+}
+
+void FFSDSMenu::UpdateFrameCap()
+{
+	// The sim's own rate: with bUseFixedFrameRate the engine paces frames by
+	// FixedFrameRate and ignores t.MaxFPS, so the cap is a wait of our own
+	// (ThrottleFrame), which keeps every frame the same fixed physics step.
+	const float BaseFps = GEngine && GEngine->bUseFixedFrameRate ? GEngine->FixedFrameRate : 60.f;
+
+	// Only while nothing drives: the menu is up, and the pipeline doesn't have
+	// the car (Esc during an autonomous session brings the menu up over it).
+	int32 Cap = 0;
+	const AFSDSVehiclePawn* P = Pawn.Get();
+	if (bEnabled && IsOpen() && !(P && P->IsApiControlEnabled()))
+	{
+		Cap = GetMenuFrameRate();
+		const UWorld* W = World.Get();
+		const UGameViewportClient* Viewport = W ? W->GetGameViewport() : nullptr;
+		const TSharedPtr<SWindow> Window = Viewport ? Viewport->GetWindow() : nullptr;
+		if (Window.IsValid() && Window->IsWindowMinimized()) Cap = MinimisedFrameRate;
+		if (Cap >= BaseFps) Cap = 0;   // no lower than the sim's own: nothing to do
+	}
+	if (Cap == AppliedCap) return;
+	AppliedCap = Cap;
+	LastFrameWall = 0.0;
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: frame rate %s"),
+		Cap > 0 ? *FString::Printf(TEXT("capped at %d while the menu is up"), Cap) : *FString::Printf(TEXT("back to %.0f"), BaseFps));
+}
+
+void FFSDSMenu::ThrottleFrame()
+{
+	if (AppliedCap <= 0) return;
+	// Wait out the rest of this frame's share of a second. The game thread
+	// sleeps, so the render thread and the GPU idle with it.
+	const double Period = 1.0 / AppliedCap;
+	double Now = FPlatformTime::Seconds();
+	if (LastFrameWall > 0.0)
+	{
+		const double Left = Period - (Now - LastFrameWall);
+		if (Left > 0.0 && Left <= Period)
+		{
+			FPlatformProcess::SleepNoStats((float)Left);
+			Now = FPlatformTime::Seconds();
+		}
+	}
+	LastFrameWall = Now;
 }
 
 void FFSDSMenu::HoldCar()
