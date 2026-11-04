@@ -434,9 +434,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const FString P3 = FPaths::Combine(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM")), TEXT("settings.json"));
 		return FString::Printf(
 			TEXT("{\"launch\":\"%s\",\"launch_exists\":%s,\"project\":\"%s\",\"project_exists\":%s,\"user\":\"%s\",\"user_exists\":%s}"),
-			*P1, FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
-			*P2, FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
-			*P3, FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
+			*P1.ReplaceCharWithEscapedChar(), FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
+			*P2.ReplaceCharWithEscapedChar(), FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
+			*P3.ReplaceCharWithEscapedChar(), FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
 	}
 	else if (Method == TEXT("enableApiControl"))
 	{
@@ -1980,7 +1980,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				// the details, including why a sidecar was invalid).
 				return FString::Printf(
 					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
-					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"),
+					*TrackPath.ReplaceCharWithEscapedChar(), NumCones, bAligned ? TEXT("true") : TEXT("false"),
 					*Spawner->GetEnvironmentStatus());
 			},
 			5.0,
