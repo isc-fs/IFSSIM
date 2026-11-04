@@ -21,6 +21,12 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **HUD.** A small overlay in the corner of the sim window shows speed,
+  throttle, brake and steering, who is driving (manual or autonomous), an EBS
+  badge, and the mission: event, laps, last and best lap, cones down and
+  off-course. H hides and shows it; `"HUD": {"Enabled", "Key"}` in
+  settings.json; off in headless runs and with `-NoHUD`. See
+  `docs/OPERATING.md`.
 - **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
   with no window, runs the mission benchmark around it and stops it, once
   (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.

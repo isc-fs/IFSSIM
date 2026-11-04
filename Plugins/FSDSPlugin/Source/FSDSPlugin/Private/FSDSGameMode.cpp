@@ -118,10 +118,14 @@ void AFSDSGameMode::StartPlay()
 	// In-game Mission Control panel (toggle key, Tab by default). Drives the
 	// same backend as the web UI; off when there is no viewport.
 	Launcher.Init(GetWorld(), RefereeActor);
+
+	// The HUD: the car's and the mission's state in a corner (H by default).
+	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	Hud.Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

@@ -3,6 +3,7 @@
 #include "FSDSSettings.h"
 #include "FSDSGameMode.h"
 #include "UI/FSDSLauncher.h"
+#include "UI/FSDSHud.h"
 #include "GameFramework/PlayerController.h"
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
@@ -1609,6 +1610,15 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	// settings.json ("MissionControl": {"Key": ...}) with nothing to add to
 	// DefaultInput.ini.
 	PlayerInputComponent->BindKey(FFSDSLauncher::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleLauncher);
+	PlayerInputComponent->BindKey(FFSDSHud::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleHud);
+}
+
+void AFSDSVehiclePawn::OnToggleHud()
+{
+	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
+	{
+		GM->GetHud().Toggle();
+	}
 }
 
 void AFSDSVehiclePawn::OnToggleLauncher()
