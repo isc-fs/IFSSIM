@@ -434,9 +434,9 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const FString P3 = FPaths::Combine(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM")), TEXT("settings.json"));
 		return FString::Printf(
 			TEXT("{\"launch\":\"%s\",\"launch_exists\":%s,\"project\":\"%s\",\"project_exists\":%s,\"user\":\"%s\",\"user_exists\":%s}"),
-			*P1, FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
-			*P2, FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
-			*P3, FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
+			*P1.ReplaceCharWithEscapedChar(), FPaths::FileExists(P1) ? TEXT("true") : TEXT("false"),
+			*P2.ReplaceCharWithEscapedChar(), FPaths::FileExists(P2) ? TEXT("true") : TEXT("false"),
+			*P3.ReplaceCharWithEscapedChar(), FPaths::FileExists(P3) ? TEXT("true") : TEXT("false"));
 	}
 	else if (Method == TEXT("enableApiControl"))
 	{
@@ -753,6 +753,63 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			S.WheelSteer[0], S.WheelSteer[1], S.WheelSteer[2], S.WheelSteer[3],
 			S.bWheelInContact[0]?1:0, S.bWheelInContact[1]?1:0,
 			S.bWheelInContact[2]?1:0, S.bWheelInContact[3]?1:0);
+	}
+	else if (Method == TEXT("getMassProperties"))
+	{
+		// What the chassis body really has, as Chaos holds it: mass, centre of
+		// mass and the wheel positions, in the car's frame (x forward, y left,
+		// z up, metres). The front/rear split follows from where the CoM sits
+		// between the axles, which is what the configured mass and CoG are
+		// meant to produce, and what the wheel loads should agree with.
+		if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle pawn\"}");
+		const FString Timeout = TEXT("{\"ok\":false,\"error\":\"timeout\"}");
+		return CallOnGameThread<FString>([this]() -> FString
+		{
+			if (!IsValid(VehiclePawn)) return TEXT("{\"ok\":false,\"error\":\"no vehicle pawn\"}");
+			USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
+			UChaosWheeledVehicleMovementComponent* Move =
+				Cast<UChaosWheeledVehicleMovementComponent>(VehiclePawn->GetVehicleMovementComponent());
+			FBodyInstance* Body = Mesh ? Mesh->GetBodyInstance() : nullptr;
+			if (!Body || !Move) return TEXT("{\"ok\":false,\"error\":\"no chassis body\"}");
+
+			const FTransform Actor = VehiclePawn->GetActorTransform();
+			// UE is left-handed (y right), centimetres; flip y for the car frame.
+			auto ToCar = [&Actor](const FVector& World)
+			{
+				const FVector L = Actor.InverseTransformPosition(World);
+				return FVector(L.X * 0.01, -L.Y * 0.01, L.Z * 0.01);
+			};
+			const FVector Com = ToCar(Body->GetCOMPosition());
+
+			FString Wheels;
+			double FrontX = 0, RearX = 0; int NFront = 0, NRear = 0;
+			for (int32 i = 0; i < Move->WheelSetups.Num(); ++i)
+			{
+				const FName Bone = Move->WheelSetups[i].BoneName;
+				const FVector W = ToCar(Mesh->GetBoneLocation(Bone, EBoneSpaces::WorldSpace));
+				Wheels += FString::Printf(TEXT("%s{\"bone\":\"%s\",\"pos\":[%.4f,%.4f,%.4f]}"),
+					i ? TEXT(",") : TEXT(""), *Bone.ToString(), W.X, W.Y, W.Z);
+				if (i < 2) { FrontX += W.X; ++NFront; } else { RearX += W.X; ++NRear; }
+			}
+			FrontX = NFront ? FrontX / NFront : 0; RearX = NRear ? RearX / NRear : 0;
+			const double Base = FrontX - RearX;
+			const double FrontShare = Base != 0 ? (Com.X - RearX) / Base : 0;
+
+			const FVector Nudge = Body->COMNudge * 0.01;
+			const FVector Override = Move->CenterOfMassOverride * 0.01;
+			return FString::Printf(
+				TEXT("{\"ok\":true,\"bodyMass\":%.2f,\"configuredMass\":%.2f,")
+				TEXT("\"com\":[%.4f,%.4f,%.4f],\"comOverride\":[%.4f,%.4f,%.4f],\"overrideOn\":%s,")
+				TEXT("\"comNudge\":[%.4f,%.4f,%.4f],\"inertia\":[%.3f,%.3f,%.3f],")
+				TEXT("\"frontShareFromCom\":%.4f,\"wheels\":[%s]}"),
+				Body->GetBodyMass(), Move->Mass,
+				Com.X, Com.Y, Com.Z, Override.X, -Override.Y, Override.Z,
+				Move->bEnableCenterOfMassOverride ? TEXT("true") : TEXT("false"),
+				Nudge.X, -Nudge.Y, Nudge.Z,
+				Body->GetBodyInertiaTensor().X * 1e-4, Body->GetBodyInertiaTensor().Y * 1e-4,
+				Body->GetBodyInertiaTensor().Z * 1e-4,
+				FrontShare, *Wheels);
+		}, 10.0, Timeout, TEXT("getMassProperties"));
 	}
 	else if (Method.StartsWith(TEXT("plantDrive")))
 	{
@@ -1980,7 +2037,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				// the details, including why a sidecar was invalid).
 				return FString::Printf(
 					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
-					*TrackPath, NumCones, bAligned ? TEXT("true") : TEXT("false"),
+					*TrackPath.ReplaceCharWithEscapedChar(), NumCones, bAligned ? TEXT("true") : TEXT("false"),
 					*Spawner->GetEnvironmentStatus());
 			},
 			5.0,

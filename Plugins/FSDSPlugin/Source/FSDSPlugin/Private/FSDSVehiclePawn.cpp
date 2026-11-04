@@ -3,6 +3,7 @@
 #include "FSDSSettings.h"
 #include "FSDSGameMode.h"
 #include "UI/FSDSLauncher.h"
+#include "UI/FSDSHud.h"
 #include "GameFramework/PlayerController.h"
 #include "FSDSRandom.h"
 #include "FSDSPacejkaTireModel.h"
@@ -177,6 +178,30 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 	// CDO is exactly what the rebuild reads. It is the runtime-pushed fields
 	// that need re-applying.
 	if (!VehicleMovement) return;
+
+	// The centre of mass comes from settings.json, through
+	// CenterOfMassOverride. Chaos places it at CenterOfMassOverride +
+	// COMNudge, and FormulaMesh_PhysicsAsset authors a nudge of
+	// (-36.8, 0, -16.8) cm. UE 5.7 never applied it; UE 5.8 does, which moved
+	// the CoM to just ahead of the rear axle (about 26% of the weight on the
+	// front instead of about 60%): the car spun at a quarter of steering lock
+	// and the front tyres had almost no load (#712). Clear the nudge so the
+	// override is the whole story, as on 5.7. Recalculating the mass
+	// properties calls back into the movement component's own
+	// UpdateMassProperties, which re-applies the override and the mass.
+	if (USkeletalMeshComponent* ChassisMesh = GetMesh())
+	{
+		if (FBodyInstance* Chassis = ChassisMesh->GetBodyInstance())
+		{
+			if (!Chassis->COMNudge.IsNearlyZero())
+			{
+				UE_LOG(LogTemp, Log, TEXT("FSDS: clearing the physics asset's CoM nudge %s cm"),
+					*Chassis->COMNudge.ToString());
+				Chassis->COMNudge = FVector::ZeroVector;
+				Chassis->UpdateMassProperties();
+			}
+		}
+	}
 
 	const FFSDSVehicleSettings* Vehicle = FFSDSSettings::Get().GetDefaultVehicle();
 	if (!Vehicle) return;
@@ -1378,6 +1403,25 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetBrakeInput(0.f);
 		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
 
+		// Lateral grip has to scale with the load on each tyre (#697).
+		// Chaos reads the lateral slip graph as a FORCE: it multiplies the
+		// curve by 10000 when it builds the wheel (ChaosVehicleWheel.h,
+		// FillWheelSetup) and the tyre force is curve(slip) x
+		// LateralSlipGraphMultiplier (WheelSystem.cpp). The Pacejka bake
+		// writes a friction coefficient (peak TireMu), so with the default
+		// multiplier of 1 every tyre topped out at TireMu x 100 N, whatever
+		// its load: about 140 N against ~520 N on a front tyre, which is why
+		// the car could not turn tighter than ~11 m. Multiplying by the
+		// wheel's current load (Chaos units, N x 100) / 10000 makes the
+		// lateral force mu(slip) x Fz, as the Pacejka model means it. The
+		// friction circle Chaos clips to (Fz x surface mu x FrictionMultiplier,
+		// set up in FSDSPacejka::BakeToWheel) already caps it at TireMu x Fz.
+		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); ++i)
+		{
+			const float LoadChaos = VehicleMovement->GetWheelState(i).SpringForce;
+			VehicleMovement->SetWheelSlipGraphMultiplier(i, FMath::Max(LoadChaos, 0.f) / 10000.f);
+		}
+
 		// Electric: always in gear 1 (single speed)
 		VehicleMovement->SetTargetGear(1, true);
 
@@ -1566,6 +1610,15 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	// settings.json ("MissionControl": {"Key": ...}) with nothing to add to
 	// DefaultInput.ini.
 	PlayerInputComponent->BindKey(FFSDSLauncher::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleLauncher);
+	PlayerInputComponent->BindKey(FFSDSHud::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleHud);
+}
+
+void AFSDSVehiclePawn::OnToggleHud()
+{
+	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
+	{
+		GM->GetHud().Toggle();
+	}
 }
 
 void AFSDSVehiclePawn::OnToggleLauncher()
