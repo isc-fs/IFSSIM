@@ -42,3 +42,21 @@ def test_no_sidecar_or_a_broken_one(tmp_path):
     bad.write_text("{not json")
     assert not shift_sidecar(str(bad), 1.0, 1.0)
     assert bad.read_text() == "{not json"
+
+
+def test_generated_track_with_gate_at_origin_is_centred(tmp_path):
+    # Generator output: start gate pinned at (0, 0), loop sprawling to +x/+y.
+    csv = tmp_path / "gen.csv"
+    csv.write_text(
+        "car_start,0.0,0.0,0,0,0,0\n"
+        "blue,0.0,-2.0,0,0,0,0\nyellow,0.0,2.0,0,0,0,0\n"
+        "blue,100.0,40.0,0,0,0,0\nyellow,100.0,44.0,0,0,0,0\n")
+    assert ensure_centered(str(csv))
+    xs, ys = [], []
+    for line in csv.read_text().splitlines():
+        kind, x, y = line.split(",")[:3]
+        if kind in ("blue", "yellow"):
+            xs.append(float(x)); ys.append(float(y))
+    assert (min(xs) + max(xs)) / 2 == 0.0
+    assert (min(ys) + max(ys)) / 2 == 0.0
+    assert not ensure_centered(str(csv))  # idempotent
