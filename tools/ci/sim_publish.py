@@ -12,7 +12,10 @@
    result, the comparison with dev and the maps. Later runs edit that same
    comment instead of adding new ones.
 3. The `sim-report` issue gets a row in its history table; a dev run also
-   replaces its "Latest dev" section. The issue is created the first time.
+   replaces its "Latest dev" section. Every autocross run that didn't finish
+   adds a row to its "Where autocross fails" table, and a failing random
+   track's CSV goes to `ci-assets` too, so it can be driven again. The issue
+   is created the first time.
 4. --save-baseline keeps this report (with its map links) as the dev result
    that later checks compare with.
 
@@ -44,6 +47,7 @@ ASSETS_BRANCH = "ci-assets"
 ISSUE_LABEL = "sim-report"
 ISSUE_TITLE = "Sim check report"
 HISTORY_ROWS = 100
+FAILURE_ROWS = 100
 ISSUE_MARKER = "<!-- sim-report -->"
 
 
@@ -105,6 +109,25 @@ def upload_maps(repo: str, token: str, maps_dir: Path, prefix: str) -> dict[str,
     return urls
 
 
+def upload_tracks(repo: str, token: str, tracks_dir: Path, report: dict, prefix: str) -> dict[str, str]:
+    """The CSVs of the random tracks that failed, as the sim drove them."""
+    stems = {Path(f["track"]).stem for f in report.get("failures") or [] if f.get("random_seed") is not None}
+    files = [tracks_dir / f"{s}.csv" for s in sorted(stems) if (tracks_dir / f"{s}.csv").is_file()]
+    if not files:
+        return {}
+    ensure_assets_branch(repo, token)
+    urls = {}
+    for f in files:
+        path = f"{prefix}/tracks/{f.name}"
+        api("PUT", f"/repos/{repo}/contents/{path}", token, {
+            "message": f"sim check track {path}",
+            "content": base64.b64encode(f.read_bytes()).decode(),
+            "branch": ASSETS_BRANCH,
+        })
+        urls[f.stem] = f"https://github.com/{repo}/blob/{ASSETS_BRANCH}/{path}"
+    return urls
+
+
 # ------------------------------------------------------------------ 2. PR comment
 def upsert_comment(repo: str, pr: int, token: str, body: str) -> str:
     for page in range(1, 11):
@@ -134,9 +157,19 @@ def section(body: str, name: str) -> str:
     return ""
 
 
-def issue_body(old: str, row: str, latest_dev: str | None, latest_run: str | None = None) -> str:
-    """The issue's body: `row` goes first in the history; `latest_run` and
-    `latest_dev` replace their sections (None keeps what's there)."""
+FAILURES_HEAD = [
+    "| When (UTC) | What | Pipeline | Track | Where | Corner | What happened | Map |",
+    "|---|---|---|---|---|---|---|---|",
+]
+
+
+def issue_body(old: str, row: str, latest_dev: str | None, latest_run: str | None = None,
+               failure_rows: list[str] | None = None) -> str:
+    """The issue's body: `row` goes first in the history and `failure_rows`
+    first in the failures table; `latest_run` and `latest_dev` replace their
+    sections (None keeps what's there)."""
+    failures = [ln for ln in section(old, "failures").splitlines() if ln.startswith("| 2")]
+    failures = (list(failure_rows or []) + failures)[:FAILURE_ROWS]
     rows = [ln for ln in section(old, "history").splitlines() if ln.startswith("| 2")]
     # Rows from before the Maps column: give them an empty one.
     rows = [ln.rsplit(" | ", 1)[0] + " | – | " + ln.rsplit(" | ", 1)[1] if ln.count(" | ") == 6 else ln
@@ -148,6 +181,12 @@ def issue_body(old: str, row: str, latest_dev: str | None, latest_run: str | Non
         INTRO.format(marker=ISSUE_MARKER),
         "## Latest run", "<!-- run -->", run, "<!-- /run -->", "",
         "## Latest dev", "<!-- latest -->", dev, "<!-- /latest -->", "",
+        "## Where autocross fails",
+        f"Every autocross run that didn't finish, newest first, the last {FAILURE_ROWS}. *Where* is how far "
+        "round the lap the car left the track (or stopped); *Corner* is the tightest bend within 15 m of it. "
+        "`ci_rand_<seed>` tracks are random: rebuild one with `tools/ci/gen_tracks.py --seeds <seed>`, or "
+        "drive it again with the workflow's `random_seeds` input.", "",
+        "<!-- failures -->", *FAILURES_HEAD, *failures, "<!-- /failures -->", "",
         "## History", f"Newest first, the last {HISTORY_ROWS} runs.", "",
         "<!-- history -->",
         "| When (UTC) | What | IFSSIM | Pipeline | Result | Missions | Maps | Run |",
@@ -178,7 +217,23 @@ def section_text(report: dict, run_url: str, source: str = "") -> str:
     """A run as the issue shows it in full: headline, tables and maps."""
     what = f" · {source}" if source else ""
     return "\n".join([sim_report.headline(report) + what + f" · [run]({run_url})", "",
-                      sim_report.tables(report, None), sim_report.maps(report.get("images") or {})])
+                      sim_report.tables(report, None),
+                      sim_report.failures_table(report, report.get("track_urls")),
+                      sim_report.maps(report.get("images") or {})])
+
+
+def failure_rows(report: dict, source: str, when: str) -> list[str]:
+    images = report.get("images") or {}
+    rows = []
+    for f in report.get("failures") or []:
+        img = images.get(f["scenario"])
+        rows.append("| {} | {} | `{}` | {} | {} | {} | {} | {} |".format(
+            when, source, report.get("pipeline") or "?",
+            sim_report.track_cell(f, report.get("track_urls")), sim_report.where(f),
+            f.get("corner") or "–", sim_report.how(f).replace("|", "/"),
+            f"[map]({img})" if img else "–",
+        ))
+    return rows
 
 
 def map_links(report: dict) -> str:
@@ -197,7 +252,8 @@ def update_issue(repo: str, token: str, report: dict, source: str, run_url: str,
         sim_report.history_cell(report), map_links(report), run_url,
     )
     body = issue_body(issue.get("body") or "", row, latest_dev,
-                      section_text(report, run_url, f"{source}, {when} UTC"))
+                      section_text(report, run_url, f"{source}, {when} UTC"),
+                      failure_rows(report, source, when))
     api("PATCH", f"/repos/{repo}/issues/{issue['number']}", token, {"body": body})
     return issue["html_url"]
 
@@ -213,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--source", default="run")
     ap.add_argument("--baseline", type=Path)
     ap.add_argument("--save-baseline", type=Path)
+    ap.add_argument("--tracks-dir", type=Path, default=Path(__file__).resolve().parents[2] / "Content" / "tracks",
+                    help="where the random tracks were written (default: this checkout's Content/tracks)")
     args = ap.parse_args(argv)
 
     repo = os.environ.get("GITHUB_REPOSITORY", "isc-fs/IFSSIM")
@@ -235,6 +293,15 @@ def main(argv: list[str] | None = None) -> int:
         failures += 1
         print(f"::warning::the maps weren't uploaded: {e}")
     report["images"] = images
+
+    try:
+        report["track_urls"] = upload_tracks(repo, token, args.tracks_dir, report, f"runs/{args.run_id}")
+        if report["track_urls"]:
+            print(f"failing random tracks: {len(report['track_urls'])} uploaded")
+    except (ApiError, OSError) as e:
+        failures += 1
+        report["track_urls"] = {}
+        print(f"::warning::the failing tracks weren't uploaded: {e}")
 
     base_note = ""
     if baseline:
