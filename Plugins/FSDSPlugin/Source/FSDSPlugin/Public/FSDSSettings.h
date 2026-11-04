@@ -83,7 +83,7 @@ struct FFSDSVehiclePhysics
 	FString Drivetrain = TEXT("RWD"); // RWD, FWD, AWD
 	float WheelRadius = 0.200f;      // meters
 	float WheelWidth = 0.190f;       // meters
-	float MaxSteerAngle = 22.4f;     // degrees
+	float MaxSteerAngle = 18.2f;     // degrees, measured at the road wheel (#462)
 	// Resistive wheel torque Crr*Fz*Rw. ASSUMED, not measured on the IFS-08.
 	//
 	// CONSUMED BY THE FMU PLANT, NOT BY CHAOS. Chaos has no equivalent knob we
