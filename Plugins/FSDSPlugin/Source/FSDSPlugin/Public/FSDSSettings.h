@@ -270,6 +270,13 @@ public:
 	bool bLauncherPanel = true;
 	FString LauncherKey = TEXT("Tab");
 
+	// --- HUD (in-game overlay of the car's state) ----------------------
+	//
+	// "HUD": { "Enabled", "Key" }. Shown at start when Enabled; the key
+	// (H by default) shows and hides it. See UI/FSDSHud.h.
+	bool bHudEnabled = true;
+	FString HudKey = TEXT("H");
+
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;
 
