@@ -21,6 +21,10 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Tabs and the session log in the in-sim Mission Control panel.** The panel
+  (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
+  (newest first, coloured per event type) with Export JSON, which saves to
+  `Documents/IFSSIM/SessionLogs` and says where.
 - **HUD.** A small overlay in the corner of the sim window shows speed,
   throttle, brake and steering, who is driving (manual or autonomous), an EBS
   badge, and the mission: event, laps, last and best lap, cones down and
