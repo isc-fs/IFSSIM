@@ -21,6 +21,15 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Scoring in the in-sim Mission Control panel.** A Scoring tab with the web
+  UI's view: score, elapsed, penalties, corrected time, the reference time
+  (T_best) and the lap times. Both UIs now show no score until a reference
+  time is set: without one the backend compares the run with itself and
+  every run got full points (#719). A run faster than the reference now
+  scores the maximum instead of more (271/200 before), and a run with no
+  completed lap, a total time of 0 or a skidpad with fewer than the four
+  timed laps has no score. A reference time of 0 or less is rejected (422 from
+  the API, a message in the web UI) instead of being shown next to full points.
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to

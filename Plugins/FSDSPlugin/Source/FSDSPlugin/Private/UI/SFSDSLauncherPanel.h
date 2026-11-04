@@ -15,7 +15,7 @@ struct FFSDSMcReply;
 /**
  * The in-game Mission Control panel: load a track, start and stop a
  * session, reset the car, RES (the Session tab), and the session log with
- * its export (the Log tab). A client of the backend, like the web UI; the
+ * its export (the Log tab), the event score (the Scoring tab). A client of the backend, like the web UI; the
  * backend owns the session sequence.
  *
  * Built from code in Slate (no widget Blueprint to keep in sync with the C++).
@@ -60,7 +60,26 @@ private:
 	};
 
 	/** The tabs, in the order of the tab bar. */
-	enum class ETab : int32 { Session = 0, Log = 1 };
+	enum class ETab : int32 { Session = 0, Log = 1, Scoring = 2 };
+
+	/** One /api/scoring/summary reply. */
+	struct FScoring
+	{
+		FString Event;
+		int32 Laps = 0;
+		TArray<double> LapTimes;
+		double BestLap = 0.0;
+		double Total = 0.0;
+		int32 Doo = 0;
+		double DooPenalty = 0.0;
+		int32 Oc = 0;
+		double OcPenalty = 0.0;
+		double Corrected = 0.0;
+		bool bHasReference = false;
+		double Reference = 0.0;
+		double MaxPoints = 0.0;
+		double Score = 0.0;
+	};
 	using FTrackPtr = TSharedPtr<FString>;
 
 	// --- backend -------------------------------------------------------
@@ -77,6 +96,9 @@ private:
 	/** The session log, while the Log tab is open. */
 	void FetchLog();
 	void RebuildLogList();
+	/** The score, while the Scoring tab is open. */
+	void FetchScoring();
+	void RebuildLapList();
 
 	// --- actions -------------------------------------------------------
 	FReply OnLoadTrack();
@@ -100,6 +122,7 @@ private:
 	TSharedRef<SWidget> MakeTab(const FText& Label, ETab Tab);
 	TSharedRef<SWidget> BuildSessionTab();
 	TSharedRef<SWidget> BuildLogTab();
+	TSharedRef<SWidget> BuildScoringTab();
 
 	bool CanAct() const;
 	FText BackendText() const;
@@ -155,6 +178,13 @@ private:
 	FString LogError;
 	bool bLogInFlight = false;
 	TSharedPtr<SVerticalBox> LogList;
+
+	TOptional<FScoring> Scoring;
+	FString ScoringError;
+	bool bScoringInFlight = false;
+	/** The reference time typed in, in seconds; empty for the best lap. */
+	FString ReferenceInput;
+	TSharedPtr<SVerticalBox> LapList;
 
 	/** Non-empty while an action is in flight: what it is doing. */
 	FString Busy;
