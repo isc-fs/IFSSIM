@@ -16,9 +16,10 @@ shipping pipeline, documentation.
 
 - **Parking lot A is fenced in, and its tracks get clutter of their own.** Tyre
   walls line the long edges of the lot (bins and bollards in their gaps) and a
-  new `fence` class, a steel crowd barrier, the short ones, so the car meets a
-  solid barrier before the sidewalk, which is now 20 cm tall and still
-  LiDAR-only. Each venue track's sidecar also gets tyre walls, bollards, bins,
+  new `fence` class, a steel crowd barrier, the short ones. The south sidewalk,
+  now 20 cm tall and still LiDAR-only, runs right along the lot in plain view
+  of the LiDAR (a second flat plane for the ground fit), with the barriers
+  behind it, so the car still meets something solid. Each venue track's sidecar also gets tyre walls, bollards, bins,
   spare cones and timing tripods 0.5–3 m from its cones, on the lot, from the
   track's seed (profile `venue_clutter`); the Drive map draws them. See
   docs/venues.md.
