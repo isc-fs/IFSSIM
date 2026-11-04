@@ -82,6 +82,9 @@ on:
       pipeline_pr:
         description: "IFS09-DV-PIPELINE PR number it comes from"
         default: ""
+      random_seeds:
+        description: "seeds of the random autocross tracks to drive (comma-separated, e.g. a failing one from the sim-report issue; empty: new ones)"
+        default: ""
 
 # contents: the track maps go to the ci-assets branch; issues and pull-requests:
 # the PR comment and the sim-report issue (tools/ci/sim_publish.py).
@@ -158,6 +161,7 @@ jobs:
         env:
           IFSSIM_DV_IMAGE: ${{ env.DV_IMAGE }}
           REPEATS: ${{ inputs.repeats }}
+          RANDOM_SEEDS: ${{ inputs.random_seeds }}
           RESULTS: ${{ runner.temp }}/sim-pr-results
           REPORT: ${{ runner.temp }}/sim-pr-results/report
           BASELINE: /build/ifssim-ci/baseline/report.json

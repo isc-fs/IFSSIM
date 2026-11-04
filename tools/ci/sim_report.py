@@ -10,6 +10,10 @@ sim_plot.py and sim_publish.py) and <dir>/summary.md (the job summary).
 Only the missions tools/ci/sim_check.json lists as `required` decide the
 result; `informational` ones are reported but never fail the check.
 
+Autocross also runs on random tracks (tools/ci/gen_tracks.py, named
+ci_rand_<seed>.csv): they share one row in the summary, and for every run
+that didn't finish, sim_failures.py works out where it went wrong.
+
 Exit code: 0 every required run finished, 1 some didn't, 3 nothing ran
 (the machine failed: see the job log).
 
@@ -27,8 +31,14 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import sim_failures  # noqa: E402
+
 CONFIG = HERE / "sim_check.json"
 COMMENT_MARKER = "<!-- sim-check-report -->"
+RANDOM_PREFIX = "ci_rand_"
+# Missions on closed loops, where "how far round the lap" means something.
+LOOP_MISSIONS = ("autocross", "trackdrive")
 
 
 # ------------------------------------------------------------------ reading a run
@@ -49,6 +59,27 @@ def _telemetry(path: Path) -> list[dict]:
     return rows
 
 
+def _dnf(path: Path) -> str:
+    """The benchmark's reason for a run that didn't finish (events.csv)."""
+    if not path.exists():
+        return ""
+    with path.open() as f:
+        for r in csv.DictReader(f):
+            if r.get("kind") == "dnf":
+                return (r.get("detail") or "").strip()
+    return ""
+
+
+def random_seed(track: str) -> int | None:
+    stem = Path(track).stem
+    if not stem.startswith(RANDOM_PREFIX):
+        return None
+    try:
+        return int(stem[len(RANDOM_PREFIX):])
+    except ValueError:
+        return None
+
+
 def read_run(seed_dir: Path, run_dir: Path) -> dict:
     res = json.loads((seed_dir / "results.json").read_text())
     man_path = seed_dir / "manifest.json"
@@ -57,13 +88,25 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
     wall, sim = _num(res.get("race/run_time_s")), _num(res.get("race/run_sim_time_s"))
     tel = _telemetry(seed_dir / "telemetry.csv")
     steer = [abs(r["steering"]) for r in tel if "steering" in r]
+    finished = res.get("race/finished") == 1
+    mission = scen.get("event") or seed_dir.parent.parent.name.split("_")[0]
+    track = (scen.get("track") or {}).get("csv", "")
+    failure = None
+    if not finished and mission in LOOP_MISSIONS:
+        try:
+            failure = sim_failures.locate(_telemetry(seed_dir / "cones.csv"), tel)
+        except Exception as e:  # a bad file shouldn't lose the report
+            print(f"{seed_dir}: couldn't locate the failure ({e})", file=sys.stderr)
     return {
         "scenario": seed_dir.parent.parent.name,
-        "mission": scen.get("event") or seed_dir.parent.parent.name.split("_")[0],
-        "track": (scen.get("track") or {}).get("csv", ""),
+        "mission": mission,
+        "track": track,
+        "random_seed": random_seed(track),
         "seed": int(seed_dir.name.removeprefix("seed") or 0),
-        "finished": res.get("race/finished") == 1,
-        "outcome": man.get("outcome", "finished" if res.get("race/finished") == 1 else "not finished"),
+        "finished": finished,
+        "outcome": man.get("outcome", "finished" if finished else "not finished"),
+        "dnf": _dnf(seed_dir / "events.csv"),
+        "failure": failure,
         "lap_s": _num(res.get("race/lap_time_best_s")),
         "laps": _num(res.get("race/n_laps")),
         "cones": _num(res.get("race/n_doo")),
@@ -93,6 +136,7 @@ def build(root: Path, config: dict) -> dict:
     for r in runs:
         g = groups.setdefault(r["scenario"], {
             "scenario": r["scenario"], "mission": r["mission"], "track": r["track"],
+            "random": r["random_seed"] is not None,
             "required": r["mission"] not in info, "runs": 0, "finished": 0, "laps": [],
             "cones": 0, "off_track": 0, "v_max": None, "sim_speed": [],
         })
@@ -121,6 +165,13 @@ def build(root: Path, config: dict) -> dict:
     else:
         verdict = "pass"
 
+    failures = [
+        {"scenario": r["scenario"], "mission": r["mission"], "track": r["track"],
+         "random_seed": r["random_seed"], "seed": r["seed"], "outcome": r["outcome"],
+         "dnf": r["dnf"], **(r["failure"] or {"kind": "unknown"})}
+        for r in runs if not r["finished"] and r["mission"] in LOOP_MISSIONS
+    ]
+
     code = runs[0]["code"] if runs else {}
     return {
         "verdict": verdict,
@@ -134,6 +185,7 @@ def build(root: Path, config: dict) -> dict:
         "run_dir": str(run_dir.relative_to(root)),
         "runs": [{k: v for k, v in r.items() if k != "code"} for r in runs],
         "groups": list(groups.values()),
+        "failures": failures,
     }
 
 
@@ -154,7 +206,38 @@ def _delta(g: dict, baseline: dict | None) -> str:
     return f"{d:+.1f} s (dev {b['lap_mean']:.1f})"
 
 
+def display_groups(groups: list[dict]) -> list[dict]:
+    """The groups as the summary shows them: the random tracks of a mission
+    share one row (their laps aren't comparable, so it has no lap time)."""
+    out: list[dict] = []
+    merged: dict[str, dict] = {}
+    for g in groups:
+        if not g.get("random"):
+            out.append(g)
+            continue
+        m = merged.get(g["mission"])
+        if m is None:
+            m = merged[g["mission"]] = {
+                **g, "scenario": f"{g['mission']}_random", "track": "", "tracks": 0,
+                "runs": 0, "finished": 0, "cones": 0, "off_track": 0, "laps": [],
+                "lap_mean": None, "v_max": None, "sim_speed": None,
+            }
+            out.append(m)
+        m["tracks"] += 1
+        for k in ("runs", "finished", "cones", "off_track"):
+            m[k] += g[k]
+        if g["v_max"] is not None:
+            m["v_max"] = max(m["v_max"] or 0, g["v_max"])
+        if g["sim_speed"] is not None:
+            m["sim_speed"] = g["sim_speed"] if m["sim_speed"] is None else min(m["sim_speed"], g["sim_speed"])
+    return out
+
+
 def _name(g: dict) -> str:
+    if g.get("random"):
+        n = g.get("tracks", 1)
+        name = f"{g['mission']} · {n} random track{'s' if n != 1 else ''}"
+        return name if g["required"] else f"{name} *(info)*"
     track = Path(g["track"]).stem
     name = g["mission"] if track in ("", g["mission"]) else f"{g['mission']} · {track}"
     return name if g["required"] else f"{name} *(info)*"
@@ -192,7 +275,7 @@ def tables(report: dict, baseline: dict | None) -> str:
         "| Mission | Finished | Lap (mean) | vs dev | Cones hit | Off track | Top speed | Sim speed |",
         "|---|---|---|---|---|---|---|---|",
     ]
-    for g in report["groups"]:
+    for g in display_groups(report["groups"]):
         ok = g["finished"] == g["runs"]
         out.append("| {} | {}{}/{} | {} | {} | {} | {} | {} | {} |".format(
             _name(g),
@@ -220,6 +303,48 @@ def tables(report: dict, baseline: dict | None) -> str:
     return "\n".join(out)
 
 
+def where(f: dict) -> str:
+    """A failure's place on its track, in words."""
+    if f.get("kind") == "unknown":
+        return "–"
+    return "{} m of {} m ({}%)".format(f"{f['progress_m']:.0f}", f"{f['lap_m']:.0f}", f["progress_pct"])
+
+
+def track_cell(f: dict, track_urls: dict[str, str] | None = None) -> str:
+    stem = Path(f["track"]).stem
+    url = (track_urls or {}).get(stem)
+    return f"[`{stem}`]({url})" if url else f"`{stem}`"
+
+
+def how(f: dict) -> str:
+    if f.get("kind") == "unknown":
+        return f["outcome"]
+    bits = [f["kind"]]
+    if f.get("speed") is not None and f["kind"] == "left the track":
+        bits.append(f"at {f['speed']:.1f} m/s")
+    if f.get("t_s") is not None:
+        bits.append(f"after {f['t_s']:.0f} s")
+    if f.get("dnf"):
+        bits.append(f"({f['dnf']})")
+    return " ".join(bits)
+
+
+def failures_table(report: dict, track_urls: dict[str, str] | None = None) -> str:
+    """Where each autocross run that didn't finish went wrong."""
+    fs = report.get("failures") or []
+    if not fs:
+        return ""
+    out = ["", "#### Where it failed", "",
+           "| Track | Where | Corner | What happened |", "|---|---|---|---|"]
+    for f in fs:
+        out.append("| {} | {} | {} | {} |".format(
+            track_cell(f, track_urls), where(f), f.get("corner") or "–", how(f)))
+    out.append("")
+    out.append("A random track is rebuilt from its seed with `tools/ci/gen_tracks.py --seeds <seed>`, "
+               "or rerun on the box with the `random_seeds` input of the workflow.")
+    return "\n".join(out)
+
+
 def maps(images: dict[str, str]) -> str:
     if not images:
         return ""
@@ -228,7 +353,8 @@ def maps(images: dict[str, str]) -> str:
 
 
 def comment(report: dict, baseline: dict | None, images: dict[str, str], run_url: str, base_note: str = "") -> str:
-    parts = [COMMENT_MARKER, "### " + headline(report), "", tables(report, baseline), maps(images)]
+    parts = [COMMENT_MARKER, "### " + headline(report), "", tables(report, baseline),
+             failures_table(report, report.get("track_urls")), maps(images)]
     foot = f"[Run, logs and telemetry]({run_url})" if run_url else ""
     if baseline and base_note:
         foot += f" · {base_note}"
@@ -237,16 +363,17 @@ def comment(report: dict, baseline: dict | None, images: dict[str, str], run_url
 
 
 def summary(report: dict, baseline: dict | None) -> str:
-    return "\n".join(["### " + headline(report), "", tables(report, baseline),
+    return "\n".join(["### " + headline(report), "", tables(report, baseline), failures_table(report),
                       "\nSim and pipeline logs are in the `sim-pr-results` artifact.\n"])
 
 
 def history_cell(report: dict) -> str:
     """One line per mission for the report issue's history table."""
     cells = []
-    for g in report["groups"]:
+    for g in display_groups(report["groups"]):
         lap = f" {g['lap_mean']:.1f}s" if g["lap_mean"] is not None else ""
-        name = g["mission"] if g["required"] else f"*{g['mission']}*"
+        name = g["mission"] + (" random" if g.get("random") else "")
+        name = name if g["required"] else f"*{name}*"
         cells.append(f"{name} {g['finished']}/{g['runs']}{lap}")
     return "<br>".join(cells) or "–"
 
