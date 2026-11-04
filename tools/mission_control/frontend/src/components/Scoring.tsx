@@ -19,6 +19,7 @@ interface ScoringData {
   score: number;
   // False for an unscorable run (disqualified, incomplete skidpad, no time).
   scored?: boolean;
+  disqualified?: boolean;
 }
 
 // Debounce window for the t_best text input. Pre-#326 the useEffect
@@ -122,7 +123,10 @@ export default function Scoring() {
         <div className="text-gray-500 text-xs uppercase tracking-wider mb-2">Event Score</div>
         <div className="text-6xl font-bold text-[#ffb81c]">
           {/* With no reference the backend compares the run with itself: always full points. */}
-          {scoring.t_best_reference != null && scoring.scored !== false ? scoring.score.toFixed(1) : '--'}
+          {/* A disqualified run scores 0; an incomplete run has no score yet. */}
+          {scoring.disqualified
+            ? '0.0'
+            : scoring.t_best_reference != null && scoring.scored !== false ? scoring.score.toFixed(1) : '--'}
         </div>
         <div className="text-gray-500 text-sm">/ {scoring.max_points} points</div>
         <div className="text-lg text-white capitalize mt-2">{scoring.event}</div>
