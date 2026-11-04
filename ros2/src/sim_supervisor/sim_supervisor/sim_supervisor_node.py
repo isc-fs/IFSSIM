@@ -39,7 +39,10 @@ import time
 import numpy as np
 
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import (
+    MutuallyExclusiveCallbackGroup,
+    ReentrantCallbackGroup,
+)
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn, State
@@ -161,6 +164,12 @@ class SimSupervisorNode(LifecycleNode):
         self._imu_sample_idx: int = 0
 
         self._cb_group = ReentrantCallbackGroup()
+        # The operator panel (/sim/mission, /sim/intent, /sim/estop) is
+        # handled one message at a time, in arrival order. In the reentrant
+        # group two intents published a millisecond apart (READY then GO)
+        # could be applied in either order, leaving the car armed but never
+        # sent GO.
+        self._panel_cb_group = MutuallyExclusiveCallbackGroup()
 
         # Odometry filter (Phase 1 of the /odom split — see
         # docs/AUTONOMY.md §"Open questions" Q1). Subscribes to /imu and
@@ -223,13 +232,13 @@ class SimSupervisorNode(LifecycleNode):
         # --- sim operator panel (backend/CLI → emulator) ---
         self._sim_mission_sub = self.create_subscription(
             Int32, TOPIC_SIM_MISSION, self._on_sim_mission, LATCHED_QOS,
-            callback_group=self._cb_group)
+            callback_group=self._panel_cb_group)
         self._sim_intent_sub = self.create_subscription(
             UInt8, TOPIC_SIM_INTENT, self._on_sim_intent, LATCHED_QOS,
-            callback_group=self._cb_group)
+            callback_group=self._panel_cb_group)
         self._sim_estop_sub = self.create_subscription(
             Bool, TOPIC_SIM_ESTOP, self._on_sim_estop, LATCHED_QOS,
-            callback_group=self._cb_group)
+            callback_group=self._panel_cb_group)
 
         # --- bridge outputs ---
         self._control_pub = self.create_lifecycle_publisher(
