@@ -16,6 +16,7 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -104,6 +105,7 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 					.WidgetIndex_Lambda([this]() { return (int32)ActiveTab; })
 					+ SWidgetSwitcher::Slot() [ BuildSessionTab() ]
 					+ SWidgetSwitcher::Slot() [ BuildLogTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildScoringTab() ]
 				]
 
 				// Outcome of the last action
@@ -163,6 +165,10 @@ EActiveTimerReturnType SFSDSLauncherPanel::Poll(double, float)
 	if (ActiveTab == ETab::Log)
 	{
 		FetchLog();
+	}
+	else if (ActiveTab == ETab::Scoring)
+	{
+		FetchScoring();
 	}
 
 	if (PollsInFlight > 0 || !Client.IsValid())
@@ -617,9 +623,13 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildTabBar()
 		[
 			MakeTab(LOCTEXT("TabSession", "Session"), ETab::Session)
 		]
-		+ SHorizontalBox::Slot().AutoWidth()
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
 		[
 			MakeTab(LOCTEXT("TabLog", "Log"), ETab::Log)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			MakeTab(LOCTEXT("TabScoring", "Scoring"), ETab::Scoring)
 		];
 }
 
@@ -639,6 +649,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 		{
 			ActiveTab = Tab;
 			if (Tab == ETab::Log) FetchLog();
+			if (Tab == ETab::Scoring) FetchScoring();
 			return FReply::Handled();
 		})
 		[
@@ -794,6 +805,265 @@ void SFSDSLauncherPanel::RebuildLogList()
 			[
 				SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Ink).AutoWrapText(true)
 				.Text(FText::FromString(E.Text))
+			]
+		];
+	}
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildScoringTab()
+{
+	auto Seconds = [](double S) { return FText::FromString(FString::Printf(TEXT("%.3f s"), S)); };
+
+	return SNew(SVerticalBox)
+		// The score, as big as the web UI makes it.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("ScoreHeading", "EVENT SCORE"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom)
+			[
+				SNew(STextBlock)
+				.Font(Font(28, TEXT("Bold")))
+				.ColorAndOpacity(Accent)
+				.Text_Lambda([this]()
+				{
+					// With no reference the backend compares the run with itself,
+					// so every run "scores" the maximum: show no number at all.
+					if (!Scoring || !Scoring->bHasReference) return LOCTEXT("NoScore", "--");
+					return FText::FromString(FString::Printf(TEXT("%.1f"), Scoring->Score));
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(8, 0, 0, 6)
+			[
+				SNew(STextBlock)
+				.Font(Font(10))
+				.ColorAndOpacity(Muted)
+				.Text_Lambda([this]()
+				{
+					if (!Scoring) return FText::GetEmpty();
+					return FText::Format(LOCTEXT("OfPoints", "/ {0} points   {1}"),
+						FText::AsNumber(FMath::RoundToInt(Scoring->MaxPoints)), FText::FromString(Scoring->Event));
+				})
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(STextBlock)
+			.Font(Font(9))
+			.AutoWrapText(true)
+			.ColorAndOpacity(Warn)
+			.Visibility_Lambda([this]() { return ScoringError.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			.Text_Lambda([this]() { return FText::Format(LOCTEXT("ScoreError", "No score: {0}"), FText::FromString(ScoringError)); })
+		]
+
+		// The time breakdown.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			MakeStatusRow(LOCTEXT("Elapsed", "Elapsed"),
+				TAttribute<FText>::CreateLambda([this, Seconds]() { return Scoring ? Seconds(Scoring->Total) : FText::GetEmpty(); }),
+				FSlateColor(Ink))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Penalties", "Penalties"),
+				TAttribute<FText>::CreateLambda([this]()
+				{
+					if (!Scoring) return FText::GetEmpty();
+					return FText::FromString(FString::Printf(TEXT("+%.1f s   (DOO %d: +%.1f s, OC %d: +%.1f s)"),
+						Scoring->DooPenalty + Scoring->OcPenalty, Scoring->Doo, Scoring->DooPenalty,
+						Scoring->Oc, Scoring->OcPenalty));
+				}),
+				TAttribute<FSlateColor>::CreateLambda([this]()
+				{
+					return FSlateColor(Scoring && (Scoring->DooPenalty + Scoring->OcPenalty) > 0.0 ? Warn : Ink);
+				}))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Corrected", "Corrected"),
+				TAttribute<FText>::CreateLambda([this, Seconds]() { return Scoring ? Seconds(Scoring->Corrected) : FText::GetEmpty(); }),
+				FSlateColor(Accent))
+		]
+
+		// The reference time the score is computed against.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("RefHeading", "REFERENCE TIME (T_BEST)"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(SBox).WidthOverride(120.f)
+				[
+					SNew(SEditableTextBox)
+					.Font(Font(10))
+					.HintText(LOCTEXT("RefHint", "seconds"))
+					.Text_Lambda([this]() { return FText::FromString(ReferenceInput); })
+					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+					{
+						const FString In = Text.ToString().TrimStartAndEnd();
+						if (In.IsEmpty() || (In.IsNumeric() && FCString::Atod(*In) > 0.0))
+						{
+							ReferenceInput = In;
+							FetchScoring();
+						}
+						else
+						{
+							Say(TEXT("The reference time is a number of seconds, or empty for the best lap."), true);
+						}
+						// Hand the keys back to the car.
+						FSlateApplication::Get().SetAllUserFocusToGameViewport();
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Font(Font(9))
+				.AutoWrapText(true)
+				.ColorAndOpacity_Lambda([this]()
+				{
+					return FSlateColor(Scoring && !Scoring->bHasReference && ReferenceInput.IsEmpty() ? Warn : Muted);
+				})
+				.Text_Lambda([this]()
+				{
+					if (!ReferenceInput.IsEmpty()) return FText::Format(LOCTEXT("RefUsing", "Scoring against {0} s"), FText::FromString(ReferenceInput));
+					if (Scoring && Scoring->bHasReference)
+					{
+						return FText::FromString(FString::Printf(TEXT("Scoring against %.3f s"), Scoring->Reference));
+					}
+					return LOCTEXT("RefNone",
+						"None set. Without one the run is compared with itself and always gets full points, so no score is shown.");
+				})
+			]
+		]
+
+		// The laps.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("LapsHeading", "LAP TIMES"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.MaxDesiredHeight(220.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(LapList, SVerticalBox)
+				]
+			]
+		];
+}
+
+void SFSDSLauncherPanel::FetchScoring()
+{
+	if (bScoringInFlight || !Client.IsValid()) return;
+	bScoringInFlight = true;
+
+	FString Path = TEXT("/api/scoring/summary");
+	if (!ReferenceInput.IsEmpty())
+	{
+		Path += TEXT("?t_best=") + ReferenceInput;
+	}
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Get(Path, [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->bScoringInFlight = false;
+
+		const TSharedPtr<FJsonObject> O = R.Object();
+		FString Err;
+		if (!R.Ok() || !O.IsValid())
+		{
+			P->ScoringError = R.Error.IsEmpty() ? TEXT("malformed reply") : R.Error;
+			return;
+		}
+		// No referee yet comes back as 200 {"error": "No referee data"}.
+		if (O->TryGetStringField(TEXT("error"), Err))
+		{
+			P->ScoringError = Err;
+			return;
+		}
+		P->ScoringError.Reset();
+
+		FScoring S;
+		O->TryGetStringField(TEXT("event"), S.Event);
+		O->TryGetNumberField(TEXT("laps_completed"), S.Laps);
+		O->TryGetNumberField(TEXT("best_lap"), S.BestLap);
+		O->TryGetNumberField(TEXT("total_elapsed"), S.Total);
+		O->TryGetNumberField(TEXT("doo_count"), S.Doo);
+		O->TryGetNumberField(TEXT("doo_penalty_s"), S.DooPenalty);
+		O->TryGetNumberField(TEXT("oc_count"), S.Oc);
+		O->TryGetNumberField(TEXT("oc_penalty_s"), S.OcPenalty);
+		O->TryGetNumberField(TEXT("corrected_time"), S.Corrected);
+		O->TryGetNumberField(TEXT("max_points"), S.MaxPoints);
+		O->TryGetNumberField(TEXT("score"), S.Score);
+		S.bHasReference = O->TryGetNumberField(TEXT("t_best_reference"), S.Reference);
+		const TArray<TSharedPtr<FJsonValue>>* Laps = nullptr;
+		if (O->TryGetArrayField(TEXT("lap_times"), Laps))
+		{
+			for (const TSharedPtr<FJsonValue>& L : *Laps)
+			{
+				double T = 0.0;
+				if (L.IsValid() && L->TryGetNumber(T)) S.LapTimes.Add(T);
+			}
+		}
+
+		const bool bLapsChanged = !P->Scoring || P->Scoring->LapTimes != S.LapTimes
+			|| P->Scoring->BestLap != S.BestLap || (P->LapList.IsValid() && P->LapList->NumSlots() == 0);
+		P->Scoring = MoveTemp(S);
+		if (bLapsChanged) P->RebuildLapList();
+	});
+}
+
+void SFSDSLauncherPanel::RebuildLapList()
+{
+	if (!LapList.IsValid()) return;
+	LapList->ClearChildren();
+
+	if (!Scoring || Scoring->LapTimes.Num() == 0)
+	{
+		LapList->AddSlot().AutoHeight()
+		[
+			SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted).Text(LOCTEXT("NoLaps", "No laps completed yet"))
+		];
+		return;
+	}
+
+	for (int32 i = 0; i < Scoring->LapTimes.Num(); ++i)
+	{
+		const double T = Scoring->LapTimes[i];
+		const bool bBest = FMath::IsNearlyEqual(T, Scoring->BestLap, 1e-6);
+		LapList->AddSlot().AutoHeight().Padding(0, 1)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(LabelWidth)
+				[
+					SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted)
+					.Text(FText::Format(LOCTEXT("LapN", "Lap {0}"), FText::AsNumber(i + 1)))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 16, 0)
+			[
+				SNew(STextBlock).Font(Font(10, TEXT("Bold"))).ColorAndOpacity(Ink)
+				.Text(FText::FromString(FString::Printf(TEXT("%.3f s"), T)))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(STextBlock).Font(Font(10)).ColorAndOpacity(bBest ? Good : Muted)
+				.Text(bBest ? LOCTEXT("Best", "BEST")
+					: FText::FromString(FString::Printf(TEXT("+%.3f"), T - Scoring->BestLap)))
 			]
 		];
 	}
