@@ -29,8 +29,10 @@ Chosen on the menu's Drive page (TIMING, shown with Autonomous), with `"Timing":
 
 In slow motion nothing but the pipeline's time budget changes:
 - Every frame is still the same 1/60 s physics step.
-- The sensors run on simulation time: the plugin sends a sensor frame per engine frame, and counts the LiDAR's 10 Hz in game time. The bridge's two wall-timer topics (the LWS steering sensor at 100 Hz, `/tire_loads` at 20 Hz) are held to their rate in simulation time (`ros2/src/ifssim_bridge/include/sim_rate_gate.h`), so they don't repeat.
+- The sensors run on simulation time: the RPC sensor stream sends 400 frames per simulated second (it resends each tick's frame for the simulation time that tick advanced, so at real time it sends what it always did), the UDP broadcaster sends one per engine frame, and the LiDAR's 10 Hz is counted in game time. The bridge's two wall-timer topics (the LWS steering sensor at 100 Hz, `/tire_loads` at 20 Hz) are held to their rate in simulation time (`ros2/src/ifssim_bridge/include/sim_rate_gate.h`), so they don't repeat.
 - The pipeline's 40 Hz control and its watchdog run on `/clock`, so they tick 40 times per simulated second, as on the car.
+
+Checked with one autocross lap of `track_20260404_013721` driven by the pipeline: 173.3 s, no cones down, at real time, and 173.4 s, no cones down, at 0.25x (12 real minutes).
 
 It isn't an exact lockstep. The pipeline gets more time, not unlimited time, and small timing differences between runs remain. If a node needs more than its slowed-down share, pick a slower speed.
 

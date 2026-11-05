@@ -52,7 +52,12 @@ shipping pipeline, documentation.
   `setSpeedFactor` RPC, and the mission benchmark's `--speed-factor`. The
   bridge holds its two wall-timer topics (the LWS steering sensor,
   `/tire_loads`) to their rate in simulation time, so they don't repeat in
-  slow motion. See docs/sim_timing.md.
+  slow motion, and the sim's RPC sensor stream now sends 400 frames per
+  simulated second rather than per real second (the same frames at real
+  time; in slow motion it had sent the pipeline four times its IMU, GPS and
+  odometry per simulated second). An autocross lap the pipeline drove in
+  173.3 s at real time took 173.4 s at 0.25x, both with no cones down. See
+  docs/sim_timing.md.
 - **The menu costs less in the background.** While the menu is up and nothing
   drives, the sim draws 30 frames a second (Settings, Performance: 60, 30 or
   15, kept between launches), and 5 while its window is minimised. On the main

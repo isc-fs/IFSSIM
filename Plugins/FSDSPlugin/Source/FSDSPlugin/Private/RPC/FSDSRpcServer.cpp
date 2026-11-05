@@ -2363,6 +2363,20 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	int32 Sent = 0;
 	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
 
+	// 400 frames per second of SIM time. The latest tick's frame is resent
+	// until the next tick replaces it, so at 60 fps each tick goes out about
+	// 6.7 times. Paced on the wall clock alone, slow motion (FFSDSRealTime)
+	// would send far more per sim second (27 per tick at 0.25x): 1600 IMU
+	// samples per sim second and a GPS, GSS and odometry the bridge counts
+	// off this stream at four times their rate. So each new tick earns sends
+	// for the sim time it advanced, one per StreamPeriodNs, and each send
+	// spends one: the same frames as before at real time, the same rate in
+	// sim time in slow motion.
+	constexpr int64 StreamPeriodNs = 2'500'000;   // 400 Hz
+	constexpr double MaxStreamCredit = 40.0;      // 0.1 s of sim time: no burst after a pause
+	uint64 LastStampNs = 0;
+	double StreamCredit = 0.0;
+
 	while (bRunning)
 	{
 		if (!IsValid(VehiclePawn)) { FPlatformProcess::Sleep(0.1f); continue; }
@@ -2383,6 +2397,17 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		}
 		if (!bHaveFrame) { FPlatformProcess::Sleep(0.0025f); continue; }
 
+		if (Frame.Timestamp != LastStampNs)
+		{
+			// A new tick (or a new session, whose clock went back): its share.
+			StreamCredit = (LastStampNs == 0 || Frame.Timestamp < LastStampNs)
+				? 1.0
+				: FMath::Min(StreamCredit + double(Frame.Timestamp - LastStampNs) / StreamPeriodNs, MaxStreamCredit);
+			LastStampNs = Frame.Timestamp;
+		}
+		if (StreamCredit < 1.0) { FPlatformProcess::Sleep(0.0025f); continue; }
+		StreamCredit -= 1.0;
+
 		Frame.FrameID = StreamFrameCounter++;
 		// Wall clock at send time (latency/health only, never integrated).
 		Frame.ExternalTimestamp =
@@ -2396,7 +2421,8 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			return;
 		}
 
-		// Pace at ~400Hz — matches BMI088 IMU rate
+		// Pace at ~400Hz of wall time between sends (the BMI088's rate); the
+		// credit above holds it to 400 Hz of sim time.
 		FPlatformProcess::Sleep(0.0025f);
 	}
 }
