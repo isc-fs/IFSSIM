@@ -23,7 +23,7 @@ A venue is data, built by the plugin at `loadTrack` like any environment. It is 
    After the venue's props, the sidecar adds **the track's own clutter**: tyre walls, bollards, bins, stacks of spare cones and timing tripods, 0.5–3 m from its cone lines, as an event would set them up (profile `venue_clutter` in `catalogue.py`).
    - It is placed by the same code as the random environments (`envgen.generate.place`), from the track spec's `seed`, so changing the seed in the editor moves it.
    - It only stands on the lot, 0.3 m in from its edge, so it never meets the venue's props, which all stand off it.
-4. **The plugin** loads the sidecar with the track, as it does any environment. Today that only happens with `"Environment": {"Enabled": true}` in settings.json (roadmap rule 5).
+4. **The plugin** loads the sidecar with the track, as it does any environment. A venue's track loads it whatever `"Environment": {"Enabled"}` says in settings.json, because the place is why it was picked: the plugin recognises it by its profile, `venue_<venue>`. Every other sidecar still waits for `Enabled` (roadmap rule 5), so the flat world stays the regression baseline, and tracks without a sidecar are unchanged.
 
 ## Drawing a track on a venue
 
@@ -71,17 +71,16 @@ That makes 250 props, plus each track's own clutter: 13 more around `parking_a__
 ## What is next
 
 1. ~~Drive it in the menu~~ and ~~draw on it in the track editor~~: done, see above.
-2. **Load a venue's environment even with `Environment.Enabled` off**, since the props are the point (decision 1 below).
 3. **More venues.** Two or three parking lots of different sizes and layouts, each with room for several tracks.
 4. **A real hill** once terrain (roadmap P3) lands: a slope inside or beside the lot that the car drives over.
 5. **Real meshes** for the new classes, if the primitives prove too simple for the LiDAR. From CARLA (CC-BY, the roadmap's preferred source) or from our own models.
 
 ## Decisions to take with Raúl
 
-1. **Should a venue's environment load whatever `Environment.Enabled` says?**
+1. **Should a venue's environment load whatever `Environment.Enabled` says?** Done as proposed, pending Raúl's review:
    - Rule 5 keeps environments opt-in, so the flat world stays the regression baseline.
    - But a venue track is a venue track; without its props it is only cones.
-   - Proposal: venue tracks always load their sidecar, and other tracks stay opt-in.
+   - So venue tracks always load their sidecar (step 4 above), and other tracks stay opt-in.
 2. **Where do venue tracks live?**
    - Flat in `Content/tracks` with a `<venue>__` prefix (as now) works with packaging, Mission Control, the menu and `loadTrack` unchanged.
    - `Content/tracks/venues/<venue>/` (the roadmap's layout for geodata venues) needs subfolder support in all four.

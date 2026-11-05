@@ -42,6 +42,11 @@ shipping pipeline, documentation.
   spare cones and timing tripods 0.5–3 m from its cones, on the lot, from the
   track's seed (profile `venue_clutter`); the Drive map draws them. See
   docs/venues.md.
+- **A venue's track always loads its surroundings,** even with
+  `"Environment": {"Enabled": false}` in settings.json (the default): the
+  plugin recognises a venue's sidecar by its profile, `venue_<venue>`. Every
+  other sidecar still waits for `Enabled`, and tracks without one are
+  unchanged.
 
 - **The menu's Location is a dropdown, and the track list groups by venue.**
   Drive and the Track editor pick the venue from one dropdown (with each
