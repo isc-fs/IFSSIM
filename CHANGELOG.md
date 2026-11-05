@@ -21,6 +21,24 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
+  Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
+  suits it (a gridded top-down map of its cones, in metres), and who drives,
+  then START. Practice takes any track, open test tracks included, and has no
+  lap target. A manual run needs only the sim, no Docker:
+  the menu loads the track with `loadTrack`'s own code and hands the car to the
+  keyboard. Esc pauses (Resume, Restart run, Main menu); when the referee ends
+  the run, a results box shows its laps and cones, and the Results page keeps
+  every manual run since the sim started. Autonomous opens Mission Control,
+  where the pipeline's session starts as before. The menu stays out of the way
+  of RPC sessions: it is off with `-NoMenu`, `-RenderOffscreen` or
+  `"Menu": {"Enabled": false}`, and closes when a client loads a track or resets
+  the scenario. The Mission Control panel (Tab) stays, for engineers.
+- **A Track editor in the menu.** Draws tracks in the sim, as the web UI's Draw
+  Track does and through the same track creator (tools/envgen, via Mission
+  Control's backend): click points or draw freehand, see the cones, both cone
+  lines, the start pose and every FS rule issue live, add test sections, save,
+  and Test drive the track in Practice. Drawn tracks reopen for editing.
 - **Telemetry in the in-sim Mission Control panel.** A Telemetry tab with the
   car's live state read straight from the sim: speed, motor rpm, pedals,
   steering, who is driving, position and heading, and the motor's regen (torque
@@ -280,6 +298,14 @@ shipping pipeline, documentation.
   of `docs/ENVIRONMENT_ROADMAP.md`.
 
 ### Fixed
+
+- **A run on an open track now ends at its finish gate, whatever the event.**
+  A track with two orange gates, start at one end and finish at the other
+  (acceleration, the open stress tracks: slaloms, hairpins), only finished
+  under the Acceleration event: under Autocross or Trackdrive the referee waited
+  for a second crossing that never came, so an autonomous or benchmark run there
+  could only end by timeout. The referee now starts the clock when the car sets
+  off and finishes on one pass of the far gate. Loops are unchanged.
 
 - Full steering lock in the sim is now 18.2° at the road wheel, the measured value and the one the controller assumes (#462). It was 22.4°, so every steering command turned the wheels 1.23x further than the controller intended and the car cut the inside of corners. The bridge's reported `/fsds/steering_angle` uses the same scale.
 - The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.

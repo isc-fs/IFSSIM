@@ -107,6 +107,12 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 		(*McObj)->TryGetStringField(TEXT("Key"), LauncherKey);
 	}
 
+	const TSharedPtr<FJsonObject>* MenuObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("Menu"), MenuObj))
+	{
+		(*MenuObj)->TryGetBoolField(TEXT("Enabled"), bMenuEnabled);
+	}
+
 	const TSharedPtr<FJsonObject>* HudObj = nullptr;
 	if (Root->TryGetObjectField(TEXT("HUD"), HudObj))
 	{

@@ -259,6 +259,10 @@ private:
 	bool bFinishLineValid = false;
 	/** The finish gate was chosen relative to a track cone, not the origin. */
 	bool bFinishAnchoredToTrack = false;
+	/** Two orange gates, start at one end and finish at the other (acceleration,
+	 *  open test tracks): the clock starts when the car sets off and one pass of
+	 *  the finish gate ends the run, whatever the event. */
+	bool bOneWayTrack = false;
 
 	/** Displacement threshold for cone hit (cm) */
 	float ConeHitThreshold = 15.0f;

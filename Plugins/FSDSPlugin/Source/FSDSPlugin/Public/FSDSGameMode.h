@@ -5,6 +5,7 @@
 #include "RPC/FSDSRpcServer.h"
 #include "RPC/FSDSUdpBroadcaster.h"
 #include "UI/FSDSLauncher.h"
+#include "UI/FSDSMenu.h"
 #include "UI/FSDSHud.h"
 #include "FSDSGameMode.generated.h"
 
@@ -30,6 +31,7 @@ public:
 	AFSDSVehiclePawn* GetVehiclePawn() const { return VehiclePawn; }
 	FFSDSRpcServer* GetRpcServer() { return &RpcServer; }
 	FFSDSLauncher& GetLauncher() { return Launcher; }
+	FFSDSMenu& GetMenu() { return Menu; }
 	FFSDSHud& GetHud() { return Hud; }
 
 private:
@@ -48,5 +50,6 @@ private:
 	FFSDSRpcServer RpcServer;
 	FFSDSUdpBroadcaster UdpBroadcaster;
 	FFSDSLauncher Launcher;
+	FFSDSMenu Menu;
 	FFSDSHud Hud;
 };

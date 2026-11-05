@@ -270,6 +270,12 @@ public:
 	bool bLauncherPanel = true;
 	FString LauncherKey = TEXT("Tab");
 
+	// --- Front-end menu ----------------------------------------------------
+	//
+	// "Menu": { "Enabled" }. The full-screen menu the sim opens on (event,
+	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
+	bool bMenuEnabled = true;
+
 	// --- HUD (in-game overlay of the car's state) ----------------------
 	//
 	// "HUD": { "Enabled", "Key" }. Shown at start when Enabled; the key
