@@ -120,6 +120,7 @@ void FFSDSMenu::Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn*
 
 	Results = MakeShared<TArray<FFSDSRunResult>>();
 	SeenExternalGen = Rpc->GetExternalSessionGeneration();
+	Alive = MakeShared<bool>(true);
 
 	// The track editor talks to the backend as the panel does.
 	const FFSDSSettings& S = FFSDSSettings::Get();
@@ -155,6 +156,7 @@ void FFSDSMenu::Shutdown()
 	Hide();
 	StopOrbit();
 	UpdateFrameCap();   // closed: back to the sim's own rate
+	Alive.Reset();      // replies still in flight find nothing to update
 	bEnabled = false;
 }
 
@@ -222,6 +224,23 @@ APlayerController* FFSDSMenu::GetPC() const
 bool FFSDSMenu::IsManualRunLive() const
 {
 	return bRunLive && Current.IsSet() && !Current->bAutonomous;
+}
+
+bool FFSDSMenu::IsAutonomousRunLive() const
+{
+	return bRunLive && Current.IsSet() && Current->bAutonomous;
+}
+
+FString FFSDSMenu::MissionName(EFSDSEventType Event)
+{
+	// tools/sim_benchmark/missions.yaml's mc_name, and the panel's missions.
+	switch (Event)
+	{
+	case EFSDSEventType::Acceleration: return TEXT("accel");
+	case EFSDSEventType::Skidpad:      return TEXT("skidpad");
+	case EFSDSEventType::Autocross:    return TEXT("autocross");
+	default:                           return TEXT("trackdrive");
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +354,11 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	// A session from outside (a track loaded or a scenario reset over RPC):
 	// whoever sent it is running the sim now, so get out of the way.
 	const uint32 Gen = Rpc->GetExternalSessionGeneration();
-	if (Gen != SeenExternalGen)
+	if (Gen != SeenExternalGen && bStartingSession)
+	{
+		SeenExternalGen = Gen;   // the backend loading the track the menu asked for
+	}
+	else if (Gen != SeenExternalGen)
 	{
 		SeenExternalGen = Gen;
 		if (bRunLive) RecordRun();
@@ -355,13 +378,15 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	ThrottleFrame();
 
 	// The referee ends the run (all laps done, or the far gate of a one-way
-	// track): show how it went. Practice on a loop never ends this way.
-	if (IsManualRunLive() && !IsOpen())
+	// track): show how it went. Practice on a loop never ends this way. With
+	// the pipeline driving, its session stops too, and the car waits.
+	if (bRunLive && Current.IsSet() && (!IsOpen() || IsAutonomousRunLive()))
 	{
 		const AFSDSReferee* R = Referee.Get();
 		if (R && R->GetState().bFinished)
 		{
 			RecordRun();
+			if (IsAutonomousRunLive()) StopSession();
 			HoldCar();
 			bRunLive = false;
 			Show(EMode::Finished);
@@ -379,12 +404,7 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 
 	if (Request.bAutonomous)
 	{
-		// The pipeline's session runs from Mission Control, through the
-		// backend, as before; the menu just hands over.
-		Current = Request;
-		bRunLive = false;
-		Hide();
-		if (Launcher) Launcher->Open(GetPC());
+		StartAutonomous(Request);
 		return;
 	}
 
@@ -433,6 +453,95 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 		*EventName(Request.Event, Request.bPractice), *Request.Track.Name, Cones, Request.Laps);
 }
 
+void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request)
+{
+	if (bStartingSession) return;   // already on its way
+	if (!Client.IsValid())
+	{
+		if (Widget) Widget->SetMessage(TEXT("No Mission Control backend configured."), true);
+		return;
+	}
+	bRunLive = false;
+	bStartingSession = true;
+	const TWeakPtr<bool> Token = Alive;
+	const FFSDSDriveRequest Req = Request;
+	const FString Csv = Req.Track.Name + TEXT(".csv");
+	auto Say = [this, Token](const FString& Msg, bool bError)
+	{
+		if (Token.IsValid() && Widget) Widget->SetMessage(Msg, bError);
+	};
+	auto Fail = [this, Token, Say](const FString& Msg)
+	{
+		if (!Token.IsValid()) return;
+		bStartingSession = false;
+		Say(Msg, true);
+		UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: autonomous start: %s"), *Msg);
+	};
+	Say(TEXT("Stopping any session that is running..."), false);
+
+	// 1. The previous session's pipeline, if any (as the mission benchmark).
+	Client->Post(TEXT("/api/pipeline/stop"), nullptr, [this, Token, Req, Csv, Say, Fail](const FFSDSMcReply& Stop)
+	{
+		if (!Token.IsValid()) return;
+		if (!Stop.Reached())
+		{
+			Fail(FString::Printf(TEXT("Mission Control's backend isn't reachable at %s: start the Docker stack. (%s)"),
+				*Client->GetBaseUrl(), *Stop.Error));
+			return;
+		}
+		Say(FString::Printf(TEXT("Loading %s..."), *Req.Track.Name), false);
+
+		// 2. The track, through the backend: it re-centres it, loads it into
+		//    the sim (cones, the car on the start gate, the referee cleared)
+		//    and knows which track the session runs on.
+		Client->Post(FString::Printf(TEXT("/api/track/%s/load"), *FFSDSMissionControlClient::EncodeSegment(Csv)), nullptr,
+			[this, Token, Req, Say, Fail](const FFSDSMcReply& Load)
+		{
+			if (!Token.IsValid()) return;
+			if (!Load.Ok())
+			{
+				Fail(FString::Printf(TEXT("Couldn't load %s: %s"), *Req.Track.Name, *Load.Error));
+				return;
+			}
+			Say(TEXT("Starting the pipeline (up to a minute)..."), false);
+
+			// 3. The mission. The backend holds the car under EBS while the
+			//    pipeline configures and its EKF calibrates, then releases it.
+			const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
+			Body->SetStringField(TEXT("mission"), MissionName(Req.Event));
+			Body->SetNumberField(TEXT("num_laps"), Req.Event == EFSDSEventType::Trackdrive ? Req.Laps : 1);
+			Body->SetBoolField(TEXT("record_bag"), false);
+			Client->Post(TEXT("/api/event/start"), Body, [this, Token, Req, Fail](const FFSDSMcReply& Start)
+			{
+				if (!Token.IsValid()) return;
+				if (!Start.Ok())
+				{
+					StopSession();
+					Fail(FString::Printf(TEXT("The pipeline didn't start: %s"), *Start.Error));
+					return;
+				}
+				bStartingSession = false;
+				SeenExternalGen = Rpc ? Rpc->GetExternalSessionGeneration() : SeenExternalGen;
+				Current = Req;
+				bRunLive = true;
+				bRunRecorded = false;
+				Hide();
+				UE_LOG(LogTemp, Log, TEXT("FSDS Menu: autonomous %s on %s, %d laps"),
+					*EventName(Req.Event), *Req.Track.Name, Req.Laps);
+			}, 300.f);
+		}, 60.f);
+	}, 60.f);
+}
+
+void FFSDSMenu::StopSession()
+{
+	if (!Client.IsValid()) return;
+	Client->Post(TEXT("/api/pipeline/stop"), nullptr, [](const FFSDSMcReply& R)
+	{
+		if (!R.Ok()) UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: stopping the session: %s"), *R.Error);
+	}, 60.f);
+}
+
 void FFSDSMenu::TestDrive(const FString& TrackName)
 {
 	ScanTracks();
@@ -459,14 +568,16 @@ void FFSDSMenu::StartStack()
 void FFSDSMenu::OnEscape()
 {
 	if (!bEnabled || IsOpen()) return;
-	if (IsManualRunLive())
+	if (bRunLive && Current.IsSet())
 	{
+		// A manual run pauses; an autonomous one keeps going under the box
+		// (pausing would stop the pipeline's clock).
 		Show(EMode::Pause);
 	}
 	else
 	{
-		// Not in a manual run (an autonomous session, or nothing yet):
-		// the front end, without touching the car.
+		// No run of the menu's (a session from Mission Control or the
+		// benchmark, or nothing yet): the front end, without touching the car.
 		Show(EMode::Main);
 	}
 }
@@ -480,6 +591,16 @@ void FFSDSMenu::Restart()
 {
 	if (!Current.IsSet()) return;
 	const FFSDSDriveRequest Again = *Current;
+	if (Again.bAutonomous)
+	{
+		// The Drive page, so the steps of the new start show under START.
+		if (bRunLive) RecordRun();
+		bRunLive = false;
+		Hide();
+		Show(EMode::Main);
+		StartAutonomous(Again);
+		return;
+	}
 	Hide();   // unpause first: the load teleports the car
 	Drive(Again);
 }
@@ -487,6 +608,7 @@ void FFSDSMenu::Restart()
 void FFSDSMenu::BackToMain()
 {
 	if (bRunLive) RecordRun();
+	if (IsAutonomousRunLive()) StopSession();
 	bRunLive = false;
 	Hide();
 	HoldCar();
@@ -501,7 +623,7 @@ void FFSDSMenu::Quit()
 
 void FFSDSMenu::RecordRun()
 {
-	if (bRunRecorded || !Current.IsSet() || Current->bAutonomous) return;
+	if (bRunRecorded || !Current.IsSet()) return;
 	const AFSDSReferee* R = Referee.Get();
 	if (!R) return;
 	bRunRecorded = true;
@@ -519,6 +641,7 @@ void FFSDSMenu::RecordRun()
 	Run.OffCourse = S.OffTrackCounter;
 	Run.bFinished = S.bFinished;
 	Run.bPractice = Current->bPractice;
+	Run.bAutonomous = Current->bAutonomous;
 	Run.When = FDateTime::Now();
 	Results->Add(MoveTemp(Run));
 }
@@ -534,7 +657,9 @@ void FFSDSMenu::UpdateFrameCap()
 	// the car (Esc during an autonomous session brings the menu up over it).
 	int32 Cap = 0;
 	const AFSDSVehiclePawn* P = Pawn.Get();
-	if (bEnabled && IsOpen() && !(P && P->IsApiControlEnabled()))
+	// Nor while a session starts: the pipeline configures and calibrates on
+	// the sim's clock, and it should not take twice the time.
+	if (bEnabled && IsOpen() && !bStartingSession && !(P && P->IsApiControlEnabled()))
 	{
 		Cap = GetMenuFrameRate();
 		const UWorld* W = World.Get();
