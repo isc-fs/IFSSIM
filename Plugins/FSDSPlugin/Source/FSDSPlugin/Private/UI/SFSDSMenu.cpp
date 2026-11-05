@@ -164,6 +164,13 @@ TSharedRef<SWidget> SFSDSMenu::MakeNavButton(const FText& Label, EPage InPage)
 		];
 }
 
+TSharedRef<SWidget> SFSDSMenu::SpeedChoice(const FText& Label, double Speed)
+{
+	return MakeChoice(Label,
+		[Speed]() { return FMath::IsNearlyEqual(FFSDSRealTime::Get().SpeedFactor(), Speed, 1e-3); },
+		[Speed]() { FFSDSRealTime::Get().SetSpeedFactor(Speed); });
+}
+
 TSharedRef<SWidget> SFSDSMenu::MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick)
 {
 	// Slate darkens a button's colour, so "on" is marked by the accent text
@@ -412,7 +419,14 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 						.Visibility_Lambda([this]() { return bPractice ? EVisibility::Collapsed : EVisibility::Visible; })
 						[
 							MakeChoice(LOCTEXT("Autonomous", "Autonomous"),
-								[this]() { return bAutonomous; }, [this]() { bAutonomous = true; })
+								[this]() { return bAutonomous; },
+								[this]()
+								{
+									// Switching to the pipeline starts at real time; slow
+									// motion is a choice made after.
+									if (!bAutonomous) FFSDSRealTime::Get().SetSpeedFactor(1.0);
+									bAutonomous = true;
+								})
 						]
 					]
 				]
@@ -430,6 +444,38 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 							: LOCTEXT("ManualHint", "You drive with the keyboard or a gamepad. Esc pauses.");
 					})
 					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+				]
+				// How fast the simulation runs while the pipeline drives.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SVerticalBox)
+					.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						// "Real time" needs more room than the slow motions.
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([]()
+						{
+							const double S = FFSDSRealTime::Get().SpeedFactor();
+							return S >= 1.0
+								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
+									"world, as on track. The HUD warns if this PC can't keep up.")
+								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
+									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
+									"unchanged; the view is choppier."),
+									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[
@@ -593,6 +639,42 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Controls", "CONTROLS")) ]
 		+ SVerticalBox::Slot().AutoHeight() [ Keys ]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Performance", "PERFORMANCE")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("MenuFps", "Menu frame rate"))
+					.Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("Fps60", "60"), []() { return FFSDSMenu::GetMenuFrameRate() == 60; }, []() { FFSDSMenu::SetMenuFrameRate(60); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("Fps30", "30"), []() { return FFSDSMenu::GetMenuFrameRate() == 30; }, []() { FFSDSMenu::SetMenuFrameRate(30); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("Fps15", "15"), []() { return FFSDSMenu::GetMenuFrameRate() == 15; }, []() { FFSDSMenu::SetMenuFrameRate(15); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("MenuFpsHint",
+				"While this menu is up and nothing drives, the sim draws this many frames a second "
+				"({0} when its window is minimised), so it costs less in the background. A run always "
+				"goes at the sim's full rate: every frame is a fixed physics step, so fewer frames would "
+				"slow the simulation down and give the pipeline more time than on the car. The HUD's "
+				"\"Real time\" line shows how close a run is to real time."), FText::AsNumber(FFSDSMenu::MinimisedFrameRate)))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Config", "CONFIGURATION")) ]
 		+ SVerticalBox::Slot().AutoHeight()
 		[

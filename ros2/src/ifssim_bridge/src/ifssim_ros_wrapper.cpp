@@ -880,6 +880,7 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     const bool first_on_new_stream = sensor_stream_reconnected_.exchange(false);
     const int64_t previous_clock_ns = clock_gate_.mark_ns();
     const auto clock_step = clock_gate_.update(now.nanoseconds(), first_on_new_stream);
+    sim_now_ns_.store(clock_gate_.mark_ns(), std::memory_order_relaxed);
     if (clock_step == ifssim_bridge::SimClockGate::Step::kNewSession) {
         // The command client may still hold the old sim's socket: the stream
         // threads reconnect it only if it already looked broken when they
@@ -1235,6 +1236,9 @@ void IFSSIMRosWrapper::lwsPublishTimerCb()
     // bit-consistent — a downstream EKF that uses both can't get them
     // out of sync. See #462.
     if (!lws_sensor_) return;
+    // 100 Hz of sim time: in slow motion the wall timer fires more often
+    // than that per sim second (sim_rate_gate.h).
+    if (!lws_rate_gate_.due(sim_now_ns_.load(std::memory_order_relaxed))) return;
     const double cmd_road_rad =
         latest_steering_cmd_rad_.load(std::memory_order_relaxed);
     const double cmd_sw_rad = cmd_road_rad * steering_ratio_;
@@ -1259,6 +1263,8 @@ void IFSSIMRosWrapper::tireLoadsTimerCb()
     // index by name not by position, but they should know the order from
     // the dim label too.
     if (!client_ || !client_->isConnected()) return;
+    // 20 Hz of sim time, as above.
+    if (!tire_loads_rate_gate_.due(sim_now_ns_.load(std::memory_order_relaxed))) return;
     std::string resp = client_->sendCommand("getTireLoads truth");
     if (resp.empty() || resp.find("\"error\"") != std::string::npos) return;
 

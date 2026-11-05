@@ -14,6 +14,38 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The sim shows how close to real time it runs.** Every frame is a fixed
+  1/60 s of simulation, so a PC that can't draw 60 frames a second slows the
+  simulation down, and the pipeline, which computes in real time, gets more
+  time per simulated second than on the car. The HUD has a "Real time" line:
+  simulated seconds per real second over the last two seconds, and the frame
+  rate, orange below 0.95 and red below 0.8. `getSimStatus` reports it
+  (`real_time_factor`, `real_fps`), and each mission benchmark run records
+  `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
+  results don't hold).
+- **Slow motion for the pipeline's sessions.** A TIMING choice on the Drive
+  page (with Autonomous): Real time, for testing the car's computer, or
+  0.5x, 0.25x, 0.1x, for comparing algorithms. In slow motion the sim spaces
+  its frames out so the pipeline gets 2, 4 or 10 times its real time per
+  simulated second; every frame is the same physics step and the sensors run
+  on simulation time, so nothing else changes. It applies only while the
+  pipeline drives. Also `"Timing": {"SpeedFactor"}` in settings.json, the
+  `setSpeedFactor` RPC, and the mission benchmark's `--speed-factor`. The
+  bridge holds its two wall-timer topics (the LWS steering sensor,
+  `/tire_loads`) to their rate in simulation time, so they don't repeat in
+  slow motion, and the sim's RPC sensor stream now sends 400 frames per
+  simulated second rather than per real second (the same frames at real
+  time; in slow motion it had sent the pipeline four times its IMU, GPS and
+  odometry per simulated second). An autocross lap the pipeline drove in
+  173.3 s at real time took 173.4 s at 0.25x, both with no cones down. See
+  docs/sim_timing.md.
+- **The menu costs less in the background.** While the menu is up and nothing
+  drives, the sim draws 30 frames a second (Settings, Performance: 60, 30 or
+  15, kept between launches), and 5 while its window is minimised. On the main
+  menu the sim took about 16% of a 12-thread CPU and half a GTX 1660 SUPER,
+  minimised or not. Runs always go at full rate, and so does an autonomous
+  session with the menu up over it.
+
 - **Parking lot A is fenced in, and its tracks get clutter of their own.** Tyre
   walls line the long edges of the lot (bins and bollards in their gaps) and a
   new `fence` class, a steel crowd barrier, the short ones. The south sidewalk,

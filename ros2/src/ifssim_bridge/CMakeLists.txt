@@ -68,6 +68,13 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  ament_add_gtest(test_sim_rate_gate
+    test/test_sim_rate_gate.cpp
+  )
+  target_include_directories(test_sim_rate_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
   ament_add_gtest(test_stamp_guard
     test/test_stamp_guard.cpp
   )
