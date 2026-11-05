@@ -73,12 +73,14 @@ one of **four** disagreeing figures for maximum steering lock:
 | source | value |
 |---|---|
 | `FSDSWheelFront.cpp`, historically | 28° — invented, comment said "FS typical geometry" |
-| `characterise_plant.m` | 22.4° — the tyre's peak-grip angle, now the clamp |
+| `characterise_plant.m` | 22.4° — the tyre's peak-grip angle, a slip angle rather than a road-wheel angle |
 | uDV `MAX_STEER_ROADWHEEL_DEG` | 18.2° — column limit / effective ratio |
 | this workbook, via the TODO | 19.25° — but possibly from an IFS-07 wheelbase |
 
-Resolving that needs someone who knows which chassis the sheet
-describes. It is tracked at #462.
+**Settled at 18.2° (#462).** It is the only figure measured at the road
+wheel on this car, and the autonomy controller already means 18.2° by a full
+steering command. The UE sim (`settings.json`, the wheel class and the
+bridge's reported angle) now uses it too.
 
 ## Two assumptions that may not need to be
 

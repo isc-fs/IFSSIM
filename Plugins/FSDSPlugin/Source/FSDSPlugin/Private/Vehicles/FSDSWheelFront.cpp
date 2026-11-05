@@ -28,22 +28,17 @@ UFSDSWheelFront::UFSDSWheelFront()
 	// IFS-08: Hoosier 16.0x7.5-10 R20
 	WheelRadius = 20.f;       // 200mm tire radius
 	WheelWidth = 19.f;        // 7.5 inch = 190mm
-	// Clamped to the tyre's peak-grip angle, not to a geometry estimate.
-	// characterise_plant.m sweeps constant steer at 8 m/s: lateral
-	// acceleration peaks at 22.4 deg (1.336 g) and FALLS to 1.268 g by
-	// 28 deg, while yaw/kinematic collapses 0.873 -> 0.651. Past the peak
-	// more lock buys less turn, which inverts the sign of the path
-	// controller's feedback: it runs wide, adds lock, turns less, adds more.
-	// That is the plow this repo kept diagnosing as a gain problem.
+	// 18.2 deg at the road wheel: the only lock measured on this car
+	// (tools/steering_check), and the angle the autonomy controller means by a
+	// full steering command (control params max_steer_deg). settings.json
+	// overrides this at runtime; it is set here too so the class default and
+	// the file agree.
 	//
-	// Nothing is lost by the clamp — every angle it removes produces less
-	// curvature than 22.4 deg already does.
-	//
-	// The 28 deg it replaces was never measured; the comment here said
-	// "FS typical steering geometry". 22.4 is measured, but measured
-	// against a SHAPE-FITTED Pacejka, not tyre data — so it moves with the
-	// tyre model. Re-run characterise_plant.m after any Pacejka change.
-	MaxSteerAngle = 22.4f;
+	// It was 22.4, described as the tyre's peak-grip angle. A road-wheel angle
+	// is not a slip angle, and at 22.4 every command turned the wheels 1.23x
+	// further than the controller intended, so the car cut the inside of
+	// corners. Settled in #462.
+	MaxSteerAngle = 18.2f;
 
 	// Per-wheel total mass. See FSDSWheelRear.cpp for the IFS-08 corner
 	// breakdown — Hoosier R20 16×7.5-10 ≈ 6 kg + 10″ Mg rim ≈ 3 kg +
