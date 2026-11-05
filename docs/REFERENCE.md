@@ -147,14 +147,14 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 | Drivetrain | RWD | — | `Drivetrain` |
 | Wheel radius | 0.228 | m | `WheelRadius` |
 | Wheel width | 0.190 | m | `WheelWidth` |
-| Max steer angle | 22.4 | ° | `MaxSteerAngle` |
+| Max steer angle | 18.2 | ° | `MaxSteerAngle` |
 | Wheelbase | 1.627 | m | `Wheelbase` |
 | Front track | 1.220 | m | `TrackFront` |
 | Rear track | 1.190 | m | `TrackRear` |
 | Weight distribution front | 43.8 | % | `WeightDistFront` |
 | Centre of gravity height | 0.300 | m | `CoGHeight` |
 
-> **Note on CoG:** runtime `CenterOfMassOverride` is applied (-10 mm in X) but the `FormulaMesh_PhysicsAsset` ships with a forward-biased authored CoM that runtime overrides cannot fully correct (`BodyInstance.COMNudge` saturates non-monotonically). The load-transfer RPC reports the actual Chaos values so autonomy code can consume relative wheel loads correctly even when the absolute distribution is biased.
+> **Note on geometry:** the physics wheels are placed from these numbers, not from the car mesh. The centre of mass is the body origin; the front axle sits `Wheelbase × (1 − WeightDistFront)` ahead of it and the rear axle `Wheelbase × WeightDistFront` behind it, at ± half the track. The mesh's own wheel bones are only 1.18 m apart, so until the mesh is re-rigged the visible wheels do not sit where the physics wheels are. The log line `FSDS: physics wheelbase` reports what the solver actually uses. CoG height is not applied yet.
 
 #### Powertrain
 

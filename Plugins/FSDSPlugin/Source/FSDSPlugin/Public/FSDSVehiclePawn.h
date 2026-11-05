@@ -459,6 +459,7 @@ private:
 	void OnHandbrakeReleased();
 	/** Opens/closes the in-game Mission Control panel (UI/FSDSLauncher.h). */
 	void OnToggleLauncher();
+	void OnToggleHud();
 
 	FCarControls CurrentControls;
 	bool bApiControlEnabled = false;

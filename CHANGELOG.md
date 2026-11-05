@@ -41,6 +41,12 @@ shipping pipeline, documentation.
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
   `Documents/IFSSIM/SessionLogs` and says where.
+- **HUD.** A small overlay in the corner of the sim window shows speed,
+  throttle, brake and steering, who is driving (manual or autonomous), an EBS
+  badge, and the mission: event, laps, last and best lap, cones down and
+  off-course. H hides and shows it; `"HUD": {"Enabled", "Key"}` in
+  settings.json; off in headless runs and with `-NoHUD`. See
+  `docs/OPERATING.md`.
 - **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
   with no window, runs the mission benchmark around it and stops it, once
   (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.
@@ -275,6 +281,34 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- Full steering lock in the sim is now 18.2° at the road wheel, the measured value and the one the controller assumes (#462). It was 22.4°, so every steering command turned the wheels 1.23x further than the controller intended and the car cut the inside of corners. The bridge's reported `/fsds/steering_angle` uses the same scale.
+- The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.
+- **RPC replies with an apostrophe or a control character in a string were
+  not valid JSON.** The replies are built by hand, and strings were escaped
+  with UE's `ReplaceCharWithEscapedChar`, which writes `'` as `\'` (no JSON
+  parser accepts it), or not escaped at all: track and plant names, FMU
+  metadata, error text, and request words echoed back in errors. A
+  `JsonEscape` helper now escapes every string that goes into a reply.
+
+- **The car could not turn tighter than ~11 m.** Chaos reads a wheel's
+  lateral slip graph as a force (it scales the curve by 10000), but the
+  Pacejka bake writes a friction coefficient, so every tyre topped out at
+  about 140 N sideways whatever its load (a front tyre carries ~520 N). The
+  sim now scales each wheel's graph by its load every tick, so lateral force
+  is mu(slip) x Fz. Full lock at ~3.3 m/s went from a 12 m to a 3.2 m radius,
+  and the stress circles (r5, r9), hairpins, tight slalom and tightening snail
+  drive to the end with no cones down (#697).
+- **On UE 5.8 the car spun at a quarter of steering lock.** The car's physics
+  asset carries a centre-of-mass nudge of 37 cm back and 17 cm down that UE 5.7
+  ignored and UE 5.8 applies, which put about 26% of the weight on the front
+  wheels instead of about 60%. The sim now clears it, so the centre of mass is
+  the one `settings.json` sets, as on 5.7: wheel loads, cornering and turning
+  radius measure the same on both engines (#712). New RPC
+  `getMassProperties` reports the chassis mass, centre of mass and wheel
+  positions in the car's frame.
+- **`loadTrack` and `getSettingsPaths` replied with invalid JSON on Windows.**
+  The file paths in them went out with bare backslashes; they are escaped
+  now, as the error replies already were.
 - **After a sim restart the car never moved.** When the sim stopped, the
   bridge reconnected its sensor streams at once, but its command connection
   only failed a moment later, on its next send, and nothing reconnected it:

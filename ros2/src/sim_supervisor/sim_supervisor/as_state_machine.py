@@ -54,12 +54,18 @@ def next_as_state(
 ) -> int:
     """Return the next AS-state byte.
 
-    Precedence (highest first):
-      1. estop or pipeline-raised emergency (DV_EMERGENCY) → AS_EMERGENCY.
-      2. Emergency latches until the operator disarms (intent OFF).
-      3. intent OFF, or no runnable mission → AS_OFF.
-      4. intent READY → AS_READY (triggers mission_control to configure).
-      5. intent GO → AS_DRIVING, but ONLY once dv_status == DV_READY
+    Precedence (highest first), the firmware's order (IFS09-DV-uDV
+    Core/Inc/as_transition.hpp):
+      1. intent OFF → AS_OFF. The operator disarming is the sim's ASMS off,
+         which always wins: it clears an emergency even while the pipeline
+         still reports DV_EMERGENCY (mission_control only stops reporting it
+         once the AS has left Emergency, so the other order never clears).
+      2. Emergency latches until the operator disarms.
+      3. estop → AS_EMERGENCY from any state; a pipeline-raised emergency
+         (DV_EMERGENCY) only while armed (Ready / Driving).
+      4. no runnable mission → AS_OFF.
+      5. intent READY → AS_READY (triggers mission_control to configure).
+      6. intent GO → AS_DRIVING, but ONLY once dv_status == DV_READY
          (the prepared handshake); otherwise hold at AS_READY. While
          driving, DV_FINISHED → AS_FINISHED (latched until re-armed).
     """
@@ -67,12 +73,13 @@ def next_as_state(
     cur = int(current)
     dv = int(dv_status)
 
-    if estop or dv == DV_EMERGENCY:
-        return AS_EMERGENCY
     if intent == OperatorIntent.OFF:
         return AS_OFF
     if cur == AS_EMERGENCY:
         # Latched: only intent OFF (handled above) clears an emergency.
+        return AS_EMERGENCY
+    armed = cur in (AS_READY, AS_DRIVING)
+    if estop or (dv == DV_EMERGENCY and armed):
         return AS_EMERGENCY
     if not mission_runnable:
         # Can't arm or go without a runnable mission selected.
