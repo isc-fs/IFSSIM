@@ -113,6 +113,13 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 		(*MenuObj)->TryGetBoolField(TEXT("Enabled"), bMenuEnabled);
 	}
 
+	const TSharedPtr<FJsonObject>* HudObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("HUD"), HudObj))
+	{
+		(*HudObj)->TryGetBoolField(TEXT("Enabled"), bHudEnabled);
+		(*HudObj)->TryGetStringField(TEXT("Key"), HudKey);
+	}
+
 	// Plant selection. A top-level "Plant" block, because which simulator
 	// runs the car is not a property of the car.
 	const TSharedPtr<FJsonObject>* PlantObj;

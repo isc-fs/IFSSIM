@@ -38,6 +38,7 @@ import mission_catalog as _mission_catalog
 # at runtime in the overlay, same as the rest of the ROS deps below).
 from mission_control.interface_contract import (
     DV_FAILED,
+    DV_IDLE,
     DV_READY,
     DV_RUNNING,
     SIM_INTENT_GO,
@@ -49,6 +50,18 @@ from mission_control.interface_contract import (
     TOPIC_SIM_MISSION,
     mission_id_to_ami_index,
 )
+
+
+# /dv/status is a heartbeat; with none for this long the pipeline is treated
+# as idle (as the sim uDV emulator does).
+DV_STATUS_STALE_S = 1.5
+# While waiting on the pipeline, the panel intent is sent again this often.
+# Intents are latched and idempotent, so this only heals a lost or
+# out-of-order one.
+INTENT_RESEND_S = 0.5
+# How long stop waits for the pipeline to drop out of READY/RUNNING.
+TEARDOWN_WAIT_S = 10.0
+_NOT_ARMED = set(range(256)) - {DV_READY, DV_RUNNING}
 
 
 @dataclass
@@ -123,6 +136,11 @@ class RosBridge:
         # Latest /dv/status byte (set on the executor thread; int reads are
         # atomic under the GIL so no lock needed).
         self._dv_status: Optional[int] = None
+        # Count and arrival time of /dv/status messages, so a wait can insist
+        # on a status sent after its own command, not one cached from the
+        # previous run.
+        self._dv_status_seq: int = 0
+        self._dv_status_stamp: float = 0.0
         self._bridge_lock = threading.Lock()
 
     def _spin_up(self) -> None:
@@ -198,28 +216,52 @@ class RosBridge:
         self._control_get_state_client = None
         self._control_state_cache = (None, 0.0)
         self._dv_status = None
+        self._dv_status_stamp = 0.0
         self._rclpy = None
 
     # ------------------------------------------------------------------
     def _on_dv_status(self, msg) -> None:
         self._dv_status = int(msg.data)
+        self._dv_status_stamp = time.monotonic()
+        self._dv_status_seq += 1
 
-    def _publish_intent(self, intent: int) -> None:
+    def _publish_intent(self, intent: int) -> int:
+        """Publish a panel intent; returns the /dv/status count at that
+        moment, for waits that must only trust statuses sent after it."""
+        seq = self._dv_status_seq
         if self._intent_pub is not None:
             self._intent_pub.publish(self._UInt8(data=int(intent)))
+        return seq
 
     def _wait_for_dv_status(
         self, targets: set[int], timeout_s: float,
         fail_on: Optional[set[int]] = None,
+        after_seq: Optional[int] = None,
+        resend_intent: Optional[int] = None,
     ) -> bool:
-        """Poll the cached /dv/status (updated on the spin thread)."""
+        """Poll /dv/status (updated on the spin thread) until it is in
+        targets. With after_seq, only statuses received after that count
+        are trusted: the cached one may be the previous run's. With
+        resend_intent, that intent is published again every
+        INTENT_RESEND_S while waiting. A stale heartbeat reads as DV_IDLE."""
         deadline = time.monotonic() + timeout_s
+        next_send = time.monotonic() + INTENT_RESEND_S
         while time.monotonic() < deadline:
-            status = self._dv_status
-            if status in targets:
-                return True
-            if fail_on and status in fail_on:
-                return False
+            now = time.monotonic()
+            if now - self._dv_status_stamp > DV_STATUS_STALE_S:
+                # No heartbeat: nothing is running, whatever was cached.
+                status, trusted = DV_IDLE, True
+            else:
+                status = self._dv_status
+                trusted = after_seq is None or self._dv_status_seq > after_seq
+            if trusted:
+                if status in targets:
+                    return True
+                if fail_on and status in fail_on:
+                    return False
+            if resend_intent is not None and now >= next_send:
+                self._publish_intent(resend_intent)
+                next_send = now + INTENT_RESEND_S
             time.sleep(0.05)
         return False
 
@@ -271,8 +313,18 @@ class RosBridge:
             )
 
         if mission == "":
-            # Tear down — disarm.
-            self._publish_intent(SIM_INTENT_OFF)
+            # Tear down — disarm, and wait until the pipeline has seen it.
+            # Returning at once let the next prepare and GO go out within
+            # milliseconds while the pipeline still reported the old run's
+            # RUNNING, so both waits passed on that stale status.
+            seq = self._publish_intent(SIM_INTENT_OFF)
+            settled = self._wait_for_dv_status(
+                _NOT_ARMED, min(timeout_s, TEARDOWN_WAIT_S), after_seq=seq,
+                resend_intent=SIM_INTENT_OFF)
+            if not settled:
+                logger.warning(
+                    "teardown: pipeline still READY/RUNNING after %.0f s",
+                    min(timeout_s, TEARDOWN_WAIT_S))
             return SetMissionOutcome(success=True, message="torn down")
 
         mission_id = _mission_catalog.mission_name_to_id().get(mission)
@@ -287,10 +339,13 @@ class RosBridge:
 
         ami = mission_id_to_ami_index(mission_id)
         self._mission_pub.publish(self._Int32(data=int(ami)))
-        self._publish_intent(SIM_INTENT_READY)
+        seq = self._publish_intent(SIM_INTENT_READY)
 
+        # Only a DV_READY sent after this READY counts. RUNNING is not
+        # accepted: before GO it can only be the previous run's.
         if self._wait_for_dv_status(
-                {DV_READY, DV_RUNNING}, timeout_s, fail_on={DV_FAILED}):
+                {DV_READY}, timeout_s, fail_on={DV_FAILED}, after_seq=seq,
+                resend_intent=SIM_INTENT_READY):
             return SetMissionOutcome(
                 success=True, message=f"{mission} prepared (DV_READY)")
         return SetMissionOutcome(
@@ -307,9 +362,10 @@ class RosBridge:
         if self._intent_pub is None:
             return RuntimeControlOutcome(
                 success=False, message="ros_bridge not started")
-        self._publish_intent(SIM_INTENT_GO)
+        seq = self._publish_intent(SIM_INTENT_GO)
         if self._wait_for_dv_status(
-                {DV_RUNNING}, timeout_s, fail_on={DV_FAILED}):
+                {DV_RUNNING}, timeout_s, fail_on={DV_FAILED}, after_seq=seq,
+                resend_intent=SIM_INTENT_GO):
             return RuntimeControlOutcome(
                 success=True, message="mission running (DV_RUNNING)")
         return RuntimeControlOutcome(
