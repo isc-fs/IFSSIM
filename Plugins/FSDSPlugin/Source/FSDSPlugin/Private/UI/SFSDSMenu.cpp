@@ -419,7 +419,14 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 						.Visibility_Lambda([this]() { return bPractice ? EVisibility::Collapsed : EVisibility::Visible; })
 						[
 							MakeChoice(LOCTEXT("Autonomous", "Autonomous"),
-								[this]() { return bAutonomous; }, [this]() { bAutonomous = true; })
+								[this]() { return bAutonomous; },
+								[this]()
+								{
+									// Switching to the pipeline starts at real time; slow
+									// motion is a choice made after.
+									if (!bAutonomous) FFSDSRealTime::Get().SetSpeedFactor(1.0);
+									bAutonomous = true;
+								})
 						]
 					]
 				]

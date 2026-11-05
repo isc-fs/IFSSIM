@@ -20,7 +20,7 @@ Driving results (cones, path) hold either way. Timing results (lap times, latenc
 
 ## The two modes
 
-Chosen on the menu's Drive page (TIMING, shown with Autonomous), with `"Timing": {"SpeedFactor": ...}` in settings.json, over RPC with `setSpeedFactor <f>`, or by the mission benchmark's `--speed-factor`. The speed applies only while the pipeline has the car (API control); manual driving is always real time.
+Chosen on the menu's Drive page (TIMING, shown with Autonomous), with `"Timing": {"SpeedFactor": ...}` in settings.json, over RPC with `setSpeedFactor <f>`, or by the mission benchmark's `--speed-factor`. The speed applies only while the pipeline has the car (API control); manual driving is always real time. Switching the menu's driver to Autonomous resets it to Real time, so slow motion is always a choice made on purpose.
 
 | Mode | For | What the sim does |
 |---|---|---|
