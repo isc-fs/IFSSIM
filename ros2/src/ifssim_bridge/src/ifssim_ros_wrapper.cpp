@@ -49,11 +49,12 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
     // reached, and the OdometryFilter's kinematic bicycle then predicts a
     // yaw rate the car cannot produce.
     //
-    // Was 0.5 rad (28.6 deg), described as the URDF rack limit, against a
-    // plugin max of 28 deg — already 2.3% adrift. Now deg2rad(22.4), the
-    // tyre's peak-grip clamp (see FSDSWheelFront.cpp).
+    // deg2rad(18.2): the lock measured at the road wheel, and what the
+    // controller means by a full command (#462). It was 22.4 deg, which made
+    // the physics turn every command 1.23x further than the controller
+    // intended. Before that it was 0.5 rad (28.6 deg), never measured.
     max_steering_angle_rad_ = node_->declare_parameter<double>(
-        "max_steering_angle_rad", 0.390954);
+        "max_steering_angle_rad", 0.317650);
 
     // ----- LWS (Bosch Steering Wheel Angle Sensor) model — #462 -----
     // The bridge publishes the post-decode floating-point view that

@@ -333,21 +333,12 @@ private:
     // Maximum front-wheel angle (radians). The plugin sends steering
     // as a normalized [-1, 1] axis input; we convert at publish time
     // for /fsds/steering_angle so downstream consumers see SI units.
-    // 0.5 rad ≈ 28.6° matches the IFS-08 URDF rack limit in
-    // pipeline/coche_urdf/urdf/ifs_08.urdf.
-    //
-    // TODO(braking-steering): authoritative ISC_IFS_08.xlsx MONO sheet
-    // gives turning radius 4.5 m + wheelbase 1.570 m → max δ ≈ 0.336
-    // rad. Mirrors settings.json VehiclePhysics.MaxSteerAngle = 22.4 deg.
-    // This scales REPORTED angle only (see the declare_parameter site); it
-    // does not clamp the command, so it cannot reduce controller authority
-    // — the earlier note here claiming otherwise was mistaken, and the
-    // value is now pinned to the plugin rather than held pending a re-tune.
-    // Sandra's confirmation of the true rack limit is still outstanding:
-    // four numbers disagree (28 deg invented, 22.4 tyre peak, 18.2 uDV
-    // MAX_STEER_ROADWHEEL_DEG, 19.25 from the MONO sheet above).
-    // Tracked in issue #462.
-    double max_steering_angle_rad_ = 0.390954;
+    // It must equal settings.json VehiclePhysics.MaxSteerAngle: 18.2 deg,
+    // measured at the road wheel and the angle the controller means by a
+    // full command (#462). It scales the REPORTED angle only, it does not
+    // clamp the command. Overwritten by the declare_parameter default in the
+    // constructor, which carries the same value.
+    double max_steering_angle_rad_ = 0.317650;
 
     // Steering ratio (steering wheel angle / road-wheel angle). The
     // Bosch LWS measures the wheel column rotation; the
