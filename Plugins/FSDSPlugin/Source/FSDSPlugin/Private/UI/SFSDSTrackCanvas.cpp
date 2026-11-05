@@ -50,14 +50,16 @@ void SFSDSTrackCanvas::Construct(const FArguments& InArgs)
 
 void SFSDSTrackCanvas::FitView()
 {
-	if (!Spec.IsValid() || Spec->Points.Num() == 0)
+	FBox2D B(ForceInit);
+	if (Spec.IsValid()) for (const FVector2D& P : Spec->Points) B += P;
+	if (Venue.IsValid()) B += Venue->Bounds();
+	if (!B.bIsValid)
 	{
 		ViewCentre = FVector2D::ZeroVector;
 		ViewHalf = 70.0;
+		Invalidate(EInvalidateWidgetReason::Paint);
 		return;
 	}
-	FBox2D B(ForceInit);
-	for (const FVector2D& P : Spec->Points) B += P;
 	ViewCentre = B.GetCenter();
 	ViewHalf = FMath::Clamp(B.GetSize().GetMax() * 0.6 + 10.0, FSDSTrackCanvasStyle::MinHalf, FSDSTrackCanvasStyle::MaxHalf);
 	Invalidate(EInvalidateWidgetReason::Paint);
@@ -303,6 +305,13 @@ int32 SFSDSTrackCanvas::OnPaint(const FPaintArgs&, const FGeometry& Geo, const F
 		Line(LayerId + 1, { FVector2f(0.f, Sy), FVector2f(Size.X, Sy) }, FMath::IsNearlyZero(Y) ? Canvas::GridZero : Canvas::GridLine, 1.f);
 	}
 	Text(LayerId + 1, FString::Printf(TEXT("grid %.0f m"), Step), FVector2f(8.f, Size.Y - 20.f), Canvas::Label);
+
+	// The venue: drawn tracks are in its frame, so it sits under the points as is.
+	if (Venue.IsValid())
+	{
+		FSDSVenue::Paint(*Venue, [&](const FVector2D& V) { return ToScreen(V, Size); }, K, Geo, Out, LayerId + 1);
+		Text(LayerId + 1, Venue->Title, FVector2f(8.f, 6.f), Canvas::Label);
+	}
 
 	// The backend recentres the cones on the origin: shift them back so they
 	// sit under the drawn points.

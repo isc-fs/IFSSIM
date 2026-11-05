@@ -57,6 +57,7 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 {
 	Screen = InArgs._Screen;
 	Tracks = InArgs._Tracks;
+	Venues = InArgs._Venues;
 	Results = InArgs._Results;
 	Last = InArgs._Last;
 	Referee = InArgs._Referee;
@@ -81,6 +82,7 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 		Laps = Last->Event == EFSDSEventType::Trackdrive && !Last->bPractice ? Last->Laps : Laps;
 		bAutonomous = Last->bAutonomous;
 		Selected = Tracks.IndexOfByPredicate([this](const FFSDSMenuTrack& T) { return T.Name == Last->Track.Name; });
+		Location = Last->Track.Venue;
 	}
 
 	ChildSlot
@@ -145,6 +147,9 @@ TSharedRef<SWidget> SFSDSMenu::MakeNavButton(const FText& Label, EPage InPage)
 		.OnClicked_Lambda([this, InPage]()
 		{
 			Page = InPage;
+			// Tracks may have come or gone outside the menu (Mission Control,
+			// envgen, a file manager): read the folders again.
+			if (InPage == EPage::Drive || InPage == EPage::Editor) OnTracksChanged.ExecuteIfBound();
 			return FReply::Handled();
 		})
 		[
@@ -281,6 +286,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						.State(EditorState)
 						.Client(Client)
 						.Tracks(Tracks)
+						.Venues(Venues)
 						.OnTestDrive(OnTestDrive)
 						.OnSaved(OnTracksChanged)
 						.OnStartStack(OnStartStack)
@@ -311,6 +317,16 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 				[
 					SNew(STextBlock).Text(LOCTEXT("DriveTitle", "Drive"))
 					.Font(MenuUi::MenuFont(20, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+				// Where: a venue and its tracks, or anywhere (every track). Only
+				// with venues to pick from.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SAssignNew(LocationRow, SBox)
+					.Visibility_Lambda([this]() { return Venues.Num() > 0 ? EVisibility::Visible : EVisibility::Collapsed; })
+					[
+						BuildLocationRow()
+					]
 				]
 				+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Event", "EVENT")) ]
 				+ SVerticalBox::Slot().AutoHeight()
@@ -694,8 +710,50 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 // ---------------------------------------------------------------------------
 // Tracks
 
+TSharedRef<SWidget> SFSDSMenu::BuildLocationRow()
+{
+	TSharedRef<SUniformGridPanel> Grid = SNew(SUniformGridPanel).SlotPadding(FMargin(3.f));
+	auto Add = [&](int32 i, const FText& Label, const FString& Name)
+	{
+		Grid->AddSlot(i % 3, i / 3)
+		[
+			MakeChoice(Label, [this, Name]() { return Location == Name; }, [this, Name]() { SetLocation(Name); })
+		];
+	};
+	Add(0, LOCTEXT("Anywhere", "Anywhere"), FString());
+	for (int32 i = 0; i < Venues.Num(); ++i)
+	{
+		Add(i + 1, FText::FromString(Venues[i]->Title), Venues[i]->Name);
+	}
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Location", "LOCATION")) ]
+		+ SVerticalBox::Slot().AutoHeight() [ Grid ];
+}
+
+void SFSDSMenu::SetLocation(const FString& InLocation)
+{
+	Location = InLocation;
+	// A venue has no acceleration straight or skidpad: go to one of its laps.
+	if (!Location.IsEmpty() && !bPractice
+		&& (Event == EFSDSEventType::Acceleration || Event == EFSDSEventType::Skidpad))
+	{
+		Event = EFSDSEventType::Autocross;
+	}
+	SetEvent(Event, bPractice);
+}
+
+TSharedPtr<const FSDSVenue::FVenue> SFSDSMenu::FindVenue(const FString& Name) const
+{
+	for (const FSDSVenue::FVenueRef& V : Venues)
+	{
+		if (V->Name == Name) return V;
+	}
+	return nullptr;
+}
+
 bool SFSDSMenu::Fits(const FFSDSMenuTrack& Track) const
 {
+	if (!Location.IsEmpty() && Track.Venue != Location) return false;
 	const FString Name = Track.Name.ToLower();
 	const bool bAccel = Name.Contains(TEXT("acceleration"));
 	const bool bSkid = Name.Contains(TEXT("skidpad"));
@@ -773,13 +831,16 @@ void SFSDSMenu::RebuildTrackList()
 	}
 }
 
-void SFSDSMenu::SetTracks(const TArray<FFSDSMenuTrack>& InTracks)
+void SFSDSMenu::SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues)
 {
 	// Keep the selected track by name: indices shift when one is added.
 	const FString Keep = Tracks.IsValidIndex(Selected) ? Tracks[Selected].Name : FString();
 	Tracks = InTracks;
+	Venues = InVenues;
+	if (!Location.IsEmpty() && !FindVenue(Location).IsValid()) Location.Reset();
+	if (LocationRow.IsValid()) LocationRow->SetContent(BuildLocationRow());
 	Selected = Tracks.IndexOfByPredicate([&](const FFSDSMenuTrack& T) { return T.Name == Keep; });
-	if (EditorPage.IsValid()) EditorPage->SetTracks(Tracks);
+	if (EditorPage.IsValid()) EditorPage->SetTracks(Tracks, Venues);
 	SetEvent(Event, bPractice);   // redraws the list, and picks a track if the old one went
 }
 
@@ -793,7 +854,15 @@ void SFSDSMenu::SelectTrack(int32 Index)
 	{
 		SFSDSTrackMap::LoadCsv(Tracks[Selected].Path, Cones);
 	}
-	if (DriveMap.IsValid()) DriveMap->SetCones(MoveTemp(Cones));
+	if (DriveMap.IsValid())
+	{
+		// A venue track shows its surroundings, placed by its sidecar.
+		TSharedPtr<const FSDSVenue::FVenue> V = Selected != INDEX_NONE ? FindVenue(Tracks[Selected].Venue) : nullptr;
+		FVector2D Shift = FVector2D::ZeroVector;
+		if (V.IsValid() && !FSDSVenue::TrackShift(*V, Tracks[Selected].Path, Shift)) V.Reset();
+		DriveMap->SetVenue(V, Shift);
+		DriveMap->SetCones(MoveTemp(Cones));
+	}
 }
 
 void SFSDSMenu::SetEvent(EFSDSEventType InEvent, bool bInPractice)
@@ -816,6 +885,7 @@ FText SFSDSMenu::TrackSummary(int32 Index) const
 	if (!Tracks.IsValidIndex(Index)) return FText::GetEmpty();
 	const FFSDSMenuTrack& T = Tracks[Index];
 	FString S = T.Name;   // the counts are in the map's legend
+	if (const TSharedPtr<const FSDSVenue::FVenue> V = FindVenue(T.Venue)) S += TEXT("   ·   ") + V->Title;
 	if (T.bDrawn) S += TEXT("   ·   made with the track creator");
 	if (!T.bClosed) S += TEXT("   ·   open, Practice only");
 	return FText::FromString(S);

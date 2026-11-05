@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "UI/FSDSTrackSpec.h"
+#include "UI/FSDSVenue.h"
 #include "Widgets/SLeafWidget.h"
 
 /**
@@ -27,10 +28,12 @@ public:
 
 	void SetPreview(const TSharedPtr<const FSDSTrackSpec::FPreview>& InPreview) { Preview = InPreview; }
 	void SetFreehand(bool bOn) { bFreehand = bOn; }
+	/** Draw a venue's lot and props behind the track, in the drawing's frame. */
+	void SetVenue(const TSharedPtr<const FSDSVenue::FVenue>& InVenue) { Venue = InVenue; Invalidate(EInvalidateWidgetReason::Paint); }
 	bool IsFreehand() const { return bFreehand; }
 	int32 GetSelected() const { return Selected; }
 	void ClearSelection() { Selected = INDEX_NONE; }
-	/** Centre the view on the drawn points. */
+	/** Centre the view on the drawn points, and the venue if there is one. */
 	void FitView();
 
 	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
@@ -57,6 +60,7 @@ private:
 
 	TSharedPtr<FSDSTrackSpec::FSpec> Spec;
 	TSharedPtr<const FSDSTrackSpec::FPreview> Preview;
+	TSharedPtr<const FSDSVenue::FVenue> Venue;
 	FSimpleDelegate OnChanged;
 
 	bool bFreehand = false;

@@ -61,7 +61,7 @@ public:
 	static TArray<FString> KnownClasses();
 
 private:
-	void AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTransform& WorldXf);
+	void AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTransform& WorldXf, bool bLidarOnly = false);
 	void PlaceRealMesh(UStaticMesh* Mesh, const FVector& FitCm, int32 Copies, double SpacingCm,
 		uint8 Stencil, const FTransform& PropXf);
 

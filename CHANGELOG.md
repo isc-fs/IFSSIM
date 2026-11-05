@@ -21,6 +21,21 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Venues in the menu.** The Drive page has a Location row (Anywhere, or a
+  venue) that lists only that venue's tracks, and its map draws the lot and
+  everything around the cones. In the Track editor, pick a venue to draw on
+  it: the lot and its props sit behind the drawing, cones off the lot are an
+  error while you draw, and the track is saved as `<venue>__<name>` with its
+  environment sidecar written by the backend at the same time (and deleted
+  with it). See docs/venues.md.
+- **Venues, starting with a parking lot.** A venue is a fixed place several
+  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
+  tracks are drawn) and what stands around it, and `python -m envgen venue`
+  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
+  plugin builds it like any environment. New prop classes for it: `tree`,
+  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
+  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
+  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
   Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
   suits it (a gridded top-down map of its cones, in metres), and who drives,

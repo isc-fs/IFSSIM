@@ -4,6 +4,8 @@
 #include "Containers/Ticker.h"
 #include "FSDSReferee.h"
 
+namespace FSDSVenue { struct FVenue; }
+
 class ACameraActor;
 class FFSDSMissionControlClient;
 namespace FSDSTrackSpec { struct FEditorState; }
@@ -25,6 +27,7 @@ struct FFSDSMenuTrack
 	int32 Orange = 0;
 	bool bDrawn = false; // has a .track.json (made with the track creator)
 	bool bClosed = true; // a loop; the .track.json says when it isn't
+	FString Venue;       // the venue it is drawn on (docs/venues.md), from a <venue>__ name
 };
 
 /** What START asks for. */
@@ -121,6 +124,7 @@ private:
 	FTSTicker::FDelegateHandle TickHandle;
 
 	TArray<FFSDSMenuTrack> Tracks;
+	TArray<TSharedRef<const FSDSVenue::FVenue>> Venues;
 	TSharedPtr<TArray<FFSDSRunResult>> Results;
 
 	/** The track editor's backend (tools/envgen builds the cones) and its state. */
