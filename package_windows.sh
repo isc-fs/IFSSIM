@@ -94,6 +94,12 @@ echo "[1/3] Building (Win64 Shipping)…"
 # cmd.exe and won't accept /c/-style paths. pwd -W gives us C:/… form.
 PROJECT_WIN="$(to_win "$SCRIPT_DIR/IFSSIM.uproject")"
 
+# RunUAT.bat runs under cmd.exe, and its exit code doesn't reach bash: a
+# compile error used to print BUILD FAILED and carry on, staging and zipping
+# the previous build's binary as if it were this one. So read UAT's own
+# verdict from its output instead.
+UAT_LOG="$(mktemp)"
+trap 'rm -f "$UAT_LOG"' EXIT
 "$RUN_UAT" \
     BuildCookRun \
     -project="$PROJECT_WIN" \
@@ -102,7 +108,13 @@ PROJECT_WIN="$(to_win "$SCRIPT_DIR/IFSSIM.uproject")"
     -build -cook -stage -pak \
     -iostore -compressed \
     -clientconfig=Shipping \
-    -noeditor
+    -noeditor 2>&1 | tee "$UAT_LOG"
+if ! grep -q "AutomationTool exiting with ExitCode=0" "$UAT_LOG"; then
+    echo "" >&2
+    echo "ERROR: BuildCookRun failed ($(grep -o 'AutomationTool exiting with ExitCode=[0-9]*' "$UAT_LOG" | tail -1 || true))." >&2
+    echo "       Nothing was staged or zipped; the errors are above." >&2
+    exit 1
+fi
 
 # 2. (No codesign step — Windows has no equivalent for the macOS
 #    sandbox/entitlements gate. The first launch will trigger
