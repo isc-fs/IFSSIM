@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "FSDSRealTime.h"
 #include "Containers/Ticker.h"
 #include "FSDSReferee.h"
 
@@ -161,8 +162,7 @@ private:
 
 	/** The cap now in force; 0 for none. */
 	int32 AppliedCap = 0;
-	/** When the last capped frame ended (FPlatformTime::Seconds), 0 for none yet. */
-	double LastFrameWall = 0.0;
+	FFSDSFramePacer MenuPacer;
 
 	TWeakObjectPtr<ACameraActor> OrbitCam;
 	float OrbitAngle = 0.f;

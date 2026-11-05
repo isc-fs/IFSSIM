@@ -2100,14 +2100,34 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// quality: the rendering preset (docs/rendering_presets.md); a
 		// benchmark should refuse "showcase". real_time_factor: simulated
 		// seconds per real second over the last couple of seconds
-		// (FFSDSRealTime), 0 while unknown (paused).
+		// (FFSDSRealTime), 0 while unknown (paused). speed_factor: the speed set
+		// for while the pipeline drives (1 real time, below 1 slow motion);
+		// target_factor: what real_time_factor should read now (the slow motion
+		// while pacing, else 1).
 		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
 		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,"
-			"\"quality\":\"%s\",\"real_time_factor\":%.3f,\"real_fps\":%.1f}"),
+			"\"quality\":\"%s\",\"real_time_factor\":%.3f,\"real_fps\":%.1f,\"speed_factor\":%.3f,\"target_factor\":%.3f}"),
 			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
-			SimTime, FSDSQuality::Name(FSDSQuality::Current()), Rt.Factor(), Rt.Fps());
+			SimTime, FSDSQuality::Name(FSDSQuality::Current()), Rt.Factor(), Rt.Fps(), Rt.SpeedFactor(), Rt.TargetFactor());
+	}
+
+	// === Timing ===
+	//
+	// setSpeedFactor <f>: how fast the simulation runs while the pipeline
+	// drives. 1 is real time; below 1 a slow motion (0.5 gives the pipeline
+	// twice its real time per simulated second). Clamped to [0.05, 1].
+	else if (Method == TEXT("setSpeedFactor"))
+	{
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2 || !Parts[1].IsNumeric())
+		{
+			return TEXT("{\"error\":\"usage: setSpeedFactor <0.05..1>\"}");
+		}
+		FFSDSRealTime::Get().SetSpeedFactor(FCString::Atod(*Parts[1]));
+		return FString::Printf(TEXT("{\"ok\":true,\"speed_factor\":%.3f}"), FFSDSRealTime::Get().SpeedFactor());
 	}
 
 	// === Version ===

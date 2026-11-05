@@ -67,6 +67,8 @@ private:
 
 	TSharedRef<SWidget> MakeNavButton(const FText& Label, EPage Page);
 	TSharedRef<SWidget> MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick);
+	/** A TIMING choice: the speed while the pipeline drives (FFSDSRealTime). */
+	TSharedRef<SWidget> SpeedChoice(const FText& Label, double Speed);
 	TSharedRef<SWidget> MakeBigButton(const FText& Label, FLinearColor Color, FSimpleDelegate OnClick,
 		TAttribute<bool> Enabled = true);
 	TSharedRef<SWidget> MakeHeading(const FText& Title);

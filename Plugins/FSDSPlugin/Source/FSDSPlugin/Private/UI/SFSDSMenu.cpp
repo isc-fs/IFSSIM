@@ -164,6 +164,13 @@ TSharedRef<SWidget> SFSDSMenu::MakeNavButton(const FText& Label, EPage InPage)
 		];
 }
 
+TSharedRef<SWidget> SFSDSMenu::SpeedChoice(const FText& Label, double Speed)
+{
+	return MakeChoice(Label,
+		[Speed]() { return FMath::IsNearlyEqual(FFSDSRealTime::Get().SpeedFactor(), Speed, 1e-3); },
+		[Speed]() { FFSDSRealTime::Get().SetSpeedFactor(Speed); });
+}
+
 TSharedRef<SWidget> SFSDSMenu::MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick)
 {
 	// Slate darkens a button's colour, so "on" is marked by the accent text
@@ -430,6 +437,38 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 							: LOCTEXT("ManualHint", "You drive with the keyboard or a gamepad. Esc pauses.");
 					})
 					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+				]
+				// How fast the simulation runs while the pipeline drives.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SVerticalBox)
+					.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						// "Real time" needs more room than the slow motions.
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([]()
+						{
+							const double S = FFSDSRealTime::Get().SpeedFactor();
+							return S >= 1.0
+								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
+									"world, as on track. The HUD warns if this PC can't keep up.")
+								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
+									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
+									"unchanged; the view is choppier."),
+									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[

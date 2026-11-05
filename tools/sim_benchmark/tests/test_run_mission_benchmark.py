@@ -649,6 +649,24 @@ def test_a_stalled_sim_clock_still_ends_on_the_real_time_backstop(tmp_path):
     assert 0.1 < res["race/run_time_s"] < 0.1 * rmb.WALL_BACKSTOP + 1.0
 
 
+def test_slow_motion_is_set_for_the_runs_and_put_back(tmp_path):
+    # 1 sim s per poll: far faster than real time, so it passes at any target
+    w = FakeWorld(never_finishes=True, sim_step=1.0)
+    rc, logs = _run(tmp_path, w, timeout_s=3.0, speed_factor=0.25)
+    res = _result(tmp_path)
+    sets = [c for c in w.calls if c.startswith("SIM setSpeedFactor")]
+    assert sets == ["SIM setSpeedFactor 0.25", "SIM setSpeedFactor 1"]
+    assert any("slow motion" in x for x in logs)
+    assert res["race/speed_factor"] == 0.25 and res["race/real_time_ok"] == 1
+
+
+def test_a_bad_speed_factor_stops_before_any_run(tmp_path):
+    w = FakeWorld()
+    with pytest.raises(rmb.BenchmarkError, match="speed-factor"):
+        _run(tmp_path, w, speed_factor=2.0)
+    assert not any(c.startswith("SIM setSpeedFactor") for c in w.calls)
+
+
 def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
     w = FakeWorld(never_finishes=True)  # answers getSimStatus without sim_time
     rc, logs = _run(tmp_path, w, timeout_s=0.1)
