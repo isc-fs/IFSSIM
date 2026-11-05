@@ -46,6 +46,25 @@ CLASSES: Dict[str, PropClass] = {c.name: c for c in (
               along_boundary=True),
     # Four small cones nested: 0.23 m wide, about 0.50 m tall.
     PropClass("cone_stack", radius_m=0.12, height_m=0.50, band_m=(2.0, 12.0)),
+
+    # Venues (docs/venues.md): what stands around a parking lot. They are placed
+    # by a venue file, not by a profile, so their bands are only defaults.
+    # A tree's footprint is its 3 m canopy, the widest part (5.3 m tall).
+    PropClass("tree", radius_m=1.5, height_m=5.3, band_m=(3.0, 15.0)),
+    # A 6 m street lamp; the footprint covers its 1.3 m arm.
+    PropClass("lamp_post", radius_m=1.35, height_m=6.0, band_m=(1.5, 6.0)),
+    PropClass("parked_car", length_m=4.4, width_m=1.8, height_m=1.5, band_m=(2.0, 10.0),
+              along_boundary=True),
+    PropClass("bench", length_m=1.8, width_m=0.5, height_m=0.9, band_m=(2.0, 10.0),
+              along_boundary=True),
+    # A 2 x 2 m slab of sidewalk, 0.15 m tall: LiDAR-only, a phantom to the car
+    # (roadmap rule 2: anything under 0.30 m a wheel could reach).
+    PropClass("sidewalk", length_m=2.0, width_m=2.0, height_m=0.15, band_m=(0.5, 3.0),
+              along_boundary=True),
+    # An earth bank 10 m long, about 2.9 m tall and 5.9 m wide at the ground:
+    # the hill until terrain (roadmap P3) exists.
+    PropClass("berm", length_m=10.0, width_m=5.9, height_m=2.9, band_m=(5.0, 20.0),
+              along_boundary=True),
 )}
 
 
