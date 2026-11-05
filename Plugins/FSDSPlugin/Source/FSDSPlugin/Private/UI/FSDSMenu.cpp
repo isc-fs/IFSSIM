@@ -17,8 +17,6 @@
 #include "Serialization/JsonSerializer.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/Engine.h"
-#include "HAL/PlatformProcess.h"
-#include "HAL/PlatformTime.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Widgets/SWindow.h"
 #include "Engine/World.h"
@@ -547,28 +545,16 @@ void FFSDSMenu::UpdateFrameCap()
 	}
 	if (Cap == AppliedCap) return;
 	AppliedCap = Cap;
-	LastFrameWall = 0.0;
+	MenuPacer.Reset();
 	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: frame rate %s"),
 		Cap > 0 ? *FString::Printf(TEXT("capped at %d while the menu is up"), Cap) : *FString::Printf(TEXT("back to %.0f"), BaseFps));
 }
 
 void FFSDSMenu::ThrottleFrame()
 {
-	if (AppliedCap <= 0) return;
 	// Wait out the rest of this frame's share of a second. The game thread
 	// sleeps, so the render thread and the GPU idle with it.
-	const double Period = 1.0 / AppliedCap;
-	double Now = FPlatformTime::Seconds();
-	if (LastFrameWall > 0.0)
-	{
-		const double Left = Period - (Now - LastFrameWall);
-		if (Left > 0.0 && Left <= Period)
-		{
-			FPlatformProcess::SleepNoStats((float)Left);
-			Now = FPlatformTime::Seconds();
-		}
-	}
-	LastFrameWall = Now;
+	if (AppliedCap > 0) MenuPacer.Wait(1.0 / AppliedCap);
 }
 
 void FFSDSMenu::HoldCar()

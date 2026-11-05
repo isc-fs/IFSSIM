@@ -121,7 +121,7 @@ void AFSDSGameMode::StartPlay()
 	Launcher.Init(GetWorld(), RefereeActor, VehiclePawn);
 
 	// How fast the simulation runs against the real clock (the HUD, getSimStatus).
-	FFSDSRealTime::Get().Start(GetWorld());
+	FFSDSRealTime::Get().Start(GetWorld(), VehiclePawn);
 
 	// The HUD: the car's and the mission's state in a corner (H by default).
 	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);

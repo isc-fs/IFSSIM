@@ -205,8 +205,9 @@ public:
 						.ColorAndOpacity(this, &SFSDSHud::RealTimeColor)
 						.Text(this, &SFSDSHud::RealTimeText)
 						.ToolTipText(LOCTEXT("RealTimeTip",
-							"Simulated seconds per real second. Below 0.95 the pipeline gets more time "
-							"than on the car, so timing results don't hold."))
+							"Simulated seconds per real second. In real time, below 0.95 the pipeline gets "
+							"more time than on the car, so timing results don't hold. In slow motion it "
+							"should read the slow motion's factor."))
 					]
 				]
 			]
@@ -366,15 +367,19 @@ private:
 	FText RealTimeText() const
 	{
 		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
-		if (!Rt.IsKnown()) return LOCTEXT("RealTimeUnknown", "Real time --");
-		return FText::FromString(FString::Printf(TEXT("Real time %.2fx   %.0f fps"), Rt.Factor(), Rt.Fps()));
+		const FString What = Rt.IsPacing()
+			? FString::Printf(TEXT("Slow motion %.2gx:"), Rt.SpeedFactor()) : FString(TEXT("Real time"));
+		if (!Rt.IsKnown()) return FText::FromString(What + TEXT(" --"));
+		return FText::FromString(FString::Printf(TEXT("%s %.2fx   %.0f fps"), *What, Rt.Factor(), Rt.Fps()));
 	}
 
 	FSlateColor RealTimeColor() const
 	{
 		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
-		if (!Rt.IsKnown() || Rt.Factor() >= FFSDSRealTime::GoodFactor) return FSlateColor(HudDimColor);
-		return Rt.Factor() >= FFSDSRealTime::PoorFactor
+		// Against the target: in slow motion 0.25x is the point, not a fault.
+		const double Share = Rt.IsKnown() ? Rt.Factor() / Rt.TargetFactor() : 1.0;
+		if (Share >= FFSDSRealTime::GoodFactor) return FSlateColor(HudDimColor);
+		return Share >= FFSDSRealTime::PoorFactor
 			? FSlateColor(FLinearColor(1.f, 0.62f, 0.25f, 1.f))
 			: FSlateColor(FLinearColor(0.97f, 0.36f, 0.36f, 1.f));
 	}

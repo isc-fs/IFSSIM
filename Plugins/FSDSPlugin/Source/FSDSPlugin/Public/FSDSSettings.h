@@ -294,6 +294,15 @@ public:
 	// regression baseline, and while this is off a sidecar is ignored.
 	bool bEnvironmentEnabled = false;
 
+	// --- Timing ------------------------------------------------------------
+	//
+	// "Timing": { "SpeedFactor" }. How fast the simulation runs while the
+	// pipeline drives: 1 is real time (the default, for testing the car's
+	// computer), below 1 a slow motion for comparing algorithms (0.5, 0.25,
+	// 0.1). Manual driving is always real time. The menu and the
+	// setSpeedFactor RPC change it while the sim runs. See FSDSRealTime.h.
+	double TimingSpeedFactor = 1.0;
+
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 
 	/** Get the first (default) vehicle settings */

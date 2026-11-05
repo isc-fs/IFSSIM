@@ -219,6 +219,13 @@ and their ratio, `race/real_time_factor` (sim seconds per real second). Below 0.
 second than on the car, and the run's timing results (lap times, latency) don't hold. Its driving
 results (cones, path) still do.
 
+**Slow motion** (`--speed-factor 0.25`, or 0.5, 0.1): the sim runs the pipeline's sessions at that
+fraction of real time, so the pipeline gets four (two, ten) times its real time per sim second. Use
+it to compare algorithms without the PC's speed in the result; its timing results are not the
+car's. The benchmark sets it before the first run and puts back the sim's own speed at the end;
+`race/speed_factor` records it, and `race/real_time_ok` is judged against it. See
+`docs/sim_timing.md`.
+
 **Pipeline parameter overrides** (`--pipeline-overrides <file.json>`, `{node: {param: value}}`; the
 `pipeline:` section of a run spec): checked against the pipeline's `bringup/config/params.yaml`
 (an unknown node or parameter, or a wrong type, stops the benchmark before anything runs), merged

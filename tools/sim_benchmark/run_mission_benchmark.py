@@ -102,6 +102,12 @@ WALL_BACKSTOP = 6.0
 # slower sim gives the pipeline more time per sim second than it has on the car.
 # The sim's HUD shows the same threshold (FFSDSRealTime::GoodFactor).
 REAL_TIME_OK = 0.95
+# --speed-factor runs the pipeline's sessions in slow motion (the sim's
+# setSpeedFactor, docs/sim_timing.md): 1 is real time, 0.25 gives the
+# pipeline four times its real time per sim second, for comparing algorithms
+# without the PC's speed in the result. real_time_ok is then judged against
+# that speed.
+MIN_SPEED_FACTOR = 0.05
 
 
 class BenchmarkError(Exception):
@@ -221,6 +227,21 @@ class Sim:
         except ValueError:
             return {}
         return out if isinstance(out, dict) else {}
+
+    def speed_factor(self) -> float | None:
+        """The speed set for while the pipeline drives (1 real time), or None (an older build)."""
+        try:
+            f = self.json("getSimStatus").get("speed_factor")
+        except BenchmarkError:
+            return None
+        return float(f) if isinstance(f, (int, float)) and not isinstance(f, bool) else None
+
+    def set_speed_factor(self, speed: float) -> None:
+        reply = self.json(f"setSpeedFactor {speed:g}")
+        if not reply.get("ok"):
+            raise BenchmarkError(
+                f"the sim refused setSpeedFactor {speed:g} ({reply.get('error') or 'an older build?'})"
+            )
 
     def sim_time(self) -> float | None:
         """The sim's game clock in seconds, or None (a build that doesn't report it, or no answer)."""
@@ -714,6 +735,7 @@ class RunResult:
     error: str | None = None
     telemetry: list[dict] = field(default_factory=list)
     sim_seconds: float | None = None  # the run's length in sim time, when the sim reports it
+    speed_factor: float | None = None  # the sim's speed while the pipeline drove, when it reports it
 
 
 class Progress:
@@ -858,8 +880,11 @@ def race_metrics(res: RunResult) -> dict[str, float]:
         out["race/run_sim_time_s"] = res.sim_seconds
         if res.seconds > 0:
             factor = res.sim_seconds / res.seconds
+            target = res.speed_factor or 1.0
             out["race/real_time_factor"] = round(factor, 3)
-            out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK else 0
+            out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
+    if res.speed_factor is not None:
+        out["race/speed_factor"] = res.speed_factor
     if laps:
         out |= {
             "race/lap_time_best_s": min(laps),
@@ -1079,6 +1104,14 @@ def run(
         )
     runs = plan(missions)
     log(f"{len(runs)} run(s); pipeline on {host.where}")
+    speed_was = sim.speed_factor()
+    speed_req = getattr(args, "speed_factor", None)
+    if speed_req is not None:
+        if not MIN_SPEED_FACTOR <= speed_req <= 1.0:
+            raise BenchmarkError(f"--speed-factor must be in [{MIN_SPEED_FACTOR}, 1], not {speed_req}")
+        sim.set_speed_factor(speed_req)
+        log("real time" if speed_req >= 1.0 else f"slow motion: the sim runs at {speed_req:g}x real time")
+    speed = speed_req if speed_req is not None else speed_was
     progress = Progress(runs)
     results = Path(args.results_root)
     code = code_state(host, stack, stack.checkout)
@@ -1097,6 +1130,7 @@ def run(
                 res = RunResult(
                     r, "error", datetime.now(timezone.utc), 0.0, error=str(e)
                 )
+            res.speed_factor = speed
             d = write_run(results, res, code, stack.changed)
             laps = res.referee.get("lap_times") or []
             log(
@@ -1107,6 +1141,11 @@ def run(
             )
             worst = max(worst, 0 if res.outcome == "finished" else 1)
     finally:
+        if speed_req is not None and speed_req != (speed_was or 1.0):
+            try:
+                sim.set_speed_factor(speed_was or 1.0)   # as it was before the benchmark
+            except BenchmarkError as e:
+                log(f"warning: {e}")
         host.down(log)
         stack.down(log, results / "mission")
     return worst
@@ -1149,6 +1188,12 @@ def main(argv: list[str] | None = None) -> int:
         "--panda-sha", help="command that prints the pipeline commit on the latte panda"
     )
     ap.add_argument("--sim", default="127.0.0.1:41451", help="the sim's RPC host:port")
+    ap.add_argument(
+        "--speed-factor",
+        type=float,
+        help="run the sessions in slow motion: 0.5, 0.25, 0.1 (default: the sim's own, real time). "
+        "For comparing algorithms without the PC's speed in the result",
+    )
     ap.add_argument(
         "--mc-url",
         default=MC_URL,
