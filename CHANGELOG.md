@@ -23,6 +23,16 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **An autonomous run starts and stops from the menu.** START with Autonomous
+  now does what the Mission Control panel did: it stops any session, loads the
+  track picked on the Drive page through the backend (cones, the car on the
+  start gate, the referee cleared) and starts the event's mission (Trackdrive
+  with its laps), showing each step under START. Before, it only opened the
+  panel, so the car and cones stayed where the last run left them. Esc during
+  the run opens a box over it (the pipeline keeps driving) with Restart run
+  and Main menu, which stop the session; when the referee ends the run, the
+  results box shows it and the Results page keeps it, marked autonomous. The
+  Tab panel stays for engineers.
 - **Slow motion for the pipeline's sessions.** A TIMING choice on the Drive
   page (with Autonomous): Real time, for testing the car's computer, or
   0.5x, 0.25x, 0.1x, for comparing algorithms. In slow motion the sim spaces

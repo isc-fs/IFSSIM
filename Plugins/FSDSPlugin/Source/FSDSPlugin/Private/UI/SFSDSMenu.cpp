@@ -437,8 +437,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					{
 						return bAutonomous
 							? FText::Format(LOCTEXT("AutoHint",
-								"The DV pipeline drives. START opens Mission Control ({0}), where the session starts; "
-								"it needs the Docker stack."), LauncherKey)
+								"The DV pipeline drives. START loads the track and starts the session through "
+								"Mission Control's backend, so it needs the Docker stack. Esc during the run: stop "
+								"it or start again. ({0} opens the engineers' panel.)"), LauncherKey)
 							: bPractice ? LOCTEXT("ManualHintPractice", "You drive with the keyboard or a gamepad. Esc pauses. "
 								"Practice is for you; for the pipeline, pick an event.")
 							: LOCTEXT("ManualHint", "You drive with the keyboard or a gamepad. Esc pauses.");
@@ -533,7 +534,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 			Best = Best > 0.f ? FMath::Min(Best, L) : L;
 		}
 		const FString Head = FString::Printf(TEXT("%s   %s  ·  %s"),
-			*R.When.ToString(TEXT("%H:%M")), *R.Track, *FFSDSMenu::EventName(R.Event, R.bPractice));
+			*R.When.ToString(TEXT("%H:%M")), *R.Track,
+			*(FFSDSMenu::EventName(R.Event, R.bPractice) + (R.bAutonomous ? TEXT(", autonomous") : TEXT(""))));
 		FString Body = R.bPractice ? FString::Printf(TEXT("Laps %d"), R.Laps.Num())
 			: FString::Printf(TEXT("Laps %d/%d"), R.Laps.Num(), R.RequiredLaps);
 		if (R.Laps.Num() > 0)
@@ -723,7 +725,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 	{
 		Buttons->AddSlot().AutoHeight().Padding(0, 4)
 		[
-			MakeBigButton(LOCTEXT("Resume", "Resume"), MenuUi::GoBtn, OnResume)
+			MakeBigButton(Last.IsSet() && Last->bAutonomous ? LOCTEXT("BackToRun", "Back to the run") : LOCTEXT("Resume", "Resume"),
+			MenuUi::GoBtn, OnResume)
 		];
 	}
 	Buttons->AddSlot().AutoHeight().Padding(0, 4)
@@ -754,7 +757,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(STextBlock)
-						.Text(bPause ? LOCTEXT("Paused", "PAUSED") : LOCTEXT("RunDone", "RUN FINISHED"))
+						.Text(!bPause ? LOCTEXT("RunDone", "RUN FINISHED")
+							: Last.IsSet() && Last->bAutonomous ? LOCTEXT("AutoRunning", "THE PIPELINE IS DRIVING")
+							: LOCTEXT("Paused", "PAUSED"))
 						.Font(MenuUi::MenuFont(22, TEXT("Bold"))).ColorAndOpacity(MenuUi::Accent)
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
@@ -809,7 +814,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
 					[
 						SNew(STextBlock)
-						.Text(bPause ? LOCTEXT("EscResume", "Esc: resume") : FText::GetEmpty())
+						.Text(!bPause ? FText::GetEmpty()
+							: Last.IsSet() && Last->bAutonomous ? LOCTEXT("EscBack", "The run goes on behind this box. Main menu stops it.")
+							: LOCTEXT("EscResume", "Esc: resume"))
 						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
 					]
 				]

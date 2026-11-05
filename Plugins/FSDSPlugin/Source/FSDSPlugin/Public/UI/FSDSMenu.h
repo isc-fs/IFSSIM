@@ -41,7 +41,7 @@ struct FFSDSDriveRequest
 	bool bAutonomous = false;
 };
 
-/** One manual run, for the Results page. */
+/** One run, manual or autonomous, for the Results page. */
 struct FFSDSRunResult
 {
 	FString Track;
@@ -52,6 +52,7 @@ struct FFSDSRunResult
 	int32 OffCourse = 0;
 	bool bFinished = false;
 	bool bPractice = false;
+	bool bAutonomous = false;
 	FDateTime When;
 };
 
@@ -104,6 +105,18 @@ private:
 
 	void ScanTracks();
 	void Drive(const FFSDSDriveRequest& Request);
+	/**
+	 * START with the pipeline driving, all from the menu: through Mission
+	 * Control's backend, as the panel and the mission benchmark do. Stop
+	 * any session, load the picked track (cones, car on the start gate,
+	 * referee cleared), then start the event's mission; the menu shows each
+	 * step under START and closes once the pipeline has the car.
+	 */
+	void StartAutonomous(const FFSDSDriveRequest& Request);
+	/** Stop the pipeline's session (the car stays where it is, under EBS). */
+	void StopSession();
+	/** The mission Mission Control runs for an event (/api/event/start). */
+	static FString MissionName(EFSDSEventType Event);
 	/** The track editor's Test drive: the saved track, in Practice. */
 	void TestDrive(const FString& TrackName);
 	void StartStack();
@@ -125,6 +138,7 @@ private:
 
 	APlayerController* GetPC() const;
 	bool IsManualRunLive() const;
+	bool IsAutonomousRunLive() const;
 
 	bool bEnabled = false;
 	bool bShowOnFirstTick = false;
@@ -159,6 +173,11 @@ private:
 	bool bPausedGame = false;
 
 	uint32 SeenExternalGen = 0;
+
+	/** While StartAutonomous runs its steps: the backend's own track load isn't an outside session. */
+	bool bStartingSession = false;
+	/** Gone with the menu (Shutdown): the backend's replies check it before touching anything. */
+	TSharedPtr<bool> Alive;
 
 	/** The cap now in force; 0 for none. */
 	int32 AppliedCap = 0;
