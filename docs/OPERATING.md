@@ -261,6 +261,29 @@ and with `-NoLauncher`. Settings, all optional:
 `ApiKey` falls back to `$IFSSIM_MC_API_KEY`, the variable compose hands
 the backend.
 
+### HUD
+
+A small overlay in the bottom-right corner of the sim window shows the car
+and the mission at a glance:
+
+- speed (km/h, with m/s and motor rpm), throttle, brake and steering;
+- who is driving (MANUAL or AUTONOMOUS) and a red **EBS** badge while the
+  EBS is latched (the brake bar then reads full);
+- the event, laps done out of required, last and best lap, cones down and
+  off-course.
+
+Press **H** to hide or show it. It never takes the mouse or keyboard, and it
+is off in headless runs and with `-NoHUD`. Settings, all optional:
+
+```json
+"HUD": {
+  "Enabled": true,
+  "Key": "H"
+}
+```
+
+`Enabled: false` starts with it hidden; the key still shows it.
+
 ### Manual mission control without Mission Control
 
 If you want to reproduce the production lifecycle from a shell —
