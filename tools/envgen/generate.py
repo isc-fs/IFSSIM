@@ -60,15 +60,19 @@ def _boundary_centre(tr: trackmod.Track) -> Tuple[float, float]:
 
 
 class _Placer:
-    def __init__(self, tr: trackmod.Track):
+    def __init__(self, tr: trackmod.Track, allowed: Optional[BaseGeometry] = None):
         self.tr = tr
         cx, cy = _boundary_centre(tr)
         self.floor = box(cx - FLOOR_HALF_M, cy - FLOOR_HALF_M, cx + FLOOR_HALF_M, cy + FLOOR_HALF_M)
+        # Where props may stand at all, e.g. a venue's lot; None: anywhere on the floor.
+        self.allowed = allowed
         self.placed: List[BaseGeometry] = []
 
     def ok(self, cls: PropClass, fp: BaseGeometry) -> bool:
         tr = self.tr
         if not self.floor.contains(fp) or fp.intersects(tr.area):
+            return False
+        if self.allowed is not None and not self.allowed.contains(fp):
             return False
         gap = tr.area.distance(fp)
         if not (cls.band_m[0] <= gap <= cls.band_m[1]):
@@ -156,9 +160,14 @@ def generate(track_csv: str | Path, seed: int, profile: str) -> Dict:
         raise ValueError(f"unknown profile {profile!r}; one of {', '.join(PROFILES)}")
     if not isinstance(seed, int) or seed < 0:
         raise ValueError("seed must be a non-negative integer")
-    prof = PROFILES[profile]
     tr = trackmod.load(track_csv)
-    pl = _Placer(tr)
+    props = place(_Placer(tr), PROFILES[profile], seed)
+    return {"format": FORMAT, "seed": seed, "profile": profile, "props": props}
+
+
+def place(pl: _Placer, prof, seed: int) -> List[Dict]:
+    """A profile's props around pl's track, in the order generate writes them."""
+    tr = pl.tr
     props: List[Dict] = []
     if prof.tripods_per_line:
         props += _place_tripods(pl, prof.tripods_per_line, Stream(seed, "Env.Props.tripod"))
@@ -170,7 +179,7 @@ def generate(track_csv: str | Path, seed: int, profile: str) -> Dict:
             prop = _place_along_boundary(pl, cls, rng)
             if prop:
                 props.append(prop)
-    return {"format": FORMAT, "seed": seed, "profile": profile, "props": props}
+    return props
 
 
 def dumps(env: Dict) -> str:

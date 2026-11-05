@@ -14,6 +14,21 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Parking lot A is fenced in, and its tracks get clutter of their own.** Tyre
+  walls line the long edges of the lot (bins and bollards in their gaps) and a
+  new `fence` class, a steel crowd barrier, the short ones. The south sidewalk,
+  now 20 cm tall and still LiDAR-only, runs right along the lot in plain view
+  of the LiDAR (a second flat plane for the ground fit), with the barriers
+  behind it, so the car still meets something solid. Each venue track's sidecar also gets tyre walls, bollards, bins,
+  spare cones and timing tripods 0.5–3 m from its cones, on the lot, from the
+  track's seed (profile `venue_clutter`); the Drive map draws them. See
+  docs/venues.md.
+- **A venue's track always loads its surroundings,** even with
+  `"Environment": {"Enabled": false}` in settings.json (the default): the
+  plugin recognises a venue's sidecar by its profile, `venue_<venue>`. Every
+  other sidecar still waits for `Enabled`, and tracks without one are
+  unchanged.
+
 - **The menu's Location is a dropdown, and the track list groups by venue.**
   Drive and the Track editor pick the venue from one dropdown (with each
   venue's track count on Drive), so more venues don't push the page down. On

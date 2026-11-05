@@ -141,7 +141,8 @@ public:
 	 *  has a valid <track>.env.json. */
 	const FFSDSEnvironment& GetEnvironment() const { return Environment; }
 
-	/** What GetEnvironment() holds: "off" (Environment.Enabled is false),
+	/** What GetEnvironment() holds: "off" (Environment.Enabled is false and the
+	 *  track isn't a venue's, whose surroundings load regardless),
 	 *  "none" (the track has no sidecar), "loaded", or "invalid" (the sidecar
 	 *  failed to parse; GetEnvironmentError() says why). */
 	const FString& GetEnvironmentStatus() const { return EnvironmentStatus; }
