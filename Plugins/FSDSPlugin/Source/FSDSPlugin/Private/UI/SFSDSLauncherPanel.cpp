@@ -17,6 +17,15 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/SOverlay.h"
+#include "Brushes/SlateDynamicImageBrush.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
+#include "Misc/Base64.h"
+#include "Modules/ModuleManager.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -106,6 +115,7 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot() [ BuildSessionTab() ]
 					+ SWidgetSwitcher::Slot() [ BuildLogTab() ]
 					+ SWidgetSwitcher::Slot() [ BuildScoringTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildTracksTab() ]
 				]
 
 				// Outcome of the last action
@@ -260,6 +270,7 @@ void SFSDSLauncherPanel::FetchLists()
 		const FString Keep = P->SelectedTrack.IsValid() ? *P->SelectedTrack : FString();
 		P->Tracks.Reset();
 		P->SelectedTrack.Reset();
+		P->TrackInfos.Reset();
 		for (const TSharedPtr<FJsonValue>& V : R.Body->AsArray())
 		{
 			const TSharedPtr<FJsonObject>* O = nullptr;
@@ -268,7 +279,23 @@ void SFSDSLauncherPanel::FetchLists()
 			{
 				P->Tracks.Add(MakeShared<FString>(Name));
 				if (Name == Keep) P->SelectedTrack = P->Tracks.Last();
+
+				FTrackInfo Info;
+				Info.Name = Name;
+				(*O)->TryGetNumberField(TEXT("cones"), Info.Cones);
+				(*O)->TryGetNumberField(TEXT("blue"), Info.Blue);
+				(*O)->TryGetNumberField(TEXT("yellow"), Info.Yellow);
+				(*O)->TryGetNumberField(TEXT("orange"), Info.Orange);
+				(*O)->TryGetBoolField(TEXT("builtin"), Info.bBuiltin);
+				(*O)->TryGetStringField(TEXT("event_type"), Info.EventType);
+				P->TrackInfos.Add(MoveTemp(Info));
 			}
+		}
+		P->RebuildTrackInfoList();
+		if (!P->SelectedInfo.IsEmpty() && !P->TrackInfos.ContainsByPredicate(
+				[&P](const FTrackInfo& I) { return I.Name == P->SelectedInfo; }))
+		{
+			P->SelectedInfo.Reset();
 		}
 		if (!P->SelectedTrack.IsValid() && P->Tracks.Num() > 0) P->SelectedTrack = P->Tracks[0];
 		if (P->TrackCombo.IsValid())
@@ -512,6 +539,78 @@ FReply SFSDSLauncherPanel::OnExportLog()
 	return FReply::Handled();
 }
 
+FReply SFSDSLauncherPanel::OnTracksLoad()
+{
+	if (SelectedInfo.IsEmpty()) return FReply::Handled();
+	// One load path: the Session tab's, with the track picked here.
+	const FTrackPtr* Match = Tracks.FindByPredicate([this](const FTrackPtr& T) { return T.IsValid() && *T == SelectedInfo; });
+	SelectedTrack = Match ? *Match : MakeShared<FString>(SelectedInfo);
+	if (TrackCombo.IsValid()) TrackCombo->SetSelectedItem(SelectedTrack);
+	return OnLoadTrack();
+}
+
+FReply SFSDSLauncherPanel::OnTracksDelete()
+{
+	if (SelectedInfo.IsEmpty() || !Confirmed(TEXT("delete"))) return FReply::Handled();
+	const FString Name = SelectedInfo;
+	Busy = FString::Printf(TEXT("Deleting %s"), *Name);
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Delete(FString::Printf(TEXT("/api/track/%s"), *FFSDSMissionControlClient::EncodeSegment(Name)),
+		[Weak, Name](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->Busy.Reset();
+		if (!R.Ok())
+		{
+			P->Say(FString::Printf(TEXT("Deleting %s failed: %s"), *Name, *R.Error), true);
+			return;
+		}
+		P->Say(FString::Printf(TEXT("Deleted %s"), *Name), false);
+		P->SelectedInfo.Reset();
+		P->PreviewFor.Reset();
+		P->PreviewBrush.Reset();
+		P->PreviewState.Reset();
+		P->FetchLists();
+	});
+	return FReply::Handled();
+}
+
+FReply SFSDSLauncherPanel::OnGenerate()
+{
+	TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetNumberField(TEXT("n_points"), GenPoints);
+	Body->SetNumberField(TEXT("n_regions"), GenRegions);
+	Body->SetNumberField(TEXT("max_bound"), GenMaxBound);
+	Body->SetStringField(TEXT("name"), GenName);
+
+	Busy = TEXT("Generating a track");
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Post(TEXT("/api/track/generate"), Body, [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->Busy.Reset();
+		FString Name;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("name"), Name))
+		{
+			P->Say(FString::Printf(TEXT("Generating failed: %s"), R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error), true);
+			return;
+		}
+		double Cones = 0;
+		O->TryGetNumberField(TEXT("cones"), Cones);
+		P->Say(FString::Printf(TEXT("Generated %s (%d cones)"), *Name, (int32)Cones), false);
+		P->GenName.Reset();
+		// Show it: the list gains it, and it becomes the selection.
+		P->SelectedInfo = Name;
+		P->FetchLists();
+		P->FetchPreview(Name);
+	}, 60.f);
+	return FReply::Handled();
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 
@@ -627,9 +726,13 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildTabBar()
 		[
 			MakeTab(LOCTEXT("TabLog", "Log"), ETab::Log)
 		]
-		+ SHorizontalBox::Slot().AutoWidth()
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
 		[
 			MakeTab(LOCTEXT("TabScoring", "Scoring"), ETab::Scoring)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			MakeTab(LOCTEXT("TabTracks", "Tracks"), ETab::Tracks)
 		];
 }
 
@@ -650,6 +753,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 			ActiveTab = Tab;
 			if (Tab == ETab::Log) FetchLog();
 			if (Tab == ETab::Scoring) FetchScoring();
+			if (Tab == ETab::Tracks && !SelectedInfo.IsEmpty() && SelectedInfo != PreviewFor) FetchPreview(SelectedInfo);
 			return FReply::Handled();
 		})
 		[
@@ -1067,6 +1171,257 @@ void SFSDSLauncherPanel::RebuildLapList()
 			]
 		];
 	}
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildTracksTab()
+{
+	auto NumberRow = [this](const FText& Label, int32* Value, int32 Min, int32 Max) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(LabelWidth)
+				[
+					SNew(STextBlock).Text(Label).Font(Font(10)).ColorAndOpacity(Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(90.f)
+				[
+					SNew(SSpinBox<int32>)
+					.Font(Font(10))
+					.MinValue(Min).MaxValue(Max)
+					.Value_Lambda([Value]() { return *Value; })
+					.OnValueChanged_Lambda([Value](int32 V) { *Value = V; })
+				]
+			];
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("TracksHeading", "TRACKS"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.MaxDesiredHeight(170.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(TrackInfoList, SVerticalBox)
+				]
+			]
+		]
+
+		// Preview of the selected track, as the web UI draws it.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SBox)
+			.HeightOverride(230.f)
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Center)
+			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()
+				[
+					SNew(SScaleBox)
+					.Stretch(EStretch::ScaleToFit)
+					.Visibility_Lambda([this]() { return PreviewBrush.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
+					[
+						SNew(SImage).Image_Lambda([this]() -> const FSlateBrush* { return PreviewBrush.Get(); })
+					]
+				]
+				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Font(Font(10))
+					.ColorAndOpacity(Muted)
+					.Visibility_Lambda([this]() { return PreviewState.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+					.Text_Lambda([this]() { return FText::FromString(PreviewState); })
+				]
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				MakeButton(LOCTEXT("TracksLoad", "Load"), GoBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnTracksLoad),
+					TAttribute<bool>::CreateLambda([this]() { return CanAct() && bSimConnected && !SelectedInfo.IsEmpty(); }))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				MakeButton(
+					TAttribute<FText>::CreateLambda([this]()
+					{
+						return IsArmed(TEXT("delete")) ? LOCTEXT("DeleteConfirm", "Click again to delete")
+							: LOCTEXT("Delete", "Delete");
+					}),
+					StopBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnTracksDelete),
+					TAttribute<bool>::CreateLambda([this]()
+					{
+						const FTrackInfo* T = TrackInfos.FindByPredicate([this](const FTrackInfo& I) { return I.Name == SelectedInfo; });
+						return CanAct() && T && !T->bBuiltin;
+					}))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeButton(LOCTEXT("TracksRefresh", "Refresh"), PlainBtn,
+					FOnClicked::CreateLambda([this]() { FetchLists(); return FReply::Handled(); }),
+					TAttribute<bool>::CreateLambda([this]() { return bBackendUp && !bListsLoading; }))
+			]
+		]
+
+		// A random track, from the same generator and defaults as the web UI.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("GenerateHeading", "GENERATE A RANDOM TRACK"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			NumberRow(LOCTEXT("GenPoints", "Points"), &GenPoints, 10, 200)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			NumberRow(LOCTEXT("GenRegions", "Regions"), &GenRegions, 5, 100)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			NumberRow(LOCTEXT("GenMax", "Max size (m)"), &GenMaxBound, 50, 300)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(LabelWidth)
+				[
+					SNew(STextBlock).Text(LOCTEXT("GenName", "Name")).Font(Font(10)).ColorAndOpacity(Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				SNew(SBox).WidthOverride(160.f)
+				[
+					SNew(SEditableTextBox)
+					.Font(Font(10))
+					.HintText(LOCTEXT("GenNameHint", "auto"))
+					.Text_Lambda([this]() { return FText::FromString(GenName); })
+					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+					{
+						GenName = Text.ToString().TrimStartAndEnd();
+						FSlateApplication::Get().SetAllUserFocusToGameViewport();
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeButton(LOCTEXT("Generate", "Generate"), GoBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnGenerate),
+					TAttribute<bool>::CreateLambda([this]() { return CanAct(); }))
+			]
+		];
+}
+
+void SFSDSLauncherPanel::RebuildTrackInfoList()
+{
+	if (!TrackInfoList.IsValid()) return;
+	TrackInfoList->ClearChildren();
+
+	if (TrackInfos.Num() == 0)
+	{
+		TrackInfoList->AddSlot().AutoHeight()
+		[
+			SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted)
+			.Text(bBackendUp ? LOCTEXT("NoTracks", "No tracks") : LOCTEXT("TracksNoBackend", "The backend isn't running"))
+		];
+		return;
+	}
+
+	for (const FTrackInfo& T : TrackInfos)
+	{
+		const FString Name = T.Name;
+		const FString Detail = FString::Printf(TEXT("%d cones (B %d  Y %d  O %d)%s"), T.Cones, T.Blue, T.Yellow, T.Orange,
+			T.bBuiltin ? *FString::Printf(TEXT("   built-in%s%s"), T.EventType.IsEmpty() ? TEXT("") : TEXT(", "), *T.EventType) : TEXT(""));
+		TrackInfoList->AddSlot().AutoHeight()
+		[
+			SNew(SButton)
+			.IsFocusable(false)          // a focused button would eat Space (the brake)
+			.ContentPadding(FMargin(6.f, 2.f))
+			.ButtonColorAndOpacity_Lambda([this, Name]()
+			{
+				return FSlateColor(SelectedInfo == Name ? PlainBtn : FLinearColor(0.f, 0.f, 0.f, 0.f));
+			})
+			.OnClicked_Lambda([this, Name]() { SelectTrackInfo(Name); return FReply::Handled(); })
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 10, 0)
+				[
+					SNew(STextBlock)
+					.Font(Font(10, TEXT("Bold")))
+					.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+					.ColorAndOpacity_Lambda([this, Name]() { return FSlateColor(SelectedInfo == Name ? Accent : Ink); })
+					.Text(FText::FromString(Name))
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Muted).Text(FText::FromString(Detail))
+				]
+			]
+		];
+	}
+}
+
+void SFSDSLauncherPanel::SelectTrackInfo(const FString& Name)
+{
+	SelectedInfo = Name;
+	if (Name != PreviewFor) FetchPreview(Name);
+}
+
+void SFSDSLauncherPanel::FetchPreview(const FString& Name)
+{
+	if (!Client.IsValid() || Name.IsEmpty()) return;
+	PreviewFor = Name;
+	PreviewBrush.Reset();
+	PreviewState = TEXT("Drawing the track...");
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Get(FString::Printf(TEXT("/api/track/%s/preview"), *FFSDSMissionControlClient::EncodeSegment(Name)),
+		[Weak, Name](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P || P->PreviewFor != Name) return;   // a newer selection won
+
+		FString Base64;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("image"), Base64))
+		{
+			P->PreviewState = FString::Printf(TEXT("No preview: %s"), R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error);
+			return;
+		}
+
+		// The backend draws it with matplotlib and sends a base64 PNG.
+		TArray<uint8> Png;
+		TArray<uint8> Bgra;
+		IImageWrapperModule& Images = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		const TSharedPtr<IImageWrapper> Wrapper = Images.CreateImageWrapper(EImageFormat::PNG);
+		if (!FBase64::Decode(Base64, Png) || !Wrapper.IsValid()
+			|| !Wrapper->SetCompressed(Png.GetData(), Png.Num())
+			|| !Wrapper->GetRaw(ERGBFormat::BGRA, 8, Bgra))
+		{
+			P->PreviewState = TEXT("No preview: the image didn't decode");
+			return;
+		}
+		P->PreviewBrush = FSlateDynamicImageBrush::CreateWithImageData(
+			FName(*FString::Printf(TEXT("FSDSTrackPreview_%d"), ++P->PreviewSerial)),
+			FVector2D((double)Wrapper->GetWidth(), (double)Wrapper->GetHeight()), Bgra);
+		P->PreviewState = P->PreviewBrush.IsValid() ? FString() : TEXT("No preview");
+	}, 15.f);
 }
 
 TSharedRef<SWidget> SFSDSLauncherPanel::BuildStackBlock()

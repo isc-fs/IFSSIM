@@ -21,6 +21,10 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Tracks in the in-sim Mission Control panel.** A Tracks tab with the web UI's
+  track manager: the list with cone counts, the selected track's preview, Load,
+  Delete (confirmed with a second click; not for built-in tracks), and Generate a
+  random track with the web UI's fields and defaults.
 - **Scoring in the in-sim Mission Control panel.** A Scoring tab with the web
   UI's view: score, elapsed, penalties, corrected time, the reference time
   (T_best) and the lap times. Both UIs now show no score until a reference

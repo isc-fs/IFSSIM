@@ -10,12 +10,14 @@ class FFSDSStackStarter;
 class AFSDSReferee;
 class FJsonObject;
 class SVerticalBox;
+struct FSlateDynamicImageBrush;
 struct FFSDSMcReply;
 
 /**
  * The in-game Mission Control panel: load a track, start and stop a
  * session, reset the car, RES (the Session tab), and the session log with
- * its export (the Log tab), the event score (the Scoring tab). A client of the backend, like the web UI; the
+ * its export (the Log tab), the event score (the Scoring tab), and the
+ * tracks: preview, load, delete, generate (the Tracks tab). A client of the backend, like the web UI; the
  * backend owns the session sequence.
  *
  * Built from code in Slate (no widget Blueprint to keep in sync with the C++).
@@ -60,7 +62,19 @@ private:
 	};
 
 	/** The tabs, in the order of the tab bar. */
-	enum class ETab : int32 { Session = 0, Log = 1, Scoring = 2 };
+	enum class ETab : int32 { Session = 0, Log = 1, Scoring = 2, Tracks = 3 };
+
+	/** One /api/track/list entry. */
+	struct FTrackInfo
+	{
+		FString Name;
+		int32 Cones = 0;
+		int32 Blue = 0;
+		int32 Yellow = 0;
+		int32 Orange = 0;
+		bool bBuiltin = false;
+		FString EventType;
+	};
 
 	/** One /api/scoring/summary reply. */
 	struct FScoring
@@ -99,6 +113,10 @@ private:
 	/** The score, while the Scoring tab is open. */
 	void FetchScoring();
 	void RebuildLapList();
+	/** Select a track in the Tracks tab and fetch its preview. */
+	void SelectTrackInfo(const FString& Name);
+	void FetchPreview(const FString& Name);
+	void RebuildTrackInfoList();
 
 	// --- actions -------------------------------------------------------
 	FReply OnLoadTrack();
@@ -108,6 +126,9 @@ private:
 	FReply OnPause();
 	FReply OnRes();
 	FReply OnExportLog();
+	FReply OnTracksLoad();
+	FReply OnTracksDelete();
+	FReply OnGenerate();
 
 	// --- layout --------------------------------------------------------
 	TSharedRef<SWidget> MakeStatusRow(const FText& Label, TAttribute<FText> Value, TAttribute<FSlateColor> Color);
@@ -123,6 +144,7 @@ private:
 	TSharedRef<SWidget> BuildSessionTab();
 	TSharedRef<SWidget> BuildLogTab();
 	TSharedRef<SWidget> BuildScoringTab();
+	TSharedRef<SWidget> BuildTracksTab();
 
 	bool CanAct() const;
 	FText BackendText() const;
@@ -185,6 +207,18 @@ private:
 	/** The reference time typed in, in seconds; empty for the best lap. */
 	FString ReferenceInput;
 	TSharedPtr<SVerticalBox> LapList;
+
+	TArray<FTrackInfo> TrackInfos;
+	FString SelectedInfo;
+	TSharedPtr<SVerticalBox> TrackInfoList;
+	TSharedPtr<FSlateDynamicImageBrush> PreviewBrush;
+	FString PreviewFor;
+	FString PreviewState;
+	int32 PreviewSerial = 0;
+	int32 GenPoints = 50;
+	int32 GenRegions = 30;
+	int32 GenMaxBound = 150;
+	FString GenName;
 
 	/** Non-empty while an action is in flight: what it is doing. */
 	FString Busy;
