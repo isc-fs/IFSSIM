@@ -10,6 +10,7 @@
 #include "UI/FSDSStackStarter.h"
 #include "UI/FSDSTrackSpec.h"
 #include "UI/FSDSVenue.h"
+#include "UI/FSDSGraphics.h"
 
 #include "Camera/CameraActor.h"
 #include "Dom/JsonObject.h"
@@ -376,6 +377,19 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	}
 	UpdateFrameCap();
 	ThrottleFrame();
+
+	// Settings, Graphics: the view off while the pipeline drives, to give its
+	// GPU and CPU time back (the LiDAR renders on its own). Drawn again
+	// whenever the menu is up, so the box over the run has the scene behind it.
+	{
+		// API control alone isn't driving: the pipeline stack's bridge takes
+		// it as soon as it connects, and holds the car under EBS until a
+		// session releases it.
+		const AFSDSVehiclePawn* P = Pawn.Get();
+		const bool bHide = FFSDSGraphics::Get().GetSettings().bHideViewWhileAutonomous
+			&& P && P->IsApiControlEnabled() && !P->IsEbsLatched() && !IsOpen();
+		FFSDSGraphics::Get().SetViewDrawn(!bHide);
+	}
 
 	// The referee ends the run (all laps done, or the far gate of a one-way
 	// track): show how it went. Practice on a loop never ends this way. With

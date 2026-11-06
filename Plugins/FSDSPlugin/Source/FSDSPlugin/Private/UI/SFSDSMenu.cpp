@@ -1,6 +1,7 @@
 #include "UI/SFSDSMenu.h"
 
 #include "UI/SFSDSTrackMap.h"
+#include "UI/FSDSGraphics.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -162,6 +163,23 @@ TSharedRef<SWidget> SFSDSMenu::MakeNavButton(const FText& Label, EPage InPage)
 				return FSlateColor(Page == InPage ? MenuUi::Accent : MenuUi::Ink);
 			})
 		];
+}
+
+TSharedRef<SWidget> SFSDSMenu::GraphicsRow(const FText& Label, const TArray<FGraphicsChoice>& Choices)
+{
+	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SBox).WidthOverride(200.f)
+			[
+				SNew(STextBlock).Text(Label).Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+			]
+		];
+	for (const FGraphicsChoice& C : Choices)
+	{
+		Row->AddSlot().AutoWidth().Padding(0, 0, 3, 0) [ MakeChoice(C.Label, C.IsOn, C.OnPick) ];
+	}
+	return Row;
 }
 
 TSharedRef<SWidget> SFSDSMenu::SpeedChoice(const FText& Label, double Speed)
@@ -675,6 +693,63 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				"goes at the sim's full rate: every frame is a fixed physics step, so fewer frames would "
 				"slow the simulation down and give the pipeline more time than on the car. The HUD's "
 				"\"Real time\" line shows how close a run is to real time."), FText::AsNumber(FFSDSMenu::MinimisedFrameRate)))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Graphics", "GRAPHICS")) ]
+		+ SVerticalBox::Slot().AutoHeight() [ GraphicsRow(LOCTEXT("GQuality", "Quality"),
+			{ { LOCTEXT("GLow", "Low"), []() { return FFSDSGraphics::Get().GetSettings().Quality == FFSDSGraphics::EQuality::Low; },
+				  []() { FFSDSGraphics::Get().SetQuality(FFSDSGraphics::EQuality::Low); } },
+			  { LOCTEXT("GMedium", "Medium"), []() { return FFSDSGraphics::Get().GetSettings().Quality == FFSDSGraphics::EQuality::Medium; },
+				  []() { FFSDSGraphics::Get().SetQuality(FFSDSGraphics::EQuality::Medium); } },
+			  { LOCTEXT("GHigh", "High"), []() { return FFSDSGraphics::Get().GetSettings().Quality == FFSDSGraphics::EQuality::High; },
+				  []() { FFSDSGraphics::Get().SetQuality(FFSDSGraphics::EQuality::High); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0) [ GraphicsRow(LOCTEXT("GRes", "Resolution"),
+			{ { LOCTEXT("G25", "25%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 25; }, []() { FFSDSGraphics::Get().SetResolution(25); } },
+			  { LOCTEXT("G50", "50%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 50; }, []() { FFSDSGraphics::Get().SetResolution(50); } },
+			  { LOCTEXT("G75", "75%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 75; }, []() { FFSDSGraphics::Get().SetResolution(75); } },
+			  { LOCTEXT("G100", "100%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 100; }, []() { FFSDSGraphics::Get().SetResolution(100); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0) [ GraphicsRow(LOCTEXT("GView", "View while the pipeline drives"),
+			{ { LOCTEXT("GShown", "Shown"), []() { return !FFSDSGraphics::Get().GetSettings().bHideViewWhileAutonomous; },
+				  []() { FFSDSGraphics::Get().SetHideViewWhileAutonomous(false); } },
+			  { LOCTEXT("GHidden", "Hidden"), []() { return FFSDSGraphics::Get().GetSettings().bHideViewWhileAutonomous; },
+				  []() { FFSDSGraphics::Get().SetHideViewWhileAutonomous(true); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("GFind", "Find the best for this PC"),
+					[]() { return FFSDSGraphics::Get().IsRecommending(); },
+					[this]()
+					{
+						RecommendResult.Reset();
+						TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+						FFSDSGraphics::Get().Recommend([Weak](const FString& Msg)
+						{
+							if (TSharedPtr<SFSDSMenu> M = Weak.Pin()) M->RecommendResult = Msg;
+						});
+					})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					const FFSDSGraphics& G = FFSDSGraphics::Get();
+					return FText::FromString(G.IsRecommending() ? G.RecommendProgress() : RecommendResult);
+				})
+				.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("GraphicsHint",
+				"These only change the view you watch: the LiDAR renders its own images of the scene, and its "
+				"scans stay the same at every setting. Low at 25% is the cheapest. Hiding the view while the "
+				"pipeline drives gives its GPU and CPU time back (the HUD and the Esc box still show). Find the "
+				"best tries each setting for a few seconds and keeps the best looking one that leaves the GPU "
+				"room within each 1/60 s frame."))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Config", "CONFIGURATION")) ]
