@@ -159,12 +159,15 @@ if [ -n "$LOCALAPPDATA" ]; then
     # truth; UE5 normally creates the runtime copy on first launch from
     # the project defaults, but we stage it explicitly here so a wiped
     # AppData doesn't temporarily lose the override.
-    if [ -f "$SCRIPT_DIR/Config/DefaultGameUserSettings.ini" ]; then
-        USER_CFG_DIR="$USER_SETTINGS_DIR/Saved/Config/Windows"
+    # Only when there is none yet: the file also holds what the user chose in
+    # the sim (the window, the menu's frame rate, Settings > Graphics), and
+    # replacing it on every package threw those choices away.
+    USER_CFG_DIR="$USER_SETTINGS_DIR/Saved/Config/Windows"
+    if [ -f "$SCRIPT_DIR/Config/DefaultGameUserSettings.ini" ] && [ ! -f "$USER_CFG_DIR/GameUserSettings.ini" ]; then
         mkdir -p "$USER_CFG_DIR"
         cp "$SCRIPT_DIR/Config/DefaultGameUserSettings.ini" \
            "$USER_CFG_DIR/GameUserSettings.ini"
-        echo "    GameUserSettings.ini: $USER_CFG_DIR/GameUserSettings.ini"
+        echo "    GameUserSettings.ini: $USER_CFG_DIR/GameUserSettings.ini (seeded)"
     fi
 else
     echo "    WARNING: \$LOCALAPPDATA not set — skipping UserSettingsDir copy"
