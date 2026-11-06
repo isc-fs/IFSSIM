@@ -46,6 +46,30 @@ It isn't an exact lockstep. The pipeline gets more time, not unlimited time, and
 
 While the menu is up and nothing drives, the sim draws 30 frames a second (Settings, Performance: 60, 30 or 15), and 5 while its window is minimised, so it costs little in the background. That cap never applies to a run, or to an autonomous session with the menu up over it.
 
+## Graphics: what the view costs
+
+Settings, Graphics in the menu, kept between launches (`FFSDSGraphics`):
+- **Quality:** Low (the project's own settings in `Config/DefaultEngine.ini`, every quality group low), Medium or High.
+- **Resolution:** 25% (the default), 50%, 75% or 100% of the window, upscaled.
+- **View while the pipeline drives:** Shown, or Hidden. Hidden stops drawing the world while the pipeline has the car (API control on and the EBS released) and the menu is closed; the HUD and the Esc box still show.
+- **Find the best for this PC:** tries High at 100% first and works down (High 75%, Medium 75%, Medium 50%, Low 50%, Low 25%), a few seconds each, and keeps the first whose GPU time per frame (the 90th percentile of `RHIGetGPUFrameCycles`) stays under 12.5 ms, three quarters of a 60 fps frame. If nothing does, it picks Low at 25% with the view hidden.
+
+**None of this changes what the LiDAR sees.** The LiDAR renders its own depth and colour images of the scene. With the car at rest on Parking lot A, its scans (points per scan, mean range, intensity) were the same, within the scatter between repeats, with the view off, at 100% resolution, and with the shadow, post-process, anti-aliasing, shading, texture and effects groups at high. The view distance, foliage and level-of-detail settings are not offered: they decide which geometry the LiDAR's own render holds.
+
+What it costs, measured on a GTX 1660 SUPER (12-thread CPU) with the LiDAR at 1.74 M points/s, all at 60 fps and real time. The GPU reads about 13% with the sim closed; percentages don't add up exactly, since the card changes its clock with the load:
+
+| Setup | GPU | CPU (whole PC) |
+|---|---|---|
+| Low, 25% (as before) | 51% | 15% |
+| The view off | 38% | 6% |
+| The LiDAR off | 39% | 19% |
+| The LiDAR and the view off | 16% | 11% |
+| Low, 100% | 72% | 15% |
+| High, 100% | 85% | 14% |
+| High, 50% | 66% | 15% |
+
+So the view and the LiDAR each take about half of the sim's GPU work, and the view most of its CPU. Find the best picked High at 100% on that PC (9.6 ms of GPU per frame).
+
 ## Known limits
 
 - The sim runs below real time for about 30 s after it starts, while it compiles shaders (#734). The HUD shows it; wait for 1.00x before a timing run.

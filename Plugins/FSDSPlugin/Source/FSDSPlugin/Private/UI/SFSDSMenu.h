@@ -69,6 +69,11 @@ private:
 	TSharedRef<SWidget> MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick);
 	/** A TIMING choice: the speed while the pipeline drives (FFSDSRealTime). */
 	TSharedRef<SWidget> SpeedChoice(const FText& Label, double Speed);
+	/** A Settings, Graphics row: a label, then one button per choice (FFSDSGraphics). */
+	struct FGraphicsChoice { FText Label; TFunction<bool()> IsOn; TFunction<void()> OnPick; };
+	TSharedRef<SWidget> GraphicsRow(const FText& Label, const TArray<FGraphicsChoice>& Choices);
+	/** What Find the best settled on, shown beside the button. */
+	FString RecommendResult;
 	TSharedRef<SWidget> MakeBigButton(const FText& Label, FLinearColor Color, FSimpleDelegate OnClick,
 		TAttribute<bool> Enabled = true);
 	TSharedRef<SWidget> MakeHeading(const FText& Title);

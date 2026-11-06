@@ -42,6 +42,14 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **Graphics settings in the menu.** Settings, Graphics: Quality (Low, the
+  sim's settings so far, Medium or High), Resolution (25% to 100%), the 3D
+  view Shown or Hidden while the pipeline drives (the HUD stays), and Find
+  the best for this PC, which tries each from the best looking down and keeps
+  the first that leaves the GPU a quarter of each 1/60 s frame. They only
+  change the view you watch: the LiDAR's scans were checked to stay the same
+  at every setting. The view and the LiDAR each cost about half of the sim's
+  GPU work, and the view most of its CPU. See docs/sim_timing.md.
 - **An autonomous run starts and stops from the menu.** START with Autonomous
   now does what the Mission Control panel did: it stops any session, loads the
   track picked on the Drive page through the backend (cones, the car on the
