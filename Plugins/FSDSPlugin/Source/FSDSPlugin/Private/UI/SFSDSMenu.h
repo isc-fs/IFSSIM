@@ -90,6 +90,8 @@ private:
 	void SetLocation(const FString& InLocation);
 	TSharedPtr<const FSDSVenue::FVenue> FindVenue(const FString& Name) const;
 	void SelectTrack(int32 Index);
+	/** Why a track can't be deleted, for the Drive page; empty if it can. */
+	static FString WhyKept(const FString& Name);
 	void SetEvent(EFSDSEventType Event, bool bInPractice);
 	/** Whether a track suits the chosen event, wherever it is. */
 	bool FitsEvent(const FFSDSMenuTrack& Track) const;

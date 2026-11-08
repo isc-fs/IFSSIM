@@ -465,12 +465,30 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					.Visibility_Lambda([this]() { return Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
 					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
 					[
-						MakeChoice(LOCTEXT("Generate", "Generate a track"), [this]() { return bTrackBusy; }, [this]() { GenerateTrack(); })
+						MakeChoice(LOCTEXT("Generate", "New random track"), [this]() { return bTrackBusy; }, [this]() { GenerateTrack(); })
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Visibility_Lambda([this]()
+						{
+							return Tracks.IsValidIndex(Selected) && !WhyKept(Tracks[Selected].Name).IsEmpty()
+								? EVisibility::Visible : EVisibility::Collapsed;
+						})
+						.Text_Lambda([this]()
+						{
+							return Tracks.IsValidIndex(Selected) ? FText::FromString(WhyKept(Tracks[Selected].Name)) : FText::GetEmpty();
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
 					[
 						SNew(SBox)
-						.Visibility_Lambda([this]() { return Tracks.IsValidIndex(Selected) ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Visibility_Lambda([this]()
+						{
+							return Tracks.IsValidIndex(Selected) && WhyKept(Tracks[Selected].Name).IsEmpty()
+								? EVisibility::Visible : EVisibility::Collapsed;
+						})
 						[
 							MakeChoice(TAttribute<FText>::CreateLambda([this]()
 								{
@@ -1363,11 +1381,21 @@ FString SFSDSMenu::ScoreText(const FFSDSRunResult& R)
 	return S;
 }
 
+FString SFSDSMenu::WhyKept(const FString& Name)
+{
+	// Same rule as protected_reason in tools/mission_control/backend/track_validators.py.
+	if (Name == TEXT("acceleration") || Name == TEXT("skidpad"))
+		return TEXT("Official event track: it can't be deleted.");
+	if (Name.StartsWith(TEXT("stress_")))
+		return TEXT("Test track kept in the repo: it can't be deleted.");
+	return FString();
+}
+
 void SFSDSMenu::GenerateTrack()
 {
 	if (bTrackBusy || !Client.IsValid()) return;
 	bTrackBusy = true;
-	SetMessage(TEXT("Generating a track..."), false);
+	SetMessage(TEXT("Making a random track..."), false);
 	// The panel's defaults: a closed random track (MIT's generator).
 	const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetNumberField(TEXT("n_points"), 50);
@@ -1384,14 +1412,14 @@ void SFSDSMenu::GenerateTrack()
 		const TSharedPtr<FJsonObject> O = R.Object();
 		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("name"), Name))
 		{
-			M->SetMessage(FString::Printf(TEXT("Generating failed: %s"), R.Error.IsEmpty() ? TEXT("no reply") : *R.Error), true);
+			M->SetMessage(FString::Printf(TEXT("Couldn't make a random track: %s"), R.Error.IsEmpty() ? TEXT("no reply") : *R.Error), true);
 			return;
 		}
 		double Cones = 0.0;
 		O->TryGetNumberField(TEXT("cones"), Cones);
 		M->PendingSelect = FPaths::GetBaseFilename(Name);
 		M->OnTracksChanged.ExecuteIfBound();   // the menu rescans and hands the list back
-		M->SetMessage(FString::Printf(TEXT("Generated %s (%d cones)."), *FPaths::GetBaseFilename(Name), (int32)Cones), false);
+		M->SetMessage(FString::Printf(TEXT("New random track: %s (%d cones)."), *FPaths::GetBaseFilename(Name), (int32)Cones), false);
 	}, 60.f);
 }
 
@@ -1399,6 +1427,7 @@ void SFSDSMenu::DeleteTrack()
 {
 	if (bTrackBusy || !Client.IsValid() || !Tracks.IsValidIndex(Selected)) return;
 	const FString Name = Tracks[Selected].Name;
+	if (!WhyKept(Name).IsEmpty()) return;
 	// Two clicks: the first arms it for 4 s.
 	if (FPlatformTime::Seconds() >= DeleteArmedUntil || DeleteArmedFor != Name)
 	{
@@ -1418,7 +1447,10 @@ void SFSDSMenu::DeleteTrack()
 		M->bTrackBusy = false;
 		if (!R.Ok())
 		{
-			M->SetMessage(FString::Printf(TEXT("Couldn't delete %s: %s"), *Name, *R.Error), true);
+			// The backend says "Cannot delete: <why>"; drop its prefix so it doesn't repeat ours.
+			FString Why = R.Error;
+			Why.RemoveFromStart(TEXT("Cannot delete: "));
+			M->SetMessage(FString::Printf(TEXT("Couldn't delete %s: %s"), *Name, *Why), true);
 			return;
 		}
 		M->OnTracksChanged.ExecuteIfBound();
