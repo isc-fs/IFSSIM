@@ -456,7 +456,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 						return bAutonomous
 							? FText::Format(LOCTEXT("AutoHint",
 								"The DV pipeline drives. START loads the track and starts the session through "
-								"Mission Control's backend, so it needs the Docker stack. Esc during the run: stop "
+								"Mission Control's backend, starting the Docker stack first if it isn't running. Esc during the run: stop "
 								"it or start again. ({0} opens the engineers' panel.)"), LauncherKey)
 							: bPractice ? LOCTEXT("ManualHintPractice", "You drive with the keyboard or a gamepad. Esc pauses. "
 								"Practice is for you; for the pipeline, pick an event.")
