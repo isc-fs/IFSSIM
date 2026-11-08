@@ -281,6 +281,10 @@ void FFSDSMenu::Show(EMode InMode)
 		.OnTestDrive(FOnFSDSTestDrive::CreateRaw(this, &FFSDSMenu::TestDrive))
 		.OnTracksChanged(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::ScanTracks))
 		.OnStartStack(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::StartStack))
+		.OnRebuildPipeline(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::RebuildPipeline))
+		.RebuildStatus([this]() { return GetRebuildStatus(); })
+		.IsRebuilding([this]() { return IsRebuilding(); })
+		.RebuildFailed([this]() { return RebuildFailed(); })
 		.LauncherKey(FFSDSLauncher::ToggleKey().GetDisplayName())
 		.OnDrive(FOnFSDSDrive::CreateRaw(this, &FFSDSMenu::Drive))
 		.OnResume(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::Resume))
@@ -383,6 +387,7 @@ bool FFSDSMenu::Tick(float DeltaTime)
 		UpdateOrbit(DeltaTime);
 	}
 	TickStackUp();
+	TickRebuild();
 	UpdateFrameCap();
 	ThrottleFrame();
 
@@ -476,6 +481,30 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 }
 
 void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request, bool bStackTried)
+{
+	if (bStartingSession) return;   // already on its way
+	if (IsRebuilding())
+	{
+		if (Widget) Widget->SetMessage(TEXT("The pipeline is being rebuilt (Settings): START when it's done."), true);
+		return;
+	}
+	ComposeDir = FFSDSStackStarter::FindComposeDir();
+	if (ComposeDir.IsEmpty() || !Client.IsValid())
+	{
+		RunSessionSteps(Request, bStackTried);
+		return;
+	}
+	bStartingSession = true;
+	const TWeakPtr<bool> Token = Alive;
+	SyncPipelineSource([this, Token, Request, bStackTried]()
+	{
+		if (!Token.IsValid()) return;
+		bStartingSession = false;
+		RunSessionSteps(Request, bStackTried);
+	});
+}
+
+void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTried)
 {
 	if (bStartingSession) return;   // already on its way
 	if (!Client.IsValid())
@@ -614,6 +643,84 @@ void FFSDSMenu::StartCompose()
 	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: starting the stack in %s"), *ComposeDir);
 }
 
+void FFSDSMenu::SyncPipelineSource(TFunction<void()> Then)
+{
+	if (!StackStarter.IsValid()) StackStarter = MakeShared<FFSDSStackStarter>();
+	FString Error;
+	if (!FFSDSStackStarter::HasTool(TEXT("docker"))
+		|| !StackStarter->Run(ComposeDir, TEXT("docker compose config --format json"), Error))
+	{
+		Then();
+		return;
+	}
+	AfterSync = MoveTemp(Then);
+	StackUp = EStackUp::SyncConfig;
+	if (Widget) Widget->SetMessage(TEXT("Copying your pipeline code into the container..."), false);
+}
+
+bool FFSDSMenu::IsRebuilding() const
+{
+	return Rebuilder.IsValid() && Rebuilder->IsRunning();
+}
+
+void FFSDSMenu::RebuildPipeline()
+{
+	if (IsRebuilding()) return;
+	bRebuildFailed = false;
+	if (bStartingSession || IsAutonomousRunLive())
+	{
+		RebuildStatus = TEXT("Not during an autonomous start or run: stop it first.");
+		bRebuildFailed = true;
+		return;
+	}
+	ComposeDir = FFSDSStackStarter::FindComposeDir();
+	if (ComposeDir.IsEmpty())
+	{
+		RebuildStatus = TEXT("The team's code isn't on this PC: START with Autonomous offers to get it.");
+		bRebuildFailed = true;
+		return;
+	}
+	if (!FFSDSStackStarter::HasTool(TEXT("docker")))
+	{
+		RebuildStatus = TEXT("Docker isn't installed: see docs/TEAM_SETUP.md.");
+		bRebuildFailed = true;
+		return;
+	}
+	if (!Rebuilder.IsValid()) Rebuilder = MakeShared<FFSDSStackStarter>();
+	// As tools/refresh-bridge.sh, for both: the code volumes are left, since
+	// START copies the team's code over them before every run.
+	FString Error;
+	if (!Rebuilder->Run(ComposeDir, TEXT("docker compose build dv_pipeline_stack mission_control_backend && "
+		"docker compose up -d --force-recreate dv_pipeline_stack mission_control_backend"), Error))
+	{
+		RebuildStatus = FString::Printf(TEXT("Couldn't start the rebuild: %s"), *Error);
+		bRebuildFailed = true;
+		return;
+	}
+	RebuildStatus = TEXT("Rebuilding the pipeline and the backend...");
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: rebuilding the pipeline in %s"), *ComposeDir);
+}
+
+void FFSDSMenu::TickRebuild()
+{
+	if (!Rebuilder.IsValid() || !Rebuilder->IsRunning()) return;
+	if (Rebuilder->Poll())
+	{
+		const FString& Line = Rebuilder->LastLine();
+		if (!Line.IsEmpty()) RebuildStatus = FString::Printf(TEXT("Rebuilding: %s"), *Line.Left(100));
+		return;
+	}
+	if (Rebuilder->ExitCode() == 0)
+	{
+		RebuildStatus = FString::Printf(TEXT("Rebuilt at %s: the next START runs it."), *FDateTime::Now().ToString(TEXT("%H:%M")));
+		return;
+	}
+	bRebuildFailed = true;
+	RebuildStatus = FFSDSStackStarter::SaysDockerIsDown(Rebuilder->Output())
+		? FString(TEXT("Docker isn't running: open Docker Desktop, then Rebuild again."))
+		: FString::Printf(TEXT("The rebuild failed: %s"), *Rebuilder->LastLine().Left(160));
+}
+
 void FFSDSMenu::ShowRepoPrompt(const FString& Error)
 {
 	if (!Widget) return;
@@ -746,6 +853,67 @@ void FFSDSMenu::TickStackUp()
 
 	switch (StackUp)
 	{
+	case EStackUp::SyncConfig:
+	case EStackUp::Sync:
+	{
+		if (StackStarter->Poll()) return;
+		auto Done = [this]()
+		{
+			StackUp = EStackUp::Idle;
+			TFunction<void()> Then = MoveTemp(AfterSync);
+			AfterSync = nullptr;
+			if (Then) Then();
+		};
+		if (StackUp == EStackUp::Sync)
+		{
+			// Not fatal: the container's own copy runs (and with no stack
+			// yet, the start brings it up and syncs again).
+			if (StackStarter->ExitCode() != 0)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: copying the pipeline code: %s"), *StackStarter->LastLine());
+			}
+			Done();
+			return;
+		}
+		// The folders compose watch syncs, as compose resolves them.
+		FString Cmd;
+		const FString& Out = StackStarter->Output();
+		int32 Brace = INDEX_NONE;
+		Out.FindChar(TEXT('{'), Brace);
+		TSharedPtr<FJsonObject> Config;
+		const TSharedPtr<FJsonObject>* Services = nullptr;
+		const TSharedPtr<FJsonObject>* Pipeline = nullptr;
+		const TSharedPtr<FJsonObject>* Develop = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Watch = nullptr;
+		if (StackStarter->ExitCode() == 0 && Brace != INDEX_NONE
+			&& FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Out.Mid(Brace)), Config) && Config.IsValid()
+			&& Config->TryGetObjectField(TEXT("services"), Services)
+			&& (*Services)->TryGetObjectField(TEXT("dv_pipeline_stack"), Pipeline)
+			&& (*Pipeline)->TryGetObjectField(TEXT("develop"), Develop)
+			&& (*Develop)->TryGetArrayField(TEXT("watch"), Watch))
+		{
+			for (const TSharedPtr<FJsonValue>& V : *Watch)
+			{
+				const TSharedPtr<FJsonObject> W = V->AsObject();
+				FString Path, Target, Action;
+				if (!W.IsValid() || !W->TryGetStringField(TEXT("path"), Path) || !W->TryGetStringField(TEXT("target"), Target)) continue;
+				if (W->TryGetStringField(TEXT("action"), Action) && Action != TEXT("sync")) continue;
+				if (!FPaths::DirectoryExists(Path)) continue;
+				Path.ReplaceInline(TEXT("\\"), TEXT("/"));
+				if (!Cmd.IsEmpty()) Cmd += TEXT(" && ");
+				// /. : the folder's contents, onto the container's copy.
+				Cmd += FString::Printf(TEXT("docker compose cp \"%s/.\" dv_pipeline_stack:%s"), *Path, *Target);
+			}
+		}
+		FString Error;
+		if (Cmd.IsEmpty() || !StackStarter->Run(ComposeDir, Cmd, Error))
+		{
+			Done();
+			return;
+		}
+		StackUp = EStackUp::Sync;
+		return;
+	}
 	case EStackUp::GitInstall:
 	{
 		if (StackStarter->Poll())

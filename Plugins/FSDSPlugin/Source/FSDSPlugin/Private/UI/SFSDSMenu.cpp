@@ -74,6 +74,10 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	OnTestDrive = InArgs._OnTestDrive;
 	OnTracksChanged = InArgs._OnTracksChanged;
 	OnStartStack = InArgs._OnStartStack;
+	OnRebuildPipeline = InArgs._OnRebuildPipeline;
+	RebuildStatus = InArgs._RebuildStatus;
+	IsRebuilding = InArgs._IsRebuilding;
+	RebuildFailed = InArgs._RebuildFailed;
 	Client = InArgs._Client;
 	EditorState = InArgs._EditorState;
 	if (InArgs._StartInEditor) Page = EPage::Editor;
@@ -812,9 +816,10 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				SNew(STextBlock)
 				.Text_Lambda([this]()
 				{
-					return FText::FromString(RepoShown.IsEmpty()
-						? FString(TEXT("Not on this PC. START with Autonomous offers to get it."))
-						: RepoShown);
+					if (RepoShown.IsEmpty()) return FText::FromString(TEXT("Not on this PC. START with Autonomous offers to get it."));
+					FString Shown = RepoShown;
+					FPaths::MakePlatformFilename(Shown);   // C:\Users\..., as Windows shows it
+					return FText::FromString(Shown);
 				})
 				.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
 			]
@@ -831,6 +836,32 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 			})
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity_Lambda([this]() { return FSlateColor(RepoNote.IsEmpty() ? MenuUi::Muted : MenuUi::Bad); })
 			.AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				MakeChoice(LOCTEXT("Rebuild", "Rebuild pipeline"),
+					[this]() { return IsRebuilding && IsRebuilding(); },
+					[this]() { OnRebuildPipeline.ExecuteIfBound(); })
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() { return FText::FromString(RebuildStatus ? RebuildStatus() : FString()); })
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(RebuildFailed && RebuildFailed() ? MenuUi::Bad : MenuUi::Good); })
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("RebuildHint",
+				"Python changes in pipeline/ need nothing: START copies your pipeline code into the container before "
+				"every run. Rebuild after changing C++, messages, launch files or a setup.py, or after a git pull: it "
+				"builds the pipeline and the backend from your code (seconds to minutes) and restarts them."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Config", "CONFIGURATION")) ]
 		+ SVerticalBox::Slot().AutoHeight()

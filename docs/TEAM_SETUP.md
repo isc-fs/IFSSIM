@@ -52,6 +52,30 @@ stack (if it isn't running) and the run.
 The folder is remembered (Settings, PIPELINE CODE, where **Change...** points
 it somewhere else).
 
+## Working on the pipeline
+
+The pipeline is `pipeline/` in that folder: a git submodule (the
+IFS09-DV-PIPELINE repo), checked out at a commit rather than a branch. Make
+one before changing anything:
+
+```bash
+cd ~/Documents/IFSSIM-repo/pipeline
+git switch -c my-change
+```
+
+Then:
+
+- **Python:** edit, press **START**. START copies your pipeline code into the
+  container before every run, and the mission restarts the nodes, so they run
+  your edit. No terminal needed.
+- **C++, messages, launch files, a `setup.py`:** Settings, PIPELINE CODE,
+  **Rebuild pipeline**, then START. It builds the pipeline and the backend
+  from your code (seconds when little changed, minutes otherwise) and
+  restarts them.
+
+Your work goes in a PR to the pipeline repo; once merged, a PR here moves the
+submodule to it.
+
 ## Keeping up to date
 
 The sim doesn't pull for you. To get the team's latest code:
@@ -59,8 +83,9 @@ The sim doesn't pull for you. To get the team's latest code:
 ```bash
 cd ~/Documents/IFSSIM-repo     # or wherever it is
 git pull --recurse-submodules
-docker compose build dv_pipeline_stack mission_control_backend
 ```
+
+then **Rebuild pipeline** in Settings.
 
 ## When something goes wrong
 
