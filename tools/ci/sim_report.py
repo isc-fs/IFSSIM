@@ -135,11 +135,14 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
             print(f"{seed_dir}: couldn't locate the failure ({e})", file=sys.stderr)
     cones = [(r["x"], r["y"], int(r["color"])) for r in _telemetry(seed_dir / "cones.csv")
              if {"x", "y", "color"} <= r.keys()]
-    stats = track_geometry.corner_stats(cones, TIGHT_M)
+    # Corners only mean something on a lap track: the skidpad's figure eight
+    # crosses itself, so its "centreline" reads as a 1 m corner.
+    stats = track_geometry.corner_stats(cones if mission in LOOP_MISSIONS else [], TIGHT_M)
     hits = _doo_events(seed_dir / "events.csv")
     for h in hits:
         h["corner_m"] = (track_geometry.radius_near(cones, h["x"], h["y"])
-                         if h["x"] is not None and h["y"] is not None else None)
+                         if mission in LOOP_MISSIONS and h["x"] is not None and h["y"] is not None
+                         else None)
     return {
         "scenario": seed_dir.parent.parent.name,
         "mission": mission,
