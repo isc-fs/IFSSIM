@@ -2,18 +2,21 @@
 
 #include "UI/SFSDSTrackMap.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSHud.h"
 #include "UI/FSDSStackStarter.h"
 #include "UI/FSDSMissionControlClient.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "HAL/PlatformProcess.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -467,6 +470,10 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					[
 						MakeChoice(LOCTEXT("Generate", "New random track"), [this]() { return bTrackBusy; }, [this]() { GenerateTrack(); })
 					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(3.f)
+					[
+						MakeChoice(LOCTEXT("GenOptions", "Options..."), [this]() { return bGenOptions; }, [this]() { bGenOptions = !bGenOptions; })
+					]
 					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f).VAlign(VAlign_Center)
 					[
 						SNew(STextBlock)
@@ -499,6 +506,10 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 								[]() { return false; }, [this]() { DeleteTrack(); })
 						]
 					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(3, 4, 3, 0)
+				[
+					MakeGenOptions()
 				]
 				+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Driver", "DRIVER")) ]
 				+ SVerticalBox::Slot().AutoHeight()
@@ -596,6 +607,58 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 						.Visibility_Lambda([this]() { return bRecordBag ? EVisibility::Visible : EVisibility::Collapsed; })
 						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 					]
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Scoring", "SCORING")) ]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3.f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+						[
+							SNew(STextBlock).Text(LOCTEXT("RefLabel", "Reference time"))
+							.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(SBox).WidthOverride(110.f)
+							[
+								SNew(SEditableTextBox)
+								.Font(MenuUi::MenuFont(11))
+								.HintText(LOCTEXT("RefHint", "none"))
+								.Text_Lambda([this]() { return FText::FromString(Reference()); })
+								.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+								{
+									FString In = Text.ToString().TrimStartAndEnd().Replace(TEXT(","), TEXT("."));
+									In.RemoveFromEnd(TEXT("s"));
+									In.TrimEndInline();
+									if (In.IsEmpty() || (In.IsNumeric() && FCString::Atod(*In) > 0.0))
+									{
+										SetReference(In);
+										Message.Reset();
+									}
+									else
+									{
+										SetMessage(TEXT("The reference time is a number of seconds, like 62.5, or empty for none."), true);
+									}
+								})
+							]
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+						[
+							SNew(STextBlock).Text(LOCTEXT("RefUnit", "s")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 4, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]()
+						{
+							return Reference().IsEmpty()
+								? LOCTEXT("RefNoneHint", "The fastest corrected time for this event on this track, the one FS "
+									"scores against. Without it the run gets its time and penalties but no points.")
+								: LOCTEXT("RefSetHint", "Points are scored against this time, as at FS. Saved for this event "
+									"and track.");
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[
@@ -610,6 +673,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 							R.Laps = Event == EFSDSEventType::Trackdrive && !bPractice ? Laps : 1;
 							R.bAutonomous = bAutonomous;
 							R.bRecordBag = bAutonomous && bRecordBag;
+							R.Reference = bAutonomous && !Reference().IsEmpty() ? FCString::Atod(*Reference()) : 0.0;
 							OnDrive.ExecuteIfBound(R);
 						}),
 						TAttribute<bool>::CreateLambda([this]() { return Tracks.IsValidIndex(Selected); }))
@@ -845,6 +909,36 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				"goes at the sim's full rate: every frame is a fixed physics step, so fewer frames would "
 				"slow the simulation down and give the pipeline more time than on the car. The HUD's "
 				"\"Real time\" line shows how close a run is to real time."), FText::AsNumber(FFSDSMenu::MinimisedFrameRate)))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Hud", "HUD")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("HudDetail", "What it shows"))
+					.Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("HudBasic", "Basic"), []() { return !FFSDSHud::IsDetailed(); }, []() { FFSDSHud::SetDetailed(false); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("HudDetailed", "Detailed"), []() { return FFSDSHud::IsDetailed(); }, []() { FFSDSHud::SetDetailed(true); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("HudDetailHint",
+				"Basic: speed, pedals, steering, laps and penalties. Detailed adds the motor's regen (torque, "
+				"power and which cap binds) and the car's position and heading. {0} shows and hides the HUD."),
+				FText::FromString(FFSDSHud::ToggleKey().GetDisplayName().ToString())))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Graphics", "GRAPHICS")) ]
@@ -1377,8 +1471,110 @@ FString SFSDSMenu::ScoreText(const FFSDSRunResult& R)
 		R.Corrected, R.DooPenalty, R.OcPenalty);
 	S += R.bHasReference
 		? FString::Printf(TEXT("   %.1f of %.0f points (reference %.2f s)"), R.Points, R.MaxPoints, R.Reference)
-		: FString(TEXT("   points need a reference time for the event"));
+		: FString(TEXT("   no points: set a reference time on the Drive page"));
 	return S;
+}
+
+TSharedRef<SWidget> SFSDSMenu::MakeGenOptions()
+{
+	auto Number = [](const FText& Label, int32* Value, int32 Min, int32 Max, const FText& Hint) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(110.f)
+				[
+					SNew(STextBlock).Text(Label).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(90.f)
+				[
+					SNew(SSpinBox<int32>)
+					.Font(MenuUi::MenuFont(11))
+					.MinValue(Min).MaxValue(Max)
+					.Value_Lambda([Value]() { return *Value; })
+					.OnValueChanged_Lambda([Value](int32 V) { *Value = V; })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+			[
+				SNew(STextBlock).Text(Hint).Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+			];
+	};
+
+	return SNew(SVerticalBox)
+		.Visibility_Lambda([this]() { return bGenOptions && Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[
+			Number(LOCTEXT("GenPoints", "Points"), &GenPoints, 10, 200, LOCTEXT("GenPointsHint", "random points the layout grows from"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[
+			Number(LOCTEXT("GenRegions", "Regions"), &GenRegions, 5, 100, LOCTEXT("GenRegionsHint", "fewer = simpler, more = twistier"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[
+			Number(LOCTEXT("GenMax", "Max size (m)"), &GenMaxBound, 50, 300, LOCTEXT("GenMaxHint", "the area it fits in"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(110.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("GenName", "Name")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(SEditableTextBox)
+					.Font(MenuUi::MenuFont(11))
+					.HintText(LOCTEXT("GenNameHint", "automatic"))
+					.Text_Lambda([this]() { return FText::FromString(GenName); })
+					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type) { GenName = Text.ToString().TrimStartAndEnd(); })
+				]
+			]
+		];
+}
+
+namespace MenuScoring { static const TCHAR* Section = TEXT("FSDSScoring"); }
+
+FString SFSDSMenu::ReferenceKey() const
+{
+	if (!Tracks.IsValidIndex(Selected)) return FString();
+	// Per event and track: T_best is the fastest time on that course.
+	return FString::Printf(TEXT("Ref_%d_%s"), (int32)Event, *Tracks[Selected].Name);
+}
+
+const FString& SFSDSMenu::Reference() const
+{
+	const FString Key = ReferenceKey();
+	if (Key != ReferenceFor)
+	{
+		ReferenceFor = Key;
+		ReferenceText.Reset();
+		if (GConfig && !Key.IsEmpty())
+		{
+			GConfig->GetString(MenuScoring::Section, *Key, ReferenceText, GGameUserSettingsIni);
+		}
+	}
+	return ReferenceText;
+}
+
+void SFSDSMenu::SetReference(const FString& Seconds)
+{
+	const FString Key = ReferenceKey();
+	if (Key.IsEmpty() || !GConfig) return;
+	ReferenceFor = Key;
+	ReferenceText = Seconds;
+	if (Seconds.IsEmpty()) GConfig->RemoveKey(MenuScoring::Section, *Key, GGameUserSettingsIni);
+	else GConfig->SetString(MenuScoring::Section, *Key, *Seconds, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
 }
 
 FString SFSDSMenu::WhyKept(const FString& Name)
@@ -1394,14 +1590,21 @@ FString SFSDSMenu::WhyKept(const FString& Name)
 void SFSDSMenu::GenerateTrack()
 {
 	if (bTrackBusy || !Client.IsValid()) return;
+	// The backend writes <name>.csv over whatever is there, so never pass it a taken name.
+	if (!GenName.IsEmpty() && (!WhyKept(GenName).IsEmpty()
+		|| Tracks.ContainsByPredicate([this](const FFSDSMenuTrack& T) { return T.Name.Equals(GenName, ESearchCase::IgnoreCase); })))
+	{
+		SetMessage(FString::Printf(TEXT("There is already a track called %s: pick another name in Options, or leave it empty."), *GenName), true);
+		return;
+	}
 	bTrackBusy = true;
 	SetMessage(TEXT("Making a random track..."), false);
 	// The panel's defaults: a closed random track (MIT's generator).
 	const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetNumberField(TEXT("n_points"), 50);
-	Body->SetNumberField(TEXT("n_regions"), 30);
-	Body->SetNumberField(TEXT("max_bound"), 150);
-	Body->SetStringField(TEXT("name"), FString());
+	Body->SetNumberField(TEXT("n_points"), GenPoints);
+	Body->SetNumberField(TEXT("n_regions"), GenRegions);
+	Body->SetNumberField(TEXT("max_bound"), GenMaxBound);
+	Body->SetStringField(TEXT("name"), GenName);
 	TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
 	Client->Post(TEXT("/api/track/generate"), Body, [Weak](const FFSDSMcReply& R)
 	{
@@ -1418,6 +1621,7 @@ void SFSDSMenu::GenerateTrack()
 		double Cones = 0.0;
 		O->TryGetNumberField(TEXT("cones"), Cones);
 		M->PendingSelect = FPaths::GetBaseFilename(Name);
+		M->GenName.Reset();   // the next one gets its own name
 		M->OnTracksChanged.ExecuteIfBound();   // the menu rescans and hands the list back
 		M->SetMessage(FString::Printf(TEXT("New random track: %s (%d cones)."), *FPaths::GetBaseFilename(Name), (int32)Cones), false);
 	}, 60.f);

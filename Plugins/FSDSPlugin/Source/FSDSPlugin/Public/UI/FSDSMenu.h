@@ -42,6 +42,8 @@ struct FFSDSDriveRequest
 	bool bAutonomous = false;
 	/** Autonomous: record a bag of the run (Mission Control's record_bag). */
 	bool bRecordBag = false;
+	/** Autonomous: the score's reference time T_best in seconds; 0 = none. */
+	double Reference = 0.0;
 };
 
 /** One run, manual or autonomous, for the Results page. */

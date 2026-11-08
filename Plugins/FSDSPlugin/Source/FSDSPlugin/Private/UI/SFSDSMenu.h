@@ -137,14 +137,28 @@ private:
 	// --- what the Tab panel did, in the menu -----------------------------
 	/** Drive: record a bag of an autonomous run. */
 	bool bRecordBag = false;
+	/** The reference time typed for the chosen event and track, as saved
+	 *  ([FSDSScoring] in GameUserSettings); reloaded when either changes. */
+	const FString& Reference() const;
+	void SetReference(const FString& Seconds);
+	FString ReferenceKey() const;
+	mutable FString ReferenceFor;
+	mutable FString ReferenceText;
 	/** Drive: generate a track (/api/track/generate), then select it. */
 	void GenerateTrack();
+	TSharedRef<SWidget> MakeGenOptions();
 	/** Drive: delete the selected track, on a second click within 4 s. */
 	void DeleteTrack();
 	FString PendingSelect;
 	double DeleteArmedUntil = 0.0;
 	FString DeleteArmedFor;
 	bool bTrackBusy = false;
+	/** New random track: the generator's settings (the panel's defaults), shown by Options. */
+	bool bGenOptions = false;
+	int32 GenPoints = 50;
+	int32 GenRegions = 30;
+	int32 GenMaxBound = 150;
+	FString GenName;
 	/** The run box over an autonomous run: RES and the sim's pause. */
 	bool bResActive = false;
 	bool bSimPaused = false;

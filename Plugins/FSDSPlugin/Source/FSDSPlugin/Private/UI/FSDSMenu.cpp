@@ -1202,7 +1202,10 @@ void FFSDSMenu::RecordRun()
 	{
 		const TWeakPtr<bool> Token = Alive;
 		const TSharedPtr<TArray<FFSDSRunResult>> Runs = Results;
-		Client->Get(TEXT("/api/scoring/summary"), [Token, Runs, Index](const FFSDSMcReply& Reply)
+		const FString Path = Current->Reference > 0.0
+			? FString::Printf(TEXT("/api/scoring/summary?t_best=%.3f"), Current->Reference)
+			: FString(TEXT("/api/scoring/summary"));
+		Client->Get(Path, [Token, Runs, Index](const FFSDSMcReply& Reply)
 		{
 			if (!Token.IsValid() || !Runs.IsValid() || !Runs->IsValidIndex(Index)) return;
 			const TSharedPtr<FJsonObject> O = Reply.Object();
