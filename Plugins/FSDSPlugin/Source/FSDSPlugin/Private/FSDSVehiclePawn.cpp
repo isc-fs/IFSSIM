@@ -208,6 +208,14 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 	const FFSDSVehiclePhysics& P = Vehicle->Physics;
 
 	float RearPerWheelMax = (P.MaxRegenTorque * P.GearRatio * P.DrivetrainEfficiency) / 2.f;
+
+	// EBS torque per wheel, sized from the grip limit at static load. Same
+	// formula as ifssim_params.m (P.Derived.EbsTorquePerWheel): 1.5 x 1.4 x
+	// (275 kg x 9.81 / 4) x 0.202 m = 286 N.m. It used to be the Chaos engine
+	// default 3000 N.m, about 15x what the tyre can transmit, so every EBS
+	// application was an instant four-wheel lock-up nobody had chosen.
+	const float EbsTorquePerWheel =
+		P.EbsGripMultiple * P.TireMu * (P.Mass * 9.81f / 4.f) * P.WheelRadius;
 	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); i++)
 	{
 		UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
@@ -215,6 +223,7 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 		// RL=2, RR=3 per the WheelSetups order in SetupVehicleMovement
 		const bool bIsRear = (i == 2 || i == 3);
 		if (bIsRear) W->MaxBrakeTorque = RearPerWheelMax;
+		W->MaxHandBrakeTorque = EbsTorquePerWheel;   // all four corners
 
 		// Make settings.json authoritative for wheel geometry. These were
 		// previously hardcoded in the wheel classes (FSDSWheelFront.cpp:13
@@ -483,7 +492,9 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// EBS is routed through the Chaos handbrake channel. RiseRate 12 meant the
 	// emergency brake took 1/12 s = 83 ms to reach full commanded torque — a
 	// modelled actuation lag on the safety system that nobody chose and that
-	// silently flattered every EBS stopping-distance figure.
+	// silently flattered every EBS stopping-distance figure. A chosen fill
+	// time now comes from settings.json (EbsFillTime), applied with the
+	// rest of the physics settings; this is the boot value.
 	VehicleMovement->HandbrakeInputRate.RiseRate = kInstantInputRate;
 	VehicleMovement->HandbrakeInputRate.FallRate = kInstantInputRate;
 
@@ -819,6 +830,16 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		MaxRegenPower = P.MaxRegenPower;
 		GearRatio = P.GearRatio;
 		WheelRadius = P.WheelRadius;
+		DrivetrainEfficiency = FMath::Clamp(P.DrivetrainEfficiency, 0.05f, 1.f);
+		MotorMaxPower = P.MotorMaxPower;
+		RollingResistance = P.RollingResistance;
+
+		// EBS fill: the handbrake input is analog in Chaos (torque =
+		// input x HandbrakeTorque), so a finite rise rate is a linear
+		// pressure ramp from 0 to full torque over EbsFillTime. 0 keeps
+		// it instant. Release stays instant either way.
+		VehicleMovement->HandbrakeInputRate.RiseRate =
+			(P.EbsFillTime > 1e-3f) ? 1.f / P.EbsFillTime : 1000.f;
 
 		// Vehicle-dynamics shadow consumed by ComputeTireLoadsParametric.
 		// Mirrors the same per-tick caching pattern as the regen fields
@@ -1068,6 +1089,11 @@ void AFSDSVehiclePawn::BeginPlay()
 	{
 		Motor->P.MaxRegenPowerW = MaxRegenPower;
 		Motor->P.MaxRegenTorqueNm = MaxRegenTorque;
+		// Drive power cap from settings (80 kW, the FS rules accumulator
+		// limit the car is configured to) instead of the 100 kW EMRAX
+		// datasheet figure at 400 V, which the car is never allowed to use.
+		// Peak torque stays on the EMRAX envelope curve.
+		if (MotorMaxPower > 0.f) Motor->P.MaxPeakPowerW = MotorMaxPower;
 	}
 
 	// Load and apply FSDS car materials at runtime.
@@ -1381,6 +1407,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	if (bChaosVehicleActive)
 	{
 		ApplyAeroForces();
+		ApplyRollingResistance();
 	}
 
 	// Apply controls
@@ -1509,8 +1536,14 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			// per-wheel torque — Chaos applies it as a decelerating
 			// force on the rear axle, which is the actual physical
 			// behaviour of regen on a RWD EV.
-			constexpr float DrivetrainEfficiency = 0.92f;
-			const float AxleTorqueNm = ShaftTorqueNm * GearRatio * DrivetrainEfficiency;
+			// Losses always cost the driver: driving, the wheel gets
+			// shaft x G x eta; in regen, power flows wheel -> motor, so the
+			// wheel has to give up shaft x G / eta for the motor to see its
+			// torque. Multiplying regen by eta (as before) made the losses
+			// help the car brake less, which is backwards.
+			const float AxleTorqueNm = (ShaftTorqueNm >= 0.f)
+				? ShaftTorqueNm * GearRatio * DrivetrainEfficiency
+				: ShaftTorqueNm * GearRatio / DrivetrainEfficiency;
 			const float PerWheelTorqueNm = 0.5f * AxleTorqueNm;
 
 			// SetDriveTorque takes Nm; internally scales to Nm·cm.
@@ -1584,19 +1617,52 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	// large. Only the couple was wrong; total downforce was unaffected, which
 	// is why it never showed up as an obviously broken ride height.
 	//
-	// Derived from the vehicle's Wheelbase rather than re-hardcoded, so it
-	// tracks settings.json and removes one more copy of a constant this
-	// codebase already has too many versions of.
+	// The axles are where UFSDSWheeledVehicleMovementComponent places the
+	// physics wheels: the body origin is the centre of mass, the front axle
+	// Wheelbase*(1-WeightDistFront) ahead of it and the rear axle
+	// Wheelbase*WeightDistFront behind. This used +-Wheelbase/2, which was
+	// only right while the origin was taken to be the axle midpoint; with the
+	// axles at +0.914 / -0.713 m it put 38.8% of the downforce on the front
+	// axle instead of AeroBalanceFront's 45%.
 	FTransform ActorTransform = GetActorTransform();
-	const float HalfWheelbaseCm = 0.5f * Wheelbase * 100.f;   // m -> cm
-	FVector FrontAxleLocal(HalfWheelbaseCm, 0.f, 0.f);
-	FVector RearAxleLocal(-HalfWheelbaseCm, 0.f, 0.f);
+	FVector FrontAxleLocal(Wheelbase * (1.f - WeightDistFront) * 100.f, 0.f, 0.f);   // m -> cm
+	FVector RearAxleLocal(-Wheelbase * WeightDistFront * 100.f, 0.f, 0.f);
 	FVector FrontAxleWorld = ActorTransform.TransformPosition(FrontAxleLocal);
 	FVector RearAxleWorld = ActorTransform.TransformPosition(RearAxleLocal);
 
 	FVector DownDir = FVector(0.f, 0.f, -1.f) * 100.f; // N → UE force
 	VehicleMesh->AddForceAtLocation(DownDir * Fdown * AeroBalanceFront, FrontAxleWorld, NAME_None);
 	VehicleMesh->AddForceAtLocation(DownDir * Fdown * (1.f - AeroBalanceFront), RearAxleWorld, NAME_None);
+}
+
+void AFSDSVehiclePawn::ApplyRollingResistance()
+{
+	// Chaos has no rolling resistance at all (nothing in ChaosVehicles reads
+	// one), so RollingResistance in settings.json had no consumer: a coasting
+	// car only slowed down from aero drag. Applied here as a body force
+	// opposing ground-plane velocity, F = Crr x (m g + downforce), the same
+	// magnitude the FMU applies as Crr x Fz x Rw wheel torque. The pitch
+	// moment from applying it at the body rather than the contact patch is
+	// ~55 N x 0.3 m, negligible.
+	USkeletalMeshComponent* VehicleMesh = GetMesh();
+	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
+	if (RollingResistance <= 0.f) return;
+
+	FVector Velocity = GetVehicleVelocityUe();   // cm/s
+	Velocity.Z = 0.f;
+	const float SpeedMs = Velocity.Size() / 100.f;
+	if (SpeedMs < 1e-3f) return;
+
+	const float Q = 0.5f * 1.225f * SpeedMs * SpeedMs;
+	const float Fdown = (SpeedMs >= 1.0f) ? Q * ClA : 0.f;   // matches ApplyAeroForces
+	const float Fz = Mass * 9.81f + Fdown;
+
+	// Linear ramp below 0.2 m/s so the force goes to zero with speed instead
+	// of flipping sign every step around standstill (Coulomb chatter).
+	const float Ramp = FMath::Min(SpeedMs / 0.2f, 1.f);
+	const float Frr = RollingResistance * Fz * Ramp;   // N
+
+	VehicleMesh->AddForce(-Velocity.GetSafeNormal() * Frr * 100.f, NAME_None, false);   // N -> UE
 }
 
 void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)

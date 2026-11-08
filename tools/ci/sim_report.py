@@ -39,12 +39,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import sim_failures  # noqa: E402
+import track_geometry  # noqa: E402
 
 CONFIG = HERE / "sim_check.json"
 COMMENT_MARKER = "<!-- sim-check-report -->"
 RANDOM_PREFIX = "ci_rand_"
 # Missions on closed loops, where "how far round the lap" means something.
 LOOP_MISSIONS = ("autocross", "trackdrive")
+# A corner below this radius is flagged (the car's turning circle is 4.95 m).
+TIGHT_M = track_geometry.CAR_MIN_RADIUS_M
+# The cone-hit table lists at most this many hits per run, and this many overall.
+HITS_PER_RUN, HITS_TOTAL = 8, 24
 
 
 # ------------------------------------------------------------------ reading a run
@@ -76,6 +81,37 @@ def _dnf(path: Path) -> str:
     return ""
 
 
+def _kv(detail: str) -> dict[str, str]:
+    """events.csv's `key=value key=value` detail."""
+    return dict(p.split("=", 1) for p in (detail or "").split() if "=" in p)
+
+
+def _doo_events(path: Path) -> list[dict]:
+    """The kind=doo rows of events.csv (one per cone the referee counted)."""
+    if not path.exists():
+        return []
+    out = []
+    with path.open() as f:
+        for r in csv.DictReader(f):
+            if r.get("kind") != "doo":
+                continue
+            kv = _kv(r.get("detail") or "")
+
+            def num(k):
+                try:
+                    return float(kv[k])
+                except (KeyError, ValueError):
+                    return None
+
+            try:
+                t = float(r.get("t"))
+            except (TypeError, ValueError):
+                t = None
+            out.append({"t": t, "color": kv.get("color", ""), "why": kv.get("why", ""),
+                        "x": num("x"), "y": num("y"), "speed": num("car_speed")})
+    return out
+
+
 def random_seed(track: str) -> int | None:
     stem = Path(track).stem
     if not stem.startswith(RANDOM_PREFIX):
@@ -103,6 +139,16 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
             failure = sim_failures.locate(_telemetry(seed_dir / "cones.csv"), tel)
         except Exception as e:  # a bad file shouldn't lose the report
             print(f"{seed_dir}: couldn't locate the failure ({e})", file=sys.stderr)
+    cones = [(r["x"], r["y"], int(r["color"])) for r in _telemetry(seed_dir / "cones.csv")
+             if {"x", "y", "color"} <= r.keys()]
+    # Corners only mean something on a lap track: the skidpad's figure eight
+    # crosses itself, so its "centreline" reads as a 1 m corner.
+    stats = track_geometry.corner_stats(cones if mission in LOOP_MISSIONS else [], TIGHT_M)
+    hits = _doo_events(seed_dir / "events.csv")
+    for h in hits:
+        h["corner_m"] = (track_geometry.radius_near(cones, h["x"], h["y"])
+                         if mission in LOOP_MISSIONS and h["x"] is not None and h["y"] is not None
+                         else None)
     return {
         "scenario": seed_dir.parent.parent.name,
         "mission": mission,
@@ -124,6 +170,9 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
         # (the pipeline is real-time sensitive), so a failure there may be the box.
         "sim_speed": sim / wall if sim and wall else None,
         "steer_max": max(steer) if steer else None,
+        "corner_min_m": stats["min_radius_m"],
+        "corner_tight": stats["n_tight"],
+        "hits": hits,
         "dir": str(seed_dir.relative_to(run_dir)),
         "code": man.get("code") or {},
     }
@@ -293,6 +342,45 @@ def headline(report: dict) -> str:
     return " · ".join(parts)
 
 
+def corner_cell(r: dict) -> str:
+    """Tightest centreline radius, bold with the count when it is under what the car can turn."""
+    m = r.get("corner_min_m")
+    if m is None:
+        return "–"
+    if m < TIGHT_M:
+        return f"**{m:.1f} m** ({r.get('corner_tight') or 1} under {TIGHT_M:.2f})"
+    return f"{m:.1f} m"
+
+
+def hits_table(report: dict) -> str:
+    """The cones each run knocked down: when, which side, the corner there, how fast."""
+    rows = []
+    for r in report["runs"]:
+        hs = r.get("hits") or []
+        for h in hs[:HITS_PER_RUN]:
+            rows.append((r, h))
+        if len(hs) > HITS_PER_RUN:
+            rows.append((r, None))
+    if not rows:
+        return ""
+    out = ["<details><summary>Cone hits</summary>\n",
+           "| Run | Time | Side | Corner | Car speed | Why |", "|---|---|---|---|---|---|"]
+    for r, h in rows[:HITS_TOTAL]:
+        run = f"{r['scenario']} #{r['seed']}"
+        if h is None:
+            out.append(f"| {run} | … | | | | +{len(r['hits']) - HITS_PER_RUN} more |")
+            continue
+        side = {"blue": "blue (left)", "yellow": "yellow (right)"}.get(h["color"], h["color"] or "–")
+        out.append("| {} | {} | {} | {} | {} | {} |".format(
+            run, f1(h["t"], " s"), side,
+            "–" if h.get("corner_m") is None else f"R {h['corner_m']:.1f} m",
+            f1(h["speed"], " m/s"), h["why"] or "–"))
+    if len(rows) > HITS_TOTAL:
+        out.append(f"| … | | | | | +{len(rows) - HITS_TOTAL} more rows |")
+    out.append("\n</details>\n")
+    return "\n".join(out)
+
+
 def tables(report: dict, baseline: dict | None) -> str:
     out = []
     if report.get("error"):
@@ -317,18 +405,21 @@ def tables(report: dict, baseline: dict | None) -> str:
         ))
     out.append("")
     out.append("<details><summary>Every run</summary>\n")
-    out.append("| Mission | Seed | Result | Lap | Cones hit | Off track | Mean / top speed | Max steering | Sim speed |")
-    out.append("|---|---|---|---|---|---|---|---|---|")
+    out.append("| Mission | Seed | Result | Lap | Cones hit | Off track | Mean / top speed | Max steering "
+               "| Tightest corner | Sim speed |")
+    out.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in report["runs"]:
-        out.append("| {} | {} | {} | {} | {} | {} | {} / {} | {} | {} |".format(
+        out.append("| {} | {} | {} | {} | {} | {} | {} / {} | {} | {} | {} |".format(
             r["scenario"], r["seed"], "finished" if r["finished"] else f"**{r['outcome']}**",
             f1(r["lap_s"], " s"), r["cones"] if r["cones"] is not None else "–",
             r["off_track"] if r["off_track"] is not None else "–",
             f1(r["v_mean"]), f1(r["v_max"], " m/s"),
             "–" if r["steer_max"] is None else f"{r['steer_max']:.2f}",
+            corner_cell(r),
             "–" if r["sim_speed"] is None else f"{r['sim_speed']:.2f}×",
         ))
     out.append("\n</details>\n")
+    out.append(hits_table(report))
     out.append("*Sim speed* is sim seconds per real second, the slowest run's. "
                "Below ~0.95× the car is known to drive badly, so check it before blaming the pipeline.")
     return "\n".join(out)
