@@ -25,6 +25,7 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProcess.h"
 #include "Misc/App.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -133,12 +134,6 @@ void FFSDSMenu::Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn*
 	// The backend saves into the repo's Content/tracks (docker-compose mounts
 	// it); a packaged sim reads its own copy. List the repo's first, so a
 	// track saved in the editor shows up and loads.
-	ComposeDir = S.MissionControlComposeDir.IsEmpty() ? FFSDSStackStarter::FindComposeDir() : S.MissionControlComposeDir;
-	if (!ComposeDir.IsEmpty())
-	{
-		const FString Dir = FPaths::Combine(ComposeDir, TEXT("Content"), TEXT("tracks"));
-		if (FPaths::DirectoryExists(Dir)) RepoTracksDir = Dir;
-	}
 	ScanTracks();
 
 	// Shown on the first tick, once the controller has its pawn and camera.
@@ -165,6 +160,18 @@ void FFSDSMenu::Shutdown()
 
 void FFSDSMenu::ScanTracks()
 {
+	// The backend saves into the repo's Content/tracks (docker-compose mounts
+	// it); a packaged sim reads its own copy. List the repo's first, so a
+	// track saved in the editor shows up and loads. Found again each time:
+	// the menu may have just cloned it.
+	RepoTracksDir.Reset();
+	const FString Repo = FFSDSStackStarter::FindComposeDir();
+	if (!Repo.IsEmpty())
+	{
+		const FString Dir = FPaths::Combine(Repo, TEXT("Content"), TEXT("tracks"));
+		if (FPaths::DirectoryExists(Dir)) RepoTracksDir = Dir;
+	}
+
 	Tracks.Reset();
 	TSet<FString> Seen;
 	TArray<FString> Dirs = FFSDSRpcServer::TrackSearchDirs();
@@ -552,9 +559,10 @@ void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request, bool bStackTri
 
 namespace StackUpUi
 {
-	// Only what START needs, and never a build: a plain `up -d` would also
-	// build Lichtblick (minutes) and the web UI.
-	const TCHAR* Services = TEXT("--no-build dv_pipeline_stack mission_control_backend");
+	// Only what START needs: a plain `up -d` would also build Lichtblick
+	// (minutes) and the web UI. Each is built when its image is missing (a
+	// fresh clone), and left as it is otherwise.
+	const TCHAR* Services = TEXT("dv_pipeline_stack mission_control_backend");
 	constexpr double DockerTimeoutS = 180.0;   // Docker Desktop's engine, from cold
 	constexpr double BackendTimeoutS = 120.0;  // the backend up and connected to the sim
 	constexpr double DockerRetryS = 5.0;
@@ -563,27 +571,160 @@ namespace StackUpUi
 
 bool FFSDSMenu::BringUpStack(const FFSDSDriveRequest& Request)
 {
-	if (ComposeDir.IsEmpty()) return false;
+	// bStartingSession stays set from here on: START is still on its way.
+	StackUpRequest = Request;
+	DockerOpenedAt = 0.0;
+	bStackProbe = false;
 	if (!StackStarter.IsValid()) StackStarter = MakeShared<FFSDSStackStarter>();
+	ComposeDir = FFSDSStackStarter::FindComposeDir();
+	if (ComposeDir.IsEmpty())
+	{
+#if PLATFORM_WINDOWS
+		// A sim that came as a zip: the stack runs from the team's code.
+		StackUp = EStackUp::NeedRepo;
+		ShowRepoPrompt();
+		return true;
+#else
+		StackUpRequest.Reset();
+		return false;
+#endif
+	}
+	StartCompose();
+	return true;
+}
+
+void FFSDSMenu::StartCompose()
+{
+	if (!FFSDSStackStarter::HasTool(TEXT("docker")))
+	{
+		FPlatformProcess::LaunchURL(TEXT("https://www.docker.com/products/docker-desktop/"), nullptr, nullptr);
+		EndStackUp(TEXT("Docker isn't installed: its download page is open in your browser. Install Docker Desktop, "
+			"open it once, then START again."));
+		return;
+	}
 	FString Error;
 	if (!StackStarter->Start(ComposeDir, Error, StackUpUi::Services))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: can't start the stack: %s"), *Error);
-		return false;
+		EndStackUp(FString::Printf(TEXT("Couldn't start the stack: %s"), *Error));
+		return;
 	}
-	// bStartingSession stays set: START is still on its way.
-	StackUpRequest = Request;
 	StackUp = EStackUp::Compose;
 	StackUpSince = FPlatformTime::Seconds();
-	DockerOpenedAt = 0.0;
-	bStackProbe = false;
-	if (Widget) Widget->SetMessage(TEXT("Mission Control's backend isn't running: starting the pipeline and the backend..."), false);
-	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: no backend; starting the stack in %s"), *ComposeDir);
-	return true;
+	if (Widget) Widget->SetMessage(TEXT("Starting the pipeline and the backend (the first time, they're built: 5 to 10 minutes)..."), false);
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: starting the stack in %s"), *ComposeDir);
+}
+
+void FFSDSMenu::ShowRepoPrompt(const FString& Error)
+{
+	if (!Widget) return;
+	FString Where = FFSDSStackStarter::SuggestedRepoDir();
+	FPaths::MakePlatformFilename(Where);   // C:\Users\..., as Windows shows it
+	FString Text = FString::Printf(TEXT("The pipeline runs from the team's code (the IFSSIM repo, with the pipeline "
+		"in it), and it isn't on this PC yet. Get it puts it in %s: your browser opens to sign in to GitHub with "
+		"an account in the isc-fs organization."), *Where);
+	if (!Error.IsEmpty()) Text = Error + TEXT("\n\n") + Text;
+	Widget->SetMessage(FString(), false);
+	Widget->SetRepoPrompt(Text, [this](int32 Choice) { OnRepoChoice(Choice); });
+}
+
+void FFSDSMenu::OnRepoChoice(int32 Choice)
+{
+	if (StackUp != EStackUp::NeedRepo) return;
+	FString Picked;
+	switch (Choice)
+	{
+	case 0:
+		StartClone(FFSDSStackStarter::SuggestedRepoDir());
+		return;
+	case 1:
+		if (!FFSDSStackStarter::PickFolder(TEXT("Where to put the team's code (IFSSIM)"),
+			FPaths::GetPath(FFSDSStackStarter::SuggestedRepoDir()), Picked)) return;
+		{
+			// An empty folder is used as it is; otherwise IFSSIM-repo inside it.
+			TArray<FString> Inside;
+			IFileManager::Get().FindFiles(Inside, *FPaths::Combine(Picked, TEXT("*")), true, true);
+			StartClone(Inside.Num() == 0 || FFSDSStackStarter::IsRepo(Picked) ? Picked : FPaths::Combine(Picked, TEXT("IFSSIM-repo")));
+		}
+		return;
+	case 2:
+		if (!FFSDSStackStarter::PickFolder(TEXT("The IFSSIM folder (with docker-compose.yml in it)"),
+			FPaths::GetPath(FFSDSStackStarter::SuggestedRepoDir()), Picked)) return;
+		if (!FFSDSStackStarter::IsRepo(Picked))
+		{
+			ShowRepoPrompt(FString::Printf(TEXT("%s has no docker-compose.yml: pick the IFSSIM folder itself "
+				"(the one with Content and pipeline in it)."), *Picked));
+			return;
+		}
+		StartClone(Picked);   // already there: used as it is
+		return;
+	default:
+		if (Widget) Widget->SetRepoPrompt(FString(), nullptr);
+		EndStackUp(TEXT("Autonomous needs the team's code: START again when you want to get it."));
+		return;
+	}
+}
+
+void FFSDSMenu::StartClone(const FString& Dir)
+{
+	CloneDir = Dir;
+	if (FFSDSStackStarter::IsRepo(Dir))
+	{
+		if (Widget) Widget->SetRepoPrompt(FString(), nullptr);
+		FFSDSStackStarter::SaveRepoDir(Dir);
+		ComposeDir = Dir;
+		ScanTracks();
+		StartCompose();
+		return;
+	}
+	if (FPaths::DirectoryExists(Dir))
+	{
+		TArray<FString> Inside;
+		IFileManager::Get().FindFiles(Inside, *FPaths::Combine(Dir, TEXT("*")), true, true);
+		if (Inside.Num() > 0)
+		{
+			ShowRepoPrompt(FString::Printf(TEXT("%s already has other things in it: choose somewhere else."), *Dir));
+			return;
+		}
+	}
+	if (Widget) Widget->SetRepoPrompt(FString(), nullptr);
+
+	FString Error;
+	if (!FFSDSStackStarter::HasTool(TEXT("git")))
+	{
+		if (!FFSDSStackStarter::HasTool(TEXT("winget")))
+		{
+			FPlatformProcess::LaunchURL(TEXT("https://git-scm.com/download/win"), nullptr, nullptr);
+			EndStackUp(TEXT("git isn't installed: its download page is open in your browser. Install it, then START again."));
+			return;
+		}
+		if (!StackStarter->Run(FPlatformProcess::UserTempDir(), TEXT("winget install --id Git.Git -e --source winget "
+			"--accept-package-agreements --accept-source-agreements"), Error))
+		{
+			EndStackUp(FString::Printf(TEXT("Couldn't install git: %s"), *Error));
+			return;
+		}
+		StackUp = EStackUp::GitInstall;
+		if (Widget) Widget->SetMessage(TEXT("Installing git (Windows asks for permission)..."), false);
+		return;
+	}
+
+	const FString Parent = FPaths::GetPath(Dir);
+	IFileManager::Get().MakeDirectory(*Parent, true);
+	// The Unreal assets (Git LFS) aren't needed to run the stack.
+	FPlatformMisc::SetEnvironmentVar(TEXT("GIT_LFS_SKIP_SMUDGE"), TEXT("1"));
+	if (!StackStarter->Run(Parent, FFSDSStackStarter::CloneCommand(Dir), Error))
+	{
+		EndStackUp(FString::Printf(TEXT("Couldn't run git: %s"), *Error));
+		return;
+	}
+	StackUp = EStackUp::Clone;
+	if (Widget) Widget->SetMessage(TEXT("Getting the team's code: sign in to GitHub in your browser if it asks..."), false);
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: cloning the team's code into %s"), *Dir);
 }
 
 void FFSDSMenu::EndStackUp(const FString& Error)
 {
+	if (Widget) Widget->SetRepoPrompt(FString(), nullptr);
 	StackUp = EStackUp::Idle;
 	bStartingSession = false;
 	const TOptional<FFSDSDriveRequest> Req = StackUpRequest;
@@ -605,6 +746,51 @@ void FFSDSMenu::TickStackUp()
 
 	switch (StackUp)
 	{
+	case EStackUp::GitInstall:
+	{
+		if (StackStarter->Poll())
+		{
+			Say(TEXT("Installing git (Windows asks for permission)..."));
+			return;
+		}
+		if (FFSDSStackStarter::HasTool(TEXT("git")))
+		{
+			StartClone(CloneDir);
+			return;
+		}
+		FPlatformProcess::LaunchURL(TEXT("https://git-scm.com/download/win"), nullptr, nullptr);
+		EndStackUp(FString::Printf(TEXT("git didn't install (%s): its download page is open in your browser. "
+			"Install it, then START again."), *StackStarter->LastLine().Left(120)));
+		return;
+	}
+	case EStackUp::Clone:
+	{
+		if (StackStarter->Poll())
+		{
+			const FString& Line = StackStarter->LastLine();
+			Say(Line.IsEmpty() ? FString(TEXT("Getting the team's code: sign in to GitHub in your browser if it asks..."))
+				: FString::Printf(TEXT("Getting the team's code: %s"), *Line.Left(90)));
+			return;
+		}
+		if (StackStarter->ExitCode() == 0 && FFSDSStackStarter::IsRepo(CloneDir))
+		{
+			FFSDSStackStarter::SaveRepoDir(CloneDir);
+			ComposeDir = CloneDir;
+			ScanTracks();
+			StartCompose();
+			return;
+		}
+		const FString& Out = StackStarter->Output();
+		if (Out.Contains(TEXT("Repository not found")) || Out.Contains(TEXT("403"))
+			|| Out.Contains(TEXT("Authentication failed")) || Out.Contains(TEXT("could not read Username")))
+		{
+			EndStackUp(TEXT("GitHub said no: the account you signed in with can't see isc-fs/IFSSIM. Ask to be added "
+				"to the isc-fs organization (or sign in with that account), then START again."));
+			return;
+		}
+		EndStackUp(FString::Printf(TEXT("git clone failed: %s"), *StackStarter->LastLine().Left(160)));
+		return;
+	}
 	case EStackUp::Compose:
 	{
 		if (StackStarter->Poll())
@@ -616,6 +802,13 @@ void FFSDSMenu::TickStackUp()
 		}
 		if (StackStarter->ExitCode() == 0)
 		{
+			// Up, but out of reach: the containers listen inside Docker's VM.
+			if (FFSDSStackStarter::HostNetworkingOff())
+			{
+				EndStackUp(TEXT("Docker's host networking is off, so the sim can't reach the pipeline. In Docker Desktop: "
+					"Settings, Resources, Network, tick Enable host networking, Apply & restart. Then START again."));
+				return;
+			}
 			// Docker Desktop may still have put its window over the sim.
 			if (DockerOpenedAt > 0.0)
 			{

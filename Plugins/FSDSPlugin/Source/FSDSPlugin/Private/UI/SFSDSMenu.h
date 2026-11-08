@@ -49,6 +49,9 @@ public:
 
 	/** A line under START, e.g. why a track would not load. */
 	void SetMessage(const FString& Msg, bool bError);
+	/** START's question when the team's code isn't on this PC: Text and the
+	 *  answers (FFSDSMenu::OnRepoChoice). An empty Text hides it. */
+	void SetRepoPrompt(const FString& Text, TFunction<void(int32)> OnChoice);
 
 	/** The tracks folders changed, e.g. a track was saved in the editor. */
 	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues);
@@ -124,6 +127,11 @@ private:
 
 	FString Message;
 	bool bMessageError = false;
+	FString RepoPrompt;
+	TFunction<void(int32)> OnRepoChoice;
+	/** Settings, PIPELINE CODE: the folder, and what the last Change... said. */
+	FString RepoShown;
+	FString RepoNote;
 
 	TSharedPtr<SScrollBox> DriveList;
 	TSharedPtr<SFSDSTrackMap> DriveMap;

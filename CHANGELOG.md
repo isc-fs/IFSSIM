@@ -23,11 +23,28 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **A sim from the build zip sets up the pipeline itself (Windows).** When
+  START with Autonomous can't find the team's code, it asks: Get it (into
+  Documents\IFSSIM-repo, asked of Windows so a Spanish or moved Documents is
+  found (Documents\IFSSIM holds the sim's session logs),
+  or the home folder when Documents is in OneDrive), Somewhere else, or I have
+  it. It installs git with winget if needed, clones the repo with its
+  pipeline submodule (Git Credential Manager opens the browser for the GitHub
+  login; Git LFS assets skipped), builds the pipeline and backend images the
+  first time, and says when Docker Desktop's host networking is off. The
+  folder is remembered, and Settings, PIPELINE CODE changes it. See
+  docs/TEAM_SETUP.md. docker-compose.yml now names its project `ifssim`, so
+  the containers keep their names (which the backend uses to find the
+  pipeline's) in a folder called anything else. Two fixes found on the way:
+  the menu's calls to the backend no longer fail after 30 s of waiting (the
+  engine's default activity timeout; a fresh pipeline's first start took 2
+  min 22 s here), and Docker Desktop is started from the user's home, not the
+  sim's folder, which it kept open and so blocked the next build or update.
 - **START brings up the Docker stack when it isn't running.** START with
   Autonomous used to stop at "the backend isn't reachable". Now, when nothing
-  answers, it runs `docker compose up -d --no-build dv_pipeline_stack
-  mission_control_backend` from the repo (the services START needs, with no
-  image builds), opening Docker Desktop first, hidden, if its engine is down
+  answers, it runs `docker compose up -d dv_pipeline_stack
+  mission_control_backend` from the repo (only the services START needs, each
+  built only when its image is missing), opening Docker Desktop first, hidden, if its engine is down
   (Windows, macOS; on Linux it says to start the service). It waits until the
   backend sees the sim and starts the run, showing each step under START.
   From Docker closed to the car driving took about a minute here.

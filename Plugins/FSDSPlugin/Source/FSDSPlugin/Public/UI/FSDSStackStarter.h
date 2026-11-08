@@ -27,6 +27,34 @@ public:
 
 	/** `docker compose up -d`, then Extra (services, flags) when given. */
 	bool Start(const FString& ComposeDir, FString& OutError, const FString& Extra = FString());
+	/** Any command line, through the shell, in WorkDir; its output is collected as Start's. */
+	bool Run(const FString& WorkDir, const FString& Command, FString& OutError);
+
+	// --- the team's code (the IFSSIM repo), for a sim that came as a zip ----
+
+	/** Whether Dir holds docker-compose.yml: the repo's root. */
+	static bool IsRepo(const FString& Dir);
+	/** The folder chosen or cloned from the menu (GameUserSettings.ini); empty when none. */
+	static FString SavedRepoDir();
+	static void SaveRepoDir(const FString& Dir);
+	/** Where to clone it when asked: Documents\IFSSIM-repo (Documents\IFSSIM
+	 *  holds the sim's session logs), asked of Windows (so a
+	 *  Spanish "Documentos" or a moved Documents is found), or the user's
+	 *  home when Documents is in OneDrive, which would sync gigabytes and lock
+	 *  files under git and Docker. A free name: IFSSIM-repo, IFSSIM-repo-2... */
+	static FString SuggestedRepoDir();
+	/** The clone, with its submodule (the pipeline). Git Credential Manager
+	 *  opens the browser for the GitHub login when it needs one. */
+	static FString CloneCommand(const FString& Dir);
+	/** Whether an executable (git, docker, winget) is on the PATH, or where
+	 *  its installer puts it (added to the PATH: an install after the sim
+	 *  started isn't on the PATH it was given). */
+	static bool HasTool(const FString& Exe);
+	/** A folder picker (Windows); false when cancelled or unavailable. */
+	static bool PickFolder(const FString& Title, const FString& StartDir, FString& OutDir);
+	/** Docker Desktop's "Enable host networking" is off (the stack's
+	 *  containers then listen inside Docker's VM, out of the sim's reach). */
+	static bool HostNetworkingOff();
 
 	/** Whether docker's output says its engine isn't running (Docker Desktop closed). */
 	static bool SaysDockerIsDown(const FString& Output);
