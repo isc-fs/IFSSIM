@@ -23,6 +23,19 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **What only the Tab panel did is in the menu.** Drive: Generate a track
+  and Delete this track (a second click confirms) under the track list, and
+  RECORDING (No bag / Record a bag) for an autonomous run. The box over an
+  autonomous run: RES (stop the car / release) and Pause the sim. The end of
+  an autonomous run and the Results page: Mission Control's FS score (the
+  time with the cone and off-course penalties, and the points against a
+  reference time). Results: the session log, and Save it to a file
+  (Documents/IFSSIM/SessionLogs). When the car is stopped during an
+  autonomous run (RES, or the pipeline's own watchdog or a failure), the
+  menu ends the run with a RUN STOPPED box, instead of still saying the
+  pipeline drives. START waits up to 7 minutes for the previous session to
+  stop: the backend copies a recorded bag out first (four minutes for an
+  870 MB one here).
 - **Pipeline edits run on the next START; Rebuild pipeline in Settings.**
   START copies the pipeline's source from the team's code into the running
   container before every run (the folders `compose watch` syncs, as

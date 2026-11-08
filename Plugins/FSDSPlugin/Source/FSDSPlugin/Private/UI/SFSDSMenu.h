@@ -73,7 +73,7 @@ private:
 	TSharedRef<SWidget> BuildSettingsPage();
 
 	TSharedRef<SWidget> MakeNavButton(const FText& Label, EPage Page);
-	TSharedRef<SWidget> MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick);
+	TSharedRef<SWidget> MakeChoice(TAttribute<FText> Label, TFunction<bool()> IsOn, TFunction<void()> OnPick);
 	/** A TIMING choice: the speed while the pipeline drives (FFSDSRealTime). */
 	TSharedRef<SWidget> SpeedChoice(const FText& Label, double Speed);
 	/** A Settings, Graphics row: a label, then one button per choice (FFSDSGraphics). */
@@ -131,6 +131,33 @@ private:
 
 	FString Message;
 	bool bMessageError = false;
+
+	// --- what the Tab panel did, in the menu -----------------------------
+	/** Drive: record a bag of an autonomous run. */
+	bool bRecordBag = false;
+	/** Drive: generate a track (/api/track/generate), then select it. */
+	void GenerateTrack();
+	/** Drive: delete the selected track, on a second click within 4 s. */
+	void DeleteTrack();
+	FString PendingSelect;
+	double DeleteArmedUntil = 0.0;
+	FString DeleteArmedFor;
+	bool bTrackBusy = false;
+	/** The run box over an autonomous run: RES and the sim's pause. */
+	bool bResActive = false;
+	bool bSimPaused = false;
+	FString RunNote;
+	/** Results: the session log (/api/session/log), and its export. */
+	struct FLogLine { FString Time; FString Type; FString Text; };
+	TArray<FLogLine> LogLines;
+	TSharedPtr<SVerticalBox> LogBox;
+	FString LogNote;
+	bool bLogLoading = false;
+	void FetchLog();
+	void SaveLog();
+	void RebuildLogBox();
+	/** An autonomous run's score, for the results box and the Results page. */
+	static FString ScoreText(const FFSDSRunResult& R);
 	FString RepoPrompt;
 	TFunction<void(int32)> OnRepoChoice;
 	/** Settings, PIPELINE CODE: the folder, and what the last Change... said. */

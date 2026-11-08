@@ -40,6 +40,8 @@ struct FFSDSDriveRequest
 	int32 Laps = 1;
 	bool bPractice = false;   // any track, no lap target, no results box
 	bool bAutonomous = false;
+	/** Autonomous: record a bag of the run (Mission Control's record_bag). */
+	bool bRecordBag = false;
 };
 
 /** One run, manual or autonomous, for the Results page. */
@@ -55,6 +57,17 @@ struct FFSDSRunResult
 	bool bPractice = false;
 	bool bAutonomous = false;
 	FDateTime When;
+	/** Autonomous: a bag was recorded. */
+	bool bBag = false;
+	/** Autonomous: Mission Control's FS score (/api/scoring/summary), once it answers. */
+	bool bScored = false;
+	double Corrected = 0.0;
+	double DooPenalty = 0.0;
+	double OcPenalty = 0.0;
+	bool bHasReference = false;
+	double Reference = 0.0;
+	double Points = 0.0;
+	double MaxPoints = 0.0;
 };
 
 /**
@@ -219,6 +232,8 @@ private:
 
 	/** While StartAutonomous runs its steps: the backend's own track load isn't an outside session. */
 	bool bStartingSession = false;
+	/** When the car's EBS latched during an autonomous run (0: it isn't). */
+	double EbsSince = 0.0;
 
 	/** BringUpStack's steps. */
 	enum class EStackUp : uint8 { Idle, NeedRepo, GitInstall, Clone, Compose, Docker, Backend, SyncConfig, Sync };
