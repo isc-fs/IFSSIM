@@ -218,9 +218,9 @@ def infer_steering_angle_units(
     steer_series: list[tuple[int, float]],
     *,
     imu_decimation: int = 1,
-    wheelbase_m: float = 1.570,
+    wheelbase_m: float = 1.570,  # pipeline EKF value (disputed vs settings.json 1.627); see odometry_filter_cpp.py
     rpm_to_ms: float = 0.00821,
-    max_steer_rad: float = 0.5,
+    max_steer_rad: float = 0.317650,  # bridge normalized->rad scale = deg2rad(MaxSteerAngle 18.2)
     max_samples: int = 3000,
     offset_ns: int = 0,
 ) -> str:
