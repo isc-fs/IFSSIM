@@ -632,7 +632,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getRefereeState"))
 	{
-		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[]}");
+		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[],\"doo_events\":[]}");
 		auto State = Referee->GetState();
 
 		// Build lap times array
@@ -659,6 +659,25 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		ConesJson += TEXT("]");
 
+		// Per-cone hit records (ENU metres, same frame as cone_positions).
+		// "t" is the game clock, the same one getSimStatus "sim_time" reports.
+		FString DooEventsJson = TEXT("[");
+		for (int32 i = 0; i < State.DooEvents.Num(); i++)
+		{
+			if (i > 0) DooEventsJson += TEXT(",");
+			const FFSDSConeHit& H = State.DooEvents[i];
+			FString CarJson = H.bHasCar
+				? FString::Printf(TEXT(",\"car_x\":%.3f,\"car_y\":%.3f,\"car_speed\":%.3f"),
+					H.CarLocation.Y / 100.f, H.CarLocation.X / 100.f, H.CarSpeedCmS / 100.f)
+				: FString();
+			DooEventsJson += FString::Printf(
+				TEXT("{\"t\":%.3f,\"cone\":%d,\"name\":\"%s\",\"color\":%d,\"x\":%.4f,\"y\":%.4f,\"displacement\":%.3f,\"tilt_deg\":%.1f,\"reason\":\"%s\"%s}"),
+				H.TimeSeconds, H.ConeIndex, *JsonEscape(H.ConeName), (int32)H.Color,
+				H.OriginalLocation.Y / 100.f, H.OriginalLocation.X / 100.f,
+				H.DisplacementCm / 100.f, H.TiltDeg, *JsonEscape(H.Reason), *CarJson);
+		}
+		DooEventsJson += TEXT("]");
+
 		// Event type name
 		FString EventName;
 		switch (State.EventType)
@@ -670,10 +689,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		default: EventName = TEXT("unknown"); break;
 		}
 
-		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s}"),
+		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s,\"doo_events\":%s}"),
 			State.DooCounter, State.OffTrackCounter, State.Cones.Num(), State.Laps.Num(), State.RequiredLaps,
 			State.bFinished ? TEXT("true") : TEXT("false"), *EventName,
-			*LapTimesJson, *ConesJson);
+			*LapTimesJson, *ConesJson, *DooEventsJson);
 	}
 	else if (Method.StartsWith(TEXT("setVehicleCommand")) || Method.StartsWith(TEXT("setCarControls")))
 	{

@@ -10,9 +10,15 @@ and writes <out>/<prefix>_<seed>.csv. The generator draws everything from
 numpy's global RNG, so a seed gives the same track every time: a failing track
 can be rebuilt from its name alone.
 
-A seed whose track is unusable (the generator failed, too few cones, or too
-short or long to drive in the check's time) is replaced by the next seed up,
-up to 20 tries. Prints the written file names, comma-separated, on the last
+A seed whose track is unusable (the generator failed, too few cones, too
+short or long to drive in the check's time, or with a centreline corner
+tighter than --min-radius) is replaced by the next seed up, up to 20 tries.
+The corner floor (default 5.0 m, env GEN_MIN_RADIUS_M, 0 disables) sits just
+above the car's 4.95 m turning circle: a tighter corner cannot be driven by
+any controller. Rejection keeps seeds deterministic (the same seed and floor
+always give the same file, and the file name carries the seed actually used),
+but the seed list now depends on the floor: rebuild a track with the floor it
+was made with, or ask for its exact seed (a seed that passed always passes). Prints the written file names, comma-separated, on the last
 line of stdout.
 
 Needs numpy, scipy, shapely, gpxpy, PyYAML and matplotlib: the sim check runs
@@ -28,6 +34,9 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import track_geometry  # noqa: E402
 
 # Mission Control's defaults (tools/mission_control/backend/main.py, TrackGenerate).
 N_POINTS, N_REGIONS, MIN_BOUND, MAX_BOUND = 50, 30, 10.0, 150.0
@@ -56,7 +65,10 @@ def length_m(cones: list[tuple[str, float, float]]) -> float:
     return sum(math.dist(a, b) for a, b in zip(blue, blue[1:] + blue[:1]))
 
 
-def problem(cones: list[tuple[str, float, float]]) -> str | None:
+_COLOUR = {"blue": track_geometry.BLUE, "yellow": track_geometry.YELLOW}
+
+
+def problem(cones: list[tuple[str, float, float]], min_radius: float = 0.0) -> str | None:
     if len(cones) < MIN_CONES:
         return f"{len(cones)} cones"
     kinds = {k for k, _, _ in cones}
@@ -65,6 +77,10 @@ def problem(cones: list[tuple[str, float, float]]) -> str | None:
     n = length_m(cones)
     if not MIN_LENGTH_M <= n <= MAX_LENGTH_M:
         return f"{n:.0f} m long"
+    if min_radius > 0:
+        r = track_geometry.min_radius([(x, y, _COLOUR[k]) for k, x, y in cones if k in _COLOUR])
+        if r is not None and r < min_radius:
+            return f"corner R {r:.1f} m < {min_radius:.1f} m"
     return None
 
 
@@ -103,6 +119,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, required=True, help="where the tracks go (Content/tracks)")
     ap.add_argument("--seeds", required=True, help="comma-separated seeds")
     ap.add_argument("--prefix", default="ci_rand")
+    ap.add_argument("--min-radius", type=float,
+                    default=float(os.environ.get("GEN_MIN_RADIUS_M", track_geometry.DEFAULT_FLOOR_M)),
+                    help="reject tracks with a centreline corner tighter than this, m (0 = off; "
+                         "env GEN_MIN_RADIUS_M; the car's turning circle is 4.95 m)")
     args = ap.parse_args(argv)
 
     import matplotlib
@@ -124,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as e:  # the generator raises on some layouts
                 print(f"seed {s}: no track ({type(e).__name__}: {e})", file=sys.stderr)
                 continue
-            why = problem(read_cones(tmp))
+            why = problem(read_cones(tmp), args.min_radius)
             if why:
                 print(f"seed {s}: skipped ({why})", file=sys.stderr)
                 shutil.rmtree(tmp.parent, ignore_errors=True)

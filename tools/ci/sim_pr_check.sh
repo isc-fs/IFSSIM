@@ -115,7 +115,7 @@ random_tracks=""
 if [ -n "$seeds" ]; then
   echo "random track seeds: $seeds"
   if out="$(cd "$ROOT" && docker compose run --rm --no-deps -T --user "$(id -u):$(id -g)" \
-      -e MPLCONFIGDIR=/tmp -v "$ROOT/tools/ci:/ci:ro" --entrypoint python3 \
+      -e MPLCONFIGDIR=/tmp -e GEN_MIN_RADIUS_M -v "$ROOT/tools/ci:/ci:ro" --entrypoint python3 \
       mission_control_backend /ci/gen_tracks.py --gen /track_gen --out /tracks --seeds "$seeds")"; then
     random_tracks="$(printf '%s\n' "$out" | tail -n1)"
   else
