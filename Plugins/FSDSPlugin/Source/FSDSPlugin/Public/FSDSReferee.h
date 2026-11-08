@@ -121,7 +121,7 @@ struct FFSDSConeHit
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
 	float DisplacementCm = 0.f;
 
-	/** Angle between the cone's up vector and world up, degrees. */
+	/** Angle between the cone's up vector and its settled up vector, degrees. */
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
 	float TiltDeg = 0.f;
 

@@ -73,10 +73,13 @@ void AFSDSReferee::Tick(float DeltaTime)
 			float Displacement = FVector::Dist(CurrentPos, OriginalPos);
 
 			// "Down or out": moved more than the threshold, or tipped over
-			// even if it stayed put. Tilt is the angle of the cone's up
-			// vector from world up.
-			const float UpZ = FMath::Clamp((float)ConeActor->GetActorUpVector().Z, -1.f, 1.f);
-			const float TiltDeg = FMath::RadiansToDegrees(FMath::Acos(UpZ));
+			// even if it stayed put. Tilt is measured from the cone's own
+			// settled orientation, not world up, so a mesh whose pivot is
+			// not authored Z-up is not counted as down at spawn.
+			const FTransform* Settled = ConeOriginalTransforms.Find(ConeActor);
+			const FVector Up0 = Settled ? Settled->GetUnitAxis(EAxis::Z) : FVector::UpVector;
+			const float UpDot = FMath::Clamp((float)FVector::DotProduct(ConeActor->GetActorUpVector(), Up0), -1.f, 1.f);
+			const float TiltDeg = FMath::RadiansToDegrees(FMath::Acos(UpDot));
 			const bool bDisplaced = Displacement > ConeHitThreshold;
 			const bool bTipped = TiltDeg > ConeTipThresholdDeg;
 
