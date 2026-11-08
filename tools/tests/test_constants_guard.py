@@ -27,6 +27,7 @@ CHECKS = [
     ("tools/sim_benchmark/odometry_filter_cpp.py", r"^MAX_STEERING_ANGLE_RAD = ([\d.]+)", "MaxSteerAngle", deg2rad, 1e-5),
     ("tools/sim_benchmark/slam_metrics.py", r"max_steer_rad: float = ([\d.]+)", "MaxSteerAngle", deg2rad, 1e-5),
     ("ros2/src/ifssim_bridge/include/ifssim_ros_wrapper.h", r"max_steering_angle_rad_ = ([\d.]+);", "MaxSteerAngle", deg2rad, 1e-5),
+    ("ros2/src/ifssim_bridge/src/ifssim_ros_wrapper.cpp", r'"max_steering_angle_rad", ([\d.]+)\)', "MaxSteerAngle", deg2rad, 1e-5),
     ("tests/test_vehicle_physics.py", r'"mass": ([\d.]+)', "Mass", ident, 1e-9),
     ("tests/test_vehicle_physics.py", r'"tire_radius": ([\d.]+)', "WheelRadius", ident, 1e-9),
     ("tests/test_vehicle_physics.py", r'"tire_mu": ([\d.]+)', "TireMu", ident, 1e-9),
@@ -48,6 +49,8 @@ ALLOWLIST = [
     # says 1.627. Disputed pending a tape measurement. Mirror must follow the pipeline.
     ("tools/sim_benchmark/odometry_filter_cpp.py", r"^WHEELBASE_M = ([\d.]+)", 1.570),
     ("tools/sim_benchmark/slam_metrics.py", r"wheelbase_m: float = ([\d.]+)", 1.570),
+    # Same mirror: odometry_filter.hpp kRpmToMs (wheel 0.202 m, gear 2.909).
+    ("tools/sim_benchmark/odometry_filter_cpp.py", r"^RPM_TO_MS = ([\d.]+)", 0.00727),
 ]
 
 

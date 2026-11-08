@@ -27,7 +27,7 @@ import numpy as np
 
 # --- constants (odometry_filter.hpp) -----------------------------------------
 G = 9.81
-RPM_TO_MS = 0.00821
+RPM_TO_MS = 0.00727  # pipeline odometry_filter.hpp kRpmToMs (0.202 m wheel, 2.909 gear)
 # Mirror of the PIPELINE filter: keep the pipeline value (1.570, car hardpoints),
 # NOT settings.json Wheelbase (1.627). Disputed pending a tape measurement;
 # allowlisted in tools/tests/test_constants_guard.py.
