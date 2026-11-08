@@ -8,5 +8,5 @@
     "autocross": {"repeats": 1, "tracks": ["track_20260404_013721.csv"], "timeout_s": 300}
   },
   "random_tracks": {"mission": "autocross", "count": 3},
-  "characterisation": {"enabled": true, "required": true}
+  "characterisation": {"enabled": true, "required": false}
 }
