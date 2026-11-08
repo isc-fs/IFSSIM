@@ -32,7 +32,12 @@ shipping pipeline, documentation.
   PowerShell helper checks its `.sha256`, unzips it, keeps the old folder as
   `<folder>-previous` and restarts the sim. `package_windows.sh` writes
   `build.json` (version, commit, commit time) next to the exe, and
-  `tools/publish_windows_build.sh stable|latest` publishes a build.
+  `tools/publish_windows_build.sh stable|latest` publishes a build. The sim
+  also compares the team's code with its own commit (Settings, PIPELINE
+  CODE): when the copy is older, clean and on `dev`, Bring the stack in step
+  fast-forwards it and rebuilds; the pipeline submodule moves with it only
+  when untouched (no branch, no changes), so pipeline work is never moved.
+  Otherwise it only warns.
 - **Pipeline edits run on the next START; Rebuild pipeline in Settings.**
   START copies the pipeline's source from the team's code into the running
   container before every run (the folders `compose watch` syncs, as

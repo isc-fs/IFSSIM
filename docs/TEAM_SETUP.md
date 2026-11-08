@@ -89,8 +89,12 @@ and says on the main menu when a newer build is out.
   kept as `settings.previous.json`, and tracks you added there come along.
 - It signs in to GitHub with the login git keeps from getting the team's
   code; **Check now** signs in if it can't.
-- After updating, **Rebuild pipeline** (below it), so the stack is built from
-  code that matches the new sim.
+- The sim compares the team's code with the commit it was built from
+  (Settings, PIPELINE CODE). When your copy is older, has no changes and is
+  on `dev`, **Bring the stack in step** moves it forward and rebuilds. The
+  pipeline moves with it only when you haven't touched it: a branch of your
+  own or any change in `pipeline/` stays exactly as it is. Otherwise it only
+  warns, and nothing is moved.
 
 Builds are published with `tools/publish_windows_build.sh stable|latest`
 (Git Bash, UE 5.8, `gh` logged in), until a CI runner does it.

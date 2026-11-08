@@ -926,6 +926,36 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
 			]
 		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			.Visibility_Lambda([]() { return FFSDSUpdater::Get().StackText().IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("StackCheck", "Compare with this build"), []() { return false; },
+					[]() { FFSDSUpdater::Get().CheckStack(/*bFetch=*/true); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				SNew(SBox).Visibility_Lambda([]() { return FFSDSUpdater::Get().CanMatchStack() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakeChoice(LOCTEXT("StackMatch", "Bring the stack in step"), []() { return false; },
+						[]() { FFSDSUpdater::Get().MatchStack(); })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(9, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([]() { return FText::FromString(FFSDSUpdater::Get().StackText()); })
+				.ColorAndOpacity_Lambda([]()
+				{
+					const FFSDSUpdater::EStack S = FFSDSUpdater::Get().GetStackState();
+					return FSlateColor(S == FFSDSUpdater::EStack::Differs || S == FFSDSUpdater::EStack::Failed ? MenuUi::Bad
+						: S == FFSDSUpdater::EStack::Behind ? MenuUi::Ink : MenuUi::Good);
+				})
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
 		[
 			SNew(STextBlock)

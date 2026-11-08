@@ -44,6 +44,27 @@ public:
 	/** Download the newer build, then hand over to the helper and quit. */
 	void Update();
 	bool CanRollBack() const;
+
+	// --- the stack in step with the sim ---------------------------------
+	// The sim talks to the bridge, so the team's code the stack is built
+	// from should be the commit this build came from. Only ever offered:
+	//  - the IFSSIM part moves (fast-forward) only when it's clean and on
+	//    dev or no branch;
+	//  - the pipeline (the submodule) moves with it only when untouched:
+	//    on the commit the repo records, no branch of its own, no changes.
+	//    Pipeline work is never moved.
+	// Anything else just gets a warning.
+
+	enum class EStack : uint8 { Unknown, Checking, InStep, Newer, Behind, Differs, Moving, Failed };
+	/** Compare the team's code with this build's commit (git fetch first when Fetch). */
+	void CheckStack(bool bFetch);
+	/** Behind: move the code forward to this build's commit, then rebuild (OnStackMoved). */
+	void MatchStack();
+	EStack GetStackState() const { return StackState; }
+	bool CanMatchStack() const { return StackState == EStack::Behind; }
+	FString StackText() const { return StackStatus; }
+	/** The menu's Rebuild pipeline, run once the code has moved. */
+	void SetOnStackMoved(TFunction<void()> InOnStackMoved) { OnStackMoved = MoveTemp(InOnStackMoved); }
 	/** Swap back to <folder>-previous and restart. */
 	void RollBack();
 
@@ -96,6 +117,16 @@ private:
 	FString ZipPath;
 	/** How the last update or rollback went, shown with the first check. */
 	FString Note;
+
+	/** The git helper (stack.ps1): Mode check prints JSON, apply moves the code. */
+	bool RunStackHelper(const FString& Mode, bool bFetch, bool bPipeline);
+	void OnStackChecked();
+	EStack StackState = EStack::Unknown;
+	FString StackStatus;
+	FString StackRepo;
+	bool bMovePipeline = false;
+	TSharedPtr<FFSDSStackStarter> StackProc;
+	TFunction<void()> OnStackMoved;
 	int64 Received = 0;
 
 	TSharedPtr<FFSDSStackStarter> Proc;

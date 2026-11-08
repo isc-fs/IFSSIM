@@ -120,6 +120,7 @@ void FFSDSUpdater::Init()
 
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &FFSDSUpdater::Tick));
 	Check(/*bInteractive=*/false);
+	CheckStack(/*bFetch=*/true);
 }
 
 void FFSDSUpdater::Shutdown()
@@ -131,6 +132,9 @@ void FFSDSUpdater::Shutdown()
 	}
 	Alive.Reset();
 	Proc.Reset();
+	StackProc.Reset();
+	OnStackMoved = nullptr;
+	if (StackState == EStack::Checking || StackState == EStack::Moving) StackState = EStack::Unknown;
 	if (State == EState::SigningIn || State == EState::Checking || State == EState::Downloading) State = EState::Idle;
 }
 
@@ -225,6 +229,25 @@ bool FFSDSUpdater::Tick(float)
 			return true;
 		}
 		FetchRelease();
+	}
+	if ((StackState == EStack::Checking || StackState == EStack::Moving) && StackProc.IsValid() && !StackProc->Poll())
+	{
+		if (StackState == EStack::Checking)
+		{
+			OnStackChecked();
+		}
+		else if (StackProc->ExitCode() == 0)
+		{
+			StackState = EStack::InStep;
+			StackStatus = FString::Printf(TEXT("Moved to %s%s: in step once Rebuild pipeline, above, has finished."), *Build.Commit,
+				bMovePipeline ? TEXT(", the pipeline too") : TEXT("; your pipeline work is as it was"));
+			if (OnStackMoved) OnStackMoved();
+		}
+		else
+		{
+			StackState = EStack::Failed;
+			StackStatus = FString::Printf(TEXT("Couldn't move the team's code: %s. Nothing else changed."), *StackProc->LastLine().Left(140));
+		}
 	}
 	if (State == EState::Downloading)
 	{
@@ -511,6 +534,144 @@ void FFSDSUpdater::HandOver(const FString& Sha256)
 	UE_LOG(LogTemp, Log, TEXT("FSDS Updater: handing over to %s"), *ScriptPath);
 	FPlatformMisc::RequestExit(false);
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// The stack in step with the sim
+
+bool FFSDSUpdater::RunStackHelper(const FString& Mode, bool bFetch, bool bPipeline)
+{
+	static const TCHAR* Script = TEXT(R"PS(param([string]$Mode, [string]$Repo, [string]$Commit, [switch]$Fetch, [switch]$MovePipeline)
+$ErrorActionPreference = 'Continue'
+Set-Location -LiteralPath $Repo
+if ($Mode -eq 'apply') {
+  # Only what the sim offered: dev fast-forwards, no branch moves to the commit.
+  $branch = (git rev-parse --abbrev-ref HEAD).Trim()
+  if ($branch -eq 'HEAD') { git checkout --quiet --detach $Commit } else { git merge --quiet --ff-only $Commit }
+  if ($LASTEXITCODE -ne 0) { Write-Output 'git refused to move it'; exit 1 }
+  if ($MovePipeline) {
+    git submodule update --init pipeline
+    if ($LASTEXITCODE -ne 0) { Write-Output 'git could not move the pipeline'; exit 1 }
+  }
+  Write-Output 'ok'
+  exit 0
+}
+$r = [ordered]@{}
+if ($Fetch) { git fetch --quiet origin 2>$null; $r.fetched = ($LASTEXITCODE -eq 0) }
+$r.head = (git rev-parse --short HEAD).Trim()
+$r.branch = (git rev-parse --abbrev-ref HEAD).Trim()
+$r.dirty = [bool](git status --porcelain --untracked-files=no --ignore-submodules=all)
+git cat-file -e "$Commit^{commit}" 2>$null
+$r.known = ($LASTEXITCODE -eq 0)
+$r.behind = $false; $r.contains = $false
+if ($r.known) {
+  git merge-base --is-ancestor $Commit HEAD; $r.contains = ($LASTEXITCODE -eq 0)
+  git merge-base --is-ancestor HEAD $Commit; $r.behind = ($LASTEXITCODE -eq 0)
+}
+$p = Join-Path $Repo 'pipeline'
+git -C $p symbolic-ref -q HEAD 2>$null | Out-Null; $r.pipelineBranch = ($LASTEXITCODE -eq 0)
+$r.pipelineDirty = [bool](git -C $p status --porcelain --untracked-files=no 2>$null)
+$s = [string](git submodule status pipeline 2>$null)
+$r.pipelineMoved = $s.StartsWith('+')
+Write-Output ('STACK ' + ($r | ConvertTo-Json -Compress))
+)PS");
+	StackRepo = FFSDSStackStarter::FindComposeDir();
+	if (StackRepo.IsEmpty() || !FFSDSStackStarter::HasTool(TEXT("git"))) return false;
+	const FString Path = FPaths::Combine(FPlatformProcess::UserTempDir(), TEXT("ifssim-stack.ps1"));
+	if (!FFileHelper::SaveStringToFile(FString(Script), *Path, FFileHelper::EEncodingOptions::ForceUTF8)) return false;
+	auto Win = [](FString P) { FPaths::MakePlatformFilename(P); return P; };
+	FString Cmd = FString::Printf(TEXT("set GCM_INTERACTIVE=never&& set GIT_TERMINAL_PROMPT=0&& powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\" -Mode %s -Repo \"%s\" -Commit %s"),
+		*Win(Path), *Mode, *Win(StackRepo), *Build.Commit);
+	if (bFetch) Cmd += TEXT(" -Fetch");
+	if (bPipeline) Cmd += TEXT(" -MovePipeline");
+	if (!StackProc.IsValid()) StackProc = MakeShared<FFSDSStackStarter>();
+	FString Error;
+	return StackProc->Run(StackRepo, Cmd, Error);
+}
+
+void FFSDSUpdater::CheckStack(bool bFetch)
+{
+	if (!Build.bValid || StackState == EStack::Checking || StackState == EStack::Moving) return;
+	if (!RunStackHelper(TEXT("check"), bFetch, false))
+	{
+		StackState = EStack::Unknown;
+		StackStatus = FString();
+		return;
+	}
+	StackState = EStack::Checking;
+	StackStatus = TEXT("Comparing the team's code with this build...");
+}
+
+void FFSDSUpdater::OnStackChecked()
+{
+	FString Json;
+	TArray<FString> Lines;
+	StackProc->Output().ParseIntoArrayLines(Lines);
+	for (const FString& L : Lines)
+	{
+		if (L.StartsWith(TEXT("STACK "))) Json = L.Mid(6);
+	}
+	TSharedPtr<FJsonObject> R;
+	if (Json.IsEmpty() || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), R) || !R.IsValid())
+	{
+		StackState = EStack::Failed;
+		StackStatus = TEXT("Couldn't compare the team's code with this build.");
+		return;
+	}
+	auto B = [&R](const TCHAR* K) { bool V = false; R->TryGetBoolField(K, V); return V; };
+	FString Head, Branch;
+	R->TryGetStringField(TEXT("head"), Head);
+	R->TryGetStringField(TEXT("branch"), Branch);
+	const bool bPipelineWork = B(TEXT("pipelineBranch")) || B(TEXT("pipelineDirty")) || B(TEXT("pipelineMoved"));
+	// If the pipeline is kept: the bridge's messages live in the pipeline too.
+	const FString MsgNote = TEXT(" If the pipeline won't start after the rebuild, bring your pipeline branch up to date: "
+		"the team may have changed fs_msgs or dv_msgs.");
+
+	if (!B(TEXT("known")))
+	{
+		StackState = EStack::Differs;
+		StackStatus = FString::Printf(TEXT("This build's commit (%s) isn't in your clone (not pushed, or no network): "
+			"the stack is built from %s, which may not match the sim."), *Build.Commit, *Head);
+	}
+	else if (B(TEXT("contains")))
+	{
+		StackState = Head.StartsWith(Build.Commit) || Build.Commit.StartsWith(Head) ? EStack::InStep : EStack::Newer;
+		StackStatus = StackState == EStack::InStep
+			? FString::Printf(TEXT("In step: the stack is built from %s, as this build."), *Head)
+			: FString::Printf(TEXT("Your code (%s) is newer than this build (%s): fine, unless the sim side changed since."), *Head, *Build.Commit);
+	}
+	else if (B(TEXT("behind")) && !B(TEXT("dirty")) && (Branch == TEXT("dev") || Branch == TEXT("HEAD")))
+	{
+		StackState = EStack::Behind;
+		bMovePipeline = !bPipelineWork;
+		StackStatus = FString::Printf(TEXT("Your code (%s) is older than this build (%s). Bring the stack in step moves it "
+			"to %s%s, then rebuilds."), *Head, *Build.Commit, *Build.Commit,
+			bMovePipeline ? TEXT(", the pipeline too") : TEXT(" and leaves your pipeline work as it is"));
+		if (!bMovePipeline) StackStatus += MsgNote;
+	}
+	else
+	{
+		StackState = EStack::Differs;
+		const FString Why = B(TEXT("dirty")) ? TEXT("it has changes")
+			: (Branch != TEXT("dev") && Branch != TEXT("HEAD")) ? FString::Printf(TEXT("it's on your branch %s"), *Branch)
+			: FString(TEXT("it has commits this build doesn't"));
+		StackStatus = FString::Printf(TEXT("The stack is built from %s, not this build's %s, and %s, so nothing was moved. "
+			"Runs may misbehave if the bridge or the backend changed in between."), *Head, *Build.Commit, *Why);
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS Updater: stack: %s"), *StackStatus);
+}
+
+void FFSDSUpdater::MatchStack()
+{
+	if (StackState != EStack::Behind) return;
+	if (!RunStackHelper(TEXT("apply"), false, bMovePipeline))
+	{
+		StackState = EStack::Failed;
+		StackStatus = TEXT("Couldn't run git to move the team's code.");
+		return;
+	}
+	StackState = EStack::Moving;
+	StackStatus = FString::Printf(TEXT("Moving the team's code to %s..."), *Build.Commit);
 }
 
 void FFSDSUpdater::RollBack()
