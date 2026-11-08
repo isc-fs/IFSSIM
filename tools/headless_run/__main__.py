@@ -74,6 +74,9 @@ def _parser() -> argparse.ArgumentParser:
                        help="start Mission Control's backend (docker compose up -d mission_control_backend)")
         p.add_argument("--max-run-s", type=float, default=0.0,
                        help="hard cap on one run, on top of the benchmark's own per-mission timeouts")
+        p.add_argument("--characterise", action="store_true",
+                       help="before the missions, run the car characterisation (tools/characterise): "
+                            "scripted manoeuvres checked against settings.json, no pipeline")
         p.add_argument("--settle-s", type=float, default=120.0,
                        help="before the first mission, wait (at most this long; 0 = don't) until "
                             "the sim keeps real time: for ~30 s after boot it runs slower and the "
@@ -90,6 +93,11 @@ def _sim_command(a):
     if a.sim == "attach":
         return None
     return resolve_command(a.sim, project=a.project, extra=a.sim_arg, settings_dir=a.settings_dir)
+
+
+def _characterise_cmd(a) -> List[str]:
+    settings = Path(a.settings_dir).expanduser() / "settings.json" if a.settings_dir else TOOLS.parent / "settings.json"
+    return [sys.executable, "-m", "characterise", "--settings", str(settings.absolute())]
 
 
 def _check(a, should_stop) -> int:
@@ -160,7 +168,7 @@ def main(argv=None) -> int:
     cfg = RunConfig(sim_command=cmd, results_root=Path(a.results_root), benchmark_args=bench,
                     mc_url=a.mc_url.rstrip("/"), mc_key=a.mc_key, mc_up=a.mc_up, host=a.host,
                     sim_ready_timeout_s=a.ready_timeout_s, max_run_s=a.max_run_s,
-                    settle_s=a.settle_s)
+                    settle_s=a.settle_s, characterise_cmd=_characterise_cmd(a) if a.characterise else None)
     log = lambda m: print(m, flush=True)  # noqa: E731
     if a.cmd == "run":
         rec = run_once(cfg, log=log, should_stop=should_stop)

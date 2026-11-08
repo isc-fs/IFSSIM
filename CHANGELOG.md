@@ -21,6 +21,11 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Car characterisation in the sim check.** `tools/characterise` drives the car
+  with scripted inputs (no pipeline) before the missions and checks it against
+  `settings.json`: full-lock radius both ways, steering linearity and low-speed
+  yaw gain and the solver's wheelbase (from the sim log) fail the check; launch, coast-down and EBS stop are reported. Switch
+  it in `tools/ci/sim_check.json` (`characterisation`).
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
