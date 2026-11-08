@@ -86,10 +86,10 @@ struct FFSDSVehiclePhysics
 	float MaxSteerAngle = 18.2f;     // degrees, measured at the road wheel (#462)
 	// Resistive wheel torque Crr*Fz*Rw. ASSUMED, not measured on the IFS-08.
 	//
-	// CONSUMED BY THE FMU PLANT, NOT BY CHAOS. Chaos has no equivalent knob we
-	// drive, so this field changes nothing in a Plant.Type="chaos" run — it is
-	// here because ifssim_params.m mirrors this struct field-for-field and a
-	// silent divergence between the two is the bug that mirror exists to stop.
+	// Both plants consume it. Chaos has no rolling resistance of its own, so
+	// AFSDSVehiclePawn::ApplyRollingResistance applies Crr*(m*g + downforce)
+	// as a body force; the FMU applies it as wheel torque. ifssim_params.m
+	// mirrors this struct field-for-field.
 	//
 	// It reaches the FMU by being BAKED IN AT EXPORT: export_plant_fmu.m reads
 	// settings.json into IFSSIM_Crr and Simulink freezes it into the .fmu. So
@@ -97,6 +97,14 @@ struct FFSDSVehiclePhysics
 	// (matlab/plant/export_plant_fmu.m) or the number here and the number the
 	// plant actually uses will quietly disagree.
 	float RollingResistance = 0.020f;
+	// EBS (pneumatic, all four corners, on the Chaos handbrake channel).
+	// Torque per wheel = EbsGripMultiple * TireMu * (Mass*g/4) * WheelRadius,
+	// the same formula as ifssim_params.m (P.Derived.EbsTorquePerWheel), so the
+	// two plants brake alike. Both numbers are ASSUMPTIONS until measured on
+	// the car: the multiple only has to clear the grip limit, the fill time
+	// decides the stopping distance.
+	float EbsGripMultiple = 1.5f;
+	float EbsFillTime = 0.f;         // s, 0 = instant (matches ifssim_params.m)
 	float MotorMaxTorque = 230.f;    // Nm (at motor)
 	float MotorMaxPower = 80000.f;   // Watts
 	// Regen braking limits. The IFS-08 has no hydraulic service brake —

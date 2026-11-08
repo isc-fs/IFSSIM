@@ -14,6 +14,16 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Longitudinal plant uses the settings it already had.** Rolling resistance
+  (`RollingResistance`, Crr 0.020) is now applied to the Chaos car; Chaos has
+  none of its own, so a coasting car only slowed from drag. Drive and regen
+  use `DrivetrainEfficiency` from settings instead of a hardcoded 0.92, and
+  regen divides by it (losses make the wheel give up more torque, not less).
+  The EMRAX drive power cap is `MotorMaxPower` (80 kW) instead of the 100 kW
+  datasheet figure. EBS torque is sized like the MATLAB plant,
+  `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
+  Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
+
 - **`dv_pipeline_stack` now compiles C++ packages as Release.** The
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
