@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The sim PR check as the GPU runner runs it (.github/workflows/sim-pr.yml):
-# a headless start-up check, then the missions tools/ci/sim_check.json lists,
+# a headless start-up check, then the car characterisation (tools/characterise)
+# and the missions tools/ci/sim_check.json lists,
 # through this checkout's pipeline, scored by the referee; then the report
 # (tools/ci/sim_report.py) and its track maps (tools/ci/sim_plot.py).
 #
@@ -22,7 +23,8 @@
 #   SESSION_LOCK   default /var/tmp/ifssim-session.lock
 #   LOCK_WAIT_S    how long to wait for it (default 14400)
 #
-# Exit codes: 0 every run of the required missions finished, 1 some didn't,
+# Exit codes: 0 every run of the required missions finished (and the car
+# characterisation's hard checks passed, when sim_check.json requires them), 1 not,
 # 3 the machine failed (sim didn't start, nothing ran, lock never free).
 set -euo pipefail
 
@@ -143,9 +145,20 @@ PY
 )"
 echo "missions: $missions"
 
+# The car characterisation (tools/characterise), once, before the missions, in
+# the same sim session: scripted manoeuvres checked against settings.json.
+# sim_check.json's `characterisation.enabled` switches it; sim_report.py judges it.
+characterise=""
+if python3 -c 'import json, sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("characterisation") or {}).get("enabled") else 1)' \
+    "$ROOT/tools/ci/sim_check.json"; then
+  characterise="--characterise"
+fi
+echo "car characterisation: ${characterise:-off}"
+
 # --poll-s 0.2: the car's path is sampled 5 times a second (the maps need it).
+# shellcheck disable=SC2086  # $characterise is one flag or nothing
 python3 -m headless_run run --sim "$SIM" --settings-dir "$ROOT" --mc-up \
-  --results-root "$RESULTS" --max-run-s 2400 \
+  --results-root "$RESULTS" --max-run-s 2400 $characterise \
   -- --missions "$missions" --mission-overrides "$overrides" --poll-s 0.2 || true
 
 rc=0

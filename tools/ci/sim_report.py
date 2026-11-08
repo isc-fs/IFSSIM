@@ -14,6 +14,12 @@ Autocross also runs on random tracks (tools/ci/gen_tracks.py, named
 ci_rand_<seed>.csv): they share one row in the summary, and for every run
 that didn't finish, sim_failures.py works out where it went wrong.
 
+The car characterisation (tools/characterise), when the run had one, is read
+from <run>/characterisation/: its section joins the summary and the comment,
+and with `characterisation.required` in sim_check.json a failed hard check
+fails the check. One that couldn't measure is shown, but fails nothing: that
+is the measurement's fault, not evidence about the car.
+
 Exit code: 0 every required run finished, 1 some didn't, 3 nothing ran
 (the machine failed: see the job log).
 
@@ -172,6 +178,28 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
     }
 
 
+def read_characterisation(run_dir: Path, rec: dict, config: dict) -> dict | None:
+    """The run's car characterisation: status, its markdown, the hard checks that failed."""
+    cfg = config.get("characterisation") or {}
+    d = run_dir / "characterisation"
+    out = {"required": bool(cfg.get("required")), "status": "error", "markdown": "", "failed": [],
+           "error": None}
+    try:
+        res = json.loads((d / "result.json").read_text())
+    except (OSError, ValueError):
+        if "characterisation" not in rec:
+            return None  # not asked for, or the run never got that far
+        out["error"] = (rec["characterisation"] or {}).get("error") or \
+            f"it ended {(rec['characterisation'] or {}).get('status', 'without a result')}"
+        return out
+    out["status"] = res.get("status", "error")
+    out["error"] = res.get("error")
+    out["failed"] = [c["name"] for c in res.get("checks", []) if c.get("hard") and c.get("status") == "fail"]
+    if (d / "summary.md").exists():
+        out["markdown"] = (d / "summary.md").read_text()
+    return out
+
+
 def build(root: Path, config: dict) -> dict:
     runs_json = sorted((root / "headless").glob("*/run.json"))
     if not runs_json:
@@ -207,9 +235,11 @@ def build(root: Path, config: dict) -> dict:
     ran = {g["mission"] for g in groups.values()}
     missing = [m for m in required if m not in ran]
     failed = [g["scenario"] for g in groups.values() if g["required"] and g["finished"] < g["runs"]]
+    car = read_characterisation(run_dir, rec, config)
+    car_failed = bool(car and car["required"] and car["status"] == "fail")
     if not runs:
         verdict = "error"
-    elif failed or missing:
+    elif failed or missing or car_failed:
         verdict = "fail"
     else:
         verdict = "pass"
@@ -235,6 +265,7 @@ def build(root: Path, config: dict) -> dict:
         "runs": [{k: v for k, v in r.items() if k != "code"} for r in runs],
         "groups": list(groups.values()),
         "failures": failures,
+        "characterisation": car,
     }
 
 
@@ -436,6 +467,21 @@ def failures_table(report: dict, track_urls: dict[str, str] | None = None) -> st
     return "\n".join(out)
 
 
+def characterisation_section(report: dict) -> str:
+    """The car characterisation's table (written by tools/characterise), or why there is none."""
+    car = report.get("characterisation")
+    if not car:
+        return ""
+    if car.get("markdown"):
+        text = car["markdown"].rstrip()
+    else:
+        text = f"#### Car characterisation · couldn't run\n\n> {car.get('error') or 'no result'}"
+    if car.get("status") == "fail":
+        text += ("\n\nThis fails the sim check." if car.get("required") else
+                 "\n\nReported only: `characterisation.required` is off in `tools/ci/sim_check.json`.")
+    return "\n" + text + "\n"
+
+
 def maps(images: dict[str, str]) -> str:
     if not images:
         return ""
@@ -445,7 +491,7 @@ def maps(images: dict[str, str]) -> str:
 
 def comment(report: dict, baseline: dict | None, images: dict[str, str], run_url: str, base_note: str = "") -> str:
     parts = [COMMENT_MARKER, "### " + headline(report), "", tables(report, baseline),
-             failures_table(report, report.get("track_urls")), maps(images)]
+             failures_table(report, report.get("track_urls")), characterisation_section(report), maps(images)]
     foot = f"[Run, logs and telemetry]({run_url})" if run_url else ""
     if baseline and base_note:
         foot += f" · {base_note}"
@@ -455,6 +501,7 @@ def comment(report: dict, baseline: dict | None, images: dict[str, str], run_url
 
 def summary(report: dict, baseline: dict | None) -> str:
     return "\n".join(["### " + headline(report), "", tables(report, baseline), failures_table(report),
+                      characterisation_section(report),
                       "\nSim and pipeline logs are in the `sim-pr-results` artifact.\n"])
 
 
@@ -466,6 +513,9 @@ def history_cell(report: dict) -> str:
         name = g["mission"] + (" random" if g.get("random") else "")
         name = name if g["required"] else f"*{name}*"
         cells.append(f"{name} {g['finished']}/{g['runs']}{lap}")
+    car = report.get("characterisation")
+    if car:
+        cells.append(f"car {car['status']}")
     return "<br>".join(cells) or "–"
 
 

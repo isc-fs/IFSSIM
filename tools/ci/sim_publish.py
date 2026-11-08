@@ -219,6 +219,7 @@ def section_text(report: dict, run_url: str, source: str = "") -> str:
     return "\n".join([sim_report.headline(report) + what + f" · [run]({run_url})", "",
                       sim_report.tables(report, None),
                       sim_report.failures_table(report, report.get("track_urls")),
+                      sim_report.characterisation_section(report),
                       sim_report.maps(report.get("images") or {})])
 
 

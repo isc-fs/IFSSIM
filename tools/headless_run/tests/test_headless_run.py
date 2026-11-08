@@ -218,3 +218,34 @@ def test_a_sim_that_never_keeps_real_time_is_waited_for_at_most_settle_s(tmp_pat
                        settle_s=2.0, settle_window_s=1.0), log=quiet)
     assert rec["outcome"] == "finished"
     assert rec["settle_timeout"] and 0.4 < rec["settle_rtf"] < 0.6
+
+
+def test_the_car_characterisation_runs_before_the_missions(tmp_path, backend):
+    c = cfg(tmp_path, free_port(), backend,
+            characterise_cmd=[sys.executable, str(HERE / "fake_characterise.py"), "--status", "fail"])
+    t0 = time.time()
+    rec = run_once(c, log=quiet)
+    run_dir = Path(rec["run_dir"])
+    res = json.loads((run_dir / "characterisation" / "result.json").read_text())
+    manifest = next((run_dir / "mission").rglob("manifest.json"))
+    assert t0 <= res["t"] <= manifest.stat().st_mtime          # before the benchmark
+    assert res["args"]["sim"] == f"127.0.0.1:{c.port}"
+    assert res["args"]["sim_log"] == str(run_dir / "sim.log")
+    # Its result is recorded, but the run's outcome is the missions'.
+    assert rec["characterisation"]["status"] == "fail" and rec["characterisation"]["exit"] == 1
+    assert rec["outcome"] == "finished"
+    assert json.loads((run_dir / "run.json").read_text())["characterisation"]["status"] == "fail"
+
+
+def test_a_characterisation_that_hangs_is_cut_off(tmp_path, backend):
+    c = cfg(tmp_path, free_port(), backend, characterise_timeout_s=0.5,
+            characterise_cmd=[sys.executable, str(HERE / "fake_characterise.py"), "--sleep", "30"])
+    rec = run_once(c, log=quiet)
+    assert rec["characterisation"]["status"] == "timeout"
+    assert rec["outcome"] == "finished"
+
+
+def test_no_characterisation_unless_asked(tmp_path, backend):
+    rec = run_once(cfg(tmp_path, free_port(), backend), log=quiet)
+    assert "characterisation" not in rec
+    assert not (Path(rec["run_dir"]) / "characterisation").exists()
