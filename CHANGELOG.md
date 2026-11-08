@@ -21,6 +21,7 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
