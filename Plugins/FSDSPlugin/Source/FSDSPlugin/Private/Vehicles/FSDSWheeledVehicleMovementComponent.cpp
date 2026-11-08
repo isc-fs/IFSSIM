@@ -262,6 +262,20 @@ void UFSDSWheeledVehicleMovementComponent::LogInheritedWheelDefaults() const
 			UE_LOG(LogTemp, Log, TEXT("FSDS: EBS torque %.0f N.m/wheel (from settings.json)"), Ebs);
 		}
 	}
+	// Chaos engine braking acts on the driven wheels whenever the Chaos
+	// throttle is zero, which for this car is always (the EMRAX drives the
+	// wheels through SetDriveTorque). Anything but 0 is a hidden drag.
+	if (EngineSetup.EngineBrakeEffect != 0.f)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: Chaos EngineBrakeEffect is %.3f, not 0: the driven wheels get ")
+			TEXT("EngineRPM x %.3f N.m of brake torque at all times (hidden drag)."),
+			EngineSetup.EngineBrakeEffect, EngineSetup.EngineBrakeEffect);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Chaos engine braking off (EngineBrakeEffect 0)"));
+	}
 	UE_LOG(LogTemp, Warning, TEXT("FSDS: ---- end unchosen wheel parameters ----"));
 }
 

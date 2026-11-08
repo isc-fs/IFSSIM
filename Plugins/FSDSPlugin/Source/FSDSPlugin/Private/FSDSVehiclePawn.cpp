@@ -364,6 +364,17 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->EngineSetup.MaxRPM = 6500.f;
 	VehicleMovement->EngineSetup.MaxTorque = 643.f; // Full EMRAX peak at wheel
 	VehicleMovement->EngineSetup.EngineIdleRPM = 0.f;
+
+	// No Chaos engine braking. UChaosWheeledVehicleSimulation::ApplyInput
+	// puts EngineRPM x EngineBrakeEffect (N.m) on every driven wheel as brake
+	// torque whenever ITS throttle input is zero, and Tick always passes zero
+	// (EMRAX torque goes in through SetDriveTorque). With the 0.05 default
+	// and engine RPM = wheel RPM (gear 1, final 1) that is 23·v N on the rear
+	// axle, 0.085·v m/s² on 275 kg: a hidden viscous drag the motor fought
+	// while driving and most of the coast-down excess the first car
+	// characterisation found (#796: 1.02 vs 0.31 m/s² at 10 m/s). Motor
+	// losses and regen belong to UEmraxMotor, so the Chaos engine adds none.
+	VehicleMovement->EngineSetup.EngineBrakeEffect = 0.f;
 	FRichCurve* TorqueCurve = VehicleMovement->EngineSetup.TorqueCurve.GetRichCurve();
 	TorqueCurve->Reset();
 	// EMRAX 228 torque curve (normalized, power-limited only) — kept
