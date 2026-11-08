@@ -466,13 +466,11 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 				[
 					SNew(SHorizontalBox)
 					.Visibility_Lambda([this]() { return Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
-					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
+					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f).VAlign(VAlign_Center)
 					[
-						MakeChoice(LOCTEXT("Generate", "New random track"), [this]() { return bTrackBusy; }, [this]() { GenerateTrack(); })
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(3.f)
-					[
-						MakeChoice(LOCTEXT("GenOptions", "Options..."), [this]() { return bGenOptions; }, [this]() { bGenOptions = !bGenOptions; })
+						SNew(STextBlock)
+						.Text(LOCTEXT("NewTracksHint", "New tracks, drawn or random: Track editor."))
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 					]
 					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f).VAlign(VAlign_Center)
 					[
@@ -506,10 +504,6 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 								[]() { return false; }, [this]() { DeleteTrack(); })
 						]
 					]
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(3, 4, 3, 0)
-				[
-					MakeGenOptions()
 				]
 				+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Driver", "DRIVER")) ]
 				+ SVerticalBox::Slot().AutoHeight()
@@ -1475,73 +1469,6 @@ FString SFSDSMenu::ScoreText(const FFSDSRunResult& R)
 	return S;
 }
 
-TSharedRef<SWidget> SFSDSMenu::MakeGenOptions()
-{
-	auto Number = [](const FText& Label, int32* Value, int32 Min, int32 Max, const FText& Hint) -> TSharedRef<SWidget>
-	{
-		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(110.f)
-				[
-					SNew(STextBlock).Text(Label).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(90.f)
-				[
-					SNew(SSpinBox<int32>)
-					.Font(MenuUi::MenuFont(11))
-					.MinValue(Min).MaxValue(Max)
-					.Value_Lambda([Value]() { return *Value; })
-					.OnValueChanged_Lambda([Value](int32 V) { *Value = V; })
-				]
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(8, 0, 0, 0)
-			[
-				SNew(STextBlock).Text(Hint).Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
-			];
-	};
-
-	return SNew(SVerticalBox)
-		.Visibility_Lambda([this]() { return bGenOptions && Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-		[
-			Number(LOCTEXT("GenPoints", "Points"), &GenPoints, 10, 200, LOCTEXT("GenPointsHint", "random points the layout grows from"))
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-		[
-			Number(LOCTEXT("GenRegions", "Regions"), &GenRegions, 5, 100, LOCTEXT("GenRegionsHint", "fewer = simpler, more = twistier"))
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-		[
-			Number(LOCTEXT("GenMax", "Max size (m)"), &GenMaxBound, 50, 300, LOCTEXT("GenMaxHint", "the area it fits in"))
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(110.f)
-				[
-					SNew(STextBlock).Text(LOCTEXT("GenName", "Name")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(200.f)
-				[
-					SNew(SEditableTextBox)
-					.Font(MenuUi::MenuFont(11))
-					.HintText(LOCTEXT("GenNameHint", "automatic"))
-					.Text_Lambda([this]() { return FText::FromString(GenName); })
-					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type) { GenName = Text.ToString().TrimStartAndEnd(); })
-				]
-			]
-		];
-}
-
 namespace MenuScoring { static const TCHAR* Section = TEXT("FSDSScoring"); }
 
 FString SFSDSMenu::ReferenceKey() const
@@ -1585,46 +1512,6 @@ FString SFSDSMenu::WhyKept(const FString& Name)
 	if (Name.StartsWith(TEXT("stress_")))
 		return TEXT("Test track kept in the repo: it can't be deleted.");
 	return FString();
-}
-
-void SFSDSMenu::GenerateTrack()
-{
-	if (bTrackBusy || !Client.IsValid()) return;
-	// The backend writes <name>.csv over whatever is there, so never pass it a taken name.
-	if (!GenName.IsEmpty() && (!WhyKept(GenName).IsEmpty()
-		|| Tracks.ContainsByPredicate([this](const FFSDSMenuTrack& T) { return T.Name.Equals(GenName, ESearchCase::IgnoreCase); })))
-	{
-		SetMessage(FString::Printf(TEXT("There is already a track called %s: pick another name in Options, or leave it empty."), *GenName), true);
-		return;
-	}
-	bTrackBusy = true;
-	SetMessage(TEXT("Making a random track..."), false);
-	// The panel's defaults: a closed random track (MIT's generator).
-	const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
-	Body->SetNumberField(TEXT("n_points"), GenPoints);
-	Body->SetNumberField(TEXT("n_regions"), GenRegions);
-	Body->SetNumberField(TEXT("max_bound"), GenMaxBound);
-	Body->SetStringField(TEXT("name"), GenName);
-	TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
-	Client->Post(TEXT("/api/track/generate"), Body, [Weak](const FFSDSMcReply& R)
-	{
-		TSharedPtr<SFSDSMenu> M = Weak.Pin();
-		if (!M) return;
-		M->bTrackBusy = false;
-		FString Name;
-		const TSharedPtr<FJsonObject> O = R.Object();
-		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("name"), Name))
-		{
-			M->SetMessage(FString::Printf(TEXT("Couldn't make a random track: %s"), R.Error.IsEmpty() ? TEXT("no reply") : *R.Error), true);
-			return;
-		}
-		double Cones = 0.0;
-		O->TryGetNumberField(TEXT("cones"), Cones);
-		M->PendingSelect = FPaths::GetBaseFilename(Name);
-		M->GenName.Reset();   // the next one gets its own name
-		M->OnTracksChanged.ExecuteIfBound();   // the menu rescans and hands the list back
-		M->SetMessage(FString::Printf(TEXT("New random track: %s (%d cones)."), *FPaths::GetBaseFilename(Name), (int32)Cones), false);
-	}, 60.f);
 }
 
 void SFSDSMenu::DeleteTrack()
@@ -1765,11 +1652,6 @@ void SFSDSMenu::SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<F
 {
 	// Keep the selected track by name: indices shift when one is added.
 	FString Keep = Tracks.IsValidIndex(Selected) ? Tracks[Selected].Name : FString();
-	if (!PendingSelect.IsEmpty())
-	{
-		Keep = PendingSelect;   // just generated
-		PendingSelect.Reset();
-	}
 	Tracks = InTracks;
 	Venues = InVenues;
 	if (!Location.IsEmpty() && !FindVenue(Location).IsValid()) Location.Reset();
