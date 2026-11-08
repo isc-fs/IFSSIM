@@ -89,4 +89,17 @@ private:
 	double OverwriteArmedUntil = 0.0;
 	FString Message;
 	bool bMessageError = false;
+
+	/** RANDOM TRACK: Mission Control's random generator (MIT's), not drawn, so
+	 *  not editable here; it can be test driven. */
+	TSharedRef<SWidget> BuildRandom();
+	void GenerateRandom();
+	int32 GenPoints = 50;
+	int32 GenRegions = 30;
+	int32 GenMaxBound = 150;
+	FString GenName;
+	bool bGenerating = false;
+	FString GenMessage;
+	bool bGenError = false;
+	FString Generated;   // the last one made, for its Test drive
 };

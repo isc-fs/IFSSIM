@@ -536,7 +536,131 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(bMessageError ? EditorUi::Bad : EditorUi::Good); })
 				.Font(EditorUi::EdFont(10)).AutoWrapText(true)
 			]
+
+			+ SVerticalBox::Slot().AutoHeight() [ BuildRandom() ]
 		];
+}
+
+TSharedRef<SWidget> SFSDSTrackEditor::BuildRandom()
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0) [ EditorUi::Heading(LOCTEXT("RandomH", "OR MAKE A RANDOM TRACK")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("RandomHint", "A closed loop of cones from the random generator, on the open floor. "
+				"It isn't drawn, so it can't be edited here: drive it, or pick it on the Drive page."))
+			.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				EditorUi::Num<int32>(LOCTEXT("GenPoints", "POINTS"), [this]() { return GenPoints; },
+					[this](int32 V) { GenPoints = V; }, 10, 200, 1, 64.f)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				EditorUi::Num<int32>(LOCTEXT("GenRegions", "REGIONS"), [this]() { return GenRegions; },
+					[this](int32 V) { GenRegions = V; }, 5, 100, 1, 64.f)
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				EditorUi::Num<int32>(LOCTEXT("GenMax", "MAX SIZE (M)"), [this]() { return GenMaxBound; },
+					[this](int32 V) { GenMaxBound = V; }, 50, 300, 5, 76.f)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("GenNumbersHint", "Points: what the layout grows from. Regions: fewer is simpler, more is twistier. "
+				"Max size: the area it fits in."))
+			.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 8, 0)
+			[
+				SNew(SEditableTextBox)
+				.Font(EditorUi::EdFont(11))
+				.HintText(LOCTEXT("GenNameHint", "name (empty: track_<date>)"))
+				.Text_Lambda([this]() { return FText::FromString(GenName); })
+				.OnTextChanged_Lambda([this](const FText& T) { GenName = T.ToString().TrimStartAndEnd(); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				EditorUi::Button(TAttribute<FText>::CreateLambda([this]()
+					{
+						return bGenerating ? LOCTEXT("Generating", "Making...") : LOCTEXT("Generate", "Make random track");
+					}),
+					EditorUi::PlainBtn, [this]() { GenerateRandom(); },
+					TAttribute<bool>::CreateLambda([this]() { return !bGenerating && Client.IsValid(); }), 11)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this]() { return FText::FromString(GenMessage); })
+			.Visibility_Lambda([this]() { return GenMessage.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(bGenError ? EditorUi::Bad : EditorUi::Good); })
+			.Font(EditorUi::EdFont(10)).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(SBox)
+			.Visibility_Lambda([this]() { return Generated.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			[
+				EditorUi::Button(TAttribute<FText>::CreateLambda([this]()
+					{
+						return FText::Format(LOCTEXT("TestDriveRandom", "Test drive {0}"), FText::FromString(Generated));
+					}),
+					EditorUi::GoBtn, [this]() { OnTestDrive.ExecuteIfBound(Generated); }, true, 12)
+			]
+		];
+}
+
+void SFSDSTrackEditor::GenerateRandom()
+{
+	if (bGenerating || !Client.IsValid()) return;
+	// The backend writes <name>.csv over whatever is there, so never pass it a taken name.
+	if (!GenName.IsEmpty() && (FSDSTrackSpec::IsProtectedName(GenName)
+		|| Tracks.ContainsByPredicate([this](const FFSDSMenuTrack& T) { return T.Name.Equals(GenName, ESearchCase::IgnoreCase); })))
+	{
+		GenMessage = FString::Printf(TEXT("There is already a track called %s: pick another name, or leave it empty."), *GenName);
+		bGenError = true;
+		return;
+	}
+	bGenerating = true;
+	GenMessage = TEXT("Making a random track...");
+	bGenError = false;
+	const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetNumberField(TEXT("n_points"), GenPoints);
+	Body->SetNumberField(TEXT("n_regions"), GenRegions);
+	Body->SetNumberField(TEXT("max_bound"), GenMaxBound);
+	Body->SetStringField(TEXT("name"), GenName);
+	TWeakPtr<SFSDSTrackEditor> Weak = SharedThis(this);
+	Client->Post(TEXT("/api/track/generate"), Body, [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSTrackEditor> E = Weak.Pin();
+		if (!E) return;
+		E->bGenerating = false;
+		FString Name;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("name"), Name))
+		{
+			E->GenMessage = FString::Printf(TEXT("Couldn't make a random track: %s"), R.Error.IsEmpty() ? TEXT("no reply") : *R.Error);
+			E->bGenError = true;
+			return;
+		}
+		double Cones = 0.0;
+		O->TryGetNumberField(TEXT("cones"), Cones);
+		E->Generated = FPaths::GetBaseFilename(Name);
+		E->GenName.Reset();   // the next one gets its own name
+		E->GenMessage = FString::Printf(TEXT("Made %s (%d cones). It's on the Drive page's list too."), *E->Generated, (int32)Cones);
+		E->OnSaved.ExecuteIfBound();   // the menu rescans the tracks folders
+	}, 60.f);
 }
 
 void SFSDSTrackEditor::RebuildSections()

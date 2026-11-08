@@ -145,20 +145,11 @@ private:
 	mutable FString ReferenceFor;
 	mutable FString ReferenceText;
 	/** Drive: generate a track (/api/track/generate), then select it. */
-	void GenerateTrack();
-	TSharedRef<SWidget> MakeGenOptions();
 	/** Drive: delete the selected track, on a second click within 4 s. */
 	void DeleteTrack();
-	FString PendingSelect;
 	double DeleteArmedUntil = 0.0;
 	FString DeleteArmedFor;
 	bool bTrackBusy = false;
-	/** New random track: the generator's settings (the panel's defaults), shown by Options. */
-	bool bGenOptions = false;
-	int32 GenPoints = 50;
-	int32 GenRegions = 30;
-	int32 GenMaxBound = 150;
-	FString GenName;
 	/** The run box over an autonomous run: RES and the sim's pause. */
 	bool bResActive = false;
 	bool bSimPaused = false;
