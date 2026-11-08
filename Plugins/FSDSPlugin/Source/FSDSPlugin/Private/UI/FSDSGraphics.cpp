@@ -202,11 +202,11 @@ bool FFSDSGraphics::TickRecommend(float)
 		// Keep it (or the cheapest, if nothing fits).
 		Settings.Quality = T.Quality;
 		Settings.ResolutionPct = T.ResolutionPct;
-		Settings.bHideViewWhileAutonomous = Before.bHideViewWhileAutonomous || (P90 > RecommendBudgetMs);
+		Settings.bHideViewWhileAutonomous = Before.bHideViewWhileAutonomous;   // yours to choose
 		Apply();
 		Save();
 		const FString Msg = P90 > RecommendBudgetMs
-			? FString::Printf(TEXT("Even the cheapest view takes %.1f ms of the GPU's 16.7 ms per frame: Low at 25%%, with the view hidden while the pipeline drives. Check the HUD's Real time line during a run."), P90)
+			? FString::Printf(TEXT("Even the cheapest view takes %.1f ms of the GPU's 16.7 ms per frame: Low at 25%%. Consider hiding the view while the pipeline drives, and check the HUD's Real time line during a run."), P90)
 			: FString::Printf(TEXT("%s at %d%%: the GPU takes %.1f ms of each 16.7 ms frame, leaving room for the pipeline."),
 				*QualityName(T.Quality).ToString(), T.ResolutionPct, P90);
 		TestTicker.Reset();   // returning false removes it
