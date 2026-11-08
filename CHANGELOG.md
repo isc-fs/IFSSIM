@@ -265,6 +265,7 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.
 - Full steering lock in the sim is now 18.2° at the road wheel, the measured value and the one the controller assumes (#462). It was 22.4°, so every steering command turned the wheels 1.23x further than the controller intended and the car cut the inside of corners. The bridge's reported `/fsds/steering_angle` uses the same scale.
 - The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.
 - **RPC replies with an apostrophe or a control character in a string were
