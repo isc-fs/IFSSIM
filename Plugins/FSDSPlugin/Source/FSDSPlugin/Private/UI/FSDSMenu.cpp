@@ -672,8 +672,11 @@ void FFSDSMenu::UpdateFrameCap()
 	int32 Cap = 0;
 	const AFSDSVehiclePawn* P = Pawn.Get();
 	// Nor while a session starts: the pipeline configures and calibrates on
-	// the sim's clock, and it should not take twice the time.
-	if (bEnabled && IsOpen() && !bStartingSession && !(P && P->IsApiControlEnabled()))
+	// the sim's clock, and it should not take twice the time. Nor while Find
+	// the best measures the GPU: capped, its frame time counts the waits too,
+	// and the GPU drops to a power-saving clock.
+	if (bEnabled && IsOpen() && !bStartingSession && !FFSDSGraphics::Get().IsRecommending()
+		&& !(P && P->IsApiControlEnabled()))
 	{
 		Cap = GetMenuFrameRate();
 		const UWorld* W = World.Get();
