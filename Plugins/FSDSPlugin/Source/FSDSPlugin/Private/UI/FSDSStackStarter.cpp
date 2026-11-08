@@ -53,7 +53,49 @@ FString FFSDSStackStarter::FindComposeDir()
 	return FString();
 }
 
-bool FFSDSStackStarter::Start(const FString& ComposeDir, FString& OutError)
+bool FFSDSStackStarter::SaysDockerIsDown(const FString& Output)
+{
+	// The engine's pipe or socket isn't there. Matched on docker's own
+	// English words, not the OS's (localised) error text after them.
+	return Output.Contains(TEXT("error during connect"))
+		|| Output.Contains(TEXT("dockerDesktopLinuxEngine"))
+		|| Output.Contains(TEXT("Cannot connect to the Docker daemon"))
+		|| Output.Contains(TEXT("docker daemon is not running"));
+}
+
+bool FFSDSStackStarter::StartDocker(FString& OutError)
+{
+#if PLATFORM_WINDOWS
+	FString Exe = FPaths::Combine(FPlatformMisc::GetEnvironmentVariable(TEXT("ProgramFiles")),
+		TEXT("Docker"), TEXT("Docker"), TEXT("Docker Desktop.exe"));
+	if (!FPaths::FileExists(Exe))
+	{
+		OutError = TEXT("Docker isn't running and Docker Desktop isn't installed where expected: start Docker");
+		return false;
+	}
+	// Hidden: only its engine is wanted, not its window over the sim.
+	FProcHandle H = FPlatformProcess::CreateProc(*Exe, TEXT(""), /*bLaunchDetached=*/true,
+		/*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
+#elif PLATFORM_MAC
+	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/usr/bin/open"), TEXT("-g -a Docker"), true,
+		false, false, nullptr, 0, nullptr, nullptr);
+#else
+	OutError = TEXT("Docker isn't running: start it (sudo systemctl start docker)");
+	return false;
+#endif
+#if PLATFORM_WINDOWS || PLATFORM_MAC
+	if (!H.IsValid())
+	{
+		OutError = TEXT("couldn't open Docker Desktop: start it yourself");
+		return false;
+	}
+	FPlatformProcess::CloseProc(H);
+	UE_LOG(LogTemp, Log, TEXT("FSDS Launcher: Docker wasn't running; opening Docker Desktop"));
+	return true;
+#endif
+}
+
+bool FFSDSStackStarter::Start(const FString& ComposeDir, FString& OutError, const FString& Extra)
 {
 	if (bRunning) return true;
 	if (!HasCompose(ComposeDir))
@@ -74,15 +116,16 @@ bool FFSDSStackStarter::Start(const FString& ComposeDir, FString& OutError)
 		return false;
 	}
 
+	const FString Command = Extra.IsEmpty() ? CommandLine() : CommandLine() + TEXT(" ") + Extra;
 #if PLATFORM_WINDOWS
 	const FString Exe = TEXT("cmd.exe");
-	const FString Args = FString::Printf(TEXT("/c %s 2>&1"), *CommandLine());
+	const FString Args = FString::Printf(TEXT("/c %s 2>&1"), *Command);
 #elif PLATFORM_MAC
 	const FString Exe = TEXT("/bin/zsh");
-	const FString Args = FString::Printf(TEXT("-lc \"%s 2>&1\""), *CommandLine());
+	const FString Args = FString::Printf(TEXT("-lc \"%s 2>&1\""), *Command);
 #else
 	const FString Exe = TEXT("/bin/bash");
-	const FString Args = FString::Printf(TEXT("-lc \"%s 2>&1\""), *CommandLine());
+	const FString Args = FString::Printf(TEXT("-lc \"%s 2>&1\""), *Command);
 #endif
 
 	Proc = FPlatformProcess::CreateProc(*Exe, *Args, /*bLaunchDetached=*/false,
@@ -95,7 +138,7 @@ bool FFSDSStackStarter::Start(const FString& ComposeDir, FString& OutError)
 		return false;
 	}
 	bRunning = true;
-	UE_LOG(LogTemp, Log, TEXT("FSDS Launcher: '%s' in %s"), *CommandLine(), *ComposeDir);
+	UE_LOG(LogTemp, Log, TEXT("FSDS Launcher: '%s' in %s"), *Command, *ComposeDir);
 	return true;
 }
 

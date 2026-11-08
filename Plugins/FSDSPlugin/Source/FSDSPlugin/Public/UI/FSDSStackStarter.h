@@ -25,7 +25,13 @@ public:
 	/** The command a person would type, for the panel's hint line. */
 	static FString CommandLine() { return TEXT("docker compose up -d"); }
 
-	bool Start(const FString& ComposeDir, FString& OutError);
+	/** `docker compose up -d`, then Extra (services, flags) when given. */
+	bool Start(const FString& ComposeDir, FString& OutError, const FString& Extra = FString());
+
+	/** Whether docker's output says its engine isn't running (Docker Desktop closed). */
+	static bool SaysDockerIsDown(const FString& Output);
+	/** Open Docker Desktop (Windows, macOS); on Linux the service is the user's to start. */
+	static bool StartDocker(FString& OutError);
 	/** Drain the pipe; call every tick or so. Returns true while running. */
 	bool Poll();
 

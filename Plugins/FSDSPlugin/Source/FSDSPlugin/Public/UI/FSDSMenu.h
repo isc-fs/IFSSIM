@@ -13,6 +13,7 @@ namespace FSDSTrackSpec { struct FEditorState; }
 class AFSDSVehiclePawn;
 class APlayerController;
 class FFSDSLauncher;
+class FFSDSStackStarter;
 class FFSDSRpcServer;
 class SFSDSMenu;
 class SWidget;
@@ -112,7 +113,17 @@ private:
 	 * referee cleared), then start the event's mission; the menu shows each
 	 * step under START and closes once the pipeline has the car.
 	 */
-	void StartAutonomous(const FFSDSDriveRequest& Request);
+	void StartAutonomous(const FFSDSDriveRequest& Request, bool bStackTried = false);
+	/**
+	 * START found no backend: bring up the pipeline and the backend
+	 * (docker compose, opening Docker Desktop first if its engine is down),
+	 * wait until the backend sees the sim, then START again. False when
+	 * there is no docker-compose.yml to start them from.
+	 */
+	bool BringUpStack(const FFSDSDriveRequest& Request);
+	void TickStackUp();
+	/** BringUpStack is over: START again, or show why not (Error). */
+	void EndStackUp(const FString& Error);
 	/** Stop the pipeline's session (the car stays where it is, under EBS). */
 	void StopSession();
 	/** The mission Mission Control runs for an event (/api/event/start). */
@@ -176,6 +187,18 @@ private:
 
 	/** While StartAutonomous runs its steps: the backend's own track load isn't an outside session. */
 	bool bStartingSession = false;
+
+	/** BringUpStack's steps. */
+	enum class EStackUp : uint8 { Idle, Compose, Docker, Backend };
+	EStackUp StackUp = EStackUp::Idle;
+	TSharedPtr<FFSDSStackStarter> StackStarter;
+	/** The folder with docker-compose.yml; empty when none was found. */
+	FString ComposeDir;
+	TOptional<FFSDSDriveRequest> StackUpRequest;
+	double StackUpSince = 0.0;
+	double DockerOpenedAt = 0.0;
+	double StackUpNextTry = 0.0;
+	bool bStackProbe = false;
 	/** Gone with the menu (Shutdown): the backend's replies check it before touching anything. */
 	TSharedPtr<bool> Alive;
 

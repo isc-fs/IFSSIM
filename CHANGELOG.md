@@ -23,6 +23,14 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **START brings up the Docker stack when it isn't running.** START with
+  Autonomous used to stop at "the backend isn't reachable". Now, when nothing
+  answers, it runs `docker compose up -d --no-build dv_pipeline_stack
+  mission_control_backend` from the repo (the services START needs, with no
+  image builds), opening Docker Desktop first, hidden, if its engine is down
+  (Windows, macOS; on Linux it says to start the service). It waits until the
+  backend sees the sim and starts the run, showing each step under START.
+  From Docker closed to the car driving took about a minute here.
 - **Graphics settings in the menu.** Settings, Graphics: Quality (Low, the
   sim's settings so far, Medium or High), Resolution (25% to 100%), the 3D
   view Shown or Hidden while the pipeline drives (the HUD stays), and Find

@@ -133,7 +133,7 @@ void FFSDSMenu::Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn*
 	// The backend saves into the repo's Content/tracks (docker-compose mounts
 	// it); a packaged sim reads its own copy. List the repo's first, so a
 	// track saved in the editor shows up and loads.
-	const FString ComposeDir = S.MissionControlComposeDir.IsEmpty() ? FFSDSStackStarter::FindComposeDir() : S.MissionControlComposeDir;
+	ComposeDir = S.MissionControlComposeDir.IsEmpty() ? FFSDSStackStarter::FindComposeDir() : S.MissionControlComposeDir;
 	if (!ComposeDir.IsEmpty())
 	{
 		const FString Dir = FPaths::Combine(ComposeDir, TEXT("Content"), TEXT("tracks"));
@@ -375,6 +375,7 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	{
 		UpdateOrbit(DeltaTime);
 	}
+	TickStackUp();
 	UpdateFrameCap();
 	ThrottleFrame();
 
@@ -467,7 +468,7 @@ void FFSDSMenu::Drive(const FFSDSDriveRequest& Request)
 		*EventName(Request.Event, Request.bPractice), *Request.Track.Name, Cones, Request.Laps);
 }
 
-void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request)
+void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request, bool bStackTried)
 {
 	if (bStartingSession) return;   // already on its way
 	if (!Client.IsValid())
@@ -494,11 +495,13 @@ void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request)
 	Say(TEXT("Stopping any session that is running..."), false);
 
 	// 1. The previous session's pipeline, if any (as the mission benchmark).
-	Client->Post(TEXT("/api/pipeline/stop"), nullptr, [this, Token, Req, Csv, Say, Fail](const FFSDSMcReply& Stop)
+	Client->Post(TEXT("/api/pipeline/stop"), nullptr, [this, Token, Req, Csv, Say, Fail, bStackTried](const FFSDSMcReply& Stop)
 	{
 		if (!Token.IsValid()) return;
 		if (!Stop.Reached())
 		{
+			// Nothing answers: start the stack, then START again.
+			if (!bStackTried && BringUpStack(Req)) return;
 			Fail(FString::Printf(TEXT("Mission Control's backend isn't reachable at %s: start the Docker stack. (%s)"),
 				*Client->GetBaseUrl(), *Stop.Error));
 			return;
@@ -545,6 +548,146 @@ void FFSDSMenu::StartAutonomous(const FFSDSDriveRequest& Request)
 			}, 300.f);
 		}, 60.f);
 	}, 60.f);
+}
+
+namespace StackUpUi
+{
+	// Only what START needs, and never a build: a plain `up -d` would also
+	// build Lichtblick (minutes) and the web UI.
+	const TCHAR* Services = TEXT("--no-build dv_pipeline_stack mission_control_backend");
+	constexpr double DockerTimeoutS = 180.0;   // Docker Desktop's engine, from cold
+	constexpr double BackendTimeoutS = 120.0;  // the backend up and connected to the sim
+	constexpr double DockerRetryS = 5.0;
+	constexpr double ProbeEveryS = 2.0;
+}
+
+bool FFSDSMenu::BringUpStack(const FFSDSDriveRequest& Request)
+{
+	if (ComposeDir.IsEmpty()) return false;
+	if (!StackStarter.IsValid()) StackStarter = MakeShared<FFSDSStackStarter>();
+	FString Error;
+	if (!StackStarter->Start(ComposeDir, Error, StackUpUi::Services))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: can't start the stack: %s"), *Error);
+		return false;
+	}
+	// bStartingSession stays set: START is still on its way.
+	StackUpRequest = Request;
+	StackUp = EStackUp::Compose;
+	StackUpSince = FPlatformTime::Seconds();
+	DockerOpenedAt = 0.0;
+	bStackProbe = false;
+	if (Widget) Widget->SetMessage(TEXT("Mission Control's backend isn't running: starting the pipeline and the backend..."), false);
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: no backend; starting the stack in %s"), *ComposeDir);
+	return true;
+}
+
+void FFSDSMenu::EndStackUp(const FString& Error)
+{
+	StackUp = EStackUp::Idle;
+	bStartingSession = false;
+	const TOptional<FFSDSDriveRequest> Req = StackUpRequest;
+	StackUpRequest.Reset();
+	if (!Error.IsEmpty())
+	{
+		if (Widget) Widget->SetMessage(Error, true);
+		UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: autonomous start: %s"), *Error);
+		return;
+	}
+	if (Req.IsSet()) StartAutonomous(Req.GetValue(), /*bStackTried=*/true);
+}
+
+void FFSDSMenu::TickStackUp()
+{
+	if (StackUp == EStackUp::Idle || !StackStarter.IsValid()) return;
+	const double Now = FPlatformTime::Seconds();
+	auto Say = [this](const FString& Msg) { if (Widget) Widget->SetMessage(Msg, false); };
+
+	switch (StackUp)
+	{
+	case EStackUp::Compose:
+	{
+		if (StackStarter->Poll())
+		{
+			const FString& Line = StackStarter->LastLine();
+			Say(Line.IsEmpty() ? FString(TEXT("Starting the pipeline and the backend..."))
+				: FString::Printf(TEXT("Starting the pipeline and the backend: %s"), *Line.Left(90)));
+			return;
+		}
+		if (StackStarter->ExitCode() == 0)
+		{
+			// Docker Desktop may still have put its window over the sim.
+			if (DockerOpenedAt > 0.0)
+			{
+				const UWorld* W = World.Get();
+				UGameViewportClient* V = W ? W->GetGameViewport() : nullptr;
+				if (const TSharedPtr<SWindow> Win = V ? V->GetWindow() : nullptr)
+				{
+					Win->HACK_ForceToFront();
+				}
+			}
+			StackUp = EStackUp::Backend;
+			StackUpSince = Now;
+			StackUpNextTry = Now;
+			return;
+		}
+		if (FFSDSStackStarter::SaysDockerIsDown(StackStarter->Output()))
+		{
+			if (DockerOpenedAt == 0.0)
+			{
+				FString Error;
+				if (!FFSDSStackStarter::StartDocker(Error)) { EndStackUp(Error); return; }
+				DockerOpenedAt = Now;
+			}
+			if (Now - DockerOpenedAt < StackUpUi::DockerTimeoutS)
+			{
+				StackUp = EStackUp::Docker;   // its engine is still on its way
+				StackUpNextTry = Now + StackUpUi::DockerRetryS;
+				return;
+			}
+			EndStackUp(TEXT("Docker didn't start within 3 minutes: open Docker Desktop, then START again."));
+			return;
+		}
+		EndStackUp(FString::Printf(TEXT("docker compose failed: %s"), *StackStarter->LastLine()));
+		return;
+	}
+	case EStackUp::Docker:
+	{
+		Say(FString::Printf(TEXT("Starting Docker (%.0f s)..."), Now - DockerOpenedAt));
+		if (Now < StackUpNextTry) return;
+		FString Error;
+		if (!StackStarter->Start(ComposeDir, Error, StackUpUi::Services)) { EndStackUp(Error); return; }
+		StackUp = EStackUp::Compose;
+		return;
+	}
+	case EStackUp::Backend:
+	{
+		Say(FString::Printf(TEXT("Waiting for the backend to see the sim (%.0f s)..."), Now - StackUpSince));
+		if (Now - StackUpSince > StackUpUi::BackendTimeoutS)
+		{
+			EndStackUp(FString::Printf(TEXT("The stack started, but the backend at %s didn't see the sim within 2 minutes: "
+				"check docker compose logs mission_control_backend."), Client.IsValid() ? *Client->GetBaseUrl() : TEXT("?")));
+			return;
+		}
+		if (bStackProbe || Now < StackUpNextTry || !Client.IsValid()) return;
+		bStackProbe = true;
+		const TWeakPtr<bool> Token = Alive;
+		Client->Get(TEXT("/api/sim/status"), [this, Token](const FFSDSMcReply& R)
+		{
+			if (!Token.IsValid()) return;
+			bStackProbe = false;
+			if (StackUp != EStackUp::Backend) return;
+			const TSharedPtr<FJsonObject> O = R.Ok() ? R.Object() : nullptr;
+			bool bConnected = false;
+			if (O.IsValid()) O->TryGetBoolField(TEXT("connected"), bConnected);
+			if (bConnected) { EndStackUp(FString()); return; }
+			StackUpNextTry = FPlatformTime::Seconds() + StackUpUi::ProbeEveryS;
+		}, 3.f);
+		return;
+	}
+	default:
+		return;
+	}
 }
 
 void FFSDSMenu::StopSession()
