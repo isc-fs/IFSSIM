@@ -72,6 +72,10 @@ void FFSDSMissionControlClient::Send(const FString& Verb, const FString& Path, c
 	Req->SetURL(BaseUrl + Path);
 	Req->SetVerb(Verb);
 	Req->SetTimeout(TimeoutS);
+	// And the silence allowed: the engine's default (30 s) fails a call that
+	// waits for its answer, like /api/event/start while a fresh pipeline
+	// compiles (the first run after a clone).
+	Req->SetActivityTimeout(TimeoutS);
 	Req->SetHeader(TEXT("Accept"), TEXT("application/json"));
 	if (!ApiKey.IsEmpty())
 	{

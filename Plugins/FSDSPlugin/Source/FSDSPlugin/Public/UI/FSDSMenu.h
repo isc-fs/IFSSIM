@@ -121,6 +121,15 @@ private:
 	 * there is no docker-compose.yml to start them from.
 	 */
 	bool BringUpStack(const FFSDSDriveRequest& Request);
+	/** docker compose for the services START needs (building them the first time). */
+	void StartCompose();
+	/** The answer to START's question when the team's code isn't on this PC
+	 *  (SFSDSMenu::SetRepoPrompt): 0 get it here, 1 somewhere else, 2 I have
+	 *  it, 3 not now. */
+	void OnRepoChoice(int32 Choice);
+	/** git clone into Dir, installing git first if it isn't there. */
+	void StartClone(const FString& Dir);
+	void ShowRepoPrompt(const FString& Error = FString());
 	void TickStackUp();
 	/** BringUpStack is over: START again, or show why not (Error). */
 	void EndStackUp(const FString& Error);
@@ -189,7 +198,7 @@ private:
 	bool bStartingSession = false;
 
 	/** BringUpStack's steps. */
-	enum class EStackUp : uint8 { Idle, Compose, Docker, Backend };
+	enum class EStackUp : uint8 { Idle, NeedRepo, GitInstall, Clone, Compose, Docker, Backend };
 	EStackUp StackUp = EStackUp::Idle;
 	TSharedPtr<FFSDSStackStarter> StackStarter;
 	/** The folder with docker-compose.yml; empty when none was found. */
@@ -199,6 +208,8 @@ private:
 	double DockerOpenedAt = 0.0;
 	double StackUpNextTry = 0.0;
 	bool bStackProbe = false;
+	/** Where StartClone puts the team's code. */
+	FString CloneDir;
 	/** Gone with the menu (Shutdown): the backend's replies check it before touching anything. */
 	TSharedPtr<bool> Alive;
 

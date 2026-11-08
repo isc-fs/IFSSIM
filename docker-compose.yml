@@ -1,3 +1,9 @@
+# The project name, whatever the folder is called (a clone into IFSSIM-repo,
+# say): containers are <name>-<service>-1, and mission_control_backend finds
+# the pipeline's by that name (DV_PIPELINE_STACK_CONTAINER below).
+# COMPOSE_PROJECT_NAME still overrides it (CI runs as ifssim-ci).
+name: ifssim
+
 services:
 
   # ROS2 bridge + full driverless pipeline in one container
@@ -397,9 +403,9 @@ services:
       # Container name of the dv_pipeline_stack — mc_backend's auto-pull
       # talks to the docker daemon via the Python SDK and addresses the
       # source container by this name. Compose names it
-      # `<project>-<service>-<idx>` by default; the project prefix is
-      # `ifssim` (pinned by `image:` in this file) so the full name is
-      # stable.
+      # `<project>-<service>-<idx>` by default; the project is `ifssim`
+      # (`name:` at the top of this file, whatever the folder is called), so
+      # the full name is stable.
       - DV_PIPELINE_STACK_CONTAINER=ifssim-dv_pipeline_stack-1
       - IFSSIM_TOOLS_DIR=/ifssim_tools
       # pipeline/control sources for track_driver Pure Pursuit import.
