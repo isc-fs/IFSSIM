@@ -42,9 +42,14 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
-- **What only the Tab panel did is in the menu.** Drive: Generate a track
-  and Delete this track (a second click confirms) under the track list, and
-  RECORDING (No bag / Record a bag) for an autonomous run. The box over an
+- **What only the Tab panel did is in the menu.** Drive: New random track
+  (Options: points, regions, max size, name; a taken name is refused, as the
+  backend would overwrite it) and Delete this track (a second click
+  confirms; official event tracks and the stress library say why they can't
+  be deleted instead) under the track list, RECORDING (No bag / Record a
+  bag) and SCORING (the reference time T_best, saved per event and track)
+  for an autonomous run. Settings, HUD: Basic or Detailed, which adds the
+  motor's regen and the car's position and heading. The box over an
   autonomous run: RES (stop the car / release) and Pause the sim. The end of
   an autonomous run and the Results page: Mission Control's FS score (the
   time with the cone and off-course penalties, and the points against a
