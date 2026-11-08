@@ -404,6 +404,35 @@ bool FFSDSMenu::Tick(float DeltaTime)
 		FFSDSGraphics::Get().SetViewDrawn(!bHide);
 	}
 
+	// The pipeline stopped the car itself (its watchdog, RES, a failure): the
+	// EBS latched with the run still on. End the run there, as the referee
+	// would, so the box says so instead of "the pipeline is driving".
+	if (IsAutonomousRunLive() && !bStartingSession)
+	{
+		const AFSDSVehiclePawn* EbsPawn = Pawn.Get();
+		const AFSDSReferee* EbsRef = Referee.Get();
+		const bool bFinishing = EbsRef && EbsRef->GetState().bFinished;   // the referee's own ending, below
+		if (EbsPawn && EbsPawn->IsEbsLatched() && !bFinishing)
+		{
+			const double Now = FPlatformTime::Seconds();
+			if (EbsSince == 0.0) EbsSince = Now;
+			else if (Now - EbsSince > 1.5)
+			{
+				EbsSince = 0.0;
+				UE_LOG(LogTemp, Log, TEXT("FSDS Menu: the car was stopped (EBS) during the autonomous run"));
+				RecordRun();
+				StopSession();
+				bRunLive = false;
+				Show(EMode::Finished);
+				return true;
+			}
+		}
+		else
+		{
+			EbsSince = 0.0;
+		}
+	}
+
 	// The referee ends the run (all laps done, or the far gate of a one-way
 	// track): show how it went. Practice on a loop never ends this way. With
 	// the pipeline driving, its session stops too, and the car waits.
@@ -528,7 +557,7 @@ void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTri
 		Say(Msg, true);
 		UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: autonomous start: %s"), *Msg);
 	};
-	Say(TEXT("Stopping any session that is running..."), false);
+	Say(TEXT("Stopping any session that is running (after a run with a bag, saving it can take a few minutes)..."), false);
 
 	// 1. The previous session's pipeline, if any (as the mission benchmark).
 	Client->Post(TEXT("/api/pipeline/stop"), nullptr, [this, Token, Req, Csv, Say, Fail, bStackTried](const FFSDSMcReply& Stop)
@@ -563,7 +592,7 @@ void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTri
 			const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
 			Body->SetStringField(TEXT("mission"), MissionName(Req.Event));
 			Body->SetNumberField(TEXT("num_laps"), Req.Event == EFSDSEventType::Trackdrive ? Req.Laps : 1);
-			Body->SetBoolField(TEXT("record_bag"), false);
+			Body->SetBoolField(TEXT("record_bag"), Req.bRecordBag);
 			Client->Post(TEXT("/api/event/start"), Body, [this, Token, Req, Fail](const FFSDSMcReply& Start)
 			{
 				if (!Token.IsValid()) return;
@@ -583,7 +612,9 @@ void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTri
 					*EventName(Req.Event), *Req.Track.Name, Req.Laps);
 			}, 300.f);
 		}, 60.f);
-	}, 60.f);
+	// The backend copies a recorded bag out of the pipeline's container before
+	// it answers: hundreds of MB (an 870 MB one took four minutes here).
+	}, 420.f);
 }
 
 namespace StackUpUi
@@ -1147,8 +1178,9 @@ void FFSDSMenu::RecordRun()
 	bRunRecorded = true;
 
 	const FFSDSRefereeState& S = R->GetState();
-	// A run where nothing happened (restarted at once) isn't worth a line.
-	if (S.Laps.Num() == 0 && S.DooCounter == 0 && S.OffTrackCounter == 0) return;
+	// A run where nothing happened (restarted at once) isn't worth a line;
+	// an autonomous one always is (it may have been stopped at the start).
+	if (!Current->bAutonomous && S.Laps.Num() == 0 && S.DooCounter == 0 && S.OffTrackCounter == 0) return;
 
 	FFSDSRunResult Run;
 	Run.Track = Current->Track.Name;
@@ -1161,7 +1193,31 @@ void FFSDSMenu::RecordRun()
 	Run.bPractice = Current->bPractice;
 	Run.bAutonomous = Current->bAutonomous;
 	Run.When = FDateTime::Now();
-	Results->Add(MoveTemp(Run));
+	Run.bBag = Current->bAutonomous && Current->bRecordBag;
+	const int32 Index = Results->Add(MoveTemp(Run));
+
+	// An autonomous run's FS score, as Mission Control computes it: asked now,
+	// before the next track load clears the referee.
+	if (Current->bAutonomous && Client.IsValid())
+	{
+		const TWeakPtr<bool> Token = Alive;
+		const TSharedPtr<TArray<FFSDSRunResult>> Runs = Results;
+		Client->Get(TEXT("/api/scoring/summary"), [Token, Runs, Index](const FFSDSMcReply& Reply)
+		{
+			if (!Token.IsValid() || !Runs.IsValid() || !Runs->IsValidIndex(Index)) return;
+			const TSharedPtr<FJsonObject> O = Reply.Object();
+			FString Err;
+			if (!Reply.Ok() || !O.IsValid() || O->TryGetStringField(TEXT("error"), Err)) return;
+			FFSDSRunResult& R = (*Runs)[Index];
+			O->TryGetNumberField(TEXT("corrected_time"), R.Corrected);
+			O->TryGetNumberField(TEXT("doo_penalty_s"), R.DooPenalty);
+			O->TryGetNumberField(TEXT("oc_penalty_s"), R.OcPenalty);
+			O->TryGetNumberField(TEXT("score"), R.Points);
+			O->TryGetNumberField(TEXT("max_points"), R.MaxPoints);
+			R.bHasReference = O->TryGetNumberField(TEXT("t_best_reference"), R.Reference) && R.Reference > 0.0;
+			R.bScored = true;
+		}, 5.f);
+	}
 }
 
 void FFSDSMenu::UpdateFrameCap()
