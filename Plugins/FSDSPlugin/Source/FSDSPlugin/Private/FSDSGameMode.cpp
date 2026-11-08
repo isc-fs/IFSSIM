@@ -1,6 +1,7 @@
 #include "FSDSGameMode.h"
 #include "FSDSRealTime.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSUpdater.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "FSDSConeSpawner.h"
@@ -127,6 +128,9 @@ void AFSDSGameMode::StartPlay()
 	// How the view is drawn (Settings, Graphics): the saved choice.
 	FFSDSGraphics::Get().Init(GetWorld());
 
+	// A newer published build (Settings, Updates): checked quietly.
+	FFSDSUpdater::Get().Init();
+
 	// The HUD: the car's and the mission's state in a corner (H by default).
 	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);
 
@@ -140,6 +144,7 @@ void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Hud.Shutdown();
 	FFSDSRealTime::Get().Stop();
 	FFSDSGraphics::Get().Shutdown();
+	FFSDSUpdater::Get().Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

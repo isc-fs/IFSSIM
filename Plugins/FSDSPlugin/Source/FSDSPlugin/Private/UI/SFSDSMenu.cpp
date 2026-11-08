@@ -3,6 +3,7 @@
 #include "UI/SFSDSTrackMap.h"
 #include "UI/FSDSGraphics.h"
 #include "UI/FSDSStackStarter.h"
+#include "UI/FSDSUpdater.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -286,6 +287,12 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						[
 							SNew(STextBlock).Text(LOCTEXT("Team", "ISC Racing Team"))
 							.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+						[
+							SNew(STextBlock).Text(LOCTEXT("UpdateBadge", "A new build is out: Settings, Updates"))
+							.Visibility_Lambda([]() { return FFSDSUpdater::Get().HasUpdate() ? EVisibility::Visible : EVisibility::Collapsed; })
+							.Font(MenuUi::MenuFont(10, TEXT("Bold"))).ColorAndOpacity(MenuUi::Good)
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
@@ -786,6 +793,71 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				"pipeline drives gives its GPU and CPU time back (the HUD and the Esc box still show). Find the "
 				"best tries each setting for a few seconds and keeps the best looking one that leaves the GPU "
 				"room within each 1/60 s frame."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Updates", "UPDATES")) ]
+		+ SVerticalBox::Slot().AutoHeight() [ GraphicsRow(LOCTEXT("UChannel", "Builds"),
+			{ { LOCTEXT("UStable", "Stable"), []() { return FFSDSUpdater::Get().GetChannel() == FFSDSUpdater::EChannel::Stable; },
+				  []() { FFSDSUpdater::Get().SetChannel(FFSDSUpdater::EChannel::Stable); } },
+			  { LOCTEXT("ULatest", "Latest"), []() { return FFSDSUpdater::Get().GetChannel() == FFSDSUpdater::EChannel::Latest; },
+				  []() { FFSDSUpdater::Get().SetChannel(FFSDSUpdater::EChannel::Latest); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("UThis", "This build")).Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text_Lambda([]() { return FText::FromString(FFSDSUpdater::Get().CurrentText()); })
+				.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Ink)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("UCheck", "Check now"), []() { return false; },
+					[]() { FFSDSUpdater::Get().Check(/*bInteractive=*/true); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				SNew(SBox).Visibility_Lambda([]() { return FFSDSUpdater::Get().HasUpdate() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakeChoice(LOCTEXT("UUpdate", "Update and restart"), []() { return false; },
+						[]() { FFSDSUpdater::Get().Update(); })
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				SNew(SBox).Visibility_Lambda([]() { return FFSDSUpdater::Get().CanRollBack() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakeChoice(LOCTEXT("URollBack", "Back to the previous build"), []() { return false; },
+						[]() { FFSDSUpdater::Get().RollBack(); })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(9, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([]() { return FText::FromString(FFSDSUpdater::Get().StatusText()); })
+				.ColorAndOpacity_Lambda([]() { return FSlateColor(FFSDSUpdater::Get().GetState() == FFSDSUpdater::EState::Failed ? MenuUi::Bad
+					: FFSDSUpdater::Get().HasUpdate() ? MenuUi::Good : MenuUi::Ink); })
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("UpdatesHint",
+				"New builds come from the repo's GitHub Releases. Stable: the tagged releases. Latest: the last build of "
+				"dev, newer but less tested. It signs in with the GitHub login git keeps from getting the team's code. "
+				"Updating downloads the build, restarts the sim into it, and keeps this one: Back to the previous build "
+				"returns to it. After updating, Rebuild pipeline below so the stack matches."))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("PipelineCode", "PIPELINE CODE")) ]

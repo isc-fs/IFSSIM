@@ -23,6 +23,16 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **The sim updates itself from GitHub Releases (Windows).** Settings,
+  UPDATES: Builds Stable (tagged releases, the default) or Latest (the
+  rolling `latest-dev` pre-release), this build, Check now, Update and
+  restart, Back to the previous build; the main menu says when a newer build
+  is out. It signs in with the GitHub login git keeps (`git credential
+  fill`; `IFSSIM_GITHUB_TOKEN` also works), downloads the zip, and a
+  PowerShell helper checks its `.sha256`, unzips it, keeps the old folder as
+  `<folder>-previous` and restarts the sim. `package_windows.sh` writes
+  `build.json` (version, commit, commit time) next to the exe, and
+  `tools/publish_windows_build.sh stable|latest` publishes a build.
 - **Pipeline edits run on the next START; Rebuild pipeline in Settings.**
   START copies the pipeline's source from the team's code into the running
   container before every run (the folders `compose watch` syncs, as

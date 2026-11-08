@@ -76,7 +76,26 @@ Then:
 Your work goes in a PR to the pipeline repo; once merged, a PR here moves the
 submodule to it.
 
-## Keeping up to date
+## Updating the sim
+
+Settings, UPDATES. The sim checks the repo's GitHub Releases when it starts
+and says on the main menu when a newer build is out.
+
+- **Builds**: **Stable** (the default) gets the tagged releases; **Latest**
+  gets the last build of `dev`, newer but less tested.
+- **Update and restart** downloads it, restarts the sim into it and keeps the
+  build you had next to it (`<folder>-previous`): **Back to the previous
+  build** returns to it. A `settings.json` you changed in the sim's folder is
+  kept as `settings.previous.json`, and tracks you added there come along.
+- It signs in to GitHub with the login git keeps from getting the team's
+  code; **Check now** signs in if it can't.
+- After updating, **Rebuild pipeline** (below it), so the stack is built from
+  code that matches the new sim.
+
+Builds are published with `tools/publish_windows_build.sh stable|latest`
+(Git Bash, UE 5.8, `gh` logged in), until a CI runner does it.
+
+## Keeping the code up to date
 
 The sim doesn't pull for you. To get the team's latest code:
 
