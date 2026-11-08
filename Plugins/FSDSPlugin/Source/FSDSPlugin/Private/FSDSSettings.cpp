@@ -217,6 +217,8 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelWidth"), DblVal)) P.WheelWidth = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxSteerAngle"), DblVal)) P.MaxSteerAngle = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollingResistance"), DblVal)) P.RollingResistance = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("EbsGripMultiple"), DblVal)) P.EbsGripMultiple = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("EbsFillTime"), DblVal)) P.EbsFillTime = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxTorque"), DblVal)) P.MotorMaxTorque = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxPower"), DblVal)) P.MotorMaxPower = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxRegenTorque"), DblVal)) P.MaxRegenTorque = DblVal;

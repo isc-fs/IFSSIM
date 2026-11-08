@@ -475,6 +475,9 @@ private:
 	float MaxRegenPower = 6000.f;  // Watts — hardware cell-current limit
 	float GearRatio = 2.909f;      // motor → rear axle
 	float WheelRadius = 0.2f;      // m
+	float DrivetrainEfficiency = 0.92f;  // gearbox + chain, from settings
+	float MotorMaxPower = 80000.f;       // W, forwarded to the EMRAX drive cap
+	float RollingResistance = 0.020f;    // Crr, from settings
 
 	// Vehicle-dynamics shadow of FFSDSVehiclePhysics — same write-once
 	// pattern as the regen fields above. Consumed by
@@ -500,4 +503,5 @@ private:
 	float ClA = 3.0f;                // Downforce coefficient * plan area (m²)
 	float AeroBalanceFront = 0.45f;   // 45% downforce on front axle
 	void ApplyAeroForces();
+	void ApplyRollingResistance();
 };
