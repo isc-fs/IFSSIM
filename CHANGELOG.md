@@ -22,6 +22,8 @@ shipping pipeline, documentation.
 ### Added
 
 - **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
+- **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
+
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
@@ -266,6 +268,7 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.
 - Full steering lock in the sim is now 18.2° at the road wheel, the measured value and the one the controller assumes (#462). It was 22.4°, so every steering command turned the wheels 1.23x further than the controller intended and the car cut the inside of corners. The bridge's reported `/fsds/steering_angle` uses the same scale.
 - The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.
 - **RPC replies with an apostrophe or a control character in a string were
