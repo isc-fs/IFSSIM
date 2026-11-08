@@ -75,6 +75,12 @@ RUN git clone --depth 1 https://github.com/papalotis/ft-fsd-path-planning.git /t
 # upstream's compatibility shim.
 RUN pip install --no-cache-dir "gtsam==4.3a0"
 
+# PyPI `dbscan` (parallel grid DBSCAN) for perception's cluster_backend=pypi.
+# Pinned to 0.0.12, the last release built for numpy 1.x (declares numpy<2,
+# matching the 1.24 pin above); 1.0.0 requires numpy>=2. --no-deps keeps pip
+# from touching numpy. Without it perception falls back to its numba kernel.
+RUN pip install --no-cache-dir --no-deps "dbscan==0.0.12"
+
 # Re-pin numpy after all installs to prevent any dependency from upgrading it
 RUN pip install --no-cache-dir "numpy==1.24.*"
 
