@@ -51,6 +51,7 @@ def next_as_state(
     estop: bool,
     dv_status: int,
     mission_runnable: bool,
+    dv_fresh: bool = True,
 ) -> int:
     """Return the next AS-state byte.
 
@@ -62,7 +63,9 @@ def next_as_state(
          once the AS has left Emergency, so the other order never clears).
       2. Emergency latches until the operator disarms.
       3. estop → AS_EMERGENCY from any state; a pipeline-raised emergency
-         (DV_EMERGENCY) only while armed (Ready / Driving).
+         (DV_EMERGENCY) only while armed (Ready / Driving); a lost pipeline
+         heartbeat (dv_fresh False) while Driving, the firmware's
+         dv_lost_driving.
       4. no runnable mission → AS_OFF.
       5. intent READY → AS_READY (triggers mission_control to configure).
       6. intent GO → AS_DRIVING, but ONLY once dv_status == DV_READY
@@ -80,6 +83,12 @@ def next_as_state(
         return AS_EMERGENCY
     armed = cur in (AS_READY, AS_DRIVING)
     if estop or (dv == DV_EMERGENCY and armed):
+        return AS_EMERGENCY
+    if cur == AS_DRIVING and not dv_fresh:
+        # Pipeline heartbeat lost mid-run (link or DV-PC dead): the
+        # firmware's dv_lost_driving, which forces Emergency + EBS. Before
+        # this the emulator read a stale /dv/status as DV_IDLE and kept
+        # driving on the last command.
         return AS_EMERGENCY
     if not mission_runnable:
         # Can't arm or go without a runnable mission selected.
