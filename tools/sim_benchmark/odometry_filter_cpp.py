@@ -28,12 +28,16 @@ import numpy as np
 # --- constants (odometry_filter.hpp) -----------------------------------------
 G = 9.81
 RPM_TO_MS = 0.00821
+# Mirror of the PIPELINE filter: keep the pipeline value (1.570, car hardpoints),
+# NOT settings.json Wheelbase (1.627). Disputed pending a tape measurement;
+# allowlisted in tools/tests/test_constants_guard.py.
 WHEELBASE_M = 1.570
 CALIBRATION_SECONDS = 3.0
 SLIP_YAW_RESIDUAL_THRESHOLD = 0.3
 MIN_VX_FOR_STEERING_CORRECT = 3.0
-# Bridge default: Chaos normalized [-1, 1] → road-wheel rad via this scale.
-MAX_STEERING_ANGLE_RAD = 0.5
+# Bridge default: Chaos normalized [-1, 1] → road-wheel rad via this scale
+# (ifssim_bridge max_steering_angle_rad = deg2rad(settings.json MaxSteerAngle 18.2)).
+MAX_STEERING_ANGLE_RAD = 0.317650
 # Bridge ``/steering_angle`` uses UE/Chaos sign (positive = right). REP-103
 # body ω_z and sim_supervisor integration use positive = left — negate δ.
 STEERING_ANGLE_TO_YAW_RATE_SIGN = -1.0
