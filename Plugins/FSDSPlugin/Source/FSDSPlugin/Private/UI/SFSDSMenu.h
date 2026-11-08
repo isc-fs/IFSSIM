@@ -38,6 +38,10 @@ public:
 		SLATE_EVENT(FOnFSDSTestDrive, OnTestDrive)
 		SLATE_EVENT(FSimpleDelegate, OnTracksChanged)
 		SLATE_EVENT(FSimpleDelegate, OnStartStack)
+		SLATE_EVENT(FSimpleDelegate, OnRebuildPipeline)
+		SLATE_ARGUMENT(TFunction<FString()>, RebuildStatus)
+		SLATE_ARGUMENT(TFunction<bool()>, IsRebuilding)
+		SLATE_ARGUMENT(TFunction<bool()>, RebuildFailed)
 		SLATE_EVENT(FOnFSDSDrive, OnDrive)
 		SLATE_EVENT(FSimpleDelegate, OnResume)
 		SLATE_EVENT(FSimpleDelegate, OnRestart)
@@ -132,6 +136,11 @@ private:
 	/** Settings, PIPELINE CODE: the folder, and what the last Change... said. */
 	FString RepoShown;
 	FString RepoNote;
+	/** Settings, Rebuild pipeline (FFSDSMenu::RebuildPipeline). */
+	FSimpleDelegate OnRebuildPipeline;
+	TFunction<FString()> RebuildStatus;
+	TFunction<bool()> IsRebuilding;
+	TFunction<bool()> RebuildFailed;
 
 	TSharedPtr<SScrollBox> DriveList;
 	TSharedPtr<SFSDSTrackMap> DriveMap;

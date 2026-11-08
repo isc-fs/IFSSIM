@@ -42,6 +42,15 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **Pipeline edits run on the next START; Rebuild pipeline in Settings.**
+  START copies the pipeline's source from the team's code into the running
+  container before every run (the folders `compose watch` syncs, as
+  `docker compose config` resolves them), so a Python edit runs without
+  `tools/compose-up-and-watch.sh`, and the container's copy can't go stale
+  after a rebuild. Settings, PIPELINE CODE, Rebuild pipeline builds the
+  pipeline and backend images and recreates their containers (as
+  `tools/refresh-bridge.sh`), for C++, messages, launch files and setup.py,
+  or after a git pull, with its progress shown there.
 - **A sim from the build zip sets up the pipeline itself (Windows).** When
   START with Autonomous can't find the team's code, it asks: Get it (into
   Documents\IFSSIM-repo, asked of Windows so a Spanish or moved Documents is
