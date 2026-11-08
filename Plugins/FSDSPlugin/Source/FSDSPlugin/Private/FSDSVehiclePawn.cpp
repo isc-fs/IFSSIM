@@ -1584,13 +1584,16 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	// large. Only the couple was wrong; total downforce was unaffected, which
 	// is why it never showed up as an obviously broken ride height.
 	//
-	// Derived from the vehicle's Wheelbase rather than re-hardcoded, so it
-	// tracks settings.json and removes one more copy of a constant this
-	// codebase already has too many versions of.
+	// The axles are where UFSDSWheeledVehicleMovementComponent places the
+	// physics wheels: the body origin is the centre of mass, the front axle
+	// Wheelbase*(1-WeightDistFront) ahead of it and the rear axle
+	// Wheelbase*WeightDistFront behind. This used +-Wheelbase/2, which was
+	// only right while the origin was taken to be the axle midpoint; with the
+	// axles at +0.914 / -0.713 m it put 38.8% of the downforce on the front
+	// axle instead of AeroBalanceFront's 45%.
 	FTransform ActorTransform = GetActorTransform();
-	const float HalfWheelbaseCm = 0.5f * Wheelbase * 100.f;   // m -> cm
-	FVector FrontAxleLocal(HalfWheelbaseCm, 0.f, 0.f);
-	FVector RearAxleLocal(-HalfWheelbaseCm, 0.f, 0.f);
+	FVector FrontAxleLocal(Wheelbase * (1.f - WeightDistFront) * 100.f, 0.f, 0.f);   // m -> cm
+	FVector RearAxleLocal(-Wheelbase * WeightDistFront * 100.f, 0.f, 0.f);
 	FVector FrontAxleWorld = ActorTransform.TransformPosition(FrontAxleLocal);
 	FVector RearAxleWorld = ActorTransform.TransformPosition(RearAxleLocal);
 
