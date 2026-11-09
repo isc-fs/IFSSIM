@@ -209,9 +209,11 @@ bool FFSDSPipelineView::Tick(float Dt)
 	// The anchor, while the car stands at the start (see the header).
 	if (S.bHasPose)
 	{
-		if (bAnchorLocked && S.Map.Num() == 0 && Speed < PipelineViewUi::StillMps)
+		// A new session: SLAM starts over at its origin with the car standing
+		// still (its map may still hold the last session's cones for a scan or two).
+		if (bAnchorLocked && S.Pose.Size() < 0.3 && Speed < PipelineViewUi::StillMps)
 		{
-			bAnchorLocked = false;   // a new session
+			bAnchorLocked = false;
 		}
 		if (!bAnchorLocked)
 		{
@@ -359,7 +361,8 @@ void FFSDSPipelineView::BeginReplay()
 		FScopeLock L(&Lock);
 		TruthCount = 0;
 	}
-	bAnchored = bAnchorLocked = false;
+	bAnchored = bAnchorLocked = false;   // the bag's own SLAM frame
+	Clear();
 	if (AFSDSVehiclePawn* P = Pawn.Get())
 	{
 		if (USkeletalMeshComponent* Mesh = P->GetMesh())
@@ -375,6 +378,7 @@ void FFSDSPipelineView::EndReplay()
 {
 	if (!bReplay) return;
 	bReplay = false;
+	bAnchored = bAnchorLocked = false;   // the next live run anchors afresh
 	if (AFSDSVehiclePawn* P = Pawn.Get())
 	{
 		if (USkeletalMeshComponent* Mesh = P->GetMesh())
