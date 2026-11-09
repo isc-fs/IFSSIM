@@ -23,9 +23,11 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
-- **What only the Tab panel did is in the menu.** Track editor: OR MAKE A
-  RANDOM TRACK (points, regions, max size, name; a taken name is refused, as
-  the backend would overwrite it), with Test drive. Drive: Delete this track
+- **What only the Tab panel did is in the menu.** Track editor: OR START
+  FROM A RANDOM TRACK (points, regions, max size): the random generator's
+  loop lands on the canvas as an unsaved drawing, to edit, check and save
+  like any drawn track (new backend `POST /api/track/random_spec`, nothing
+  written). Drive: Delete this track
   (a second click confirms; official event tracks and the stress library
   say why they can't be deleted instead) under the track list, RECORDING (No bag / Record a
   bag) and SCORING (the reference time T_best, saved per event and track)

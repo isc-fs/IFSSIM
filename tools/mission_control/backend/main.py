@@ -1472,18 +1472,71 @@ def track_spec(name: str):
                             status_code=404)
     return spec
 
+def _run_random_generator(params: "TrackGenerate"):
+    """Run the random generator into a fresh temp dir: (tmp_dir, its csv).
+    The caller removes tmp_dir. The imports are local: the third-party
+    package resolves only after the sys.path insert at module load, and a
+    missing dependency should be a 500 here, not take the whole API down."""
+    from track_generator import TrackGenerator
+    from utils import Mode, SimType
+
+    # output_yaml() builds its path as: os.path.realpath(os.path.dirname(__file__)) + output_location
+    # __file__ is inside TRACK_GEN_PATH (read-only mount), so we use a traversal to
+    # redirect output into a writable tmpdir: TRACK_GEN_PATH + /../../tmp/xxx = /tmp/xxx
+    import tempfile
+    tmp_dir = tempfile.mkdtemp()
+    rel_to_gen = os.path.relpath(tmp_dir, TRACK_GEN_PATH)
+    output_location = "/" + rel_to_gen  # e.g. "/../../tmp/tmpXXXXXX"
+
+    # `os.chdir` is process-global. Two concurrent track-generate
+    # calls would race on CWD; an unrelated handler running in the
+    # same process between chdir-in and chdir-out would also see
+    # the wrong CWD. Serialize with a dedicated lock and restore
+    # CWD in finally so an exception inside `create_track()`
+    # doesn't leave the whole backend stuck in TRACK_GEN_PATH.
+    with _gen_lock:
+        orig_dir = os.getcwd()
+        os.chdir(TRACK_GEN_PATH)
+        try:
+            gen = TrackGenerator(
+                n_points=params.n_points, n_regions=params.n_regions,
+                min_bound=10., max_bound=float(params.max_bound),
+                mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
+                create_output_file=True, output_location=output_location,
+                sim_type=SimType.FSDS
+            )
+            gen.create_track()
+        finally:
+            os.chdir(orig_dir)
+
+    return tmp_dir, os.path.join(tmp_dir, "random_track.csv")
+
+
+@app.post("/api/track/random_spec", dependencies=[Depends(require_api_key)])
+def track_random_spec(params: TrackGenerate):
+    """A random track as the track editor's control points, nothing saved.
+
+    The editor shows it as a fresh drawing to edit, check and save like any
+    drawn track (see random_spec.py)."""
+    try:
+        tmp_dir, gen_file = _run_random_generator(params)
+        try:
+            if not os.path.exists(gen_file):
+                return JSONResponse({"error": "Generation failed"}, status_code=500)
+            cones = parse_track_csv(gen_file)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        from random_spec import control_points
+        points = control_points(cones["blue"], cones["yellow"])
+        return {"points": [list(p) for p in points], "closed": True}
+    except ImportError as e:
+        return JSONResponse({"error": f"Track generator not found: {e}"}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.post("/api/track/generate", dependencies=[Depends(require_api_key)])
 def track_generate(params: TrackGenerate):
     try:
-        # `sys.path` insertion now happens once at module load
-        # (#327 B9). Imports here are still local because the
-        # third-party package only resolves after that insert and
-        # we want the failure mode (missing dependency) to surface
-        # as a 500 from this endpoint rather than a hard import
-        # error at app startup that takes the whole API down.
-        from track_generator import TrackGenerator
-        from utils import Mode, SimType
-
         # Pre-#327 (B4) `params.name` was used directly as the
         # destination filename stem — `name="../../etc/passwd"`
         # would have written to TRACKS_DIR/../../etc/passwd.csv.
@@ -1492,36 +1545,7 @@ def track_generate(params: TrackGenerate):
         # always-safe.
         name_base = _validate_track_stem(params.name.strip()) if params.name.strip() else f"track_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # output_yaml() builds its path as: os.path.realpath(os.path.dirname(__file__)) + output_location
-        # __file__ is inside TRACK_GEN_PATH (read-only mount), so we use a traversal to
-        # redirect output into a writable tmpdir: TRACK_GEN_PATH + /../../tmp/xxx = /tmp/xxx
-        import tempfile
-        tmp_dir = tempfile.mkdtemp()
-        rel_to_gen = os.path.relpath(tmp_dir, TRACK_GEN_PATH)
-        output_location = "/" + rel_to_gen  # e.g. "/../../tmp/tmpXXXXXX"
-
-        # `os.chdir` is process-global. Two concurrent track-generate
-        # calls would race on CWD; an unrelated handler running in the
-        # same process between chdir-in and chdir-out would also see
-        # the wrong CWD. Serialize with a dedicated lock and restore
-        # CWD in finally so an exception inside `create_track()`
-        # doesn't leave the whole backend stuck in TRACK_GEN_PATH.
-        with _gen_lock:
-            orig_dir = os.getcwd()
-            os.chdir(TRACK_GEN_PATH)
-            try:
-                gen = TrackGenerator(
-                    n_points=params.n_points, n_regions=params.n_regions,
-                    min_bound=10., max_bound=float(params.max_bound),
-                    mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
-                    create_output_file=True, output_location=output_location,
-                    sim_type=SimType.FSDS
-                )
-                gen.create_track()
-            finally:
-                os.chdir(orig_dir)
-
-        gen_file = os.path.join(tmp_dir, "random_track.csv")
+        tmp_dir, gen_file = _run_random_generator(params)
 
         if os.path.exists(gen_file):
             os.makedirs(TRACKS_DIR, exist_ok=True)
