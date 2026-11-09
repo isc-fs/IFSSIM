@@ -472,7 +472,7 @@ private:
 	// Brake channel = regen: 0-1 input maps to 0-MaxRegenTorque at the
 	// motor, then Tick caps by MaxRegenPower/ω_motor. See ApplyRegenBrake.
 	float MaxRegenTorque = 230.f;  // Nm at motor
-	float MaxRegenPower = 6000.f;  // Watts — hardware cell-current limit
+	float MaxRegenPower = 11000.f; // Watts — pack charge limit (95s6p VTC6, 5 A/cell)
 	float GearRatio = 2.909f;      // motor → rear axle
 	float WheelRadius = 0.2f;      // m
 	float DrivetrainEfficiency = 0.92f;  // gearbox + chain, from settings
