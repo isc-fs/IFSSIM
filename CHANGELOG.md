@@ -14,6 +14,13 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **`/lidar_points/viz` is off by default** (`LIDAR_VIZ_DECIMATION=0` in
+  docker-compose.yml, was 4). The quarter-density LiDAR copy for browser
+  visualisers was 18 % of a recorded bag, and with it on, recording made
+  SLAM pause past the pipeline watchdog's 0.6 s budget (829 ms measured on
+  stress_brake_hairpin_75m; 200 ms with it off), so recorded runs got
+  stopped. The sim's pipeline view doesn't use it. For Lichtblick's LiDAR
+  panels: `LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack`.
 - **Autonomous runs drive again after a watchdog stop.** When the pipeline's
   watchdog (or anything else through `/force_ebs`) braked the car, the bridge
   latched EBS and dropped every control command until `/signal/ebs_reset`,

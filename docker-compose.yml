@@ -42,13 +42,16 @@ services:
       #
       # Opt-in subsampled LiDAR cloud for browser-based visualisers
       # (Foxglove web, Lichtblick web). 0 (default) disables the
-      # /lidar/Lidar1/viz topic entirely — production runs unaffected.
-      # Set to >=2 to publish every Nth point on /viz alongside the
-      # full /lidar/Lidar1 cloud. Foxglove tab CPU on a 1.5 MB/scan
-      # stream sits around 35 %; LIDAR_VIZ_DECIMATION=4 drops it to
-      # ~10 % at 1/4 spatial density, plenty for "is the autonomy
-      # seeing what I think it's seeing" debugging.
-      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-4}
+      # /lidar_points/viz topic entirely. Set to >=2 to publish every Nth
+      # point on /lidar_points/viz alongside the full /lidar_points cloud.
+      # Foxglove tab CPU on a 1.5 MB/scan stream sits around 35 %;
+      # LIDAR_VIZ_DECIMATION=4 drops it to ~10 % at 1/4 spatial density.
+      # Off by default since the sim draws the pipeline's view itself:
+      # it was 18 % of a recorded bag, and with it on, recording made
+      # SLAM stall past the watchdog's 0.6 s (measured 829 ms; 200 ms
+      # with it off). For Lichtblick's LiDAR panels:
+      #   LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack
+      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-0}
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
       # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
       # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single
