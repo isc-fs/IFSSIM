@@ -778,7 +778,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 		}
 		Body += FString::Printf(TEXT("   cones down %d   off course %d"), R.ConesDown, R.OffCourse);
 		if (R.bScored && R.bFinished) Body += TEXT("\n") + ScoreText(R);
-		if (R.bBag) Body += TEXT("\nBag recorded (the bags folder of the team's code).");
+		if (R.bBag) Body += TEXT("\nBag recorded: it shows on the Bags page once it is copied out (a few minutes).");
 
 		List->AddSlot().AutoHeight().Padding(0, 0, 0, 10)
 		[
@@ -1249,7 +1249,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 										"(Results); otherwise the pipeline stopped it itself, its safety watchdog or a failure: "
 										"its own log says why (docker compose logs dv_pipeline_stack)."))
 									: R.bScored ? ScoreText(R) : FString(TEXT("Asking Mission Control for the score..."));
-								if (R.bBag) S += TEXT("\nBag recorded (the bags folder of the team's code).");
+								if (R.bBag) S += TEXT("\nBag recorded: it shows on the Bags page once it is copied out (a few minutes).");
 								return FText::FromString(S);
 							})
 							.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)

@@ -1059,6 +1059,45 @@ def pipeline_start():
         "message": outcome.message,
     }
 
+def _pull_bag_in_background(name: str) -> None:
+    """#498 auto-pull of a stopped bag onto the host (`./bags/<name>`),
+    off `_state_lock` (pipeline_stop starts it in a thread). Best-effort:
+    a failure leaves the bag safe in the volume, for `tools/pull-bag.sh`.
+    The result lands in `_active_recording` only while it still describes
+    this bag (a new START may have replaced it meanwhile)."""
+    global _active_recording
+    try:
+        pull = _bag.auto_pull_and_clean(name)
+    except Exception as ex:  # noqa: BLE001 — never kill the thread silently
+        pull = {"ok": False, "error": f"auto-pull raised: {ex}"}
+    update: dict = {"state": "stopped"}
+    if pull.get("ok"):
+        update["host_path"] = pull["host_path"]
+        # Car-liftable derivative (LiDAR+IMU only), if produced.
+        cp = pull.get("car_parity_path")
+        if cp:
+            update["car_parity_path"] = cp
+            log_event("record_bag", f"car-parity bag → {cp}")
+        elif pull.get("car_parity_error"):
+            log_event("record_bag", f"car-parity derive skipped: {pull['car_parity_error']}")
+        if pull.get("error"):
+            # Bag is on the host, but the volume-side rm failed: a warning,
+            # not a failed recording.
+            log_event("record_bag", f"auto-pulled {name} → {pull['host_path']} (warning: {pull['error']})")
+        else:
+            log_event("record_bag", f"auto-pulled {name} → {pull['host_path']}")
+    else:
+        update["pull_error"] = pull.get("error", "unknown auto-pull failure")
+        log_event(
+            "record_bag",
+            f"auto-pull failed for {name}: {update['pull_error']} — bag is still in "
+            "/bags volume, retrieve with `tools/pull-bag.sh`",
+        )
+    with _state_lock:
+        if _active_recording and _active_recording.get("name") == name:
+            _active_recording.update(update)
+
+
 @app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
     """Tear down: cancel RuntimeControl, then SetMission(mission_id=0)."""
@@ -1155,51 +1194,22 @@ def pipeline_stop():
                 if _bag.is_auto_pull_enabled() and (
                     stop_resp.get("ok") or recovered
                 ):
-                    pull = _bag.auto_pull_and_clean(name)
-                    if pull.get("ok"):
-                        bag_info["host_path"] = pull["host_path"]
-                        _active_recording["host_path"] = pull["host_path"]
-                        # Car-liftable derivative (LiDAR+IMU only), if produced.
-                        cp = pull.get("car_parity_path")
-                        if cp:
-                            bag_info["car_parity_path"] = cp
-                            _active_recording["car_parity_path"] = cp
-                            log_event("record_bag", f"car-parity bag → {cp}")
-                        elif pull.get("car_parity_error"):
-                            log_event(
-                                "record_bag",
-                                f"car-parity derive skipped: "
-                                f"{pull['car_parity_error']}")
-                        if pull.get("error"):
-                            # Cleanup partial-failure path: bag is on host,
-                            # but the volume-side rm failed. Surface as a
-                            # warning, don't taint the bag_info["state"].
-                            log_event(
-                                "record_bag",
-                                f"auto-pulled {name} → {pull['host_path']} "
-                                f"(warning: {pull['error']})",
-                            )
-                        else:
-                            log_event(
-                                "record_bag",
-                                f"auto-pulled {name} → {pull['host_path']}",
-                            )
-                    else:
-                        # Pull failed: bag stays in volume. Log it so
-                        # the user knows to retrieve manually.
-                        bag_info["pull_error"] = pull.get(
-                            "error", "unknown auto-pull failure",
-                        )
-                        log_event(
-                            "record_bag",
-                            f"auto-pull failed for {name}: "
-                            f"{bag_info['pull_error']} — "
-                            "bag is still in /bags volume, "
-                            "retrieve with `tools/pull-bag.sh`",
-                        )
+                    # The pull (a GB-sized copy over the host bind mount,
+                    # plus the car-parity convert) takes minutes. Run it
+                    # off `_state_lock`: under it, /api/event/state and
+                    # every other endpoint stalled until it finished
+                    # (measured: ~3 min for a 60 s autocross lap).
+                    # bag_state reads "saving" until then.
+                    _active_recording["state"] = "saving"
+                    bag_info["state"] = "saving"
             # Keep the dict around with its terminal state so the
             # next /api/event/state response can still surface the
             # final bag path — cleared by the next event_start.
+    if bag_info is not None and bag_info.get("state") == "saving":
+        threading.Thread(
+            target=_pull_bag_in_background, args=(bag_info["name"],),
+            name=f"bag-pull-{bag_info['name']}", daemon=True,
+        ).start()
     log_event("pipeline", "Pipeline stopped (autonomy torn down)")
     response = {"ok": True, "pipeline": "stopped", "via": "ros_action"}
     if bag_info is not None:

@@ -33,6 +33,17 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **A recorded bag is saved in the background.** After a run with Record a
+  bag, Mission Control copied the bag out of the pipeline's container while
+  holding its state lock, so every other request (the run's state, the next
+  START) waited until it was done: about 3 minutes for a 60 s autocross lap
+  (a 1.1 GB bag and its 0.8 GB car-parity copy). The copy now runs in its own
+  thread; `bag_state` reads `saving` until it's done. The archive is also
+  extracted as it streams, into a hidden `.<bag>.partial` folder renamed when
+  complete: on Windows each byte crosses the slow `./bags` bind mount once
+  (it was written there as a tar, read back and written again), an interrupted copy no longer leaves a multi-GB
+  `bag_pull_*.tar` behind, and the sim's Bags page never lists a half-copied
+  bag.
 - **Clearer Track editor settings.** The random track's fields are named by
   what they do to the loop, measured over many seeds: SIZE (M) (was max
   size; the loop fills the square, so it sets the lap length, about 2.8 m
