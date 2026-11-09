@@ -49,7 +49,8 @@ services:
       # Off by default since the sim draws the pipeline's view itself:
       # it was 18 % of a recorded bag, and with it on, recording made
       # SLAM stall past the watchdog's 0.6 s (measured 829 ms; 200 ms
-      # with it off). For Lichtblick's LiDAR panels:
+      # with it off). The lichtblick/ layouts show the full /lidar_points;
+      # to bring the light copy back for a slow browser:
       #   LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack
       - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-0}
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
