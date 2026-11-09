@@ -1,8 +1,10 @@
 #include "UI/SFSDSMenu.h"
 
 #include "UI/SFSDSTrackMap.h"
+#include "UI/SFSDSLogsPage.h"
 #include "UI/FSDSGraphics.h"
 #include "UI/FSDSHud.h"
+#include "UI/FSDSPipelineView.h"
 #include "UI/FSDSStackStarter.h"
 #include "UI/FSDSMissionControlClient.h"
 #include "Dom/JsonObject.h"
@@ -91,6 +93,10 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	Client = InArgs._Client;
 	EditorState = InArgs._EditorState;
 	if (InArgs._StartInEditor) Page = EPage::Editor;
+	if (InArgs._StartInBags) Page = EPage::Bags;
+	OnReplay = InArgs._OnReplay;
+	BagsNote = InArgs._BagsNote;
+	bBagsNoteError = InArgs._BagsNoteError;
 
 	// Start from the last run's choices, or the first track.
 	if (Last.IsSet())
@@ -319,6 +325,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavLogs", "Logs"), EPage::Logs) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavBags", "Bags"), EPage::Bags) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
 						+ SVerticalBox::Slot().AutoHeight()
@@ -360,6 +368,19 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					]
 					+ SWidgetSwitcher::Slot() [ BuildResultsPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildSettingsPage() ]
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SFSDSLogsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Logs; })
+					]
+					+ SWidgetSwitcher::Slot()
+					[
+						SAssignNew(BagsPage, SFSDSBagsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Bags; })
+						.OnReplay(OnReplay)
+						.Note(BagsNote)
+						.NoteError(bBagsNoteError)
+					]
 				]
 			]
 		];
@@ -1288,6 +1309,34 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 											}, 10.f);
 										})
 								]
+							]
+							// What the pipeline sees, drawn over the track (FFSDSPipelineView).
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+							[
+								MakeChoice(TAttribute<FText>::CreateLambda([]()
+									{
+										return FFSDSPipelineView::Get().IsShown()
+											? LOCTEXT("PipeViewHide", "Pipeline view: on (click to hide)")
+											: LOCTEXT("PipeViewShow", "Pipeline view: off (click to show)");
+									}),
+									[]() { return FFSDSPipelineView::Get().IsShown(); },
+									[]() { FFSDSPipelineView::Get().SetShown(!FFSDSPipelineView::Get().IsShown()); })
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+							[
+								SNew(STextBlock)
+								.Text_Lambda([]()
+								{
+									if (!FFSDSPipelineView::Get().IsShown()) return FText::GetEmpty();
+									return FFSDSPipelineView::Get().IsReceiving()
+										? LOCTEXT("PipeViewLegend", "Over the track: magenta crosses are this scan's detected cones, white "
+											"rings the SLAM map, the pink arrow where SLAM puts the car, green the planned path, "
+											"blue and yellow the cone chains it follows. The map sliding off the real cones is SLAM drift.")
+										: LOCTEXT("PipeViewNone", "Nothing from the pipeline yet: its viz_relay sends the view once "
+											"the stack runs (Settings, Rebuild pipeline, if the stack predates it).");
+								})
+								.Visibility_Lambda([]() { return FFSDSPipelineView::Get().IsShown() ? EVisibility::Visible : EVisibility::Collapsed; })
+								.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
 							[

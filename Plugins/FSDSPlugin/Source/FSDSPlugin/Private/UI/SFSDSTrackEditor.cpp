@@ -371,19 +371,22 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 				[
-					EditorUi::Num<float>(LOCTEXT("Spacing", "SPACING (M)"), [SpecRef]() { return SpecRef->SpacingStraight; },
+					EditorUi::Num<float>(LOCTEXT("Spacing", "CONE GAP (M)"), [SpecRef]() { return SpecRef->SpacingStraight; },
 						[this, SpecRef](float V) { SpecRef->SpacingStraight = V; SpecChanged(); }, 1.f, 10.f, 0.5f)
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
-				[
-					EditorUi::Num<float>(LOCTEXT("CornerMin", "CORNER MIN"), [SpecRef]() { return SpecRef->SpacingCornerMin; },
-						[this, SpecRef](float V) { SpecRef->SpacingCornerMin = V; SpecChanged(); }, 0.5f, 5.f, 0.1f)
 				]
 				+ SHorizontalBox::Slot().AutoWidth()
 				[
-					EditorUi::Num<int32>(LOCTEXT("Seed", "SEED"), [SpecRef]() { return SpecRef->Seed; },
-						[this, SpecRef](int32 V) { SpecRef->Seed = FMath::Max(0, V); SpecChanged(); }, 0, 9999, 1, 60.f)
+					EditorUi::Num<float>(LOCTEXT("CornerMin", "IN CORNERS (M)"), [SpecRef]() { return SpecRef->SpacingCornerMin; },
+						[this, SpecRef](float V) { SpecRef->SpacingCornerMin = V; SpecChanged(); }, 0.5f, 5.f, 0.1f)
 				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("TrackHint", "Width: between the blue and yellow lines (FS minimum 3 m). Cone gap: between "
+					"cones on a straight. In corners: the closest they get, in the tightest corner; the gap shrinks "
+					"with the bend down to it."))
+				.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Muted).AutoWrapText(true)
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
 			[
@@ -439,8 +442,14 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRight()
 				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 				[
 					SNew(STextBlock)
-					.Text(LOCTEXT("SectionsHint", "One stretch, by point number: narrower, sparser, missing, wrong-coloured or misplaced cones."))
+					.Text(LOCTEXT("SectionsHint", "One stretch, by point number: narrower, sparser, missing, wrong-coloured or misplaced cones. "
+						"Seed: which cones a section drops or moves; another seed, another pattern."))
 					.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Muted).AutoWrapText(true)
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0).VAlign(VAlign_Bottom)
+				[
+					EditorUi::Num<int32>(LOCTEXT("Seed", "SEED"), [SpecRef]() { return SpecRef->Seed; },
+						[this, SpecRef](int32 V) { SpecRef->Seed = FMath::Max(0, V); SpecChanged(); }, 0, 9999, 1, 60.f)
 				]
 				+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0).VAlign(VAlign_Center)
 				[
@@ -548,20 +557,24 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRandom()
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			SNew(SHorizontalBox)
+			// The generator's max_bound, n_points and n_regions, named by what
+			// they do to the loop (measured over many seeds): the loop spans
+			// nearly the whole square, so its side sets the length; more
+			// points make it twistier; regions barely matter above ~30.
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 			[
-				EditorUi::Num<int32>(LOCTEXT("GenPoints", "POINTS"), [this]() { return GenPoints; },
+				EditorUi::Num<int32>(LOCTEXT("GenMax", "SIZE (M)"), [this]() { return GenMaxBound; },
+					[this](int32 V) { GenMaxBound = V; }, 90, 300, 5, 76.f)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				EditorUi::Num<int32>(LOCTEXT("GenPoints", "BENDS"), [this]() { return GenPoints; },
 					[this](int32 V) { GenPoints = V; }, 10, 200, 1, 64.f)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
 			[
-				EditorUi::Num<int32>(LOCTEXT("GenRegions", "REGIONS"), [this]() { return GenRegions; },
-					[this](int32 V) { GenRegions = V; }, 5, 100, 1, 64.f)
-			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
-			[
-				EditorUi::Num<int32>(LOCTEXT("GenMax", "MAX SIZE (M)"), [this]() { return GenMaxBound; },
-					[this](int32 V) { GenMaxBound = V; }, 50, 300, 5, 76.f)
+				EditorUi::Num<int32>(LOCTEXT("GenRegions", "COMPLEXITY"), [this]() { return GenRegions; },
+					[this](int32 V) { GenRegions = V; }, 5, 100, 1, 72.f)
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Bottom)
 			[
@@ -577,8 +590,9 @@ TSharedRef<SWidget> SFSDSTrackEditor::BuildRandom()
 		[
 			SNew(STextBlock)
 			.Text(LOCTEXT("RandomHint", "A random closed loop, put on the canvas as a new drawing: move its points, "
-				"then save it like any track. Points: what the layout grows from. Regions: fewer is simpler, "
-				"more is twistier. Max size: the area it fits in."))
+				"then save it like any track. Size: the square the loop fills, so it sets the lap length "
+				"(about 2.8 m of lap per metre: 140 gives ~390 m; FS allows 200-500 m). Bends: more makes it "
+				"twistier (20 gives ~10 bends, 200 ~19). Complexity: below ~30 the loop gets simpler and a bit shorter."))
 			.Font(EditorUi::EdFont(9)).ColorAndOpacity(EditorUi::Muted).AutoWrapText(true)
 		];
 }
