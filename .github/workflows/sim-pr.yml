@@ -128,10 +128,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          lfs: true
+          # LFS after checkout (next step): the runner's repo is a partial clone
+          # (blob:none), and checkout's own LFS fetch scans the ref before its
+          # pointer files are downloaded, so it fails on any new LFS file.
+          lfs: false
           submodules: true
           # Keep Intermediate/ and Saved/ from the last job: incremental build and cook.
           clean: false
+
+      - name: Fetch LFS files
+        run: git lfs pull
 
       - name: Mark the pipeline commit as pending
         if: inputs.pipeline_sha
