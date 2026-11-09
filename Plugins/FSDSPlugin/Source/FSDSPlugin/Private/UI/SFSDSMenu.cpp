@@ -618,7 +618,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 			[
 				SNew(SHorizontalBox)
 				.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
-				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 18, 0)
+				+ SHorizontalBox::Slot().FillWidth(1.6f).Padding(0, 0, 18, 0)
 				[
 					SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
