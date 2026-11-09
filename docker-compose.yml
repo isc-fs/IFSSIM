@@ -6,9 +6,40 @@ name: ifssim
 
 services:
 
+  # Docker Desktop's VM flushes written data in small, frequent steps
+  # instead of its Linux defaults (hold up to 30 s or ~10 % of RAM, then
+  # write it all out). Recording a bag writes ~16 MB/s; with the defaults
+  # that came out as a 250-290 MB burst every ~15 s, and during a burst the
+  # whole stack could freeze 0.5-1.7 s (no /imu, no /slam/pose), long enough
+  # for the pipeline watchdog (0.6 s) to stop the run: 2 of 3 recorded laps.
+  # With these settings, 0 of 3 (the 4th lap stalled on a nearly full SSD,
+  # a different cause). vm.* settings belong to the kernel, not the
+  # container: this only touches Docker Desktop's VM (WSL2 or LinuxKit
+  # kernel) and does nothing on a Linux host, where it would change the
+  # machine's own settings. They last until Docker restarts; every
+  # `compose up` applies them again.
+  docker_vm_tuning:
+    image: alpine:3.20
+    privileged: true
+    restart: "no"
+    network_mode: none
+    command:
+      - sh
+      - -c
+      - |
+        case "$$(uname -r)" in
+          *microsoft*|*WSL*|*linuxkit*)
+            sysctl -w vm.dirty_background_bytes=33554432 vm.dirty_expire_centisecs=200 vm.dirty_writeback_centisecs=100 ;;
+          *)
+            echo "not Docker Desktop's VM: leaving the host's settings alone" ;;
+        esac
+
   # ROS2 bridge + full driverless pipeline in one container
   # Connects to UE5/IFSSIM running natively on the host
   dv_pipeline_stack:
+    depends_on:
+      docker_vm_tuning:
+        condition: service_completed_successfully
     build:
       context: .
       dockerfile: docker/dv_pipeline_stack/Dockerfile
