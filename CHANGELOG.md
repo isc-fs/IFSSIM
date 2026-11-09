@@ -21,6 +21,15 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Telemetry in the in-sim Mission Control panel.** A Telemetry tab with the
+  car's live state read straight from the sim: speed, motor rpm, pedals,
+  steering, who is driving, position and heading, and the motor's regen (torque
+  and power absorbed, torque available, and whether the power or the torque cap
+  binds). The web UI's regen gauges have always read 0: the sim never sent them.
+- **Tracks in the in-sim Mission Control panel.** A Tracks tab with the web UI's
+  track manager: the list with cone counts, the selected track's preview, Load,
+  Delete (confirmed with a second click; not for built-in tracks), and Generate a
+  random track with the web UI's fields and defaults.
 - **Scoring in the in-sim Mission Control panel.** A Scoring tab with the web
   UI's view: score, elapsed, penalties, corrected time, the reference time
   (T_best) and the lap times. Both UIs now show no score until a reference
