@@ -33,6 +33,10 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **The HUD shows the car's speed during a bag replay.** The replayed car
+  moves with its physics off, so its speed read 0 km/h. The HUD now shows
+  the recorded car's speed, measured from how far it moves over half a
+  second, with "replay" beside it.
 - **`/lidar_points/viz` is off by default** (`LIDAR_VIZ_DECIMATION=0` in
   docker-compose.yml, was 4). The quarter-density LiDAR copy for browser
   visualisers was 18 % of a recorded bag, and with it on, recording made
