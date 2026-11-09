@@ -64,7 +64,7 @@ public:
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
 
 private:
-	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3 };
+	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3, Logs = 4 };
 
 	TSharedRef<SWidget> BuildMain();
 	TSharedRef<SWidget> BuildRunBox();

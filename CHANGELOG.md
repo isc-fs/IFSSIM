@@ -33,6 +33,13 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **Logs in the menu.** A Logs page shows what the stack prints, the
+  pipeline's nodes or Mission Control's backend (the last 1500 lines of
+  `docker compose logs`), newest at the bottom, with a filter, Problems only
+  (errors, warnings, tracebacks, EBS), Live (every 3 s while the page is up)
+  and Save to a file (Documents\IFSSIM\Logs). The text can be selected and
+  copied. No terminal needed to see why the pipeline stopped.
+
 - **The pipeline view: what the pipeline sees, drawn over the track.** During
   an autonomous run the sim draws, on the real track, this scan's detected
   cones (magenta), the SLAM cone map (white rings), where SLAM puts the car

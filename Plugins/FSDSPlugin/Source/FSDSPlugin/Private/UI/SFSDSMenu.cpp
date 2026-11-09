@@ -1,6 +1,7 @@
 #include "UI/SFSDSMenu.h"
 
 #include "UI/SFSDSTrackMap.h"
+#include "UI/SFSDSLogsPage.h"
 #include "UI/FSDSGraphics.h"
 #include "UI/FSDSHud.h"
 #include "UI/FSDSPipelineView.h"
@@ -320,6 +321,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavLogs", "Logs"), EPage::Logs) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
 						+ SVerticalBox::Slot().AutoHeight()
@@ -361,6 +363,11 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					]
 					+ SWidgetSwitcher::Slot() [ BuildResultsPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildSettingsPage() ]
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SFSDSLogsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Logs; })
+					]
 				]
 			]
 		];
