@@ -39,16 +39,28 @@ struct FFSDSWorldBuilding
 	FString Material;   // concrete | glass
 	double XMin = 0, XMax = 0, YMin = 0, YMax = 0;
 	double TopZ = 0;    // roof height, world frame
+	double YawDeg = 0;  // the box turned about its centre, counter-clockwise from +x
+	bool bHasBase = false;
+	double BaseZ = 0;   // with bHasBase: a raised deck (a footbridge) from BaseZ to TopZ
+	bool bGarages = false;   // pit-garage fronts on the face towards the track
 };
 
-/** A roofed grandstand along x. Seating rises from (FrontY, FrontZ) to
- *  (BackY, BackZ); the roof slopes from (RoofFrontY, RoofFrontZ) to
+/** A grandstand along x. Seating rises from (FrontY, FrontZ) to (BackY,
+ *  BackZ); a roof, if it has one, slopes from (RoofFrontY, RoofFrontZ) to
  *  (RoofBackY, RoofBackZ). The sign of the y values says which side it is on. */
 struct FFSDSWorldGrandstand
 {
 	double XMin = 0, XMax = 0;
 	double FrontY = 0, BackY = 0, FrontZ = 0, BackZ = 0;
+	bool bHasRoof = false;
 	double RoofFrontY = 0, RoofBackY = 0, RoofFrontZ = 0, RoofBackZ = 0;
+};
+
+/** A tree measured from the LiDAR: trunk at (X, Y), H tall, crown radius R. */
+struct FFSDSWorldTree
+{
+	double X = 0, Y = 0, H = 0, R = 0;
+	FString Kind;   // a name from FSDSWorld::TreeKinds
 };
 
 /** One placed prop from /Game/Worlds/Meshes (docs/world_assets.md). */
@@ -81,6 +93,7 @@ struct FSDSPLUGIN_API FFSDSWorld
 	TArray<FFSDSWorldBuilding> Buildings;
 	TArray<FFSDSWorldGrandstand> Grandstands;
 	TArray<FFSDSWorldProp> Props;
+	TArray<FFSDSWorldTree> Trees;
 
 	/** Ground height (m, world frame) at (x, y): bilinear, clamped at the edges. */
 	double HeightAt(double X, double Y) const;
@@ -98,6 +111,10 @@ namespace FSDSWorld
 	/** Props a world may place by name; the rest are placed by the structures
 	 *  they belong to (seats on grandstands, posts on fences...). */
 	inline constexpr const TCHAR* PropMeshes[] = { TEXT("StartGantry"), TEXT("MarshalPost"), TEXT("SignBoard") };
+
+	/** Tree kinds; each is a pair of meshes, Tree<Kind>A and Tree<Kind>B. */
+	inline constexpr const TCHAR* TreeKinds[] = { TEXT("pine"), TEXT("broadleaf") };
+	constexpr int32 MaxTrees = 20000;
 
 	/** A world name is letters, digits and underscores (it becomes a path). */
 	FSDSPLUGIN_API bool IsValidName(const FString& Name);

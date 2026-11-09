@@ -28,7 +28,8 @@ PROJECT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 GEN_DIR = os.path.join(PROJECT, "Saved", "AssetGen")
 FBX_DIR = os.path.join(GEN_DIR, "fbx")
 MATERIALS = json.load(open(os.path.join(HERE, "..", "materials.json")))
-SLOTS = set(MATERIALS["materials"]) | set(MATERIALS["flat"]) | {"ChainLink"}
+FOLIAGE = set(MATERIALS["foliage"])          # leaf cards: their own 0..1 UVs
+SLOTS = set(MATERIALS["materials"]) | set(MATERIALS["flat"]) | FOLIAGE | {"ChainLink"}
 
 
 # --- mesh building ----------------------------------------------------------------
@@ -40,6 +41,10 @@ class Part:
         self.name = name
         self.bm = bmesh.new()
         self.slots = []
+        self.uv = self.bm.loops.layers.uv.new("UVMap")
+        # Leaf cards shade as if the crown were one soft volume: each card
+        # remembers the centre of the clump it belongs to (see soft_normals).
+        self.clump = self.bm.faces.layers.float_vector.new("clump")
 
     def _slot(self, mat):
         if mat not in SLOTS:
@@ -79,6 +84,38 @@ class Part:
         for f in set(self.bm.faces) - before:
             if abs(f.normal.normalized().dot(axis.normalized())) > 0.99:
                 f.smooth = False
+
+    def cone(self, a, b, r0, r1, mat, segments=8):
+        """Tapered round section from a (radius r0) to b (radius r1), open ends."""
+        a, b = Vector(a), Vector(b)
+        axis = b - a
+        rot = Vector((0, 0, 1)).rotation_difference(axis.normalized()).to_matrix().to_4x4()
+        m = Matrix.Translation((a + b) / 2) @ rot
+        before = set(self.bm.faces)
+        bmesh.ops.create_cone(self.bm, cap_ends=False, cap_tris=False, segments=segments,
+                              radius1=r0, radius2=r1, depth=axis.length, matrix=m)
+        self._tag(before, mat, smooth=True)
+
+    def card(self, base, out, up, w, h, mat, clump):
+        """A leaf card: a w x h quad standing on `base`, its face along `out`,
+        leaning towards `up`; UVs 0..1 (the texture's twig at the bottom)."""
+        out, up = Vector(out).normalized(), Vector(up).normalized()
+        side = up.cross(out)
+        if side.length < 1e-4:
+            side = Vector((1, 0, 0))
+        side.normalize()
+        along = out.cross(side).normalized()        # in the card's plane, away from the twig
+        if along.dot(up) < 0:
+            along = -along
+        base = Vector(base)
+        corners = [base - side * w / 2, base + side * w / 2,
+                   base + side * w / 2 + along * h, base - side * w / 2 + along * h]
+        before = set(self.bm.faces)
+        f = self.bm.faces.new([self.bm.verts.new(c) for c in corners])
+        for loop, uv in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+            loop[self.uv].uv = uv
+        f[self.clump] = Vector(clump)
+        self._tag(before, mat, smooth=True)
 
     def beam(self, a, b, w, h, mat, up=(0, 0, 1)):
         """Rectangular section w x h from a to b (a steel tube or timber)."""
@@ -149,15 +186,20 @@ class Part:
             bpy.context.view_layer.objects.active = obj
             bpy.ops.object.modifier_apply(modifier=mod.name)
         metre_uvs(obj)
+        soft_normals(obj)
         return obj
 
 
 def metre_uvs(obj):
-    """Box projection: each face gets the two coordinates across its normal, in metres."""
+    """Box projection: each face gets the two coordinates across its normal, in
+    metres. Leaf cards keep the 0..1 UVs they were made with."""
     bm = bmesh.new()
     bm.from_mesh(obj.data)
-    uv = bm.loops.layers.uv.new("UVMap")
+    uv = bm.loops.layers.uv.active or bm.loops.layers.uv.new("UVMap")
+    keep = {i for i, m in enumerate(obj.data.materials) if m and m.name in FOLIAGE}
     for f in bm.faces:
+        if f.material_index in keep:
+            continue
         n = f.normal
         ax = max(range(3), key=lambda k: abs(n[k]))
         u, v = {0: (1, 2), 1: (0, 2), 2: (0, 1)}[ax]
@@ -168,6 +210,32 @@ def metre_uvs(obj):
             loop[uv].uv = (co[u] * (sign if ax != 2 else 1), co[v])
     bm.to_mesh(obj.data)
     bm.free()
+
+
+def soft_normals(obj):
+    """Leaf cards get normals pointing out of their clump, so a crown lights
+    like a soft round mass and not like a pile of flat cards. Everything else
+    keeps its own normals."""
+    mesh = obj.data
+    attr = mesh.attributes.get("clump")
+    if attr is None:
+        return
+    cards = {i for i, m in enumerate(mesh.materials) if m and m.name in FOLIAGE}
+    if not cards:
+        mesh.attributes.remove(attr)
+        return
+    normals = [Vector(n.vector) for n in mesh.corner_normals]
+    for poly in mesh.polygons:
+        if poly.material_index not in cards:
+            continue
+        c = Vector(attr.data[poly.index].vector)
+        for li in poly.loop_indices:
+            v = mesh.vertices[mesh.loops[li].vertex_index].co
+            n = (v - c)
+            n.z *= 0.6                      # crowns are lit from above: flatten a little
+            normals[li] = (n.normalized() * 0.85 + Vector(poly.normal) * 0.15).normalized()
+    mesh.normals_split_custom_set(normals)
+    mesh.attributes.remove(attr)
 
 
 # --- the props ------------------------------------------------------------------
@@ -358,6 +426,167 @@ def roof_column():
     return p.finish(bevel=0.0)
 
 
+# --- trees ----------------------------------------------------------------------
+#
+# Every tree is modelled 10 m tall with a 4 m crown radius (the plugin's
+# TreeModelHeightM / TreeModelRadiusM) and scaled per instance to the height
+# and crown the LiDAR measured. Origin: the trunk's foot.
+
+TREE_H, TREE_R = 10.0, 4.0
+
+
+def _rng(seed):
+    import random
+    return random.Random(seed)
+
+
+def _shell_point(r, c, radii, inner=0.7):
+    """A point in the outer part of an ellipsoid (centre c, radii), and the
+    outward direction there."""
+    while True:
+        d = Vector((r.gauss(0, 1), r.gauss(0, 1), r.gauss(0, 1)))
+        if d.length > 1e-3:
+            break
+    d.normalize()
+    k = inner + (1 - inner) * r.random() ** 0.5
+    p = Vector(c) + Vector((d.x * radii[0], d.y * radii[1], d.z * radii[2])) * k
+    out = Vector((d.x / radii[0], d.y / radii[1], d.z / radii[2])).normalized()
+    return p, out
+
+
+def _leaves(p, r, clump, radii, n, size, mat):
+    """n cards through the outer half of one clump, facing out, tilted at
+    random: deep enough that the crown reads as a mass, not a shell."""
+    for _ in range(n):
+        base, out = _shell_point(r, clump, radii, inner=0.45)
+        jitter = Vector((r.uniform(-0.6, 0.6), r.uniform(-0.6, 0.6), r.uniform(-0.3, 0.6)))
+        face = (out + jitter).normalized()
+        up = (out * 0.6 + Vector((0, 0, 0.8)) + Vector((r.uniform(-0.5, 0.5), r.uniform(-0.5, 0.5), 0))).normalized()
+        sz = size * r.uniform(0.75, 1.25)
+        # The twig starts a little inside the crown.
+        p.card(base - out * sz * 0.35, face, up, sz, sz, mat, clump)
+
+
+def _limb(p, r, a, b, r0, r1, mat, bends=2, segments=7):
+    """A slightly crooked limb from a to b, as tapered pieces."""
+    a, b = Vector(a), Vector(b)
+    pts = [a]
+    for k in range(1, bends + 1):
+        t = k / (bends + 1)
+        q = a.lerp(b, t)
+        wob = (b - a).length * 0.06
+        pts.append(q + Vector((r.uniform(-wob, wob), r.uniform(-wob, wob), r.uniform(-wob, wob) * 0.5)))
+    pts.append(b)
+    for k in range(len(pts) - 1):
+        t0, t1 = k / (len(pts) - 1), (k + 1) / (len(pts) - 1)
+        p.cone(pts[k], pts[k + 1], r0 + (r1 - r0) * t0, r0 + (r1 - r0) * t1, mat, segments)
+
+
+def broadleaf(variant, seed):
+    """Holm oak / plane: a short trunk forking into a rounded, slightly lumpy
+    crown from about a quarter of the height to the top."""
+    r = _rng(seed)
+    p = Part(f"TreeBroadleaf{variant}")
+    fork = Vector((r.uniform(-0.2, 0.2), r.uniform(-0.2, 0.2), 3.2))
+    _limb(p, r, (0, 0, 0), fork, 0.24, 0.17, "Bark", bends=1, segments=9)
+    # Lobes: the crown as three to five overlapping clumps.
+    lobes = [((0, 0, 6.4), (3.0, 3.0, 2.6))]
+    for k in range(r.randint(3, 5)):
+        a = r.uniform(0, 2 * math.pi) + k * 1.3
+        d = r.uniform(1.4, 2.0)
+        lobes.append(((math.cos(a) * d, math.sin(a) * d, r.uniform(5.2, 7.6)),
+                      (r.uniform(1.6, 2.1), r.uniform(1.6, 2.1), r.uniform(1.4, 1.9))))
+    for c, radii in lobes:
+        _limb(p, r, fork, Vector(c) * Vector((0.75, 0.75, 1.0)) + Vector((0, 0, -0.6)), 0.12, 0.05, "Bark")
+        n = int(110 * (radii[0] * radii[1] * radii[2]) ** (1 / 3) / 2.0)
+        _leaves(p, r, c, radii, n, 1.4, "LeavesBroadleaf")
+    return p.finish()
+
+
+def pine(variant, seed):
+    """Aleppo / stone pine: a tall, leaning bare trunk and a flat umbrella of
+    needle clumps in the top third."""
+    r = _rng(seed)
+    p = Part(f"TreePine{variant}")
+    lean = Vector((r.uniform(-0.7, 0.7), r.uniform(-0.7, 0.7), 0))
+    top = Vector((0, 0, 6.6)) + lean
+    _limb(p, r, (0, 0, 0), top, 0.22, 0.12, "Bark", bends=3, segments=9)
+    clumps = [(top + Vector((0, 0, 1.9)), (1.9, 1.9, 0.9))]
+    for k in range(r.randint(6, 8)):
+        a = k * 2 * math.pi / 7 + r.uniform(-0.3, 0.3)
+        d = r.uniform(2.0, 2.8)
+        c = Vector((math.cos(a) * d, math.sin(a) * d, r.uniform(7.6, 9.0))) + lean * 0.5
+        clumps.append((c, (r.uniform(1.2, 1.6), r.uniform(1.2, 1.6), r.uniform(0.6, 0.85))))
+    for c, radii in clumps:
+        _limb(p, r, top, Vector(c) - Vector((0, 0, 0.5)), 0.09, 0.04, "Bark", bends=1, segments=6)
+        n = int(46 * radii[0] * radii[1] / 1.8)
+        _leaves(p, r, c, radii, n, 1.15, "LeavesPine")
+    return p.finish()
+
+
+def foliage_textures(size=512, seed=7):
+    """Leaf and needle sprigs drawn into colour + opacity maps for the cards:
+    Saved/AssetGen/foliage_<Slot>_color.png and _opacity.png. The colour is
+    near-grey detail (lighter and darker leaves); the material tints it."""
+    import numpy as np
+    r = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:size, 0:size] / size          # v up from the twig at the bottom
+
+    def save(name, rgb, alpha):
+        # Colour bleeds past the edges so mip maps don't fringe dark.
+        fill = rgb[alpha > 0.5].mean(0) if (alpha > 0.5).any() else np.array([0.5, 0.5, 0.5])
+        rgb = np.where(alpha[..., None] > 0.02, rgb, fill)
+        for tag, img in (("color", rgb), ("opacity", np.repeat(alpha[..., None], 3, -1))):
+            im = bpy.data.images.new(f"{name}_{tag}", size, size, alpha=True)
+            # Row 0 is the bottom in both: v = 0 is the twig, as on the cards.
+            px = np.concatenate([img, np.ones((size, size, 1))], -1).astype(np.float32)
+            im.pixels.foreach_set(px.ravel())
+            im.filepath_raw = os.path.join(GEN_DIR, f"foliage_{name}_{tag}.png")
+            im.file_format = "PNG"
+            im.save()
+
+    # Broadleaf: twigs from the bottom centre, small oval leaves along them.
+    rgb = np.zeros((size, size, 3)); alpha = np.zeros((size, size))
+    for _ in range(7):
+        a = r.uniform(-0.65, 0.65)
+        x0, y0 = 0.5, 0.02
+        dx, dy = math.sin(a), math.cos(a)
+        L = r.uniform(0.5, 0.82)
+        for t in np.linspace(0.08, L, 22):
+            px_, py_ = x0 + dx * t, y0 + dy * t
+            for side in (-1, 1):
+                ang = a + side * r.uniform(0.5, 1.1)
+                cx, cy = px_ + math.sin(ang) * 0.035, py_ + math.cos(ang) * 0.035
+                lx, ly = 0.045 * r.uniform(0.8, 1.2), 0.02 * r.uniform(0.8, 1.2)
+                ca, sa = math.cos(-ang), math.sin(-ang)
+                u = (xx - cx) * ca - (yy - cy) * sa
+                v = (xx - cx) * sa + (yy - cy) * ca
+                m = (u / ly) ** 2 + (v / lx) ** 2 < 1.0
+                shade = r.uniform(0.35, 0.75)
+                vein = np.clip(1.0 - 0.25 * np.exp(-(u / 0.003) ** 2), 0, 1)
+                rgb[m] = (shade * vein[m])[:, None] * np.array([1.0, 1.0, 1.0])
+                alpha[m] = 1.0
+    save("LeavesBroadleaf", rgb, alpha)
+
+    # Pine: tufts of long thin needles at the ends of short twigs.
+    rgb = np.zeros((size, size, 3)); alpha = np.zeros((size, size))
+    for _ in range(26):
+        cx, cy = r.uniform(0.15, 0.85), r.uniform(0.25, 0.9)
+        shade = r.uniform(0.4, 0.75)
+        for _ in range(45):
+            a = r.uniform(0, 2 * math.pi)
+            L = r.uniform(0.06, 0.13)
+            ex, ey = cx + math.cos(a) * L, cy + math.sin(a) * L
+            # distance to the segment (cx,cy)-(ex,ey)
+            vx, vy = ex - cx, ey - cy
+            t = np.clip(((xx - cx) * vx + (yy - cy) * vy) / (vx * vx + vy * vy), 0, 1)
+            d = np.hypot(xx - (cx + t * vx), yy - (cy + t * vy))
+            m = d < 0.0028
+            rgb[m] = shade * r.uniform(0.85, 1.15)
+            alpha[m] = 1.0
+    save("LeavesPine", rgb, alpha)
+
+
 # LOD screen sizes: [triangle fraction, screen size] after LOD0.
 PROPS = [
     (seat_block, [[0.35, 0.25], [0.08, 0.08]], None),
@@ -368,6 +597,11 @@ PROPS = [
     (handrail, [[0.4, 0.08]], None),
     (marshal_post, [[0.4, 0.15]], None),
     (roof_column, [], None),
+    # Trees: two of each kind. Leaf cards thin out with distance.
+    (lambda: broadleaf("A", 11), [[0.5, 0.25], [0.2, 0.08]], None),
+    (lambda: broadleaf("B", 23), [[0.5, 0.25], [0.2, 0.08]], None),
+    (lambda: pine("A", 31), [[0.5, 0.25], [0.2, 0.08]], None),
+    (lambda: pine("B", 47), [[0.5, 0.25], [0.2, 0.08]], None),
 ]
 
 
@@ -424,6 +658,7 @@ def main():
         print(f"ASSETGEN {obj.name}: {tris} triangles, slots {[m.name for m in obj.data.materials]}")
     json.dump(manifest, open(os.path.join(FBX_DIR, "manifest.json"), "w"), indent=2)
     chainlink_mask(os.path.join(GEN_DIR, "chainlink_opacity.png"))
+    foliage_textures()
     print("ASSETGEN done")
 
 

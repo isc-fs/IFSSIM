@@ -1,6 +1,6 @@
 # Worlds: real places around a track
 
-A **world** is a real place the sim builds around a track: its terrain, the surfaces and lines painted on it, walls and fences, buildings and grandstands. It comes from survey data, so tests can run where an event is actually held. The first world is `montmelo_straight`, the main straight of the Circuit de Barcelona-Catalunya, where Formula Student Spain runs its acceleration event.
+A **world** is a real place the sim builds around a track: its terrain, the surfaces and lines painted on it, walls and fences, buildings, grandstands and trees. It comes from survey data, so tests can run where an event is actually held. The first world is `montmelo_straight`, the main straight of the Circuit de Barcelona-Catalunya, where Formula Student Spain runs its acceleration event.
 
 Everything is generated from data files at runtime. There is no editor map to open, and a world moves with its track when Mission Control recentres it.
 
@@ -33,7 +33,9 @@ Load `montmelo_straight_acceleration` to drive the acceleration event on the rea
 | Asphalt, concrete, grass surfaces | `FSDSTerrain` (ground) | Draped 3 cm above the terrain, the largest step the matrix allows. |
 | Light painted bands, lines | none | Paint only. |
 | Walls, fence posts | `FSDSProp` | Follow the ground in 2 m steps. The fence mesh has no collision, so the LiDAR sees through it. |
-| Buildings, grandstands | `FSDSProp` | Grandstand: stepped rows, back wall, roof slab. |
+| Buildings, grandstands | `FSDSProp` | Buildings: one box each, turned by `yaw_deg`; plain concrete blocks get a band of windows per 3.5 m storey. A deck (`base_z`) is a slab in the air, for footbridges. Grandstand: stepped rows, back wall, roof slab if it has one. |
+| Trees | none | Instanced: two pine and two broadleaf models, scaled to each tree's height and crown, variant and turn picked from its position. Shadows on, culled past 1.5 km. |
+| Ground beyond the survey | none | A flat skirt from the terrain's edge out to 40 km, so the ground reaches the horizon instead of ending in sky. |
 | Props: seats, rails, roof columns, fence posts, boards, garage fronts, listed props | none | Instanced, with LODs ([world_assets.md](world_assets.md)). |
 
 While a world is built, the level's own flat floor is hidden and its collision turned off: any WorldStatic part at least 90 m across and at most 5 m thick. So is the ring of tyre stacks around it (`spline_tires`), which would otherwise cross the world's track: the car runs on until it brakes, and the world's own barriers bound it. The log line `FSDS World: built ...` names what it hid. Loading a track without a world puts the floor back.
@@ -62,8 +64,9 @@ The world frame is in metres: `+x` along the place's main axis, `+y` to its left
 | `surfaces` | Boxes of `asphalt`, `asphalt_light`, `concrete` or `grass`: `material`, `x_min`, `x_max`, `y_min`, `y_max`. |
 | `lines` | `x0`, `y0`, `x1`, `y1`, `width_m`, `colour` (`white` or `yellow`). |
 | `walls` | `material` (`concrete`), `x0`, `y0`, `x1`, `y1`, `height_m`, `thickness_m`, optional `fence_height_m` (above `height_m`). |
-| `buildings` | `material` (`concrete` or `glass`), a box, and `top_z`: the roof height in the world frame. |
-| `grandstands` | `x_min`, `x_max`; seating rising from (`front_y`, `front_z`) to (`back_y`, `back_z`); roof from (`roof_front_y`, `roof_front_z`) to (`roof_back_y`, `roof_back_z`). |
+| `buildings` | `material` (`concrete` or `glass`), a box, and `top_z`: the roof height in the world frame. Optional: `yaw_deg` (the box turned anticlockwise about its own centre), `base_z` (below `top_z`: the box floats, as a deck or footbridge) and `garages` (`true`: pit-garage fronts on its track-side face; only on unturned buildings). |
+| `grandstands` | `x_min`, `x_max`; seating rising from (`front_y`, `front_z`) to (`back_y`, `back_z`); optional roof from (`roof_front_y`, `roof_front_z`) to (`roof_back_y`, `roof_back_z`), all four or none. |
+| `trees` | Optional: `x`, `y`, `h` (height, 1 to 60 m), `r` (crown radius, 0.3 to 20 m), `kind` (`pine` or `broadleaf`). At most 20,000. |
 | `props` | `mesh` (`StartGantry`, `MarshalPost` or `SignBoard`), `x`, `y`, optional `yaw_deg` (anticlockwise from +x). Placed on the ground; see [world_assets.md](world_assets.md). |
 
 Coordinates are within ±2000 m, and unknown keys are errors. `tools/worldgen/world.py` and `FSDSWorld::Parse` apply the same rules; `tools/validate_tracks.py` checks every world a sidecar names, in CI.
@@ -72,7 +75,7 @@ Coordinates are within ±2000 m, and unknown keys are errors. `tools/worldgen/wo
 
 | Source | Licence | Used for |
 |---|---|---|
-| ICGC Territorial LiDAR v3r1 (2021-2023), tiles 438601 and 438602 | CC BY 4.0 | Terrain (ground classes 2 and 8, 1 m grid), roof and wall heights, painted lines (intensity) |
+| ICGC Territorial LiDAR v3r1 (2021-2023), tiles 438601 and 438602 | CC BY 4.0 | Terrain (ground classes 2 and 8, 1 m grid), roof and wall heights, painted lines (intensity), the other buildings, open grandstands and trees (classes 6 and 3 to 5) |
 | OpenStreetMap | ODbL 1.0 | Straight axis, start line, extents of the pit lane, pit building and main grandstand |
 
 Measured along the straight (EPSG:25831, 1049 m, bearing 212.7°):
@@ -82,6 +85,14 @@ Measured along the straight (EPSG:25831, 1049 m, bearing 212.7°):
 - The track is about 20 m of asphalt, with about 2% cross-fall towards the pits.
 - Pit wall at y = −11.2 m (1.1 m high, fence to 2.1 m). Barrier on the grandstand side at y = +10.5 m (1.0 m, fence to 1.8 m).
 - The pit building roof is at 8.25 m. The main grandstand roof edge is at 28.5 m, falling to 25.6 m at the back.
+
+Everything else around the straight comes from the LiDAR classes (`tools/worldgen/lidar_features.py`, numpy only):
+
+- **Buildings** (class 6, more than 2 m above the ground): the points are rasterised on a 1 m grid and split into connected blobs. A blob that fills at least 60% of its smallest turned rectangle becomes that box; any other is covered by boxes of at least 15 cells, none thinner than 2 m. The roof is the 90th percentile of the heights under each box. A box at most 6 m wide, at least 4 m above the ground and with ground seen under more than half of it is a deck: a 1.2 m slab, so footbridges don't turn into walls.
+- **Open grandstands** (no roof) along the far side of the straight: runs of class-6 points along x at least 40 m long; the seating's front and back edge are the 2nd and 98th percentile of |y|, its rise a line fitted to the median height per metre of depth. There are four, from x = 276 m to 707 m.
+- **Trees** (classes 3 to 5): one per peak of the canopy height, a peak being the highest point within 2 to 4 m depending on the tree's height. The crown radius is the median reach, over eight directions, until the canopy falls below half the height, capped at half the height plus 1.5 m so a hedge doesn't become one huge flat tree. A tall, narrow crown with its base high on the trunk is a pine; the rest are broadleaf.
+
+The pit building, the main grandstand and the open grandstands are modelled; LiDAR buildings and trees inside them are dropped. The current build has 44 buildings (7 of them decks), 5 grandstands and 775 trees.
 
 The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate. Signage is generic on purpose: no circuit or sponsor logos. The start gantry and the two marshal posts are generic models at assumed positions, not surveyed.
 

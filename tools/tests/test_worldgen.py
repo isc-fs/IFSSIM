@@ -30,12 +30,20 @@ MINI = {
     "buildings": [{"material": "concrete", "x_min": -1, "x_max": 1, "y_min": -1, "y_max": 0, "top_z": 5}],
     "grandstands": [{"x_min": -1, "x_max": 1, "front_y": 2, "back_y": 6, "front_z": 1, "back_z": 4,
                      "roof_front_y": 2, "roof_back_y": 7, "roof_front_z": 9, "roof_back_z": 8}],
+    "trees": [{"x": 0, "y": 5, "h": 8, "r": 3, "kind": "pine"}],
 }
 
 
 class FormatTest(unittest.TestCase):
     def test_minimal_world_is_valid(self):
         W.validate(copy.deepcopy(MINI))
+
+    def test_optional_parts(self):
+        w = copy.deepcopy(MINI)
+        for k in W.ROOF_KEYS:
+            w["grandstands"][0].pop(k)            # an open stand
+        w["buildings"][0].update(yaw_deg=30, base_z=3, garages=True)
+        W.validate(w)
 
     def test_rejections(self):
         def bad(mutate):
@@ -57,6 +65,12 @@ class FormatTest(unittest.TestCase):
             ("coordinate in cm", bad(lambda w: w["buildings"][0].update(x_max=5000)), "outside"),
             ("seating falls", bad(lambda w: w["grandstands"][0].update(back_z=0.5)), "rise"),
             ("boolean number", bad(lambda w: w["walls"][0].update(height_m=True)), "number"),
+            ("tree kind", bad(lambda w: w["trees"][0].update(kind="palm")), "kind"),
+            ("tree too tall", bad(lambda w: w["trees"][0].update(h=120)), "trees[0].h"),
+            ("tree key", bad(lambda w: w["trees"][0].update(z=1)), "unknown key"),
+            ("half a roof", bad(lambda w: w["grandstands"][0].pop("roof_back_z")), "roof"),
+            ("deck above roof", bad(lambda w: w["buildings"][0].update(base_z=6)), "base_z"),
+            ("garages flag", bad(lambda w: w["buildings"][0].update(garages=1)), "garages"),
         ]
         for what, w, expected in cases:
             with self.subTest(what):

@@ -121,12 +121,13 @@
       "set": "Grass004",
       "tile_m": 2.5,
       "tint": [
-        0.9,
-        0.85,
-        0.7
+        0.66,
+        0.66,
+        0.42
       ],
-      "recolor": 0.0,
-      "variation": 0.35
+      "recolor": 0.3,
+      "variation": 0.35,
+      "roughness": 1.5
     },
     "Gravel": {
       "set": "Ground108",
@@ -237,6 +238,17 @@
       ],
       "recolor": 1.0,
       "variation": 0.0
+    },
+    "Bark": {
+      "set": "Ground108",
+      "tile_m": 1.0,
+      "tint": [
+        0.2,
+        0.16,
+        0.13
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
     }
   },
   "flat": {
@@ -272,5 +284,35 @@
   },
   "_comment_maps": "A map name may end in @N: its source is downscaled to N pixels before import (repo size; the sim's texture quality never shows more).",
   "_comment_lamp": "LampRed is the start-light lens: off by default; the world actor lights it at runtime (AFSDSWorldActor::SetStartLights).",
-  "_comment_paint": "Painted steel (SteelWhite, SteelGrey, DoorPanel) uses the smooth plastic scan: paint is a dielectric, and the chipped-paint scan read as marble on large panels."
+  "_comment_paint": "Painted steel (SteelWhite, SteelGrey, DoorPanel) uses the smooth plastic scan: paint is a dielectric, and the chipped-paint scan read as marble on large panels.",
+  "foliage": {
+    "LeavesBroadleaf": {
+      "tint": [
+        0.11,
+        0.15,
+        0.065
+      ],
+      "tint_vary": [
+        0.15,
+        0.17,
+        0.075
+      ],
+      "translucency": 0.6
+    },
+    "LeavesPine": {
+      "tint": [
+        0.12,
+        0.15,
+        0.07
+      ],
+      "tint_vary": [
+        0.15,
+        0.165,
+        0.08
+      ],
+      "translucency": 0.5
+    }
+  },
+  "_comment_foliage": "Leaf cards (trees): colour and opacity drawn by tools/assetgen/blender (foliage_textures). tint is the average albedo; each tree picks a colour between tint and tint_vary. translucency scales the light let through the leaves.",
+  "_comment_grass": "Grass: late-August Catalonia, half dried out (recolor 0.4 towards straw); roughness 1.5 keeps the scan from glinting in the sun."
 }

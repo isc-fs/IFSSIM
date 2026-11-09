@@ -9,10 +9,11 @@ Worlds ([worlds.md](worlds.md)) are drawn with scanned materials and props model
 - `textures`: CC0 scan sets from ambientcg.com and which maps to import. A map name may end in `@N`: its source is downscaled to N pixels first.
 - `materials`: an `MI_<name>` per entry: the scan set, `tile_m` (the real size one texture repeat covers), a tint, `recolor` (0..1, replaces the scan's hue with the tint and keeps its detail) and `variation` (large-scale brightness variation that hides tiling).
 - `flat`: untextured materials (glass, lamp lenses).
+- `foliage`: leaf materials for the trees (below).
 
 Generated geometry and the props carry UVs in metres, so `tile_m` holds on every surface.
 
-UE stores each texture's source inside its `.uasset`. To keep the repo small the importer re-encodes every source as a JPEG at quality 85 and caps roughness, AO and metalness maps at 1024 px. Only the asphalt and grass colour maps stay at 4K. `Content/Worlds` is about 48 MB. Painted steel uses the smooth plastic scan: paint is not metallic, and a chipped-paint scan read as marble on large panels.
+UE stores each texture's source inside its `.uasset`. To keep the repo small the importer re-encodes every source as a JPEG at quality 85 and caps roughness, AO and metalness maps at 1024 px. Only the asphalt and grass colour maps stay at 4K. `Content/Worlds` is about 49 MB. Painted steel uses the smooth plastic scan: paint is not metallic, and a chipped-paint scan read as marble on large panels.
 
 `MI_LampRed` is the start-light lens. The world actor lights it at runtime (below).
 
@@ -30,8 +31,16 @@ UE stores each texture's source inside its `.uasset`. To keep the repo small the
 | `GarageBay` | 6 m wide pit-garage front, scaled to the roof | Along a concrete building's face towards the track |
 | `StartGantry` | Truss over the track, columns at y = −12 / +11.5 m, five light modules | Where the world's `props` list says |
 | `MarshalPost` | 2.4 × 1.6 m booth | Where the world's `props` list says |
+| `TreePineA`, `TreePineB` | 10 m stone pine: leaning trunk, umbrella crown of 7 to 9 clumps | At each of the world's `trees` of kind `pine`, scaled to its height and crown |
+| `TreeBroadleafA`, `TreeBroadleafB` | 10 m tree, 4 m crown radius: trunk forking at 3.2 m, 3 to 5 lobes | At each `broadleaf` tree |
 
 The world actor draws them as hierarchical instances with LODs (built by the importer) and cull distances. They have no collision: the GPU LiDAR renders them, and the car can't reach them past the walls.
+
+## Trees
+
+The tree crowns are leaf cards: small quads in clumps, about 1,000 to 1,600 triangles per tree. Their normals point out of each clump's centre, so a crown shades as a rounded mass, not as flat cards. The leaf texture (colour and cut-out) is drawn by the Blender script; trunks use `Bark` (the ground scan, recoloured).
+
+`M_Foliage` is masked, two-sided foliage shading: sunlight comes through the leaves (`translucency` in `materials.json`). Each tree instance picks its colour between `tint` and `tint_vary`, so a stand of trees isn't one flat green.
 
 ## Start lights
 

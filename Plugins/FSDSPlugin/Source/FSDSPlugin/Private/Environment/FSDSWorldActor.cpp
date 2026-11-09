@@ -42,6 +42,15 @@ namespace
 	constexpr double AisleM = 1.4;
 	constexpr double SignM = 3.0, SignGapM = 0.05, SignMaxWallM = 1.5;
 	constexpr double GarageM = 6.0, GarageHeightM = 8.25;
+	// The tree models' nominal size (tools/assetgen/blender: trees); each
+	// instance is scaled to its measured height and crown radius.
+	constexpr double TreeModelHeightM = 10.0, TreeModelRadiusM = 4.0;
+	constexpr double TreeCullM = 1500.0;   // the whole world: trees frame every view
+	// The ground beyond the survey: out this far, sloping down this much.
+	constexpr double SkirtM = 40000.0, SkirtBlendM = 300.0, SkirtDropM = 2.0;
+	// Window bands on plain LiDAR blocks: a 1.4 m band per 3.5 m storey, from
+	// 1 m above the ground, standing 3 cm proud of the wall.
+	constexpr double StoreyM = 3.5, WindowSillM = 1.0, WindowHeightM = 1.4, WindowProudM = 0.03;
 	constexpr double RailM = 2.5;
 	constexpr float StartLightsEmissive = 3.0f;   // x the lens colour (0.4 red); brighter tonemaps to orange
 
@@ -406,6 +415,42 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 			}
 	}
 
+	// --- skirt: the ground carries on past the survey to the horizon ---------
+	// Without it the world is an island and the sky shows below the horizon.
+	// No collision: nothing that drives gets this far.
+	{
+		const int32 NX = G.Xs.Num(), NY = G.Ys.Num();
+		TArray<FIntPoint> Ring;   // border nodes, once round
+		for (int32 I = 0; I < NX; ++I) Ring.Add({I, 0});
+		for (int32 J = 1; J < NY; ++J) Ring.Add({NX - 1, J});
+		for (int32 I = NX - 2; I >= 0; --I) Ring.Add({I, NY - 1});
+		for (int32 J = NY - 2; J >= 1; --J) Ring.Add({0, J});
+		// Three rings: the survey edge, a blend ring SkirtBlendM out, and the
+		// far ring. Past the blend ring the ground is flat at the edge's mean
+		// height, so the long strips all share one plane and one shading.
+		double ZFlat = 0.0;
+		for (const FIntPoint& N : Ring) ZFlat += G.Node(N.X, N.Y);
+		ZFlat = ZFlat / Ring.Num() - SkirtDropM;
+		auto Out = [&](const FIntPoint& N, double D, double Z) {
+			const double Sx = N.X == 0 ? -1.0 : N.X == NX - 1 ? 1.0 : 0.0;
+			const double Sy = N.Y == 0 ? -1.0 : N.Y == NY - 1 ? 1.0 : 0.0;
+			return F.Ue(G.Xs[N.X] + Sx * D, G.Ys[N.Y] + Sy * D, Z);
+		};
+		FBuf B;
+		const int32 R = Ring.Num();
+		for (const FIntPoint& N : Ring)
+			for (const FVector& P : {Out(N, 0.0, G.Node(N.X, N.Y)), Out(N, SkirtBlendM, ZFlat), Out(N, SkirtM, ZFlat)})
+				B.Add(P, FVector::UpVector, FVector2D(P.X, P.Y) / 100.0);
+		for (int32 K = 0; K < R; ++K)
+			for (int32 L = 0; L < 2; ++L)
+			{
+				const int32 A = 3 * K + L, Bn = 3 * ((K + 1) % R) + L;
+				B.Tri(A, Bn, Bn + 1, FVector::UpVector);
+				B.Tri(A, Bn + 1, A + 1, FVector::UpVector);
+			}
+		Emit(NewMesh(TEXT("NoCollision"), false), 0, B, Grass, false);
+	}
+
 	// --- surfaces: ground (collision) and painted bands (none) ----------------
 	for (const FFSDSWorldSurface& S : World.Surfaces)
 	{
@@ -511,28 +556,64 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		Emit(M, 1, FenceBuf, Fence, false);   // the LiDAR sees through mesh fencing; posts and wall it hits
 	}
 
-	// --- buildings: boxes from below the ground to their roof -----------------
+	// --- buildings: boxes from below the ground to their roof, or raised decks -
+	FBuf Blocks, GlassBlocks, Windows;
 	for (const FFSDSWorldBuilding& Bd : World.Buildings)
 	{
+		// Corners and edge midpoints, turned about the centre by the yaw.
+		const double Cx = 0.5 * (Bd.XMin + Bd.XMax), Cy = 0.5 * (Bd.YMin + Bd.YMax);
+		const double Hl = 0.5 * (Bd.XMax - Bd.XMin), Hw = 0.5 * (Bd.YMax - Bd.YMin);
+		const double Cs = FMath::Cos(FMath::DegreesToRadians(Bd.YawDeg)), Sn = FMath::Sin(FMath::DegreesToRadians(Bd.YawDeg));
+		auto At = [&](double U, double V) { return FVector2D(Cx + U * Cs - V * Sn, Cy + U * Sn + V * Cs); };
+		const FVector2D Corner[4] = {At(-Hl, -Hw), At(Hl, -Hw), At(Hl, Hw), At(-Hl, Hw)};
 		double Low = TNumericLimits<double>::Max();
-		for (double X : {Bd.XMin, 0.5 * (Bd.XMin + Bd.XMax), Bd.XMax})
-			for (double Y : {Bd.YMin, 0.5 * (Bd.YMin + Bd.YMax), Bd.YMax})
-				Low = FMath::Min(Low, G.At(X, Y));
-		Low -= WallFootM;
-		if (Bd.TopZ <= Low + 1.0)
+		for (double U : {-Hl, 0.0, Hl})
+			for (double V : {-Hw, 0.0, Hw})
+			{
+				const FVector2D P = At(U, V);
+				Low = FMath::Min(Low, G.At(P.X, P.Y));
+			}
+		Low = Bd.bHasBase ? Bd.BaseZ : Low - WallFootM;
+		if (Bd.TopZ <= Low + (Bd.bHasBase ? 0.0 : 1.0))
 		{
 			UE_LOG(LogTemp, Warning, TEXT("FSDS World: a building's roof (%.2f m) is below its ground (%.2f m); skipped"), Bd.TopZ, Low);
 			continue;
 		}
-		const FVector A = F.Ue(Bd.XMin, Bd.YMin, Low), Bb = F.Ue(Bd.XMax, Bd.YMax, Bd.TopZ);
-		FBuf B;
-		B.AlignedBox(A.ComponentMin(Bb), A.ComponentMax(Bb));
-		Emit(NewMesh(FSDSCollision::PropProfile, true), 0, B,
-			Bd.Material == TEXT("glass") ? Glass : BuildingWhite, true);
+		FVector Bot[4], Top[4];
+		for (int32 K = 0; K < 4; ++K)
+		{
+			Bot[K] = F.Ue(Corner[K].X, Corner[K].Y, Low);
+			Top[K] = F.Ue(Corner[K].X, Corner[K].Y, Bd.TopZ);
+		}
+		(Bd.Material == TEXT("glass") ? GlassBlocks : Blocks).Box(Bot, Top, /*bWithBottom=*/Bd.bHasBase);
 
-		// A concrete building gets pit-garage fronts on the face towards the
-		// track, stretched to its length and roof.
-		if (Bd.Material == TEXT("concrete"))
+		// A plain block measured from the LiDAR gets a band of windows on every
+		// floor of every face long enough to have them.
+		if (!Bd.bHasBase && !Bd.bGarages && Bd.Material == TEXT("concrete"))
+		{
+			const FVector2D Mid((Cx), (Cy));
+			for (int32 K = 0; K < 4; ++K)
+			{
+				const FVector2D P0 = Corner[K], P1 = Corner[(K + 1) % 4];
+				const double Len = FVector2D::Distance(P0, P1);
+				if (Len < 4.0) continue;
+				const FVector2D Dir = (P1 - P0) / Len;
+				FVector2D Out(Dir.Y, -Dir.X);
+				if (FVector2D::DotProduct(Out, 0.5 * (P0 + P1) - Mid) < 0.0) Out = -Out;
+				const FVector2D A0 = P0 + Dir * 0.8 + Out * WindowProudM, A1 = P1 - Dir * 0.8 + Out * WindowProudM;
+				const double Floor0 = G.At(0.5 * (P0.X + P1.X), 0.5 * (P0.Y + P1.Y));
+				const FVector N = F.Ue(Out.X, Out.Y, 0.0) - F.Ue(0.0, 0.0, 0.0);
+				for (double Z = Floor0 + WindowSillM; Z + WindowHeightM <= Bd.TopZ - 0.6; Z += StoreyM)
+				{
+					Windows.Quad(F.Ue(A0.X, A0.Y, Z), F.Ue(A1.X, A1.Y, Z), F.Ue(A1.X, A1.Y, Z + WindowHeightM),
+						F.Ue(A0.X, A0.Y, Z + WindowHeightM), N);
+				}
+			}
+		}
+
+		// The pit building gets garage fronts on the face towards the track,
+		// stretched to its length and roof.
+		if (Bd.bGarages && Bd.YawDeg == 0.0)
 		{
 			const bool bNearIsMax = FMath::Abs(Bd.YMax) < FMath::Abs(Bd.YMin);
 			const double FaceY = bNearIsMax ? Bd.YMax : Bd.YMin;
@@ -549,6 +630,13 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 				                       : Place(X0 + Wd, FaceY, Z, 180.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM)));
 			}
 		}
+	}
+
+	{
+		UProceduralMeshComponent* M = NewMesh(FSDSCollision::PropProfile, true);
+		Emit(M, 0, Blocks, BuildingWhite, true);
+		Emit(M, 1, GlassBlocks, Glass, true);
+		Emit(M, 2, Windows, Glass, false);
 	}
 
 	// --- grandstands: stepped rows, back wall, roof on rear columns -----------
@@ -597,6 +685,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 
 		// Roof slab, its top on the measured edges.
 		const double RF = FMath::Abs(Gs.RoofFrontY), RB = FMath::Abs(Gs.RoofBackY);
+		if (Gs.bHasRoof)
 		{
 			const FVector Bot[4] = {P(Gs.XMin, RF, Gs.RoofFrontZ - RoofThicknessM), P(Gs.XMax, RF, Gs.RoofFrontZ - RoofThicknessM),
 			                        P(Gs.XMax, RB, Gs.RoofBackZ - RoofThicknessM), P(Gs.XMin, RB, Gs.RoofBackZ - RoofThicknessM)};
@@ -608,7 +697,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		const double DC = FMath::Min(DB + ColumnSizeM, FMath::Max(RB - ColumnSizeM * 0.5, DB));
 		const double ZRoof = FMath::Lerp(Gs.RoofFrontZ, Gs.RoofBackZ, RB > RF ? (DC - RF) / (RB - RF) : 1.0) - RoofThicknessM;
 		const int32 Cols = FMath::Max(1, FMath::RoundToInt((Gs.XMax - Gs.XMin) / ColumnSpacingM));
-		for (int32 K = 0; K <= Cols; ++K)
+		for (int32 K = 0; Gs.bHasRoof && K <= Cols; ++K)
 		{
 			const double X = FMath::Lerp(Gs.XMin + ColumnSizeM, Gs.XMax - ColumnSizeM, double(K) / Cols);
 			Columns.Add(Place(X, Sgn * DC, Base, 0.0, FVector(1.0, 1.0, ZRoof - Base)));
@@ -642,6 +731,24 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 				const int32 Slot = H->GetMaterialIndex(TEXT("LampRed"));
 				if (Slot != INDEX_NONE) StartLights = H->CreateDynamicMaterialInstance(Slot);
 			}
+		}
+	}
+
+	// --- trees: two models per kind, scaled to each measured tree ----------
+	{
+		TMap<FString, TArray<FTransform>> ByMesh;
+		for (const FFSDSWorldTree& T : World.Trees)
+		{
+			// The variant and turn come from the position, so a rebuild is identical.
+			const uint32 Hash = HashCombine(GetTypeHash(FMath::RoundToInt(T.X * 10.0)), GetTypeHash(FMath::RoundToInt(T.Y * 10.0)));
+			const FString Kind = T.Kind == TEXT("pine") ? TEXT("Pine") : TEXT("Broadleaf");
+			const FString Mesh = FString::Printf(TEXT("Tree%s%s"), *Kind, (Hash & 1) ? TEXT("A") : TEXT("B"));
+			const FVector Scale(T.R / TreeModelRadiusM, T.R / TreeModelRadiusM, T.H / TreeModelHeightM);
+			ByMesh.FindOrAdd(Mesh).Add(Place(T.X, T.Y, G.At(T.X, T.Y) - 0.1, double((Hash >> 1) % 360), Scale));
+		}
+		for (const TPair<FString, TArray<FTransform>>& It : ByMesh)
+		{
+			if (AddInstances(WorldMesh(It.Key), It.Value, TreeCullM, true)) NumTrees += It.Value.Num();
 		}
 	}
 
@@ -718,6 +825,7 @@ void AFSDSWorldActor::Clear()
 	bBuilt = false;
 	NumTriangles = 0;
 	NumInstances = 0;
+	NumTrees = 0;
 	PropTriangles = 0;
 	BuildSeconds = 0.0;
 }

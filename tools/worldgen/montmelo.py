@@ -23,6 +23,7 @@ import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from . import lidar_features as LF
 from . import world as W
 
 NAME = "montmelo_straight"
@@ -145,6 +146,23 @@ def build(cache: Path, out_dir: Path) -> Dict:
     track = (sx(0.0), sx(1049.0))
     stand_side = (sx(150.0), sx(560.0))      # barrier and run-off in front of the stands
 
+    # Everything else the LiDAR shows: the open grandstands further along the
+    # straight, the other buildings and footbridges, and the trees.
+    assert CELL == 1.0, "lidar_features works on a 1 m grid"
+    gi = np.clip(np.rint((x - X0) / CELL).astype(int), 0, nx - 1)
+    gj = np.clip(np.rint((y - Y0) / CELL).astype(int), 0, ny - 1)
+    zrel = z - z0
+    agl = zrel - h[gj, gi]
+    stands = LF.open_stands(x, y, zrel, c, (gs_x[1] + 20.0, X1), (12.0, 50.0))
+    modelled = [(pit_x[0] - 1.0, pit_x[1] + 1.0, -47.0, -25.0),      # pit building
+                (gs_x[0] - 2.0, gs_x[1] + 2.0, 15.0, 48.0)]          # main grandstand
+    modelled += [(g["x_min"] - 2.0, g["x_max"] + 2.0, 12.0, 50.0) for g in stands]
+    others = LF.buildings(x, y, zrel, agl, c, X0, Y0, (ny, nx), modelled)
+    for b in others:
+        b["material"] = "concrete"
+    trees = [t for t in LF.trees(x, y, agl, c, X0, Y0, (ny, nx))
+             if not any(e[0] <= t["x"] <= e[1] and e[2] <= t["y"] <= e[3] for e in modelled)]
+
     world = {
         "format": W.FORMAT,
         "name": NAME,
@@ -190,8 +208,8 @@ def build(cache: Path, out_dir: Path) -> Dict:
         ],
         "buildings": [
             {"material": "concrete", "x_min": pit_x[0], "x_max": pit_x[1], "y_min": -46.0, "y_max": -26.0,
-             "top_z": round(pit_h, 2)},
-        ],
+             "top_z": round(pit_h, 2), "garages": True},
+        ] + [dict(sorted(b.items())) for b in others],
         "grandstands": [
             # Roof measured; the seating under it is not visible from the air,
             # so its rake (3 m at the front to 20 m at the back) is an estimate.
@@ -199,7 +217,7 @@ def build(cache: Path, out_dir: Path) -> Dict:
              "front_z": 3.0, "back_z": 20.0,
              "roof_front_y": 18.5, "roof_back_y": 44.0,
              "roof_front_z": round(roof_front, 2), "roof_back_z": round(roof_back, 2)},
-        ],
+        ] + stands,           # the rest along the straight are uncovered
         # Generic models, not surveyed: the start gantry over the painted start
         # line, and two marshal posts on the grandstand-side run-off, clear of
         # the acceleration zone.
@@ -208,8 +226,10 @@ def build(cache: Path, out_dir: Path) -> Dict:
             {"mesh": "MarshalPost", "x": -80.0, "y": 13.25},
             {"mesh": "MarshalPost", "x": 170.0, "y": 13.25},
         ],
+        # One per canopy peak in the LiDAR (lidar_features.trees).
+        "trees": trees,
     }
-    for k in ("surfaces", "walls", "lines", "buildings", "grandstands", "props"):
+    for k in ("surfaces", "walls", "lines", "buildings", "grandstands", "props", "trees"):
         for e in world[k]:
             for f, v in list(e.items()):
                 if isinstance(v, float):

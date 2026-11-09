@@ -141,7 +141,7 @@ bool FSDSWorld::Parse(const FString& Json, FFSDSWorld& Out, FString& OutError)
 	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid()) return R.Fail(TEXT("not a JSON object"));
 	const FString WR = TEXT("world");
 	if (!R.Keys(*Root, WR, { TEXT("format"), TEXT("name"), TEXT("title"), TEXT("attribution"), TEXT("frame"), TEXT("terrain") },
-		{ TEXT("detail"), TEXT("surfaces"), TEXT("lines"), TEXT("walls"), TEXT("buildings"), TEXT("grandstands"), TEXT("props") })) return false;
+		{ TEXT("detail"), TEXT("surfaces"), TEXT("lines"), TEXT("walls"), TEXT("buildings"), TEXT("grandstands"), TEXT("props"), TEXT("trees") })) return false;
 
 	FString Format;
 	if (!R.Str(*Root, TEXT("format"), WR, Format)) return false;
@@ -235,23 +235,43 @@ bool FSDSWorld::Parse(const FString& Json, FFSDSWorld& Out, FString& OutError)
 		}) &&
 		R.Each(*Root, TEXT("buildings"), [&](const FObj& E, const FString& Where) {
 			FFSDSWorldBuilding B;
-			if (!R.Keys(E, Where, { TEXT("material"), TEXT("x_min"), TEXT("x_max"), TEXT("y_min"), TEXT("y_max"), TEXT("top_z") }) ||
+			if (!R.Keys(E, Where, { TEXT("material"), TEXT("x_min"), TEXT("x_max"), TEXT("y_min"), TEXT("y_max"), TEXT("top_z") },
+					{ TEXT("yaw_deg"), TEXT("base_z"), TEXT("garages") }) ||
 				!R.Str(E, TEXT("material"), Where, B.Material, { TEXT("concrete"), TEXT("glass") }) ||
 				!R.Box(E, Where, B.XMin, B.XMax, B.YMin, B.YMax) ||
 				!R.Num(E, TEXT("top_z"), Where, B.TopZ, -50.0, 200.0)) return false;
+			if (E.HasField(TEXT("yaw_deg")) && !R.Num(E, TEXT("yaw_deg"), Where, B.YawDeg, -360.0, 360.0)) return false;
+			if (E.HasField(TEXT("base_z")))
+			{
+				if (!R.Num(E, TEXT("base_z"), Where, B.BaseZ, -50.0, 200.0)) return false;
+				if (B.BaseZ >= B.TopZ) return R.Fail(Where + TEXT(": base_z must be below top_z"));
+				B.bHasBase = true;
+			}
+			if (E.HasField(TEXT("garages")))
+			{
+				const TSharedPtr<FJsonValue> V = E.TryGetField(TEXT("garages"));
+				if (V->Type != EJson::Boolean) return R.Fail(Where + TEXT(".garages: expected true or false"));
+				B.bGarages = V->AsBool();
+			}
 			W.Buildings.Add(B);
 			return true;
 		}) &&
 		R.Each(*Root, TEXT("grandstands"), [&](const FObj& E, const FString& Where) {
 			FFSDSWorldGrandstand G;
-			if (!R.Keys(E, Where, { TEXT("x_min"), TEXT("x_max"), TEXT("front_y"), TEXT("back_y"), TEXT("front_z"), TEXT("back_z"),
-					TEXT("roof_front_y"), TEXT("roof_back_y"), TEXT("roof_front_z"), TEXT("roof_back_z") }) ||
+			static const TCHAR* RoofKeys[] = { TEXT("roof_front_y"), TEXT("roof_back_y"), TEXT("roof_front_z"), TEXT("roof_back_z") };
+			if (!R.Keys(E, Where, { TEXT("x_min"), TEXT("x_max"), TEXT("front_y"), TEXT("back_y"), TEXT("front_z"), TEXT("back_z") },
+					{ RoofKeys[0], RoofKeys[1], RoofKeys[2], RoofKeys[3] }) ||
 				!R.Num(E, TEXT("x_min"), Where, G.XMin) || !R.Num(E, TEXT("x_max"), Where, G.XMax) ||
 				!R.Num(E, TEXT("front_y"), Where, G.FrontY) || !R.Num(E, TEXT("back_y"), Where, G.BackY) ||
-				!R.Num(E, TEXT("roof_front_y"), Where, G.RoofFrontY) || !R.Num(E, TEXT("roof_back_y"), Where, G.RoofBackY) ||
-				!R.Num(E, TEXT("front_z"), Where, G.FrontZ, -50.0, 200.0) || !R.Num(E, TEXT("back_z"), Where, G.BackZ, -50.0, 200.0) ||
-				!R.Num(E, TEXT("roof_front_z"), Where, G.RoofFrontZ, -50.0, 200.0) ||
-				!R.Num(E, TEXT("roof_back_z"), Where, G.RoofBackZ, -50.0, 200.0)) return false;
+				!R.Num(E, TEXT("front_z"), Where, G.FrontZ, -50.0, 200.0) || !R.Num(E, TEXT("back_z"), Where, G.BackZ, -50.0, 200.0)) return false;
+			int32 NRoof = 0;
+			for (const TCHAR* K : RoofKeys) NRoof += E.HasField(K) ? 1 : 0;
+			if (NRoof != 0 && NRoof != 4) return R.Fail(Where + TEXT(": a roof needs all of roof_front_y, roof_back_y, roof_front_z, roof_back_z, or none of them"));
+			G.bHasRoof = NRoof == 4;
+			if (G.bHasRoof &&
+				(!R.Num(E, TEXT("roof_front_y"), Where, G.RoofFrontY) || !R.Num(E, TEXT("roof_back_y"), Where, G.RoofBackY) ||
+				 !R.Num(E, TEXT("roof_front_z"), Where, G.RoofFrontZ, -50.0, 200.0) ||
+				 !R.Num(E, TEXT("roof_back_z"), Where, G.RoofBackZ, -50.0, 200.0))) return false;
 			if (G.XMin >= G.XMax) return R.Fail(Where + TEXT(": x_min must be below x_max"));
 			if (FMath::Abs(G.BackY) <= FMath::Abs(G.FrontY)) return R.Fail(Where + TEXT(": back_y must be further from the track (|y|) than front_y"));
 			if (G.BackZ <= G.FrontZ) return R.Fail(Where + TEXT(": the seating must rise from front to back"));
@@ -268,6 +288,16 @@ bool FSDSWorld::Parse(const FString& Json, FFSDSWorld& Out, FString& OutError)
 			if (!bKnown) return R.Fail(FString::Printf(TEXT("%s.mesh: '%s' is not allowed"), *Where, *P.Mesh));
 			if (E.HasField(TEXT("yaw_deg")) && !R.Num(E, TEXT("yaw_deg"), Where, P.YawDeg, -360.0, 360.0)) return false;
 			W.Props.Add(P);
+			return true;
+		}) &&
+		R.Each(*Root, TEXT("trees"), [&](const FObj& E, const FString& Where) {
+			if (W.Trees.Num() >= MaxTrees) return R.Fail(FString::Printf(TEXT("world.trees: more than %d"), MaxTrees));
+			FFSDSWorldTree T;
+			if (!R.Keys(E, Where, { TEXT("x"), TEXT("y"), TEXT("h"), TEXT("r"), TEXT("kind") }) ||
+				!R.Num(E, TEXT("x"), Where, T.X) || !R.Num(E, TEXT("y"), Where, T.Y) ||
+				!R.Num(E, TEXT("h"), Where, T.H, 1.0, 60.0) || !R.Num(E, TEXT("r"), Where, T.R, 0.3, 20.0) ||
+				!R.Str(E, TEXT("kind"), Where, T.Kind, { TreeKinds[0], TreeKinds[1] })) return false;
+			W.Trees.Add(T);
 			return true;
 		});
 	if (!bOk) return false;

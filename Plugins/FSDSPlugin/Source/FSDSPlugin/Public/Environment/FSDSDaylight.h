@@ -5,7 +5,6 @@
 #include "FSDSDaylight.generated.h"
 
 class UDirectionalLightComponent;
-class UExponentialHeightFogComponent;
 class UPostProcessComponent;
 class USkyAtmosphereComponent;
 class USkyLightComponent;
@@ -55,7 +54,6 @@ private:
 
 	UPROPERTY() TObjectPtr<USkyAtmosphereComponent> Atmosphere;
 	UPROPERTY() TObjectPtr<USkyLightComponent> Sky;
-	UPROPERTY() TObjectPtr<UExponentialHeightFogComponent> Fog;
 	UPROPERTY() TObjectPtr<UPostProcessComponent> Exposure;
 
 	struct FSun

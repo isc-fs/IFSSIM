@@ -60,6 +60,14 @@ shipping pipeline, documentation.
   Worlds are a new sidecar key (`"world"`) and format (`ifssim-world/1`);
   they load whatever `Environment.Enabled` says, and replace the level's flat
   floor while loaded. See `docs/worlds.md`.
+- **Trees and buildings around the Montmeló straight.** From the same LiDAR:
+  775 trees (pine and broadleaf models, scaled to each tree), 43 more
+  buildings, footbridges included, and the four open grandstands opposite
+  the pits. The ground carries on to the horizon. World format: optional
+  `trees`, and building `yaw_deg`, `base_z` and `garages`; a grandstand's
+  roof is optional. `FSDS.View` places a free camera for renders. The
+  showcase preset drops its height fog, which drew a dark band at the
+  horizon. Needs a UE recompile.
 - **Car characterisation in the sim check.** `tools/characterise` drives the car
   with scripted inputs (no pipeline) before the missions and checks it against
   `settings.json`: full-lock radius both ways, steering linearity and low-speed

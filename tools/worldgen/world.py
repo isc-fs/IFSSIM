@@ -40,6 +40,9 @@ BUILDING_MATERIALS = ("concrete", "glass")
 # Props a world places by name (docs/world_assets.md); the plugin places the
 # rest itself, from the structures they belong to.
 PROP_MESHES = ("StartGantry", "MarshalPost", "SignBoard")
+TREE_KINDS = ("pine", "broadleaf")
+MAX_TREES = 20_000
+ROOF_KEYS = ("roof_front_y", "roof_back_y", "roof_front_z", "roof_back_z")
 
 
 class WorldError(ValueError):
@@ -93,7 +96,7 @@ def _box(e: Dict[str, Any], where: str) -> None:
 def validate(world: Any) -> Dict[str, Any]:
     """Check a parsed world.json the way the plugin does. Returns it unchanged."""
     w = _obj(world, "world", ["format", "name", "title", "attribution", "frame", "terrain"],
-             ["detail", "surfaces", "lines", "walls", "buildings", "grandstands", "props"])
+             ["detail", "surfaces", "lines", "walls", "buildings", "grandstands", "props", "trees"])
     if w["format"] != FORMAT:
         raise WorldError(f"world.format: expected {FORMAT!r}")
     _str(w["name"], "world.name")
@@ -154,21 +157,32 @@ def validate(world: Any) -> Dict[str, Any]:
 
     for i, b in enumerate(w.get("buildings", [])):
         where = f"world.buildings[{i}]"
-        _obj(b, where, ["material", "x_min", "x_max", "y_min", "y_max", "top_z"])
+        _obj(b, where, ["material", "x_min", "x_max", "y_min", "y_max", "top_z"],
+             ["yaw_deg", "base_z", "garages"])
         _str(b["material"], f"{where}.material", BUILDING_MATERIALS)
         _box(b, where)
-        _num(b["top_z"], f"{where}.top_z", -50.0, 200.0)
+        top = _num(b["top_z"], f"{where}.top_z", -50.0, 200.0)
+        if "yaw_deg" in b:
+            _num(b["yaw_deg"], f"{where}.yaw_deg", -360.0, 360.0)
+        if "base_z" in b and _num(b["base_z"], f"{where}.base_z", -50.0, 200.0) >= top:
+            raise WorldError(f"{where}: base_z must be below top_z")
+        if "garages" in b and not isinstance(b["garages"], bool):
+            raise WorldError(f"{where}.garages: expected true or false")
 
     for i, g in enumerate(w.get("grandstands", [])):
         where = f"world.grandstands[{i}]"
-        _obj(g, where, ["x_min", "x_max", "front_y", "back_y", "front_z", "back_z",
-                        "roof_front_y", "roof_back_y", "roof_front_z", "roof_back_z"])
+        _obj(g, where, ["x_min", "x_max", "front_y", "back_y", "front_z", "back_z"], ROOF_KEYS)
+        roof = [k for k in ROOF_KEYS if k in g]
+        if roof and len(roof) != len(ROOF_KEYS):
+            raise WorldError(f"{where}: a roof needs all of {list(ROOF_KEYS)}, or none of them")
         if _num(g["x_min"], f"{where}.x_min") >= _num(g["x_max"], f"{where}.x_max"):
             raise WorldError(f"{where}: x_min must be below x_max")
         for k in ("front_y", "back_y", "roof_front_y", "roof_back_y"):
-            _num(g[k], f"{where}.{k}")
+            if k in g:
+                _num(g[k], f"{where}.{k}")
         for k in ("front_z", "back_z", "roof_front_z", "roof_back_z"):
-            _num(g[k], f"{where}.{k}", -50.0, 200.0)
+            if k in g:
+                _num(g[k], f"{where}.{k}", -50.0, 200.0)
         if abs(g["back_y"]) <= abs(g["front_y"]):
             raise WorldError(f"{where}: back_y must be further from the track (|y|) than front_y")
         if g["back_z"] <= g["front_z"]:
@@ -182,6 +196,18 @@ def validate(world: Any) -> Dict[str, Any]:
         _num(p["y"], f"{where}.y")
         if "yaw_deg" in p:
             _num(p["yaw_deg"], f"{where}.yaw_deg", -360.0, 360.0)
+
+    trees = w.get("trees", [])
+    if not isinstance(trees, list) or len(trees) > MAX_TREES:
+        raise WorldError(f"world.trees: expected a list of at most {MAX_TREES}")
+    for i, t in enumerate(trees):
+        where = f"world.trees[{i}]"
+        _obj(t, where, ["x", "y", "h", "r", "kind"])
+        _num(t["x"], f"{where}.x")
+        _num(t["y"], f"{where}.y")
+        _num(t["h"], f"{where}.h", 1.0, 60.0)
+        _num(t["r"], f"{where}.r", 0.3, 20.0)
+        _str(t["kind"], f"{where}.kind", TREE_KINDS)
     return w
 
 

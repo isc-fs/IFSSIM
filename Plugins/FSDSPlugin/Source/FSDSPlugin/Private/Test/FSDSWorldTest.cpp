@@ -78,6 +78,11 @@ bool FFSDSWorldRejectTest::RunTest(const FString& Parameters)
 		{TEXT("fence below wall"), Mutate(TEXT(R"("fence_height_m": 2.0)"), TEXT(R"("fence_height_m": 0.5)")), TEXT("fence_height_m")},
 		{TEXT("coordinate in cm"), Mutate(TEXT(R"("x_max": 1, "y_min": -1, "y_max": 0, "top_z")"), TEXT(R"("x_max": 5000, "y_min": -1, "y_max": 0, "top_z")")), TEXT("outside")},
 		{TEXT("seating falls"), Mutate(TEXT(R"("back_z": 4)"), TEXT(R"("back_z": 0.5)")), TEXT("rise")},
+		{TEXT("tree kind"), Mutate(TEXT(R"("name": "mini",)"), TEXT(R"("name": "mini", "trees": [{"x": 0, "y": 5, "h": 8, "r": 3, "kind": "palm"}],)")), TEXT("not allowed")},
+		{TEXT("tree too tall"), Mutate(TEXT(R"("name": "mini",)"), TEXT(R"("name": "mini", "trees": [{"x": 0, "y": 5, "h": 120, "r": 3, "kind": "pine"}],)")), TEXT("trees[0].h")},
+		{TEXT("half a roof"), Mutate(TEXT(R"(, "roof_back_z": 8)"), TEXT("")), TEXT("roof")},
+		{TEXT("deck above roof"), Mutate(TEXT(R"("top_z": 5})"), TEXT(R"("top_z": 5, "base_z": 6})")), TEXT("base_z")},
+		{TEXT("garages flag"), Mutate(TEXT(R"("top_z": 5})"), TEXT(R"("top_z": 5, "garages": 1})")), TEXT("garages")},
 		{TEXT("boolean number"), Mutate(TEXT(R"("height_m": 1.0)"), TEXT(R"("height_m": true)")), TEXT("number")},
 		{TEXT("not JSON"), FString(TEXT("{")), TEXT("JSON")},
 	};
@@ -153,8 +158,11 @@ bool FFSDSWorldShippedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("ground at the start line is the datum"), W.HeightAt(0.0, 0.0), 0.0, 0.15);
 	TestTrue(TEXT("flat through the acceleration zone"), FMath::Abs(W.HeightAt(100.0, 0.0)) < 0.3);
 	TestTrue(TEXT("falls towards turn 1"), W.HeightAt(600.0, 0.0) < -5.0);
-	TestEqual(TEXT("pit building"), W.Buildings.Num(), 1);
-	TestEqual(TEXT("main grandstand"), W.Grandstands.Num(), 1);
+	TestTrue(TEXT("pit building first, with garages"), W.Buildings.Num() > 0 && W.Buildings[0].bGarages);
+	TestTrue(TEXT("main grandstand first, roofed"), W.Grandstands.Num() > 0 && W.Grandstands[0].bHasRoof);
+	TestTrue(TEXT("open grandstands along the straight"), W.Grandstands.Num() >= 4);
+	TestTrue(TEXT("buildings and footbridges from the LiDAR"), W.Buildings.Num() >= 20);
+	TestTrue(TEXT("trees from the LiDAR"), W.Trees.Num() >= 500);
 	TestTrue(TEXT("credits its data"), W.Attribution.Num() >= 2);
 	return true;
 }
@@ -188,6 +196,7 @@ bool FFSDSWorldBuildTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("under 1.5 M triangles"), A->GetNumTriangles() < 1500000);
 		// Seats, posts, boards, garage fronts, rails, columns and the listed props.
 		TestTrue(TEXT("props placed from /Game/Worlds"), A->GetNumInstances() > 1000);
+		TestEqual(TEXT("every tree placed"), A->GetNumTrees(), W.Trees.Num());
 		// The listed StartGantry: its lights start out and follow SetStartLights.
 		TestTrue(TEXT("start gantry has lights"), A->HasStartLights());
 		TestFalse(TEXT("start lights out after a build"), A->AreStartLightsOn());

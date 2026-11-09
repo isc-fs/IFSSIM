@@ -273,7 +273,8 @@ def build_materials(textures, flat):
     master = build_master("M_WorldPBR", flat, masked=False)
     masked = build_master("M_WorldPBRMasked", flat, masked=True)
     for name, m in SPEC["materials"].items():
-        make_instance(name, master, textures[m["set"]], m["tile_m"], m["tint"], m["recolor"], m["variation"])
+        make_instance(name, master, textures[m["set"]], m["tile_m"], m["tint"], m["recolor"], m["variation"],
+                      roughness=m.get("roughness", 1.0))
     for name, m in SPEC["flat"].items():
         make_instance(name, master, None, 1.0, m["color"], 0.0, 0.0,
                       roughness=m["roughness"], metallic=m["metallic"], emissive=m.get("emissive", 0.0),
@@ -285,7 +286,77 @@ def build_materials(textures, flat):
         configure_texture(op, "linear")
         make_instance("ChainLink", masked, textures["CorrugatedSteel005"], 0.1, (1.1, 1.1, 1.1), 0.0, 0.0,
                       extra_tex={"OpacityTex": op})
+    build_foliage(flat)
     log(f"materials: {len(SPEC['materials']) + len(SPEC['flat'])} instances")
+
+
+def build_foliage(flat):
+    """Leaf cards: masked, two-sided foliage shading (light comes through the
+    leaves), card UVs 0..1, and a colour per tree between Tint and TintVary."""
+    if not SPEC.get("foliage"):
+        return
+    name = "M_Foliage"
+    path = f"{ROOT}/Materials/{name}"
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    mat = TOOLS.create_asset(name, f"{ROOT}/Materials", unreal.Material, unreal.MaterialFactoryNew())
+    mat.set_editor_property("used_with_instanced_static_meshes", True)
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
+    mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_TWO_SIDED_FOLIAGE)
+    mat.set_editor_property("opacity_mask_clip_value", 0.4)
+    S = unreal.MaterialSamplerType
+    white, white_lin = flat["T_White"], flat["T_WhiteLinear"]
+    col = tex_param(mat, "BaseColorTex", white, S.SAMPLERTYPE_COLOR, -900, -200)
+    op = tex_param(mat, "OpacityTex", white_lin, S.SAMPLERTYPE_LINEAR_COLOR, -900, 300)
+    tint = expr(mat, unreal.MaterialExpressionVectorParameter, -900, -450, parameter_name="Tint",
+                default_value=unreal.LinearColor(0.07, 0.1, 0.04, 1))
+    vary = expr(mat, unreal.MaterialExpressionVectorParameter, -900, -600, parameter_name="TintVary",
+                default_value=unreal.LinearColor(0.1, 0.12, 0.045, 1))
+    rnd = expr(mat, unreal.MaterialExpressionPerInstanceRandom, -700, -650)
+    pick = expr(mat, unreal.MaterialExpressionLinearInterpolate, -500, -500)
+    link(tint, "", pick, "A"); link(vary, "", pick, "B"); link(rnd, "", pick, "Alpha")
+    # The drawn leaves average about 0.55 grey: x1.8 makes Tint the mean albedo.
+    detail = expr(mat, unreal.MaterialExpressionMultiply, -500, -250, const_b=1.8)
+    link(col, "RGB", detail, "A")
+    base = expr(mat, unreal.MaterialExpressionMultiply, -300, -350)
+    link(detail, "", base, "A"); link(pick, "", base, "B")
+    MEL.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    tr = expr(mat, unreal.MaterialExpressionScalarParameter, -500, -50, parameter_name="Translucency", default_value=0.6)
+    sss = expr(mat, unreal.MaterialExpressionMultiply, -300, -100)
+    link(base, "", sss, "A"); link(tr, "", sss, "B")
+    MEL.connect_material_property(sss, "", unreal.MaterialProperty.MP_SUBSURFACE_COLOR)
+    rough = expr(mat, unreal.MaterialExpressionConstant, -300, 100, r=0.7)
+    MEL.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    spec = expr(mat, unreal.MaterialExpressionConstant, -300, 180, r=0.3)
+    MEL.connect_material_property(spec, "", unreal.MaterialProperty.MP_SPECULAR)
+    MEL.connect_material_property(op, "R", unreal.MaterialProperty.MP_OPACITY_MASK)
+    MEL.recompile_material(mat)
+    EAL.save_loaded_asset(mat)
+
+    for slot, f in SPEC["foliage"].items():
+        maps = {}
+        for tag, kind in (("color", "color"), ("opacity", "linear")):
+            src = os.path.join(GEN_DIR, f"foliage_{slot}_{tag}.png")
+            if not os.path.exists(src):
+                raise RuntimeError(f"{src} missing: run tools/assetgen/blender first")
+            t = import_file(src, f"{ROOT}/Textures/Generated", f"T_{slot}_{tag.capitalize()}")
+            configure_texture(t, kind)
+            maps[tag] = t
+        path = f"{ROOT}/Materials/MI_{slot}"
+        if EAL.does_asset_exist(path):
+            EAL.delete_asset(path)
+        mi = TOOLS.create_asset(f"MI_{slot}", f"{ROOT}/Materials", unreal.MaterialInstanceConstant,
+                                unreal.MaterialInstanceConstantFactoryNew())
+        MEL.set_material_instance_parent(mi, mat)
+        MEL.set_material_instance_texture_parameter_value(mi, "BaseColorTex", maps["color"])
+        MEL.set_material_instance_texture_parameter_value(mi, "OpacityTex", maps["opacity"])
+        MEL.set_material_instance_vector_parameter_value(mi, "Tint", unreal.LinearColor(*f["tint"], 1.0))
+        MEL.set_material_instance_vector_parameter_value(mi, "TintVary", unreal.LinearColor(*f["tint_vary"], 1.0))
+        MEL.set_material_instance_scalar_parameter_value(mi, "Translucency", f["translucency"])
+        MEL.update_material_instance(mi)
+        EAL.save_loaded_asset(mi)
+    log(f"foliage: {len(SPEC['foliage'])} instances")
 
 
 # --- meshes ---------------------------------------------------------------------

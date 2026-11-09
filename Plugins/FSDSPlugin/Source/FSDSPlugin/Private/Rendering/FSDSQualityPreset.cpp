@@ -3,6 +3,9 @@
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "Containers/Ticker.h"
 #include "EngineUtils.h"
 #include "Environment/FSDSDaylight.h"
@@ -16,7 +19,7 @@ namespace
 
 	// The showcase values. Sim is whatever the ini files set, captured the
 	// first time showcase is applied and put back by Apply(Sim).
-	const FSetting Settings[] = {
+	const FSetting PresetCvars[] = {
 		{ TEXT("r.ScreenPercentage"),                 TEXT("100") },
 		{ TEXT("sg.ViewDistanceQuality"),             TEXT("3") },
 		{ TEXT("sg.AntiAliasingQuality"),             TEXT("3") },
@@ -73,6 +76,49 @@ namespace
 			}
 		}));
 
+	// A camera anywhere, for renders: track frame, metres (x along the track,
+	// y to the left, z up), pitch up and yaw left of +x in degrees. The car
+	// keeps driving; only the view moves. FSDS.View with no arguments goes
+	// back to the car.
+	TWeakObjectPtr<ACameraActor> GViewCamera;
+	FAutoConsoleCommandWithWorldAndArgs GViewCmd(
+		TEXT("FSDS.View"),
+		TEXT("FSDS.View x y z pitch yaw [fov=70] - look from a point (track frame, m, deg); no arguments: back to the car"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+			APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+			if (!PC) { UE_LOG(LogTemp, Warning, TEXT("FSDS View: no player")); return; }
+			if (Args.Num() == 0)
+			{
+				if (APawn* P = PC->GetPawn()) PC->SetViewTarget(P);
+				if (GViewCamera.IsValid()) GViewCamera->Destroy();
+				return;
+			}
+			if (Args.Num() < 5)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FSDS View: usage FSDS.View x y z pitch yaw [fov]"));
+				return;
+			}
+			double V[6] = {0, 0, 0, 0, 0, 70};
+			for (int32 K = 0; K < FMath::Min(Args.Num(), 6); ++K) V[K] = FCString::Atod(*Args[K]);
+			if (FMath::Abs(V[0]) > 5000 || FMath::Abs(V[1]) > 5000 || FMath::Abs(V[2]) > 2000 || V[5] < 5 || V[5] > 170)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FSDS View: out of range"));
+				return;
+			}
+			ACameraActor* Cam = GViewCamera.Get();
+			if (!Cam)
+			{
+				Cam = World->SpawnActor<ACameraActor>();
+				GViewCamera = Cam;
+			}
+			// Track frame to UE: y is mirrored, so is the yaw.
+			Cam->SetActorLocationAndRotation(FVector(V[0] * 100.0, -V[1] * 100.0, V[2] * 100.0), FRotator(V[3], -V[4], 0.0));
+			Cam->GetCameraComponent()->SetFieldOfView(float(V[5]));
+			Cam->GetCameraComponent()->bConstrainAspectRatio = false;
+			PC->SetViewTarget(Cam);
+			UE_LOG(LogTemp, Log, TEXT("FSDS View: (%.1f, %.1f, %.1f) pitch %.1f yaw %.1f fov %.0f"), V[0], V[1], V[2], V[3], V[4], V[5]);
+		}));
+
 	// A still, taken once lighting has settled: Lumen gathers its bounce light
 	// over a few seconds, and a shot on the first frames comes out darker and
 	// noisier than what the sim shows a moment later.
@@ -126,7 +172,7 @@ namespace FSDSQuality
 		if (Preset == Active) return;
 		if (Preset == EPreset::Showcase)
 		{
-			for (const FSetting& S : Settings)
+			for (const FSetting& S : PresetCvars)
 			{
 				if (IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(S.Name))
 				{
@@ -137,7 +183,7 @@ namespace FSDSQuality
 		}
 		else
 		{
-			for (const FSetting& S : Settings)
+			for (const FSetting& S : PresetCvars)
 			{
 				if (const FString* V = SimValues.Find(S.Name)) Set(S.Name, *V);
 			}

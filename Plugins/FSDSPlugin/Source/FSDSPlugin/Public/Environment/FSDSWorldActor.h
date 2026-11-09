@@ -65,6 +65,8 @@ public:
 	/** Generated (procedural) triangles; props are counted apart. */
 	int32 GetNumTriangles() const { return NumTriangles; }
 	int32 GetNumInstances() const { return NumInstances; }
+	/** Trees placed (instances of the tree models, when they are installed). */
+	int32 GetNumTrees() const { return NumTrees; }
 	/** Prop triangles if every instance drew its full-detail LOD. */
 	int64 GetPropTriangles() const { return PropTriangles; }
 	const TArray<FString>& GetHiddenFloors() const { return HiddenFloorNames; }
@@ -100,6 +102,7 @@ private:
 	bool bBuilt = false;
 	int32 NumTriangles = 0;
 	int32 NumInstances = 0;
+	int32 NumTrees = 0;
 	int64 PropTriangles = 0;
 	double BuildSeconds = 0.0;
 };

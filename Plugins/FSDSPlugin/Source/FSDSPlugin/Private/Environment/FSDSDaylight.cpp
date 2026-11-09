@@ -1,7 +1,6 @@
 #include "Environment/FSDSDaylight.h"
 
 #include "Components/DirectionalLightComponent.h"
-#include "Components/ExponentialHeightFogComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
 #include "Components/SkyLightComponent.h"
@@ -46,10 +45,8 @@ AFSDSDaylight::AFSDSDaylight()
 	Sky->bLowerHemisphereIsBlack = false;   // Lumen adds the ground bounce
 	Sky->Intensity = 1.f;
 
-	Fog = CreateDefaultSubobject<UExponentialHeightFogComponent>(TEXT("Fog"));
-	Fog->SetupAttachment(RootComponent);
-	Fog->FogDensity = 0.004f;              // a summer haze, not a mist
-	Fog->FogHeightFalloff = 0.2f;
+	// No height fog: the sky atmosphere's aerial perspective already hazes
+	// the distance, and a height fog draws a dark band along the horizon.
 
 	// Outranks the level's post-process volume, which only sets exposure.
 	Exposure = CreateDefaultSubobject<UPostProcessComponent>(TEXT("Exposure"));
