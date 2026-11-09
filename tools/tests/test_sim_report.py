@@ -86,6 +86,69 @@ class Verdict(unittest.TestCase):
         self.assertIn("[Run, logs and telemetry](https://run)", body)
 
 
+class Characterisation(unittest.TestCase):
+    """The car characterisation's result (tools/characterise) in the report."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.run = self.root / "headless" / "20261103_120000"
+        for s in (1, 2):
+            write_run(self.root, "acceleration_acceleration", "acceleration", s, True, 30.0)
+        write_run(self.root, "skidpad_skidpad", "skidpad", 1, True, 80.0)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_result(self, status: str, failed: str = ""):
+        d = self.run / "characterisation"
+        d.mkdir(parents=True, exist_ok=True)
+        checks = [{"id": "r", "name": "Full-lock radius, left", "hard": True,
+                   "status": "fail" if failed else "pass"}]
+        (d / "result.json").write_text(json.dumps({"status": status, "checks": checks}))
+        (d / "summary.md").write_text(f"#### Car characterisation · {status}\n\n| Check |\n")
+
+    def config(self, required: bool):
+        return {**CONFIG, "characterisation": {"enabled": True, "required": required}}
+
+    def test_a_failed_hard_check_fails_the_check_when_required(self):
+        self.write_result("fail", failed="Full-lock radius, left")
+        r = sim_report.build(self.root, self.config(True))
+        self.assertEqual(r["verdict"], "fail")
+        self.assertEqual(r["characterisation"]["failed"], ["Full-lock radius, left"])
+        md = sim_report.summary(r, None)
+        self.assertIn("#### Car characterisation · fail", md)
+        self.assertIn("This fails the sim check.", md)
+        self.assertIn("car fail", sim_report.history_cell(r))
+
+    def test_report_only_when_not_required(self):
+        self.write_result("fail", failed="Full-lock radius, left")
+        r = sim_report.build(self.root, self.config(False))
+        self.assertEqual(r["verdict"], "pass")
+        self.assertIn("Reported only", sim_report.comment(r, None, {}, "https://run"))
+
+    def test_a_characterisation_that_could_not_measure_fails_nothing(self):
+        self.write_result("error")
+        r = sim_report.build(self.root, self.config(True))
+        self.assertEqual(r["verdict"], "pass")
+        self.assertIn("Car characterisation · error", sim_report.comment(r, None, {}, ""))
+
+    def test_one_that_died_without_a_result_is_shown(self):
+        rec = json.loads((self.run / "run.json").read_text())
+        rec["characterisation"] = {"status": "timeout"}
+        (self.run / "run.json").write_text(json.dumps(rec))
+        r = sim_report.build(self.root, self.config(True))
+        self.assertEqual(r["verdict"], "pass")
+        self.assertIn("couldn't run", sim_report.characterisation_section(r))
+        self.assertIn("timeout", sim_report.characterisation_section(r))
+
+    def test_no_characterisation_no_section(self):
+        r = sim_report.build(self.root, self.config(True))
+        self.assertIsNone(r["characterisation"])
+        self.assertEqual(sim_report.characterisation_section(r), "")
+        self.assertNotIn("car ", sim_report.history_cell(r))
+
+
 class IssueHistory(unittest.TestCase):
     def test_new_rows_go_first_and_the_latest_section_is_kept(self):
         body = sim_publish.issue_body("", "| 2026-11-01 00:00 | a |", "dev result 1")

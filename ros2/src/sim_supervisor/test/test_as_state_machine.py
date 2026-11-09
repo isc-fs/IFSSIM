@@ -144,3 +144,27 @@ def test_finished_latches_until_rearm():
     # Re-arm (READY) releases the latch.
     assert next_as_state(AS_FINISHED, READY, False, DV_IDLE, True) == AS_READY
     assert next_as_state(AS_FINISHED, OFF, False, DV_IDLE, True) == AS_OFF
+
+
+# --------------------------------------------------------------------
+# Lost pipeline heartbeat (firmware dv_lost_driving)
+# --------------------------------------------------------------------
+
+def test_stale_dv_status_while_driving_is_emergency():
+    assert next_as_state(AS_DRIVING, GO, False, DV_IDLE, True,
+                         dv_fresh=False) == AS_EMERGENCY
+
+
+def test_stale_dv_status_outside_driving_is_not_emergency():
+    # Only a lost heartbeat MID-RUN trips; before go the car is braked anyway.
+    assert next_as_state(AS_READY, READY, False, DV_IDLE, True,
+                         dv_fresh=False) == AS_READY
+    assert next_as_state(AS_READY, GO, False, DV_IDLE, True,
+                         dv_fresh=False) == AS_READY
+    assert next_as_state(AS_OFF, OFF, False, DV_IDLE, True,
+                         dv_fresh=False) == AS_OFF
+
+
+def test_fresh_status_keeps_driving():
+    assert next_as_state(AS_DRIVING, GO, False, DV_RUNNING, True,
+                         dv_fresh=True) == AS_DRIVING

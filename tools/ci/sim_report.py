@@ -14,6 +14,12 @@ Autocross also runs on random tracks (tools/ci/gen_tracks.py, named
 ci_rand_<seed>.csv): they share one row in the summary, and for every run
 that didn't finish, sim_failures.py works out where it went wrong.
 
+The car characterisation (tools/characterise), when the run had one, is read
+from <run>/characterisation/: its section joins the summary and the comment,
+and with `characterisation.required` in sim_check.json a failed hard check
+fails the check. One that couldn't measure is shown, but fails nothing: that
+is the measurement's fault, not evidence about the car.
+
 Exit code: 0 every required run finished, 1 some didn't, 3 nothing ran
 (the machine failed: see the job log).
 
@@ -33,12 +39,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import sim_failures  # noqa: E402
+import track_geometry  # noqa: E402
 
 CONFIG = HERE / "sim_check.json"
 COMMENT_MARKER = "<!-- sim-check-report -->"
 RANDOM_PREFIX = "ci_rand_"
 # Missions on closed loops, where "how far round the lap" means something.
 LOOP_MISSIONS = ("autocross", "trackdrive")
+# A corner below this radius is flagged (the car's turning circle is 4.95 m).
+TIGHT_M = track_geometry.CAR_MIN_RADIUS_M
+# The cone-hit table lists at most this many hits per run, and this many overall.
+HITS_PER_RUN, HITS_TOTAL = 8, 24
 
 
 # ------------------------------------------------------------------ reading a run
@@ -70,6 +81,37 @@ def _dnf(path: Path) -> str:
     return ""
 
 
+def _kv(detail: str) -> dict[str, str]:
+    """events.csv's `key=value key=value` detail."""
+    return dict(p.split("=", 1) for p in (detail or "").split() if "=" in p)
+
+
+def _doo_events(path: Path) -> list[dict]:
+    """The kind=doo rows of events.csv (one per cone the referee counted)."""
+    if not path.exists():
+        return []
+    out = []
+    with path.open() as f:
+        for r in csv.DictReader(f):
+            if r.get("kind") != "doo":
+                continue
+            kv = _kv(r.get("detail") or "")
+
+            def num(k):
+                try:
+                    return float(kv[k])
+                except (KeyError, ValueError):
+                    return None
+
+            try:
+                t = float(r.get("t"))
+            except (TypeError, ValueError):
+                t = None
+            out.append({"t": t, "color": kv.get("color", ""), "why": kv.get("why", ""),
+                        "x": num("x"), "y": num("y"), "speed": num("car_speed")})
+    return out
+
+
 def random_seed(track: str) -> int | None:
     stem = Path(track).stem
     if not stem.startswith(RANDOM_PREFIX):
@@ -97,6 +139,16 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
             failure = sim_failures.locate(_telemetry(seed_dir / "cones.csv"), tel)
         except Exception as e:  # a bad file shouldn't lose the report
             print(f"{seed_dir}: couldn't locate the failure ({e})", file=sys.stderr)
+    cones = [(r["x"], r["y"], int(r["color"])) for r in _telemetry(seed_dir / "cones.csv")
+             if {"x", "y", "color"} <= r.keys()]
+    # Corners only mean something on a lap track: the skidpad's figure eight
+    # crosses itself, so its "centreline" reads as a 1 m corner.
+    stats = track_geometry.corner_stats(cones if mission in LOOP_MISSIONS else [], TIGHT_M)
+    hits = _doo_events(seed_dir / "events.csv")
+    for h in hits:
+        h["corner_m"] = (track_geometry.radius_near(cones, h["x"], h["y"])
+                         if mission in LOOP_MISSIONS and h["x"] is not None and h["y"] is not None
+                         else None)
     return {
         "scenario": seed_dir.parent.parent.name,
         "mission": mission,
@@ -118,9 +170,34 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
         # (the pipeline is real-time sensitive), so a failure there may be the box.
         "sim_speed": sim / wall if sim and wall else None,
         "steer_max": max(steer) if steer else None,
+        "corner_min_m": stats["min_radius_m"],
+        "corner_tight": stats["n_tight"],
+        "hits": hits,
         "dir": str(seed_dir.relative_to(run_dir)),
         "code": man.get("code") or {},
     }
+
+
+def read_characterisation(run_dir: Path, rec: dict, config: dict) -> dict | None:
+    """The run's car characterisation: status, its markdown, the hard checks that failed."""
+    cfg = config.get("characterisation") or {}
+    d = run_dir / "characterisation"
+    out = {"required": bool(cfg.get("required")), "status": "error", "markdown": "", "failed": [],
+           "error": None}
+    try:
+        res = json.loads((d / "result.json").read_text())
+    except (OSError, ValueError):
+        if "characterisation" not in rec:
+            return None  # not asked for, or the run never got that far
+        out["error"] = (rec["characterisation"] or {}).get("error") or \
+            f"it ended {(rec['characterisation'] or {}).get('status', 'without a result')}"
+        return out
+    out["status"] = res.get("status", "error")
+    out["error"] = res.get("error")
+    out["failed"] = [c["name"] for c in res.get("checks", []) if c.get("hard") and c.get("status") == "fail"]
+    if (d / "summary.md").exists():
+        out["markdown"] = (d / "summary.md").read_text()
+    return out
 
 
 def build(root: Path, config: dict) -> dict:
@@ -158,9 +235,11 @@ def build(root: Path, config: dict) -> dict:
     ran = {g["mission"] for g in groups.values()}
     missing = [m for m in required if m not in ran]
     failed = [g["scenario"] for g in groups.values() if g["required"] and g["finished"] < g["runs"]]
+    car = read_characterisation(run_dir, rec, config)
+    car_failed = bool(car and car["required"] and car["status"] == "fail")
     if not runs:
         verdict = "error"
-    elif failed or missing:
+    elif failed or missing or car_failed:
         verdict = "fail"
     else:
         verdict = "pass"
@@ -186,6 +265,7 @@ def build(root: Path, config: dict) -> dict:
         "runs": [{k: v for k, v in r.items() if k != "code"} for r in runs],
         "groups": list(groups.values()),
         "failures": failures,
+        "characterisation": car,
     }
 
 
@@ -262,6 +342,45 @@ def headline(report: dict) -> str:
     return " · ".join(parts)
 
 
+def corner_cell(r: dict) -> str:
+    """Tightest centreline radius, bold with the count when it is under what the car can turn."""
+    m = r.get("corner_min_m")
+    if m is None:
+        return "–"
+    if m < TIGHT_M:
+        return f"**{m:.1f} m** ({r.get('corner_tight') or 1} under {TIGHT_M:.2f})"
+    return f"{m:.1f} m"
+
+
+def hits_table(report: dict) -> str:
+    """The cones each run knocked down: when, which side, the corner there, how fast."""
+    rows = []
+    for r in report["runs"]:
+        hs = r.get("hits") or []
+        for h in hs[:HITS_PER_RUN]:
+            rows.append((r, h))
+        if len(hs) > HITS_PER_RUN:
+            rows.append((r, None))
+    if not rows:
+        return ""
+    out = ["<details><summary>Cone hits</summary>\n",
+           "| Run | Time | Side | Corner | Car speed | Why |", "|---|---|---|---|---|---|"]
+    for r, h in rows[:HITS_TOTAL]:
+        run = f"{r['scenario']} #{r['seed']}"
+        if h is None:
+            out.append(f"| {run} | … | | | | +{len(r['hits']) - HITS_PER_RUN} more |")
+            continue
+        side = {"blue": "blue (left)", "yellow": "yellow (right)"}.get(h["color"], h["color"] or "–")
+        out.append("| {} | {} | {} | {} | {} | {} |".format(
+            run, f1(h["t"], " s"), side,
+            "–" if h.get("corner_m") is None else f"R {h['corner_m']:.1f} m",
+            f1(h["speed"], " m/s"), h["why"] or "–"))
+    if len(rows) > HITS_TOTAL:
+        out.append(f"| … | | | | | +{len(rows) - HITS_TOTAL} more rows |")
+    out.append("\n</details>\n")
+    return "\n".join(out)
+
+
 def tables(report: dict, baseline: dict | None) -> str:
     out = []
     if report.get("error"):
@@ -286,18 +405,21 @@ def tables(report: dict, baseline: dict | None) -> str:
         ))
     out.append("")
     out.append("<details><summary>Every run</summary>\n")
-    out.append("| Mission | Seed | Result | Lap | Cones hit | Off track | Mean / top speed | Max steering | Sim speed |")
-    out.append("|---|---|---|---|---|---|---|---|---|")
+    out.append("| Mission | Seed | Result | Lap | Cones hit | Off track | Mean / top speed | Max steering "
+               "| Tightest corner | Sim speed |")
+    out.append("|---|---|---|---|---|---|---|---|---|---|")
     for r in report["runs"]:
-        out.append("| {} | {} | {} | {} | {} | {} | {} / {} | {} | {} |".format(
+        out.append("| {} | {} | {} | {} | {} | {} | {} / {} | {} | {} | {} |".format(
             r["scenario"], r["seed"], "finished" if r["finished"] else f"**{r['outcome']}**",
             f1(r["lap_s"], " s"), r["cones"] if r["cones"] is not None else "–",
             r["off_track"] if r["off_track"] is not None else "–",
             f1(r["v_mean"]), f1(r["v_max"], " m/s"),
             "–" if r["steer_max"] is None else f"{r['steer_max']:.2f}",
+            corner_cell(r),
             "–" if r["sim_speed"] is None else f"{r['sim_speed']:.2f}×",
         ))
     out.append("\n</details>\n")
+    out.append(hits_table(report))
     out.append("*Sim speed* is sim seconds per real second, the slowest run's. "
                "Below ~0.95× the car is known to drive badly, so check it before blaming the pipeline.")
     return "\n".join(out)
@@ -345,6 +467,21 @@ def failures_table(report: dict, track_urls: dict[str, str] | None = None) -> st
     return "\n".join(out)
 
 
+def characterisation_section(report: dict) -> str:
+    """The car characterisation's table (written by tools/characterise), or why there is none."""
+    car = report.get("characterisation")
+    if not car:
+        return ""
+    if car.get("markdown"):
+        text = car["markdown"].rstrip()
+    else:
+        text = f"#### Car characterisation · couldn't run\n\n> {car.get('error') or 'no result'}"
+    if car.get("status") == "fail":
+        text += ("\n\nThis fails the sim check." if car.get("required") else
+                 "\n\nReported only: `characterisation.required` is off in `tools/ci/sim_check.json`.")
+    return "\n" + text + "\n"
+
+
 def maps(images: dict[str, str]) -> str:
     if not images:
         return ""
@@ -354,7 +491,7 @@ def maps(images: dict[str, str]) -> str:
 
 def comment(report: dict, baseline: dict | None, images: dict[str, str], run_url: str, base_note: str = "") -> str:
     parts = [COMMENT_MARKER, "### " + headline(report), "", tables(report, baseline),
-             failures_table(report, report.get("track_urls")), maps(images)]
+             failures_table(report, report.get("track_urls")), characterisation_section(report), maps(images)]
     foot = f"[Run, logs and telemetry]({run_url})" if run_url else ""
     if baseline and base_note:
         foot += f" · {base_note}"
@@ -364,6 +501,7 @@ def comment(report: dict, baseline: dict | None, images: dict[str, str], run_url
 
 def summary(report: dict, baseline: dict | None) -> str:
     return "\n".join(["### " + headline(report), "", tables(report, baseline), failures_table(report),
+                      characterisation_section(report),
                       "\nSim and pipeline logs are in the `sim-pr-results` artifact.\n"])
 
 
@@ -375,6 +513,9 @@ def history_cell(report: dict) -> str:
         name = g["mission"] + (" random" if g.get("random") else "")
         name = name if g["required"] else f"*{name}*"
         cells.append(f"{name} {g['finished']}/{g['runs']}{lap}")
+    car = report.get("characterisation")
+    if car:
+        cells.append(f"car {car['status']}")
     return "<br>".join(cells) or "–"
 
 

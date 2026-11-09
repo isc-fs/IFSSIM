@@ -29,8 +29,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-WHEELBASE_M = 1.60          # IFS-08 (settings.json)
-MAX_STEER_DEG = 22.4        # IFS-08 MaxSteerAngle (settings.json)
+import pathlib
+
+
+def _sim_vehicle_physics() -> dict:
+    """VehiclePhysics block of the repo-root settings.json (single source of
+    truth for the sim car). Empty dict if it cannot be found (e.g. in Docker)."""
+    import json
+    for parent in pathlib.Path(__file__).resolve().parents:
+        cand = parent / "settings.json"
+        if cand.is_file():
+            try:
+                return json.loads(cand.read_text())["Vehicles"]["FSCar"]["VehiclePhysics"]
+            except (OSError, ValueError, KeyError):
+                return {}
+    return {}
+
+
+_VP = _sim_vehicle_physics()
+# Fallbacks must match settings.json; tools/tests/test_constants_guard.py checks them.
+WHEELBASE_M = float(_VP.get("Wheelbase", 1.627))
+MAX_STEER_DEG = float(_VP.get("MaxSteerAngle", 18.2))
 
 
 class FSDSClient:

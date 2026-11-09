@@ -14,12 +14,30 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Longitudinal plant uses the settings it already had.** Rolling resistance
+  (`RollingResistance`, Crr 0.020) is now applied to the Chaos car; Chaos has
+  none of its own, so a coasting car only slowed from drag. Drive and regen
+  use `DrivetrainEfficiency` from settings instead of a hardcoded 0.92, and
+  regen divides by it (losses make the wheel give up more torque, not less).
+  The EMRAX drive power cap is `MotorMaxPower` (80 kW) instead of the 100 kW
+  datasheet figure. EBS torque is sized like the MATLAB plant,
+  `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
+  Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
+
 - **`dv_pipeline_stack` now compiles C++ packages as Release.** The
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
   Matches CI and `mission_control_backend`'s Dockerfile.
 
 ### Added
+
+- **Car characterisation in the sim check.** `tools/characterise` drives the car
+  with scripted inputs (no pipeline) before the missions and checks it against
+  `settings.json`: full-lock radius both ways, steering linearity and low-speed
+  yaw gain and the solver's wheelbase (from the sim log) fail the check; launch, coast-down and EBS stop are reported. Switch
+  it in `tools/ci/sim_check.json` (`characterisation`).
+- **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
+- **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
 
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
@@ -274,6 +292,9 @@ shipping pipeline, documentation.
   the project's default over it on every package, throwing away what was
   chosen in the sim (the window, the menu's frame rate, the graphics
   settings). It now seeds the file only when there is none.
+- **Hidden engine-braking drag removed.** Chaos's engine was set to brake the rear wheels with EngineRPM x 0.05 N.m whenever its own throttle was zero, and the pawn always passes it zero (the EMRAX drives the wheels directly). That was a speed-proportional drag of about 0.085·v m/s², present while driving as well as coasting, and most of the coast-down excess the car characterisation found (1.02 vs 0.31 m/s² at 10 m/s). `EngineBrakeEffect` is now 0, and the startup log warns if it isn't.
+- **The sim car kept driving after leaving AS Driving.** The uDV emulator only stopped relaying `/ctrl/cmd`, and the bridge and pawn hold the last command, so an emergency, an e-stop or the end of a run left the car on its last throttle and steering. It now does what the car's firmware does: zeroes the command on leaving Driving or when `/ctrl/cmd` is older than 0.5 s, fires the EBS on AS Emergency, and treats a `/dv/status` heartbeat older than 0.4 s mid-run as an emergency (it was read as idle, with a 1.5 s window). Arming from AS Off releases an EBS latched by the previous run.
+- Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.
 - Full steering lock in the sim is now 18.2° at the road wheel, the measured value and the one the controller assumes (#462). It was 22.4°, so every steering command turned the wheels 1.23x further than the controller intended and the car cut the inside of corners. The bridge's reported `/fsds/steering_angle` uses the same scale.
 - The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.
 - **RPC replies with an apostrophe or a control character in a string were
