@@ -378,6 +378,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						SAssignNew(BagsPage, SFSDSBagsPage)
 						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Bags; })
 						.OnReplay(OnReplay)
+						.Client(Client)
 						.Note(BagsNote)
 						.NoteError(bBagsNoteError)
 					]

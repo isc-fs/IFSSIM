@@ -14,6 +14,15 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The car copy of a bag is made on demand.** Every recorded run used to
+  also get a `<name>_carparity` bag (LiDAR+IMU only, what the real car
+  replays on its test stand, `tools/lift_to_car.sh`): ~0.8 GB more written
+  per lap and most of the ~2 minutes saving took. `IFSSIM_BAG_CAR_PARITY`
+  now defaults to 0. The sim's Bags page has a **Car copy** button for a bag
+  without one (about a minute a lap), backed by `POST
+  /api/bags/<name>/car_parity` (GET for its state), which converts the bag
+  from the bags folder inside the stack. Set `IFSSIM_BAG_CAR_PARITY=1` to
+  make it after every recording as before.
 - **Recording a bag no longer freezes the stack (Docker Desktop).** A new
   one-shot compose service, `docker_vm_tuning`, runs before
   `dv_pipeline_stack` and makes Docker Desktop's VM write data out in small,
