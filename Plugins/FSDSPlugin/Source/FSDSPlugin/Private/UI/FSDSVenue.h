@@ -45,7 +45,7 @@ namespace FSDSVenue
 
 	bool LoadFile(const FString& Path, FVenue& Out);
 
-	/** Every <dir>/venues/*.venue.json, the first dir winning a name, sorted by title. */
+	/** Every <dir>/venues/<name>.venue.json, the first dir winning a name, sorted by title. */
 	TArray<FVenueRef> Scan(const TArray<FString>& TrackDirs);
 
 	/** "parking_a" for "parking_a__loop"; empty for a track with no prefix. */
