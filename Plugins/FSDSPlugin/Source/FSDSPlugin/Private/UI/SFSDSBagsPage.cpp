@@ -1,7 +1,10 @@
 #include "UI/SFSDSBagsPage.h"
 
 #include "UI/FSDSStackStarter.h"
+#include "UI/FSDSMissionControlClient.h"
 
+#include "Dom/JsonObject.h"
+#include "GenericPlatform/GenericPlatformHttp.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
@@ -62,6 +65,7 @@ void SFSDSBagsPage::Construct(const FArguments& InArgs)
 {
 	IsActive = InArgs._IsActive;
 	OnReplay = InArgs._OnReplay;
+	Client = InArgs._Client;
 	Note = InArgs._Note;
 	bNoteError = InArgs._NoteError;
 
@@ -98,7 +102,8 @@ void SFSDSBagsPage::Construct(const FArguments& InArgs)
 			SNew(STextBlock)
 			.Text(LOCTEXT("Hint", "Runs recorded with Record a bag (Drive, Autonomous), as the backend copies them out of "
 				"the stack when the run stops. Replay puts the car back on the bag's track and moves it as it drove; the "
-				"pipeline view shows what the pipeline saw at each moment. Esc stops the replay."))
+				"pipeline view shows what the pipeline saw at each moment. Esc stops the replay. Car copy makes the "
+				"LiDAR+IMU bag the real car replays on its test stand (tools/lift_to_car.sh), about a minute a lap."))
 			.Font(BagsUi::Font(10)).ColorAndOpacity(BagsUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
@@ -161,7 +166,64 @@ EActiveTimerReturnType SFSDSBagsPage::Poll(double Now, float Dt)
 	const bool bActive = IsActive.Get(true);
 	if (bActive && !bWasActive) Rescan();
 	bWasActive = bActive;
+	if (CarCopyMaking.Num() > 0 && FPlatformTime::Seconds() >= NextCarPoll)
+	{
+		NextCarPoll = FPlatformTime::Seconds() + 3.0;
+		PollCarCopies();
+	}
 	return EActiveTimerReturnType::Continue;
+}
+
+void SFSDSBagsPage::MakeCarCopy(const FString& Name)
+{
+	if (!Client.IsValid() || CarCopyMaking.Contains(Name)) return;
+	CarCopyMaking.Add(Name);
+	NextCarPoll = FPlatformTime::Seconds() + 3.0;
+	Status = FString::Printf(TEXT("Making the car copy of %s (about a minute a lap)..."), *Name);
+	bStatusError = false;
+	TWeakPtr<SFSDSBagsPage> Weak = SharedThis(this);
+	Client->Post(FString::Printf(TEXT("/api/bags/%s/car_parity"), *FGenericPlatformHttp::UrlEncode(Name)),
+		MakeShared<FJsonObject>(), [Weak, Name](const FFSDSMcReply& R)
+		{
+			TSharedPtr<SFSDSBagsPage> Self = Weak.Pin();
+			if (!Self.IsValid() || R.Ok()) return;
+			Self->CarCopyMaking.Remove(Name);
+			Self->Status = FString::Printf(TEXT("Couldn't start the car copy of %s: %s"), *Name,
+				R.Reached() ? *R.Error : TEXT("Mission Control's backend isn't running (START brings it up)."));
+			Self->bStatusError = true;
+		});
+}
+
+void SFSDSBagsPage::PollCarCopies()
+{
+	if (!Client.IsValid()) return;
+	TWeakPtr<SFSDSBagsPage> Weak = SharedThis(this);
+	for (const FString& Name : CarCopyMaking.Array())
+	{
+		Client->Get(FString::Printf(TEXT("/api/bags/%s/car_parity"), *FGenericPlatformHttp::UrlEncode(Name)),
+			[Weak, Name](const FFSDSMcReply& R)
+			{
+				TSharedPtr<SFSDSBagsPage> Self = Weak.Pin();
+				const TSharedPtr<FJsonObject> O = R.Object();
+				if (!Self.IsValid() || !O.IsValid()) return;   // no answer: try again next poll
+				const FString State = O->GetStringField(TEXT("state"));
+				if (State == TEXT("making")) return;
+				Self->CarCopyMaking.Remove(Name);
+				Self->Rescan();
+				if (State == TEXT("done"))
+				{
+					Self->Status = FString::Printf(TEXT("Car copy of %s ready: %s_carparity in the bags folder."), *Name, *Name);
+					Self->bStatusError = false;
+				}
+				else
+				{
+					// "none" too: the backend restarted and forgot it.
+					Self->Status = FString::Printf(TEXT("The car copy of %s didn't finish: %s"), *Name,
+						State.StartsWith(TEXT("error: ")) ? *State.Mid(7) : TEXT("the backend lost track of it, try again."));
+					Self->bStatusError = true;
+				}
+			});
+	}
 }
 
 void SFSDSBagsPage::Rescan()
@@ -185,6 +247,7 @@ void SFSDSBagsPage::Rescan()
 		if (!ParseName(N, B)) continue;
 		B.Dir = FPaths::Combine(Dir, N);
 		B.bComplete = FPaths::FileExists(FPaths::Combine(B.Dir, TEXT("metadata.yaml")));
+		B.bHasCarCopy = FPaths::FileExists(FPaths::Combine(B.Dir + TEXT("_carparity"), TEXT("metadata.yaml")));
 		B.Bytes = BagsUi::DirBytes(B.Dir) + BagsUi::DirBytes(B.Dir + TEXT("_carparity"));
 		Bags.Add(MoveTemp(B));
 	}
@@ -204,7 +267,8 @@ void SFSDSBagsPage::Rebuild()
 	for (const FBag& B : Bags)
 	{
 		const FString When = B.bHasWhen ? B.When.ToString(TEXT("%Y-%m-%d %H:%M")) : FString();
-		const FString Meta = FString::Printf(TEXT("%s  ·  %s  ·  %s%s"), *B.Event, *When, *SizeText(B.Bytes),
+		const FString Meta = FString::Printf(TEXT("%s  ·  %s  ·  %s%s%s"), *B.Event, *When, *SizeText(B.Bytes),
+			B.bHasCarCopy ? TEXT("  ·  car copy") : TEXT(""),
 			B.bComplete ? TEXT("") : TEXT("  ·  still being copied out, or cut short"));
 		List->AddSlot().AutoHeight().Padding(0, 0, 0, 6)
 		[
@@ -231,6 +295,23 @@ void SFSDSBagsPage::Rebuild()
 					BagsUi::Button(LOCTEXT("Replay", "Replay in the sim"), BagsUi::GoBtn,
 						[this, Dir = B.Dir, Track = B.Track]() { OnReplay.ExecuteIfBound(Dir, Track); },
 						B.bComplete)
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 6, 0)
+				[
+					SNew(SBox)
+					.Visibility(B.bComplete && !B.bHasCarCopy ? EVisibility::Visible : EVisibility::Collapsed)
+					[
+						BagsUi::Button(TAttribute<FText>::CreateLambda([this, Name = B.Name]()
+							{
+								return CarCopyMaking.Contains(Name) ? LOCTEXT("CarCopyMaking", "Making the car copy...")
+									: LOCTEXT("CarCopy", "Car copy");
+							}),
+							BagsUi::PlainBtn, [this, Name = B.Name]() { MakeCarCopy(Name); },
+							TAttribute<bool>::CreateLambda([this, Name = B.Name]()
+							{
+								return Client.IsValid() && !CarCopyMaking.Contains(Name);
+							}))
+					]
 				]
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[
