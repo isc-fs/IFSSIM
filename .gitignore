@@ -66,6 +66,8 @@ Content/tracks/*.csv
 # ...except the stress-track library, built by `python3 -m envgen stress`
 # and checked against the generator in CI (envgen/tests/test_primitives.py).
 !Content/tracks/stress_*.csv
+# ...and venue tracks, <venue>__<track>.csv: part of their venue (docs/venues.md).
+!Content/tracks/*__*.csv
 Content/tracks/.ifssim_state.json
 
 # UE5 editor scratch — *_BuiltData.uasset is regenerated lighting / nav

@@ -69,10 +69,28 @@ void SFSDSTrackMap::Construct(const FArguments&)
 void SFSDSTrackMap::SetCones(TArray<FCone> InCones)
 {
 	Cones = MoveTemp(InCones);
+	UpdateBounds();
+}
+
+void SFSDSTrackMap::SetVenue(const TSharedPtr<const FSDSVenue::FVenue>& InVenue, const FVector2D& InShift)
+{
+	Venue = InVenue;
+	VenueShift = InShift;
+	UpdateBounds();
+}
+
+void SFSDSTrackMap::UpdateBounds()
+{
 	Bounds = FBox2D(ForceInit);
 	for (const FCone& C : Cones)
 	{
 		Bounds += C.Pos;
+	}
+	if (Venue.IsValid() && Bounds.bIsValid)
+	{
+		const FBox2D V = Venue->Bounds();
+		Bounds += V.Min + VenueShift;
+		Bounds += V.Max + VenueShift;
 	}
 	Invalidate(EInvalidateWidgetReason::Paint);
 }
@@ -191,6 +209,12 @@ int32 SFSDSTrackMap::OnPaint(const FPaintArgs&, const FGeometry& Geo, const FSla
 		const FString S = LOCTEXT("XAxis", "x (m)").ToString();
 		Text(LayerId + 1, S, FVector2f(PlotMax.X - MeasureText(S, SmallFont).X, PlotMax.Y + 18.f), Map::Label, SmallFont);
 		Text(LayerId + 1, LOCTEXT("YAxis", "y (m)").ToString(), FVector2f(4.f, PlotMin.Y - 16.f), Map::Label, SmallFont);
+	}
+
+	if (Venue.IsValid())
+	{
+		FSDSVenue::Paint(*Venue, [&](const FVector2D& V) { return ToScreen(V.X + VenueShift.X, V.Y + VenueShift.Y); },
+			Scale, Geo, Out, LayerId + 1);
 	}
 
 	// Cones. A cone is ~0.23 m across: drawn a bit bigger, so a big track

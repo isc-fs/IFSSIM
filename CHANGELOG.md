@@ -14,6 +14,31 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Parking lot A is fenced in, and its tracks get clutter of their own.** Tyre
+  walls line the long edges of the lot (bins and bollards in their gaps) and a
+  new `fence` class, a steel crowd barrier, the short ones. The south sidewalk,
+  now 20 cm tall and still LiDAR-only, runs right along the lot in plain view
+  of the LiDAR (a second flat plane for the ground fit), with the barriers
+  behind it, so the car still meets something solid. Each venue track's sidecar also gets tyre walls, bollards, bins,
+  spare cones and timing tripods 0.5–3 m from its cones, on the lot, from the
+  track's seed (profile `venue_clutter`); the Drive map draws them. See
+  docs/venues.md.
+- **A venue's track always loads its surroundings,** even with
+  `"Environment": {"Enabled": false}` in settings.json (the default): the
+  plugin recognises a venue's sidecar by its profile, `venue_<venue>`. Every
+  other sidecar still waits for `Enabled`, and tracks without one are
+  unchanged.
+
+- **The menu's Location is a dropdown, and the track list groups by venue.**
+  Drive and the Track editor pick the venue from one dropdown (with each
+  venue's track count on Drive), so more venues don't push the page down. On
+  Anywhere, Drive lists the open floor's tracks first, then each venue's under
+  its name; a search box filters the list once it is long.
+- **Autocross lists open tracks.** One timed run from the start gate to the
+  finish gate, as the referee already timed them; Trackdrive still needs a loop.
+- **Practice is manual only.** The Autonomous button is hidden while Practice
+  is picked: Mission Control has no practice mission.
+
 - **`dv_pipeline_stack` now compiles C++ packages as Release.** The
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
@@ -21,6 +46,21 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Venues in the menu.** The Drive page has a Location row (Anywhere, or a
+  venue) that lists only that venue's tracks, and its map draws the lot and
+  everything around the cones. In the Track editor, pick a venue to draw on
+  it: the lot and its props sit behind the drawing, cones off the lot are an
+  error while you draw, and the track is saved as `<venue>__<name>` with its
+  environment sidecar written by the backend at the same time (and deleted
+  with it). See docs/venues.md.
+- **Venues, starting with a parking lot.** A venue is a fixed place several
+  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
+  tracks are drawn) and what stands around it, and `python -m envgen venue`
+  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
+  plugin builds it like any environment. New prop classes for it: `tree`,
+  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
+  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
+  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
   Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
   suits it (a gridded top-down map of its cones, in metres), and who drives,
