@@ -78,6 +78,8 @@ private:
 	void* ReadPipe = nullptr;
 	void* WritePipe = nullptr;
 	bool bRunning = false;
+	/** Mac/Linux: the temp script Run() hands the shell; deleted in Close(). */
+	FString ScriptPath;
 	bool bFinished = false;
 	int32 ReturnCode = 0;
 	FString Pending;
