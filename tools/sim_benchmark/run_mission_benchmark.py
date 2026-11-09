@@ -709,6 +709,7 @@ class RunResult:
     error: str | None = None
     telemetry: list[dict] = field(default_factory=list)
     sim_seconds: float | None = None  # the run's length in sim time, when the sim reports it
+    sim_start: float | None = None  # the sim clock when the run began (doo events are stamped on it)
 
 
 class Progress:
@@ -833,10 +834,49 @@ def run_one(
         offset,
         telemetry=telemetry,
         sim_seconds=None if sim0 is None else sim_now - sim0,
+        sim_start=sim0,
     )
 
 
 # ------------------------------------------------------------------ writing a run
+CONE_COLOURS = {0: "yellow", 1: "blue", 2: "orange_large", 3: "orange_small"}
+
+
+def doo_rows(res: RunResult) -> list[dict]:
+    """The referee's per-cone hits as events.csv rows: kind=doo, t in sim
+    seconds since the run began, detail as compact key=value pairs (x, y the
+    cone's original place in cones.csv's frame; car_* the car at the hit)."""
+    rows = []
+    for e in res.referee.get("doo_events") or []:
+        if not isinstance(e, dict):
+            continue
+        try:
+            t = float(e.get("t") or 0.0) - (res.sim_start or 0.0)
+            kv = [
+                ("cone", e.get("cone")),
+                ("name", str(e.get("name", "")).replace(" ", "_")),
+                ("color", CONE_COLOURS.get(e.get("color"), e.get("color"))),
+                ("x", e.get("x")),
+                ("y", e.get("y")),
+                ("disp_m", e.get("displacement")),
+                ("tilt_deg", e.get("tilt_deg")),
+                ("why", e.get("reason")),
+                ("car_x", e.get("car_x")),
+                ("car_y", e.get("car_y")),
+                ("car_speed", e.get("car_speed")),
+            ]
+        except (TypeError, ValueError):
+            continue
+        rows.append(
+            {
+                "kind": "doo",
+                "t": round(t, 2),
+                "detail": " ".join(f"{k}={v}" for k, v in kv if v is not None),
+            }
+        )
+    return rows
+
+
 def race_metrics(res: RunResult) -> dict[str, float]:
     ref = res.referee
     laps = [float(x) for x in ref.get("lap_times") or []]
@@ -995,6 +1035,7 @@ def write_run(
         if res.outcome != "finished"
         else []
     )
+    events += doo_rows(res)
     _write_csv(d / "events.csv", events, ["kind", "t", "detail"])
     _write_csv(
         d / "telemetry.csv",

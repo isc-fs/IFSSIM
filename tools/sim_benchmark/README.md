@@ -205,7 +205,7 @@ a container can reach the sim there.
   record which commit it runs. Without them it refuses to start.
 
 Each run is a folder under `results/mission/<mission>_<track>/<commit>/seed<k>/` (`manifest.json`
-with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `telemetry.csv`), the
+with the referee state, `results.json`, `laps.csv`, `events.csv` (a `dnf` row, and one `doo` row per cone hit: `key=value` detail, `t` in sim seconds), a coarse `telemetry.csv`), the
 layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
 noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
 

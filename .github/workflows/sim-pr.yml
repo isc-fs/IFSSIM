@@ -3,7 +3,9 @@ run-name: >-
   ${{ inputs.pipeline_pr && format('Sim check: pipeline PR #{0}', inputs.pipeline_pr)
       || github.event.pull_request.title || github.event.head_commit.message || 'Sim PR check' }}
 
-# Drives the sim on the GPU box: a headless start-up check, then the missions
+# Drives the sim on the GPU box: a headless start-up check, the car
+# characterisation (tools/characterise: scripted manoeuvres, no pipeline,
+# checked against settings.json), then the missions
 # in tools/ci/sim_check.json through this PR's pipeline, scored by the referee
 # (now acceleration 3 times, which decides the check, then skidpad and one
 # autocross track, reported only until they're reliable). The result, compared with the last dev run
@@ -45,6 +47,7 @@ on:
       - "docker/**"
       - "docker-compose.yml"
       - "tools/headless_run/**"
+      - "tools/characterise/**"
       - "tools/sim_benchmark/**"
       - "tools/ci/**"
       - ".github/workflows/sim-pr.yml"
@@ -64,6 +67,7 @@ on:
       - "ros2/**"
       - "docker/**"
       - "tools/headless_run/**"
+      - "tools/characterise/**"
       - "tools/sim_benchmark/**"
       - "tools/ci/**"
       - ".github/workflows/sim-pr.yml"

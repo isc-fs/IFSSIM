@@ -17,6 +17,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h"
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
 #include "Kismet/GameplayStatics.h"
@@ -230,6 +231,10 @@ void FFSDSRpcServer::Start(uint16 Port)
 	// Work that must happen at a fixed point in the frame (resetScenario).
 	PreActorTickHandle = FWorldDelegates::OnWorldPreActorTick.AddLambda(
 		[this](UWorld* InWorld, ELevelTick, float) { RunTickStartWork(InWorld); });
+	// Engine frame delta for getSimStatus. Sampled every frame (paused or
+	// not) on the game thread, the only thread UE 5.8 lets read FApp time.
+	EndFrameHandle = FCoreDelegates::OnEndFrame.AddLambda(
+		[this]() { LastFrameDeltaSec.store(static_cast<float>(FApp::GetDeltaTime()), std::memory_order_relaxed); });
 
 	ServerThread = std::make_unique<std::thread>(&FFSDSRpcServer::ServerThreadFunc, this);
 
@@ -245,6 +250,8 @@ void FFSDSRpcServer::Stop()
 	PostActorTickHandle.Reset();
 	FWorldDelegates::OnWorldPreActorTick.Remove(PreActorTickHandle);
 	PreActorTickHandle.Reset();
+	FCoreDelegates::OnEndFrame.Remove(EndFrameHandle);
+	EndFrameHandle.Reset();
 
 	if (ServerThread && ServerThread->joinable())
 	{
@@ -632,7 +639,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getRefereeState"))
 	{
-		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[]}");
+		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[],\"doo_events\":[]}");
 		auto State = Referee->GetState();
 
 		// Build lap times array
@@ -659,6 +666,25 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		ConesJson += TEXT("]");
 
+		// Per-cone hit records (ENU metres, same frame as cone_positions).
+		// "t" is the game clock, the same one getSimStatus "sim_time" reports.
+		FString DooEventsJson = TEXT("[");
+		for (int32 i = 0; i < State.DooEvents.Num(); i++)
+		{
+			if (i > 0) DooEventsJson += TEXT(",");
+			const FFSDSConeHit& H = State.DooEvents[i];
+			FString CarJson = H.bHasCar
+				? FString::Printf(TEXT(",\"car_x\":%.3f,\"car_y\":%.3f,\"car_speed\":%.3f"),
+					H.CarLocation.Y / 100.f, H.CarLocation.X / 100.f, H.CarSpeedCmS / 100.f)
+				: FString();
+			DooEventsJson += FString::Printf(
+				TEXT("{\"t\":%.3f,\"cone\":%d,\"name\":\"%s\",\"color\":%d,\"x\":%.4f,\"y\":%.4f,\"displacement\":%.3f,\"tilt_deg\":%.1f,\"reason\":\"%s\"%s}"),
+				H.TimeSeconds, H.ConeIndex, *JsonEscape(H.ConeName), (int32)H.Color,
+				H.OriginalLocation.Y / 100.f, H.OriginalLocation.X / 100.f,
+				H.DisplacementCm / 100.f, H.TiltDeg, *JsonEscape(H.Reason), *CarJson);
+		}
+		DooEventsJson += TEXT("]");
+
 		// Event type name
 		FString EventName;
 		switch (State.EventType)
@@ -670,10 +696,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		default: EventName = TEXT("unknown"); break;
 		}
 
-		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s}"),
+		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s,\"doo_events\":%s}"),
 			State.DooCounter, State.OffTrackCounter, State.Cones.Num(), State.Laps.Num(), State.RequiredLaps,
 			State.bFinished ? TEXT("true") : TEXT("false"), *EventName,
-			*LapTimesJson, *ConesJson);
+			*LapTimesJson, *ConesJson, *DooEventsJson);
 	}
 	else if (Method.StartsWith(TEXT("setVehicleCommand")) || Method.StartsWith(TEXT("setCarControls")))
 	{
@@ -1410,7 +1436,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			// seed, so a client can number samples from the reset by their
 			// stamps (verify_determinism.py). At the start of a tick the clock
 			// has already advanced to it; a paused world's has not, and its
-			// next tick is one fixed step on.
+			// next tick is one fixed step on. DoReset runs on the game thread,
+			// so reading FApp here is safe under UE 5.8.
 			const double SimTime = !World ? 0.0
 				: World->GetTimeSeconds() + (bAtTickStart ? 0.0 : FApp::GetDeltaTime());
 			const FString Result = FString::Printf(
@@ -2217,7 +2244,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			MapName = World->GetMapName();
 			MapName.RemoveFromStart(TEXT("UEDPIE_0_"));
 		}
-		FPS = 1.0f / FApp::GetDeltaTime();
+		// Runs on the RPC thread: read the game thread's sampled delta, not
+		// FApp (UE 5.8 ensures on FApp time reads off the game thread).
+		const float DeltaSec = LastFrameDeltaSec.load(std::memory_order_relaxed);
+		FPS = DeltaSec > 0.f ? 1.0f / DeltaSec : 0.f;
 
 		// sim_time: the game clock (s), the same clock the sensor stamps and
 		// /clock use. The mission benchmark counts its timeouts in it, so a

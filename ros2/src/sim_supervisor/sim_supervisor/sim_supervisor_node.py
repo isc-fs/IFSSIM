@@ -34,6 +34,7 @@ OdometryFilter, dormant by default when odometry_filter_node owns /odom).
 
 from __future__ import annotations
 
+import threading
 import time
 
 import numpy as np
@@ -64,6 +65,9 @@ from fs_msgs.msg import ControlCommand
 
 from mission_control.interface_contract import (
     AS_DRIVING,
+    AS_EMERGENCY,
+    AS_OFF,
+    AS_READY,
     DV_IDLE,
     SERVICE_FORCE_EBS,
     TOPIC_AMI_MISSION,
@@ -111,11 +115,16 @@ IMU_DECIMATION: int = 1
 # stale /assi/state as the uDV being dead.
 AS_PUBLISH_HZ: float = 10.0
 
-# /dv/status liveness: a stale downlink means mission_control / the link
-# is dead, so the emulator treats the status as DV_IDLE (go is gated off,
-# nothing drives). Must comfortably exceed mission_control's publish
-# period (>= 2 Hz → 0.5 s).
-DV_STATUS_STALE_S: float = 1.5
+# /dv/status liveness, the firmware's DV_STATUS_STALE_MS (dv_interface.h):
+# 400 ms, four missed cycles of mission_control's 10 Hz heartbeat, under the
+# FS-Rules T11.9.4 500 ms cap. A stale downlink reads as DV_IDLE (go is gated
+# off), and mid-run it is an emergency (as_state_machine dv_fresh). It was
+# 1.5 s, sized for a 2 Hz heartbeat that no longer exists.
+DV_STATUS_STALE_S: float = 0.4
+
+# /ctrl/cmd liveness, the firmware's DV_CTRL_CMD_STALE_MS: while Driving, a
+# command stream older than this is zeroed rather than held.
+CTRL_CMD_STALE_S: float = 0.5
 
 
 LATCHED_QOS = QoSProfile(
@@ -159,6 +168,12 @@ class SimSupervisorNode(LifecycleNode):
         self._as_state: int = 0               # AS_OFF
         self._dv_status: int = DV_IDLE
         self._dv_status_stamp: float = 0.0
+        # Last relayed /ctrl/cmd (monotonic) and whether the bridge is
+        # currently holding a zero command. The lock keeps a relayed command
+        # from landing after the zero that a state change or staleness sends.
+        self._last_cmd_stamp: float = 0.0
+        self._cmd_zeroed: bool = True
+        self._cmd_lock = threading.Lock()
 
         # IMU sample counter, modulo IMU_DECIMATION.
         self._imu_sample_idx: int = 0
@@ -404,31 +419,76 @@ class SimSupervisorNode(LifecycleNode):
         if self._estop:
             self.get_logger().warn("/sim/estop asserted")
 
+    def _dv_fresh(self) -> bool:
+        return (time.monotonic() - self._dv_status_stamp) <= DV_STATUS_STALE_S
+
     def _effective_dv_status(self) -> int:
         """Latest /dv/status, or DV_IDLE if the downlink is stale."""
-        if (time.monotonic() - self._dv_status_stamp) > DV_STATUS_STALE_S:
-            return DV_IDLE
-        return self._dv_status
+        return self._dv_status if self._dv_fresh() else DV_IDLE
+
+    def _send_zero_command(self, why: str) -> None:
+        """Zero throttle, regen and steering at the bridge. Call with _cmd_lock held.
+
+        The bridge and the pawn hold the last command they were sent, so
+        simply not relaying any more (the old behaviour on leaving Driving)
+        left the car on its last throttle and steering. The firmware zeroes
+        actuation instead (as_actuation / DV_CTRL_CMD_STALE_MS).
+        """
+        if self._cmd_zeroed or self._control_pub is None:
+            return
+        cmd = ControlCommand()
+        cmd.header.stamp = self.get_clock().now().to_msg()
+        cmd.throttle = 0.0
+        cmd.brake = 0.0
+        cmd.steering = 0.0
+        self._control_pub.publish(cmd)
+        self._cmd_zeroed = True
+        self.get_logger().warn(f"control zeroed: {why}")
 
     def _as_tick(self) -> None:
         """Advance the AS state machine + publish /assi/state + /ami/mission."""
         mission_runnable = ami_index_to_mission_id(self._mission_index) > 0
+        dv_fresh = self._dv_fresh()
         new_state = next_as_state(
             self._as_state,
             self._operator_intent,
             self._estop,
             self._effective_dv_status(),
             mission_runnable,
+            dv_fresh=dv_fresh,
         )
-        if new_state != self._as_state:
-            self.get_logger().info(
-                f"AS state {self._as_state} → {new_state}")
-            self._as_state = new_state
+        with self._cmd_lock:
+            old_state = self._as_state
+            if new_state != old_state:
+                self.get_logger().info(f"AS state {old_state} → {new_state}"
+                                       + ("" if dv_fresh else " (/dv/status stale)"))
+                self._as_state = new_state
+            self._apply_actuation(old_state, new_state)
 
         if self._assi_state_pub is not None:
             self._assi_state_pub.publish(UInt8(data=int(self._as_state)))
         if self._ami_mission_pub is not None:
             self._ami_mission_pub.publish(Int32(data=int(self._mission_index)))
+
+    def _apply_actuation(self, old_state: int, new_state: int) -> None:
+        """What the firmware's as_actuation does on each tick. Call with _cmd_lock held."""
+        if new_state == AS_DRIVING:
+            if time.monotonic() - self._last_cmd_stamp > CTRL_CMD_STALE_S:
+                self._send_zero_command(
+                    f"/ctrl/cmd older than {CTRL_CMD_STALE_S:.1f} s")
+            return
+        if old_state == AS_DRIVING:
+            self._send_zero_command(f"left AS Driving for {new_state}")
+        if new_state == AS_EMERGENCY and old_state != AS_EMERGENCY \
+                and self._ebs_pub is not None:
+            # Emergency is EBS on the car, whatever raised it.
+            self.get_logger().warn("AS Emergency — publishing latched /signal/ebs")
+            self._ebs_pub.publish(EmptyMsg())
+        if new_state == AS_READY and old_state == AS_OFF \
+                and self._ebs_reset_pub is not None:
+            # A fresh arming starts a new run: release an EBS latched by the
+            # last one, or the bridge drops every command of this run.
+            self._ebs_reset_pub.publish(EmptyMsg())
 
     def _on_ctrl_cmd(self, msg: Twist) -> None:
         """Relay the normalised /ctrl/cmd to the bridge — only while Driving.
@@ -439,8 +499,13 @@ class SimSupervisorNode(LifecycleNode):
         ControlCommand directly (no scaling — that's the uDV's job on the
         real car).
         """
-        if self._as_state != AS_DRIVING or self._control_pub is None:
-            return
+        with self._cmd_lock:
+            if self._as_state != AS_DRIVING or self._control_pub is None:
+                return
+            self._relay_cmd(msg)
+
+    def _relay_cmd(self, msg: Twist) -> None:
+        """Publish one relayed command. Call with _cmd_lock held."""
         cmd = ControlCommand()
         cmd.header.stamp = self.get_clock().now().to_msg()
         # Decode the signed /ctrl/cmd convention (linear.x ∈ [-1, 1],
@@ -455,6 +520,8 @@ class SimSupervisorNode(LifecycleNode):
         cmd.brake = max(0.0, -v)
         cmd.steering = float(msg.angular.z)
         self._control_pub.publish(cmd)
+        self._last_cmd_stamp = time.monotonic()
+        self._cmd_zeroed = False
 
     def _on_force_ebs(self, request, response):
         """uDV /force_ebs server — mission_control requests EBS here."""
