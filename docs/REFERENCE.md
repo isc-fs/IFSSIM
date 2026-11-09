@@ -195,10 +195,10 @@ Regen torque is gated by the **battery cell-input current limit**, not by the mo
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Max regen power | 6,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
+| Max regen power | 11,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
 | Max regen torque | 230 | Nm | `MaxRegenTorque` (settings.json) → `Motor->P.MaxRegenTorqueNm` |
 
-At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=6000` yields ~8.8 Nm of available regen — the power cap binds at all but the lowest speeds.
+At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=11000` yields ~16 Nm of available regen — the power cap binds above ~460 RPM (≈2.3 m/s). 11 kW is the pack's charge limit: 95s6p Sony VTC6 cells at their 5 A maximum continuous charge, 30 A at ~370 V (it was 6 kW, about their 3 A standard charge).
 
 The implementation includes a **single-quadrant regen guard**: regen torque is forced to zero whenever the wheel isn't rotating forward. Asking for regen at `ω ≤ 0` would (a) be electrically unsafe on the real inverter, and (b) produce reverse motor torque on a stationary wheel — driving the car backward from rest, which the real IFS-08 controller cannot do.
 

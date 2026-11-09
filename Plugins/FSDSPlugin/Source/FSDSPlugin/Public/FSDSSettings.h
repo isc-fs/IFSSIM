@@ -114,7 +114,7 @@ struct FFSDSVehiclePhysics
 	// MaxRegenPower is the cell-limited cap and is the binding limit
 	// at typical driving speeds.
 	float MaxRegenTorque = 230.f;    // Nm (at motor, negative side)
-	float MaxRegenPower = 6000.f;    // Watts — cell input current limit
+	float MaxRegenPower = 11000.f;   // Watts — pack charge limit (95s6p VTC6, 5 A/cell)
 	float GearRatio = 2.909f;
 	float DrivetrainEfficiency = 0.92f;
 	float CdA = 0.95f;              // drag
