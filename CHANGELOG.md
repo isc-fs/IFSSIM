@@ -38,8 +38,12 @@ shipping pipeline, documentation.
   visualisers was 18 % of a recorded bag, and with it on, recording made
   SLAM pause past the pipeline watchdog's 0.6 s budget (829 ms measured on
   stress_brake_hairpin_75m; 200 ms with it off), so recorded runs got
-  stopped. The sim's pipeline view doesn't use it. For Lichtblick's LiDAR
-  panels: `LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack`.
+  stopped. The sim's pipeline view doesn't use it. The four `lichtblick/`
+  layouts that showed it (pipeline, racing_dashboard, slam_debug,
+  clean_bag_replay) now show the full `/lidar_points` (91k points a scan,
+  the same colouring), as onboard_live and carparity_bag already did. For a
+  slow browser, `LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack`
+  brings the light copy back.
 - **Autonomous runs drive again after a watchdog stop.** When the pipeline's
   watchdog (or anything else through `/force_ebs`) braked the car, the bridge
   latched EBS and dropped every control command until `/signal/ebs_reset`,
