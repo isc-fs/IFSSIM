@@ -49,6 +49,9 @@ public class FSDSPlugin : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("winmm.lib");
+			// The folder picker (FFSDSStackStarter::PickFolder): IFileOpenDialog.
+			PublicSystemLibraries.Add("shell32.lib");
+			PublicSystemLibraries.Add("ole32.lib");
 		}
 	}
 }

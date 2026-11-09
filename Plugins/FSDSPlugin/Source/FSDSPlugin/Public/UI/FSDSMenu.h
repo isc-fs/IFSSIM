@@ -13,6 +13,7 @@ namespace FSDSTrackSpec { struct FEditorState; }
 class AFSDSVehiclePawn;
 class APlayerController;
 class FFSDSLauncher;
+class FFSDSStackStarter;
 class FFSDSRpcServer;
 class SFSDSMenu;
 class SWidget;
@@ -112,7 +113,49 @@ private:
 	 * referee cleared), then start the event's mission; the menu shows each
 	 * step under START and closes once the pipeline has the car.
 	 */
-	void StartAutonomous(const FFSDSDriveRequest& Request);
+	void StartAutonomous(const FFSDSDriveRequest& Request, bool bStackTried = false);
+	/** StartAutonomous's steps through the backend, once the code is synced. */
+	void RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTried);
+	/**
+	 * Copy the pipeline's source from the team's code into the running
+	 * container (the folders compose watch syncs: docker compose config
+	 * says which), then Then. So an edit runs on the next START without
+	 * compose watch, and the container's copy never goes stale. A failure
+	 * (no stack yet, Docker down) just goes on to Then.
+	 */
+	void SyncPipelineSource(TFunction<void()> Then);
+
+public:
+	/** Settings, Rebuild pipeline: build the pipeline and backend images
+	 *  from the team's code and recreate their containers (C++, messages,
+	 *  launch files, setup.py; after a git pull). */
+	void RebuildPipeline();
+	bool IsRebuilding() const;
+	/** What the rebuild is doing, or how it ended; empty before the first. */
+	FString GetRebuildStatus() const { return RebuildStatus; }
+	bool RebuildFailed() const { return bRebuildFailed; }
+
+private:
+	void TickRebuild();
+	/**
+	 * START found no backend: bring up the pipeline and the backend
+	 * (docker compose, opening Docker Desktop first if its engine is down),
+	 * wait until the backend sees the sim, then START again. False when
+	 * there is no docker-compose.yml to start them from.
+	 */
+	bool BringUpStack(const FFSDSDriveRequest& Request);
+	/** docker compose for the services START needs (building them the first time). */
+	void StartCompose();
+	/** The answer to START's question when the team's code isn't on this PC
+	 *  (SFSDSMenu::SetRepoPrompt): 0 get it here, 1 somewhere else, 2 I have
+	 *  it, 3 not now. */
+	void OnRepoChoice(int32 Choice);
+	/** git clone into Dir, installing git first if it isn't there. */
+	void StartClone(const FString& Dir);
+	void ShowRepoPrompt(const FString& Error = FString());
+	void TickStackUp();
+	/** BringUpStack is over: START again, or show why not (Error). */
+	void EndStackUp(const FString& Error);
 	/** Stop the pipeline's session (the car stays where it is, under EBS). */
 	void StopSession();
 	/** The mission Mission Control runs for an event (/api/event/start). */
@@ -176,6 +219,26 @@ private:
 
 	/** While StartAutonomous runs its steps: the backend's own track load isn't an outside session. */
 	bool bStartingSession = false;
+
+	/** BringUpStack's steps. */
+	enum class EStackUp : uint8 { Idle, NeedRepo, GitInstall, Clone, Compose, Docker, Backend, SyncConfig, Sync };
+	EStackUp StackUp = EStackUp::Idle;
+	TSharedPtr<FFSDSStackStarter> StackStarter;
+	/** The folder with docker-compose.yml; empty when none was found. */
+	FString ComposeDir;
+	TOptional<FFSDSDriveRequest> StackUpRequest;
+	double StackUpSince = 0.0;
+	double DockerOpenedAt = 0.0;
+	double StackUpNextTry = 0.0;
+	bool bStackProbe = false;
+	/** Where StartClone puts the team's code. */
+	FString CloneDir;
+	/** What SyncPipelineSource does once the code is in the container. */
+	TFunction<void()> AfterSync;
+
+	TSharedPtr<FFSDSStackStarter> Rebuilder;
+	FString RebuildStatus;
+	bool bRebuildFailed = false;
 	/** Gone with the menu (Shutdown): the backend's replies check it before touching anything. */
 	TSharedPtr<bool> Alive;
 

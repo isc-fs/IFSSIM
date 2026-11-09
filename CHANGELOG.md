@@ -23,6 +23,48 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **Pipeline edits run on the next START; Rebuild pipeline in Settings.**
+  START copies the pipeline's source from the team's code into the running
+  container before every run (the folders `compose watch` syncs, as
+  `docker compose config` resolves them), so a Python edit runs without
+  `tools/compose-up-and-watch.sh`, and the container's copy can't go stale
+  after a rebuild. Settings, PIPELINE CODE, Rebuild pipeline builds the
+  pipeline and backend images and recreates their containers (as
+  `tools/refresh-bridge.sh`), for C++, messages, launch files and setup.py,
+  or after a git pull, with its progress shown there.
+- **A sim from the build zip sets up the pipeline itself (Windows).** When
+  START with Autonomous can't find the team's code, it asks: Get it (into
+  Documents\IFSSIM-repo, asked of Windows so a Spanish or moved Documents is
+  found (Documents\IFSSIM holds the sim's session logs),
+  or the home folder when Documents is in OneDrive), Somewhere else, or I have
+  it. It installs git with winget if needed, clones the repo with its
+  pipeline submodule (Git Credential Manager opens the browser for the GitHub
+  login; Git LFS assets skipped), builds the pipeline and backend images the
+  first time, and says when Docker Desktop's host networking is off. The
+  folder is remembered, and Settings, PIPELINE CODE changes it. See
+  docs/TEAM_SETUP.md. docker-compose.yml now names its project `ifssim`, so
+  the containers keep their names (which the backend uses to find the
+  pipeline's) in a folder called anything else. Two fixes found on the way:
+  the menu's calls to the backend no longer fail after 30 s of waiting (the
+  engine's default activity timeout; a fresh pipeline's first start took 2
+  min 22 s here), and Docker Desktop is started from the user's home, not the
+  sim's folder, which it kept open and so blocked the next build or update.
+- **START brings up the Docker stack when it isn't running.** START with
+  Autonomous used to stop at "the backend isn't reachable". Now, when nothing
+  answers, it runs `docker compose up -d dv_pipeline_stack
+  mission_control_backend` from the repo (only the services START needs, each
+  built only when its image is missing), opening Docker Desktop first, hidden, if its engine is down
+  (Windows, macOS; on Linux it says to start the service). It waits until the
+  backend sees the sim and starts the run, showing each step under START.
+  From Docker closed to the car driving took about a minute here.
+- **Graphics settings in the menu.** Settings, Graphics: Quality (Low, the
+  sim's settings so far, Medium or High), Resolution (25% to 100%), the 3D
+  view Shown or Hidden while the pipeline drives (the HUD stays), and Find
+  the best for this PC, which tries each from the best looking down and keeps
+  the first that leaves the GPU a quarter of each 1/60 s frame. They only
+  change the view you watch: the LiDAR's scans were checked to stay the same
+  at every setting. The view and the LiDAR each cost about half of the sim's
+  GPU work, and the view most of its CPU. See docs/sim_timing.md.
 - **An autonomous run starts and stops from the menu.** START with Autonomous
   now does what the Mission Control panel did: it stops any session, loads the
   track picked on the Drive page through the backend (cones, the car on the
