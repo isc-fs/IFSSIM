@@ -360,7 +360,9 @@ void FFSDSPipelineView::BeginReplay()
 	{
 		FScopeLock L(&Lock);
 		TruthCount = 0;
+		TruthSpeed = 0.0;
 	}
+	SpeedFrom = -1.0;
 	bAnchored = bAnchorLocked = false;   // the bag's own SLAM frame
 	Clear();
 	if (AFSDSVehiclePawn* P = Pawn.Get())
@@ -400,6 +402,12 @@ bool FFSDSPipelineView::HasReplayPose() const
 	return TruthCount > 0 && FPlatformTime::Seconds() - TruthLast.At < 2.0;
 }
 
+double FFSDSPipelineView::ReplaySpeed() const
+{
+	FScopeLock L(&Lock);
+	return bReplay && TruthCount > 0 && FPlatformTime::Seconds() - TruthLast.At < 1.0 ? TruthSpeed : 0.0;
+}
+
 void FFSDSPipelineView::ApplyReplayPose()
 {
 	FTruth A, B;
@@ -426,6 +434,25 @@ void FFSDSPipelineView::ApplyReplayPose()
 	// ENU heading (0 = east, counter-clockwise) to UE yaw (0 = north, clockwise).
 	const FRotator Rot(0.0, 90.0 - FMath::RadiansToDegrees(Yaw), 0.0);
 	P->SetActorLocationAndRotation(FSDSCoord::ENUToUE(Enu), Rot, false, nullptr, ETeleportType::TeleportPhysics);
+
+	// The HUD's speed: how far the car went over the last half second or so,
+	// measured on where the car is put, so jitter in when the recorded poses
+	// arrive averages out.
+	const double Now = FPlatformTime::Seconds();
+	const FVector2D Here(Enu.X, Enu.Y);
+	if (SpeedFrom < 0.0)
+	{
+		SpeedFrom = Now;
+		SpeedFromEnu = Here;
+	}
+	else if (Now - SpeedFrom >= 0.5)
+	{
+		const double V = FVector2D::Distance(Here, SpeedFromEnu) / (Now - SpeedFrom);
+		FScopeLock L(&Lock);
+		TruthSpeed = V;
+		SpeedFrom = Now;
+		SpeedFromEnu = Here;
+	}
 }
 
 void FFSDSPipelineView::Clear()

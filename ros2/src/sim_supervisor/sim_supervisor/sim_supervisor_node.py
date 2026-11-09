@@ -64,6 +64,8 @@ from fs_msgs.msg import ControlCommand
 
 from mission_control.interface_contract import (
     AS_DRIVING,
+    AS_OFF,
+    AS_READY,
     DV_IDLE,
     SERVICE_FORCE_EBS,
     TOPIC_AMI_MISSION,
@@ -423,6 +425,15 @@ class SimSupervisorNode(LifecycleNode):
         if new_state != self._as_state:
             self.get_logger().info(
                 f"AS state {self._as_state} → {new_state}")
+            # A new mission armed (off → ready): release the bridge's EBS
+            # latch, as the car's uDV does when the AS is re-armed after an
+            # emergency. Published only on activation before, so after a
+            # watchdog trip (/force_ebs) every later run sat at the start,
+            # its control commands dropped, until the stack restarted.
+            if (self._as_state == AS_OFF and new_state == AS_READY
+                    and self._ebs_reset_pub is not None):
+                self._ebs_reset_pub.publish(EmptyMsg())
+                self.get_logger().info("new mission armed: /signal/ebs_reset")
             self._as_state = new_state
 
         if self._assi_state_pub is not None:

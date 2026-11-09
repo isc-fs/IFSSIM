@@ -14,6 +14,48 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The car copy of a bag is made on demand.** Every recorded run used to
+  also get a `<name>_carparity` bag (LiDAR+IMU only, what the real car
+  replays on its test stand, `tools/lift_to_car.sh`): ~0.8 GB more written
+  per lap and most of the ~2 minutes saving took. `IFSSIM_BAG_CAR_PARITY`
+  now defaults to 0. The sim's Bags page has a **Car copy** button for a bag
+  without one (about a minute a lap), backed by `POST
+  /api/bags/<name>/car_parity` (GET for its state), which converts the bag
+  from the bags folder inside the stack. Set `IFSSIM_BAG_CAR_PARITY=1` to
+  make it after every recording as before.
+- **Recording a bag no longer freezes the stack (Docker Desktop).** A new
+  one-shot compose service, `docker_vm_tuning`, runs before
+  `dv_pipeline_stack` and makes Docker Desktop's VM write data out in small,
+  frequent steps (`vm.dirty_background_bytes` 32 MB, expire 2 s). With the
+  Linux defaults, a recording's ~16 MB/s came out as a 250-290 MB burst every
+  ~15 s, and a burst could freeze the whole stack for 0.5-1.7 s, so the
+  pipeline watchdog stopped 2 of 3 recorded laps. With it, 0 of 3. It only
+  acts in Docker Desktop's VM (WSL2 or LinuxKit kernel); on a Linux host it
+  does nothing, as these settings would be the machine's own.
+- **The HUD shows the car's speed during a bag replay.** The replayed car
+  moves with its physics off, so its speed read 0 km/h. The HUD now shows
+  the recorded car's speed, measured from how far it moves over half a
+  second, with "replay" beside it.
+- **`/lidar_points/viz` is off by default** (`LIDAR_VIZ_DECIMATION=0` in
+  docker-compose.yml, was 4). The quarter-density LiDAR copy for browser
+  visualisers was 18 % of a recorded bag, and with it on, recording made
+  SLAM pause past the pipeline watchdog's 0.6 s budget (829 ms measured on
+  stress_brake_hairpin_75m; 200 ms with it off), so recorded runs got
+  stopped. The sim's pipeline view doesn't use it. The four `lichtblick/`
+  layouts that showed it (pipeline, racing_dashboard, slam_debug,
+  clean_bag_replay) now show `/lidar_points/ground`, the pipeline's cropped
+  cloud (~15k points a scan, in `base_link`, the same colouring), as
+  onboard_live already did: foxglove_bridge's whitelist doesn't pass the full
+  `/lidar_points`, and the ground cloud is in recorded bags too.
+  `LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack` brings the
+  whole-scene copy back.
+- **Autonomous runs drive again after a watchdog stop.** When the pipeline's
+  watchdog (or anything else through `/force_ebs`) braked the car, the bridge
+  latched EBS and dropped every control command until `/signal/ebs_reset`,
+  which the sim supervisor published only when it activated, at stack start.
+  Every later run sat at the start line, armed but never moving, until the
+  stack was restarted. The supervisor now also releases the latch when a new
+  mission is armed (AS off → ready), as the car's uDV does.
 - **A recorded bag is saved in the background.** After a run with Record a
   bag, Mission Control copied the bag out of the pipeline's container while
   holding its state lock, so every other request (the run's state, the next

@@ -53,6 +53,9 @@ public:
 	bool IsReplaying() const { return bReplay; }
 	/** Whether a recorded pose came in the last two seconds. */
 	bool HasReplayPose() const;
+	/** The recorded car's speed (m/s), smoothed, while a replay runs: the
+	 *  car state's reads zero, its physics being off. */
+	double ReplaySpeed() const;
 
 private:
 	struct FSnapshot
@@ -100,6 +103,9 @@ private:
 	bool bPhysicsWas = true;
 	FTruth TruthPrev, TruthLast;
 	int32 TruthCount = 0;
+	double TruthSpeed = 0.0;   // m/s, the replayed car's, over ~0.5 s (ApplyReplayPose)
+	double SpeedFrom = -1.0;   // when that window started (game thread only)
+	FVector2D SpeedFromEnu = FVector2D::ZeroVector;
 
 	mutable int32 ShownCache = -1;
 };

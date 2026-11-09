@@ -348,9 +348,12 @@ _TAR_HAS_FILTER = hasattr(tarfile, "data_filter")
 
 
 def is_car_parity_enabled() -> bool:
-    """When set (default on), auto_pull also derives a car-liftable
-    `<name>_carparity` mcap (LiDAR+IMU only) beside each finalised full dump."""
-    raw = os.environ.get("IFSSIM_BAG_CAR_PARITY", "1").strip().lower()
+    """When set, auto_pull also derives a car-liftable `<name>_carparity` mcap
+    (LiDAR+IMU only) beside each finalised full dump. Off by default: it
+    doubled the writing after every recorded run (~0.8 GB a lap) for a copy
+    only the car's test stand uses; make_car_parity() makes one on demand
+    (the sim's Bags page, Car copy)."""
+    raw = os.environ.get("IFSSIM_BAG_CAR_PARITY", "0").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -440,9 +443,12 @@ class _ChunkReader:
         return out
 
 
-def _make_car_parity_copy(container, bag_name: str, cp_name: str) -> tuple:
+def _make_car_parity_copy(container, bag_name: str, cp_name: str,
+                          src_dir: str = "/bags") -> tuple:
     """Run `ros2 bag convert` inside dv_pipeline_stack to write `/bags/<cp_name>`
-    containing ONLY the car-parity replay topics (mcap). The conversion runs
+    containing ONLY the car-parity replay topics (mcap), from `<src_dir>/<bag_name>`
+    (the volume's /bags right after a recording, or the host's bags folder,
+    which the stack mounts read-only at /host_bags). The conversion runs
     where rosbag2 + the sensor_msgs defs live, so it works on both the mcap
     full dump and legacy db3 bags. Returns (ok, error); best-effort — a failure
     here never fails the full-bag pull.
@@ -466,7 +472,7 @@ def _make_car_parity_copy(container, bag_name: str, cp_name: str) -> tuple:
         f"rm -rf /bags/{cp_name}; "
         "cfg=$(mktemp --suffix=.yaml); "
         f"echo {cfg_b64} | base64 -d > \"$cfg\"; "
-        f"ros2 bag convert -i /bags/{bag_name} -o \"$cfg\"; "
+        f"ros2 bag convert -i {src_dir}/{bag_name} -o \"$cfg\"; "
         "rm -f \"$cfg\""
     )
     try:
@@ -511,6 +517,54 @@ def bag_finalised(bag_name: str) -> bool:
     except Exception as ex:  # noqa: BLE001
         _LOG.warning("bag_recorder: could not check %s: %s", bag_name, ex)
         return False
+
+
+def make_car_parity(bag_name: str) -> dict:
+    """Make `<bag_name>_carparity` (LiDAR+IMU only, for the car's test stand,
+    see tools/lift_to_car.sh) from a bag already in the host's bags folder.
+    Converted in dv_pipeline_stack from its read-only /host_bags mount into the
+    /bags volume, streamed out beside the bag, then removed from the volume.
+    Blocking (about a minute for a lap); the caller runs it in a thread.
+
+    Returns {ok, bag_name, path, error}."""
+    out = {"ok": False, "bag_name": bag_name, "path": "", "error": ""}
+    if (not bag_name or "/" in bag_name or ".." in bag_name or bag_name.startswith("-")
+            or bag_name.startswith(".") or bag_name.endswith("_carparity")):
+        out["error"] = f"not a bag name: {bag_name!r}"
+        return out
+    host_dir = _ensure_host_dir()
+    if host_dir is None:
+        out["error"] = f"host-bags bind-mount {_HOST_BAGS_DIR!r} not present"
+        return out
+    if not os.path.isfile(os.path.join(host_dir, bag_name, "metadata.yaml")):
+        out["error"] = f"no complete bag {bag_name!r} in the bags folder"
+        return out
+    client = _get_docker_client()
+    if client is None:
+        out["error"] = "docker SDK / docker.sock unavailable from mc_backend"
+        return out
+    container_name = os.environ.get(
+        "DV_PIPELINE_STACK_CONTAINER", "ifssim-dv_pipeline_stack-1",
+    ).strip()
+    try:
+        container = client.containers.get(container_name)
+    except Exception as ex:  # noqa: BLE001
+        out["error"] = f"container {container_name!r} not found: {ex}"
+        return out
+    cp_name = f"{bag_name}_carparity"
+    ok, err = _make_car_parity_copy(container, bag_name, cp_name, src_dir="/host_bags")
+    if ok:
+        err = _stream_extract(container, f"/bags/{cp_name}", host_dir) or ""
+    try:
+        container.exec_run(["rm", "-rf", f"/bags/{cp_name}"], demux=False, stdout=True, stderr=True)
+    except Exception as ex:  # noqa: BLE001 — an orphan in the volume, not a failure
+        _LOG.warning("bag_recorder: car-parity volume cleanup failed: %s", ex)
+    if err:
+        out["error"] = err
+        return out
+    out["ok"] = True
+    out["path"] = f"{host_dir}/{cp_name}"
+    return out
 
 
 def auto_pull_and_clean(

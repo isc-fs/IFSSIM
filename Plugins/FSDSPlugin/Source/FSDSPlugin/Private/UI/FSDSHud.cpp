@@ -8,6 +8,7 @@
 #include "FSDSReferee.h"
 #include "FSDSSettings.h"
 #include "FSDSVehiclePawn.h"
+#include "UI/FSDSPipelineView.h"
 
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
@@ -293,17 +294,27 @@ private:
 		return P && P->IsEbsLatched() ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
 	}
 
+	/** The car state's speed, or in a bag replay (physics off, so that
+	 *  reads zero) the recorded car's. */
+	static double ShownSpeed(const AFSDSVehiclePawn* P)
+	{
+		const FFSDSPipelineView& V = FFSDSPipelineView::Get();
+		return V.IsReplaying() ? V.ReplaySpeed() : P->GetCarState().Speed;
+	}
+
 	FText SpeedText() const
 	{
 		const AFSDSVehiclePawn* P = GetPawn();
 		if (!P) return LOCTEXT("NoSpeed", "--");
-		return FText::AsNumber(FMath::RoundToInt(P->GetCarState().Speed * 3.6f));
+		return FText::AsNumber(FMath::RoundToInt(ShownSpeed(P) * 3.6));
 	}
 
 	FText DetailText() const
 	{
 		const AFSDSVehiclePawn* P = GetPawn();
 		if (!P) return FText::GetEmpty();
+		if (FFSDSPipelineView::Get().IsReplaying())
+			return FText::FromString(FString::Printf(TEXT("%.1f m/s  replay"), ShownSpeed(P)));
 		const AFSDSVehiclePawn::FCarState S = P->GetCarState();
 		return FText::FromString(FString::Printf(TEXT("%.1f m/s  %d rpm"), S.Speed, FMath::RoundToInt(S.RPM)));
 	}
