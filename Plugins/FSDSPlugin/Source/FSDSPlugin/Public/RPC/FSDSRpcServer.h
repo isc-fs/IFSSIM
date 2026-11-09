@@ -95,6 +95,12 @@ private:
 	FDelegateHandle PreActorTickHandle;
 	uint32 LidarStreamFrameCounter = 0;
 
+	// Engine frame delta (s), sampled on the game thread at the end of every
+	// frame. UE 5.8 lets only the game thread read FApp time, so the RPC
+	// threads (getSimStatus fps) read this copy instead.
+	std::atomic<float> LastFrameDeltaSec{0.f};
+	FDelegateHandle EndFrameHandle;
+
 	// Cached binary data for thread-safe transfer
 	TArray<uint8> CachedImageData;
 	TArray<float> CachedLidarData;
