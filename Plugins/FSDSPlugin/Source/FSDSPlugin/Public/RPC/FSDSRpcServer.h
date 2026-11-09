@@ -85,6 +85,8 @@ private:
 	 *  cross-platform from inside the plugin. */
 	void StreamSensors(FSocket* ClientSocket);
 	void StreamLidar(FSocket* ClientSocket);
+	/** The other way: the stack's viz_relay sends the pipeline view (FFSDSPipelineView). */
+	void StreamViz(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;
 
 	/** Pack the sensor stream's frame from the current tick's state. Game

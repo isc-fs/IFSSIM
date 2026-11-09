@@ -3,6 +3,7 @@
 #include "UI/SFSDSTrackMap.h"
 #include "UI/FSDSGraphics.h"
 #include "UI/FSDSHud.h"
+#include "UI/FSDSPipelineView.h"
 #include "UI/FSDSStackStarter.h"
 #include "UI/FSDSMissionControlClient.h"
 #include "Dom/JsonObject.h"
@@ -1276,6 +1277,34 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 											}, 10.f);
 										})
 								]
+							]
+							// What the pipeline sees, drawn over the track (FFSDSPipelineView).
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+							[
+								MakeChoice(TAttribute<FText>::CreateLambda([]()
+									{
+										return FFSDSPipelineView::Get().IsShown()
+											? LOCTEXT("PipeViewHide", "Pipeline view: on (click to hide)")
+											: LOCTEXT("PipeViewShow", "Pipeline view: off (click to show)");
+									}),
+									[]() { return FFSDSPipelineView::Get().IsShown(); },
+									[]() { FFSDSPipelineView::Get().SetShown(!FFSDSPipelineView::Get().IsShown()); })
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+							[
+								SNew(STextBlock)
+								.Text_Lambda([]()
+								{
+									if (!FFSDSPipelineView::Get().IsShown()) return FText::GetEmpty();
+									return FFSDSPipelineView::Get().IsReceiving()
+										? LOCTEXT("PipeViewLegend", "Over the track: magenta crosses are this scan's detected cones, white "
+											"rings the SLAM map, the pink arrow where SLAM puts the car, green the planned path, "
+											"blue and yellow the cone chains it follows. The map sliding off the real cones is SLAM drift.")
+										: LOCTEXT("PipeViewNone", "Nothing from the pipeline yet: its viz_relay sends the view once "
+											"the stack runs (Settings, Rebuild pipeline, if the stack predates it).");
+								})
+								.Visibility_Lambda([]() { return FFSDSPipelineView::Get().IsShown() ? EVisibility::Visible : EVisibility::Collapsed; })
+								.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 							]
 							+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
 							[

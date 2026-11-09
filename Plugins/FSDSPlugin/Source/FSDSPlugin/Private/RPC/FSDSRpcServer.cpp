@@ -12,6 +12,7 @@
 #include "FSDSConeSpawner.h"
 #include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
+#include "UI/FSDSPipelineView.h"
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
@@ -406,6 +407,11 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 				{
 					StreamSensors(ClientSocket);
 					return; // Connection used for streaming, done
+				}
+				if (Request == TEXT("streamViz"))
+				{
+					StreamViz(ClientSocket);
+					return;
 				}
 				if (Request == TEXT("streamLidar"))
 				{
@@ -2260,6 +2266,41 @@ void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
 	Frame.Throttle = Controls.Throttle;
 	Frame.Steering = Controls.Steering;
 	Frame.Brake = Controls.Regen;
+}
+
+void FFSDSRpcServer::StreamViz(FSocket* ClientSocket)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: pipeline view stream started"));
+	const FTCHARToUTF8 Ack(TEXT("OK\n"));
+	int32 Sent = 0;
+	ClientSocket->Send((const uint8*)Ack.Get(), Ack.Length(), Sent);
+
+	// One JSON object per line, about 10 a second; a line can be several KB
+	// (the whole SLAM map), so bytes are gathered until each newline.
+	TArray<uint8> Line;
+	uint8 Buffer[16384];
+	while (bRunning)
+	{
+		if (!ClientSocket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(5))) continue;
+		int32 Read = 0;
+		if (!ClientSocket->Recv(Buffer, sizeof(Buffer), Read) || Read <= 0) break;
+		for (int32 i = 0; i < Read; ++i)
+		{
+			if (Buffer[i] != '\n')
+			{
+				// A runaway line (no newline in 4 MB) is dropped, not grown forever.
+				if (Line.Num() < 4 * 1024 * 1024) Line.Add(Buffer[i]);
+				continue;
+			}
+			if (Line.Num() > 0)
+			{
+				Line.Add(0);
+				FFSDSPipelineView::Get().Receive(UTF8_TO_TCHAR((const char*)Line.GetData()));
+			}
+			Line.Reset();
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: pipeline view stream ended"));
 }
 
 void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
