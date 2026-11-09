@@ -45,6 +45,15 @@ public:
 	/** Whether viz_relay has sent anything in the last two seconds. */
 	bool IsReceiving() const;
 
+	/** A bag replays (the Bags page): the car follows the recorded ground
+	 *  truth viz_relay forwards, with its physics off, and the view draws
+	 *  without the pipeline driving. EndReplay gives the car its physics back. */
+	void BeginReplay();
+	void EndReplay();
+	bool IsReplaying() const { return bReplay; }
+	/** Whether a recorded pose came in the last two seconds. */
+	bool HasReplayPose() const;
+
 private:
 	struct FSnapshot
 	{
@@ -78,6 +87,19 @@ private:
 	bool bAnchorLocked = false;
 	double GroundZ = 0.0;   // UE cm
 	bool bDrawn = false;
+
+	// The car's speed from its own motion between snapshots: with its physics
+	// off in a replay, the car state's speed reads zero.
+	FVector2D LastCarEnu = FVector2D::ZeroVector;
+	double LastCarAt = -1.0;
+
+	// Replay: the last two recorded poses (ENU, m; yaw rad), and when each came.
+	struct FTruth { double At = 0.0; FVector Enu = FVector::ZeroVector; double Yaw = 0.0; };
+	void ApplyReplayPose();
+	bool bReplay = false;
+	bool bPhysicsWas = true;
+	FTruth TruthPrev, TruthLast;
+	int32 TruthCount = 0;
 
 	mutable int32 ShownCache = -1;
 };
