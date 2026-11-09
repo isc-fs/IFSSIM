@@ -121,13 +121,22 @@ class VizRelay(Node):
 
     def on_pose(self, msg):
         p = msg.pose.pose
+        near_origin = abs(p.position.x) + abs(p.position.y) < 0.3
+        # SLAM started over (a new session, or a bag replaying): jumping back
+        # to its origin, the last session's map, path and chains go.
+        if near_origin and self.pose is not None and abs(self.pose[0]) + abs(self.pose[1]) > 2.0:
+            self.forget()
         self.pose = [_r(p.position.x), _r(p.position.y), round(_yaw(p.orientation), 4)]
-        # SLAM started over (a new session): its map starts over too.
-        if abs(p.position.x) + abs(p.position.y) < 0.05 and len(self.map) == 0:
-            self.path, self.left, self.right = [], [], []
+
+    def forget(self):
+        self.map.clear()
+        self.det, self.path, self.left, self.right = [], [], [], []
 
     def on_truth(self, msg):
         p = msg.pose.pose
+        if time.monotonic() - self.truth_at > 2.0:
+            self.forget()   # a replay starting: not the live session's map
+            self.pose = None
         self.truth = [round(p.position.x, 3), round(p.position.y, 3), round(p.position.z, 3),
                       round(_yaw(p.orientation), 4)]
         self.truth_at = time.monotonic()
