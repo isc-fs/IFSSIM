@@ -2,6 +2,7 @@
 
 #include "UI/SFSDSTrackMap.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSStackStarter.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -13,6 +14,7 @@
 #include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -72,6 +74,10 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	OnTestDrive = InArgs._OnTestDrive;
 	OnTracksChanged = InArgs._OnTracksChanged;
 	OnStartStack = InArgs._OnStartStack;
+	OnRebuildPipeline = InArgs._OnRebuildPipeline;
+	RebuildStatus = InArgs._RebuildStatus;
+	IsRebuilding = InArgs._IsRebuilding;
+	RebuildFailed = InArgs._RebuildFailed;
 	Client = InArgs._Client;
 	EditorState = InArgs._EditorState;
 	if (InArgs._StartInEditor) Page = EPage::Editor;
@@ -96,6 +102,12 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	{
 		SetEvent(Event, bPractice);   // fills the list, keeps the last track if it fits
 	}
+}
+
+void SFSDSMenu::SetRepoPrompt(const FString& Text, TFunction<void(int32)> OnChoice)
+{
+	RepoPrompt = Text;
+	OnRepoChoice = MoveTemp(OnChoice);
 }
 
 void SFSDSMenu::SetMessage(const FString& Msg, bool bError)
@@ -456,7 +468,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 						return bAutonomous
 							? FText::Format(LOCTEXT("AutoHint",
 								"The DV pipeline drives. START loads the track and starts the session through "
-								"Mission Control's backend, so it needs the Docker stack. Esc during the run: stop "
+								"Mission Control's backend, starting the Docker stack first if it isn't running. Esc during the run: stop "
 								"it or start again. ({0} opens the engineers' panel.)"), LauncherKey)
 							: bPractice ? LOCTEXT("ManualHintPractice", "You drive with the keyboard or a gamepad. Esc pauses. "
 								"Practice is for you; for the pipeline, pick an event.")
@@ -519,6 +531,29 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					.Visibility_Lambda([this]() { return Message.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 					.ColorAndOpacity_Lambda([this]() { return FSlateColor(bMessageError ? MenuUi::Bad : MenuUi::Good); })
 					.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(3, 8, 3, 0)
+				[
+					SNew(SVerticalBox)
+					.Visibility_Lambda([this]() { return RepoPrompt.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]() { return FText::FromString(RepoPrompt); })
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+					[
+						SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(3.f, 3.f))
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoGet", "Get it"), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(0); }) ]
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoElsewhere", "Somewhere else..."), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(1); }) ]
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoHave", "I have it..."), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(2); }) ]
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoNotNow", "Not now"), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(3); }) ]
+					]
 				]
 			]
 		]
@@ -624,6 +659,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 
 TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 {
+	RepoShown = FFSDSStackStarter::FindComposeDir();
 	TSharedRef<SVerticalBox> Keys = SNew(SVerticalBox);
 	auto Row = [&Keys](const FText& Key, const FText& What)
 	{
@@ -750,6 +786,81 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				"pipeline drives gives its GPU and CPU time back (the HUD and the Esc box still show). Find the "
 				"best tries each setting for a few seconds and keeps the best looking one that leaves the GPU "
 				"room within each 1/60 s frame."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("PipelineCode", "PIPELINE CODE")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				MakeChoice(LOCTEXT("RepoChange", "Change..."), []() { return false; }, [this]()
+				{
+					FString Picked;
+					if (!FFSDSStackStarter::PickFolder(TEXT("The IFSSIM folder (with docker-compose.yml in it)"),
+						RepoShown.IsEmpty() ? FFSDSStackStarter::SuggestedRepoDir() : RepoShown, Picked)) return;
+					if (!FFSDSStackStarter::IsRepo(Picked))
+					{
+						RepoNote = FString::Printf(TEXT("%s has no docker-compose.yml: pick the IFSSIM folder itself."), *Picked);
+						return;
+					}
+					FFSDSStackStarter::SaveRepoDir(Picked);
+					RepoShown = FFSDSStackStarter::FindComposeDir();
+					RepoNote = RepoShown == Picked ? FString()
+						: TEXT("Saved, but settings.json's MissionControl.ComposeDir or IFSSIM_ROOT points elsewhere and wins.");
+					OnTracksChanged.ExecuteIfBound();   // its tracks
+				})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					if (RepoShown.IsEmpty()) return FText::FromString(TEXT("Not on this PC. START with Autonomous offers to get it."));
+					FString Shown = RepoShown;
+					FPaths::MakePlatformFilename(Shown);   // C:\Users\..., as Windows shows it
+					return FText::FromString(Shown);
+				})
+				.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this]()
+			{
+				return FText::FromString(RepoNote.IsEmpty()
+					? FString(TEXT("The team's code (the IFSSIM repo): the pipeline and Mission Control's backend run from it in Docker, "
+						"and START with Autonomous starts them."))
+					: RepoNote);
+			})
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity_Lambda([this]() { return FSlateColor(RepoNote.IsEmpty() ? MenuUi::Muted : MenuUi::Bad); })
+			.AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				MakeChoice(LOCTEXT("Rebuild", "Rebuild pipeline"),
+					[this]() { return IsRebuilding && IsRebuilding(); },
+					[this]() { OnRebuildPipeline.ExecuteIfBound(); })
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() { return FText::FromString(RebuildStatus ? RebuildStatus() : FString()); })
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(RebuildFailed && RebuildFailed() ? MenuUi::Bad : MenuUi::Good); })
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("RebuildHint",
+				"Python changes in pipeline/ need nothing: START copies your pipeline code into the container before "
+				"every run. Rebuild after changing C++, messages, launch files or a setup.py, or after a git pull: it "
+				"builds the pipeline and the backend from your code (seconds to minutes) and restarts them."))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Config", "CONFIGURATION")) ]

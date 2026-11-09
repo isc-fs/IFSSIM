@@ -38,6 +38,10 @@ public:
 		SLATE_EVENT(FOnFSDSTestDrive, OnTestDrive)
 		SLATE_EVENT(FSimpleDelegate, OnTracksChanged)
 		SLATE_EVENT(FSimpleDelegate, OnStartStack)
+		SLATE_EVENT(FSimpleDelegate, OnRebuildPipeline)
+		SLATE_ARGUMENT(TFunction<FString()>, RebuildStatus)
+		SLATE_ARGUMENT(TFunction<bool()>, IsRebuilding)
+		SLATE_ARGUMENT(TFunction<bool()>, RebuildFailed)
 		SLATE_EVENT(FOnFSDSDrive, OnDrive)
 		SLATE_EVENT(FSimpleDelegate, OnResume)
 		SLATE_EVENT(FSimpleDelegate, OnRestart)
@@ -49,6 +53,9 @@ public:
 
 	/** A line under START, e.g. why a track would not load. */
 	void SetMessage(const FString& Msg, bool bError);
+	/** START's question when the team's code isn't on this PC: Text and the
+	 *  answers (FFSDSMenu::OnRepoChoice). An empty Text hides it. */
+	void SetRepoPrompt(const FString& Text, TFunction<void(int32)> OnChoice);
 
 	/** The tracks folders changed, e.g. a track was saved in the editor. */
 	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues);
@@ -124,6 +131,16 @@ private:
 
 	FString Message;
 	bool bMessageError = false;
+	FString RepoPrompt;
+	TFunction<void(int32)> OnRepoChoice;
+	/** Settings, PIPELINE CODE: the folder, and what the last Change... said. */
+	FString RepoShown;
+	FString RepoNote;
+	/** Settings, Rebuild pipeline (FFSDSMenu::RebuildPipeline). */
+	FSimpleDelegate OnRebuildPipeline;
+	TFunction<FString()> RebuildStatus;
+	TFunction<bool()> IsRebuilding;
+	TFunction<bool()> RebuildFailed;
 
 	TSharedPtr<SScrollBox> DriveList;
 	TSharedPtr<SFSDSTrackMap> DriveMap;
