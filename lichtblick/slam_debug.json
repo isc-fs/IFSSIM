@@ -60,7 +60,7 @@
         }
       },
       "topics": {
-        "/lidar_points": {
+        "/lidar_points/ground": {
           "visible": true,
           "colorField": "z",
           "colorMode": "colormap",
