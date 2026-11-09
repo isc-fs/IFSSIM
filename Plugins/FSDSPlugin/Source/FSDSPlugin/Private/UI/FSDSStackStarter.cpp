@@ -257,7 +257,7 @@ bool FFSDSStackStarter::StartDocker(FString& OutError)
 		/*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, Home.IsEmpty() ? nullptr : *Home, nullptr);
 #elif PLATFORM_MAC
 	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/usr/bin/open"), TEXT("-g -a Docker"), true,
-		false, false, nullptr, 0, *FPlatformProcess::UserHomeDir(), nullptr);
+		false, false, nullptr, 0, FPlatformProcess::UserHomeDir(), nullptr);
 #else
 	OutError = TEXT("Docker isn't running: start it (sudo systemctl start docker)");
 	return false;
@@ -310,12 +310,25 @@ bool FFSDSStackStarter::Run(const FString& WorkDir, const FString& Command, FStr
 	// accents) reach the command as they are.
 	const FString Exe = TEXT("cmd.exe");
 	const FString Args = FString::Printf(TEXT("/s /c \"%s 2>&1\""), *Command);
-#elif PLATFORM_MAC
+#else
+	// The command goes through a script file, not -c. CreateProc on Mac and
+	// Linux splits Parms on spaces itself and only knows plain "..." pairs, so
+	// any quote inside the command (a quoted path for docker compose cp) broke
+	// the wrapper: zsh got "unmatched" quotes and the code copy never ran.
+#if PLATFORM_MAC
 	const FString Exe = TEXT("/bin/zsh");
-	const FString Args = FString::Printf(TEXT("-lc \"%s 2>&1\""), *Command);
 #else
 	const FString Exe = TEXT("/bin/bash");
-	const FString Args = FString::Printf(TEXT("-lc \"%s 2>&1\""), *Command);
+#endif
+	ScriptPath = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-run-"), TEXT(".sh"));
+	if (!FFileHelper::SaveStringToFile(TEXT("exec 2>&1\n") + Command + TEXT("\n"), *ScriptPath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		Close();
+		OutError = FString::Printf(TEXT("could not write %s"), *ScriptPath);
+		return false;
+	}
+	const FString Args = FString::Printf(TEXT("-l \"%s\""), *ScriptPath);
 #endif
 
 	Proc = FPlatformProcess::CreateProc(*Exe, *Args, /*bLaunchDetached=*/false,
@@ -383,5 +396,10 @@ void FFSDSStackStarter::Close()
 	{
 		FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
 		ReadPipe = WritePipe = nullptr;
+	}
+	if (!ScriptPath.IsEmpty())
+	{
+		IFileManager::Get().Delete(*ScriptPath, /*RequireExists=*/false, /*EvenReadOnly=*/true, /*Quiet=*/true);
+		ScriptPath.Reset();
 	}
 }
