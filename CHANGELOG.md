@@ -14,6 +14,13 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Autonomous runs drive again after a watchdog stop.** When the pipeline's
+  watchdog (or anything else through `/force_ebs`) braked the car, the bridge
+  latched EBS and dropped every control command until `/signal/ebs_reset`,
+  which the sim supervisor published only when it activated, at stack start.
+  Every later run sat at the start line, armed but never moving, until the
+  stack was restarted. The supervisor now also releases the latch when a new
+  mission is armed (AS off → ready), as the car's uDV does.
 - **A recorded bag is saved in the background.** After a run with Record a
   bag, Mission Control copied the bag out of the pipeline's container while
   holding its state lock, so every other request (the run's state, the next
