@@ -390,6 +390,10 @@ void IFSSIMRosWrapper::initializeSubscribers()
         "signal/ebs", ebs_qos,
         std::bind(&IFSSIMRosWrapper::ebsRequestCb, this, std::placeholders::_1));
 
+    assi_state_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
+        "/assi/state", 10,
+        std::bind(&IFSSIMRosWrapper::assiStateCb, this, std::placeholders::_1));
+
     // /signal/ebs_reset — explicit release of the EBS latch. Without this
     // the bridge's `ebs_triggered_` had no way to flip back to false after
     // a session ended with the autonomous-stop logic firing — every
@@ -1467,6 +1471,30 @@ void IFSSIMRosWrapper::ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg)
     // locks all input channels and clamps handbrake=true.
     client_->sendCommand("activateEbs");
     RCLCPP_INFO(node_->get_logger(), "EBS engaged — handbrake latched, all inputs locked");
+}
+
+void IFSSIMRosWrapper::assiStateCb(const std_msgs::msg::UInt8::SharedPtr msg)
+{
+    // AS byte values: mission_control.interface_contract (AS_READY = 2).
+    constexpr uint8_t kAsReady = 2;
+    if (!client_ || !client_->isConnected()) return;
+    const int on = msg->data == kAsReady ? 1 : 0;
+    const rclcpp::Time now = node_->now();
+    // Sim time restarts with the sim, so a step backwards also counts as stale.
+    bool stale = start_lights_sent_at_.nanoseconds() == 0 ||
+        now.get_clock_type() != start_lights_sent_at_.get_clock_type();
+    if (!stale) {
+        const double dt = (now - start_lights_sent_at_).seconds();
+        stale = dt > 5.0 || dt < 0.0;
+    }
+    if (on == start_lights_sent_ && !stale) return;
+    const std::string reply = client_->sendCommand(on ? "setStartLights 1" : "setStartLights 0");
+    if (on != start_lights_sent_) {
+        RCLCPP_INFO(node_->get_logger(), "Start lights %s (AS state %u): %s",
+            on ? "on" : "out", msg->data, reply.c_str());
+    }
+    start_lights_sent_ = on;
+    start_lights_sent_at_ = now;
 }
 
 void IFSSIMRosWrapper::ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg)

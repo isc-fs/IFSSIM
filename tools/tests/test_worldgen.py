@@ -44,7 +44,9 @@ class FormatTest(unittest.TestCase):
             return w
         cases = [
             ("format", bad(lambda w: w.update(format="ifssim-world/2")), "format"),
-            ("unknown key", bad(lambda w: w.update(props=[])), "unknown key"),
+            ("unknown key", bad(lambda w: w.update(decals=[])), "unknown key"),
+            ("prop mesh", bad(lambda w: w.update(props=[{"mesh": "Tree", "x": 0, "y": 0}])), "mesh"),
+            ("prop key", bad(lambda w: w.update(props=[{"mesh": "SignBoard", "x": 0, "y": 0, "z": 1}])), "unknown key"),
             ("no attribution", bad(lambda w: w.update(attribution=[])), "attribution"),
             ("terrain file", bad(lambda w: w["terrain"].update(file="t.png")), "terrain.file"),
             ("too many cells", bad(lambda w: w["terrain"].update(nx=20000, ny=20000)), "cells"),

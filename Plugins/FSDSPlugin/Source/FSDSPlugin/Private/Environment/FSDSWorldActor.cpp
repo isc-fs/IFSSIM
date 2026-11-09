@@ -1,14 +1,17 @@
 #include "Environment/FSDSWorldActor.h"
 
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Environment/FSDSEnvironmentBuilder.h"
 #include "FSDSCollision.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Engine/StaticMesh.h"
 #include "ProceduralMeshComponent.h"
 
 namespace
@@ -28,13 +31,22 @@ namespace
 	constexpr double WallFootM = 0.3;     // walls go this far into the ground
 	constexpr double WallStepM = 2.0;     // walls follow the ground in steps this long
 	constexpr double PostSpacingM = 2.5;  // fence posts
-	constexpr double PostSizeM = 0.08;
 	constexpr double TierDepthM = 0.85;   // one grandstand row
 	constexpr double RoofThicknessM = 0.5;
 	constexpr double ColumnSpacingM = 15.0;
 	constexpr double ColumnSizeM = 0.6;
 
+	// Prop modules, as modelled (tools/assetgen/blender/build_assets.py).
+	constexpr double SeatBlockM = 5.0;    // ten seats
+	constexpr int32 BlocksPerBay = 6;     // then an aisle
+	constexpr double AisleM = 1.4;
+	constexpr double SignM = 3.0, SignGapM = 0.05, SignMaxWallM = 1.5;
+	constexpr double GarageM = 6.0, GarageHeightM = 8.25;
+	constexpr double RailM = 2.5;
+	constexpr float StartLightsEmissive = 3.0f;   // x the lens colour (0.4 red); brighter tonemaps to orange
+
 	const TCHAR* MatDir = TEXT("/Game/RaceCourse/Materials/Environment/");
+	const TCHAR* WorldDir = TEXT("/Game/Worlds/");
 
 	/** World frame (m) to UE (cm): the world's origin sits at Origin in the
 	 *  track CSV frame, and CSV +y is UE -Y. */
@@ -73,9 +85,10 @@ namespace
 		}
 
 		/** A flat quad, corners in order around it, facing Facing; UVs are
-		 *  planar in world space, one repeat every TileM metres. */
+		 *  planar in world space, in units of TileM metres (the materials
+		 *  set their own repeat, so metres by default). */
 		void Quad(const FVector& A, const FVector& B, const FVector& C, const FVector& D,
-			const FVector& Facing, double TileM = 4.0)
+			const FVector& Facing, double TileM = 1.0)
 		{
 			FVector Nrm = FVector::CrossProduct(B - A, D - A).GetSafeNormal();
 			if (Nrm.IsNearlyZero()) return;
@@ -229,7 +242,35 @@ namespace
 		if (!M) UE_LOG(LogTemp, Warning, TEXT("FSDS World: material %s is missing; using a plain colour"), *Path);
 		return M;
 	}
+
+	/** MI_<Name> from /Game/Worlds (tools/assetgen/materials.json). */
+	UMaterialInterface* WorldMat(const TCHAR* Name)
+	{
+		const FString Path = FString::Printf(TEXT("%sMaterials/MI_%s.MI_%s"), WorldDir, Name, Name);
+		UMaterialInterface* M = LoadObject<UMaterialInterface>(nullptr, *Path);
+		if (!M) UE_LOG(LogTemp, Warning, TEXT("FSDS World: %s is missing (docs/world_assets.md); using the fallback"), *Path);
+		return M;
+	}
+
+	/** SM_<Name> from /Game/Worlds; null (and a warning) when it is missing. */
+	UStaticMesh* WorldMesh(const FString& Name)
+	{
+		const FString Path = FString::Printf(TEXT("%sMeshes/SM_%s.SM_%s"), WorldDir, *Name, *Name);
+		UStaticMesh* M = LoadObject<UStaticMesh>(nullptr, *Path);
+		if (!M) UE_LOG(LogTemp, Warning, TEXT("FSDS World: %s is missing (docs/world_assets.md); not placed"), *Path);
+		return M;
+	}
 }
+
+// FSDS.StartLights 1|0: switch the start lights by hand (the ROS bridge
+// does it from /assi/state; see the setStartLights RPC).
+static FAutoConsoleCommandWithWorldAndArgs GStartLightsCmd(
+	TEXT("FSDS.StartLights"),
+	TEXT("FSDS.StartLights 1|0 - light or put out the start lights of the loaded world"),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World) {
+		if (!World || Args.Num() != 1) return;
+		for (TActorIterator<AFSDSWorldActor> It(World); It; ++It) It->SetStartLights(Args[0] == TEXT("1"));
+	}));
 
 AFSDSWorldActor::AFSDSWorldActor()
 {
@@ -251,6 +292,35 @@ UProceduralMeshComponent* AFSDSWorldActor::NewMesh(const TCHAR* Profile, bool bC
 	return M;
 }
 
+UHierarchicalInstancedStaticMeshComponent* AFSDSWorldActor::AddInstances(UStaticMesh* Mesh, const TArray<FTransform>& Transforms, double CullM, bool bCastShadow)
+{
+	if (!Mesh || Transforms.Num() == 0) return nullptr;
+	UHierarchicalInstancedStaticMeshComponent* H = NewObject<UHierarchicalInstancedStaticMeshComponent>(this);
+	H->SetStaticMesh(Mesh);
+	H->SetMobility(EComponentMobility::Static);
+	H->SetCollisionProfileName(TEXT("NoCollision"));
+	H->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	H->SetCastShadow(bCastShadow);
+	H->SetCullDistances(int32(CullM * 80.0), int32(CullM * 100.0));   // fade out over the last 20 %
+	H->SetupAttachment(RootComponent);
+	H->RegisterComponent();
+	H->AddInstances(Transforms, /*bShouldReturnIndices=*/false, /*bWorldSpace=*/true);
+	Instanced.Add(H);
+	NumInstances += Transforms.Num();
+	PropTriangles += Transforms.Num() * (Mesh->GetRenderData() && Mesh->GetRenderData()->LODResources.Num()
+		? Mesh->GetRenderData()->LODResources[0].GetNumTriangles() : 0);
+	return H;
+}
+
+void AFSDSWorldActor::SetStartLights(bool bOn)
+{
+	if (!StartLights || bOn == bStartLightsOn) return;
+	bStartLightsOn = bOn;
+	// The lens is dark red glass; lit, it glows well above the sky.
+	StartLights->SetScalarParameterValue(TEXT("Emissive"), bOn ? StartLightsEmissive : 0.0f);
+	UE_LOG(LogTemp, Log, TEXT("FSDS World: start lights %s"), bOn ? TEXT("on") : TEXT("out"));
+}
+
 void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM)
 {
 	Clear();
@@ -260,7 +330,8 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	const FWorldFrame F{OriginCsvM};
 	const FGround G(World);
 
-	// Materials: the repo's environment set where it fits, flat colours otherwise.
+	// Materials: the scanned set in /Game/Worlds; the repo's older
+	// environment materials and flat colours if it is missing.
 	UMaterialInterface* Basic = LoadObject<UMaterialInterface>(nullptr,
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	auto Colour = [&](const FLinearColor& C) -> UMaterialInterface* {
@@ -271,18 +342,25 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		return Mid;
 	};
 	auto Or = [](UMaterialInterface* A, UMaterialInterface* B) { return A ? A : B; };
-	UMaterialInterface* Grass = Colour(FLinearColor(0.16f, 0.17f, 0.09f));
-	UMaterialInterface* Asphalt = Or(LoadMat(TEXT("Road_Inst_no_lines")), Colour(FLinearColor(0.04f, 0.04f, 0.045f)));
+	UMaterialInterface* Grass = Or(WorldMat(TEXT("Grass")), Colour(FLinearColor(0.16f, 0.17f, 0.09f)));
+	UMaterialInterface* Asphalt = Or(WorldMat(TEXT("Asphalt")), Or(LoadMat(TEXT("Road_Inst_no_lines")), Colour(FLinearColor(0.04f, 0.04f, 0.045f))));
 	// Lighter, older asphalt (LiDAR intensity), not paint.
-	UMaterialInterface* Band = Colour(FLinearColor(0.10f, 0.10f, 0.10f));
-	UMaterialInterface* ConcreteGround = Or(LoadMat(TEXT("concrete_ground")), Colour(FLinearColor(0.35f, 0.34f, 0.32f)));
-	UMaterialInterface* ConcreteWall = Or(LoadMat(TEXT("concrete_wall")), Colour(FLinearColor(0.45f, 0.45f, 0.43f)));
-	UMaterialInterface* Metal = Or(LoadMat(TEXT("metal")), Colour(FLinearColor(0.5f, 0.5f, 0.52f)));
-	UMaterialInterface* Fence = Or(LoadMat(TEXT("Chainlink")), Colour(FLinearColor(0.3f, 0.3f, 0.3f)));
-	UMaterialInterface* BuildingWhite = Or(LoadMat(TEXT("Buildings_WHITE")), Colour(FLinearColor(0.7f, 0.7f, 0.68f)));
-	UMaterialInterface* Glass = Or(LoadMat(TEXT("windows_Inst")), Colour(FLinearColor(0.1f, 0.12f, 0.15f)));
-	UMaterialInterface* White = Colour(FLinearColor(0.8f, 0.8f, 0.8f));
+	UMaterialInterface* Band = Or(WorldMat(TEXT("AsphaltWorn")), Colour(FLinearColor(0.10f, 0.10f, 0.10f)));
+	UMaterialInterface* ConcreteGround = Or(WorldMat(TEXT("ConcreteGround")), Or(LoadMat(TEXT("concrete_ground")), Colour(FLinearColor(0.35f, 0.34f, 0.32f))));
+	UMaterialInterface* ConcreteWall = Or(WorldMat(TEXT("ConcreteWall")), Or(LoadMat(TEXT("concrete_wall")), Colour(FLinearColor(0.45f, 0.45f, 0.43f))));
+	UMaterialInterface* Roofing = Or(WorldMat(TEXT("SteelWhite")), Or(LoadMat(TEXT("metal")), Colour(FLinearColor(0.5f, 0.5f, 0.52f))));
+	UMaterialInterface* Fence = Or(WorldMat(TEXT("ChainLink")), Or(LoadMat(TEXT("Chainlink")), Colour(FLinearColor(0.3f, 0.3f, 0.3f))));
+	UMaterialInterface* BuildingWhite = Or(WorldMat(TEXT("ConcreteCream")), Or(LoadMat(TEXT("Buildings_WHITE")), Colour(FLinearColor(0.7f, 0.7f, 0.68f))));
+	UMaterialInterface* Glass = Or(WorldMat(TEXT("Glass")), Or(LoadMat(TEXT("windows_Inst")), Colour(FLinearColor(0.1f, 0.12f, 0.15f))));
+	UMaterialInterface* White = Or(WorldMat(TEXT("Paint")), Colour(FLinearColor(0.8f, 0.8f, 0.8f)));
 	UMaterialInterface* Yellow = Colour(FLinearColor(0.8f, 0.6f, 0.05f));
+
+	// Props in the world frame: yaw is anticlockwise from +x towards +y
+	// (UE's yaw turns the other way, since world +y is UE -Y).
+	auto Place = [&](double X, double Y, double Z, double YawDeg, const FVector& Scale = FVector::OneVector) {
+		return FTransform(FRotator(0.0, -YawDeg, 0.0), F.Ue(X, Y, Z), Scale);
+	};
+	TArray<FTransform> Posts, Signs, Seats, Rails, Columns, Garages;
 
 	auto Emit = [&](UProceduralMeshComponent* M, int32 Section, FBuf& B, UMaterialInterface* Mat, bool bCollision) {
 		if (B.T.Num() == 0) return;
@@ -314,7 +392,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 					for (int32 I = I0; I <= I1; ++I)
 					{
 						const FVector P = F.Ue(G.Xs[I], G.Ys[J], G.Node(I, J));
-						B.Add(P, G.Normal(I, J), FVector2D(P.X, P.Y) / 400.0);
+						B.Add(P, G.Normal(I, J), FVector2D(P.X, P.Y) / 100.0);
 					}
 				for (int32 J = 0; J < J1 - J0; ++J)
 					for (int32 I = 0; I < Nx - 1; ++I)
@@ -334,7 +412,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		const bool bBand = S.Material == TEXT("asphalt_light");
 		FBuf B;
 		Drape(B, G, F, FGround::Span(G.Xs, S.XMin, S.XMax), FGround::Span(G.Ys, S.YMin, S.YMax),
-			bBand ? BandLiftM : SurfaceLiftM, 4.0);
+			bBand ? BandLiftM : SurfaceLiftM, 1.0);
 		UMaterialInterface* Mat = bBand ? Band
 			: S.Material == TEXT("asphalt") ? Asphalt
 			: S.Material == TEXT("concrete") ? ConcreteGround : Grass;
@@ -383,7 +461,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		if (Len < 0.01) continue;
 		const FVector2D Dir = (P1 - P0) / Len, Side = FVector2D(-Dir.Y, Dir.X) * (Wl.ThicknessM * 0.5);
 		const int32 Steps = FMath::Max(1, FMath::CeilToInt(Len / WallStepM));
-		FBuf WallBuf, PostBuf, FenceBuf;
+		FBuf WallBuf, FenceBuf;
 		auto Pt = [&](double S) { return P0 + Dir * S; };
 		for (int32 K = 0; K < Steps; ++K)
 		{
@@ -405,20 +483,32 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		}
 		if (Wl.FenceHeightM > Wl.HeightM)
 		{
-			const int32 Posts = FMath::Max(1, FMath::CeilToInt(Len / PostSpacingM));
-			const double H = PostSizeM * 50.0;   // half size, cm
-			for (int32 K = 0; K <= Posts; ++K)
+			// Posts: a 1 m tube stretched to the fence height.
+			const int32 N = FMath::Max(1, FMath::CeilToInt(Len / PostSpacingM));
+			for (int32 K = 0; K <= N; ++K)
 			{
-				const FVector2D C = Pt(Len * K / Posts);
-				const double Z = G.At(C.X, C.Y);
-				const FVector Bc = F.Ue(C.X, C.Y, Z + Wl.HeightM - 0.05);
-				PostBuf.AlignedBox(Bc - FVector(H, H, 0), Bc + FVector(H, H, (Wl.FenceHeightM - Wl.HeightM + 0.05) * 100.0));
+				const FVector2D C = Pt(Len * K / N);
+				Posts.Add(Place(C.X, C.Y, G.At(C.X, C.Y) + Wl.HeightM - 0.05, 0.0,
+					FVector(1.0, 1.0, Wl.FenceHeightM - Wl.HeightM + 0.05)));
+			}
+		}
+		if (Wl.HeightM <= SignMaxWallM)
+		{
+			// Boards along a barrier's track side; a board faces its local -y.
+			const FVector2D Normal(-Dir.Y, Dir.X);
+			const FVector2D Mid = Pt(Len * 0.5);
+			const double ToTrack = FVector2D::DotProduct(Normal, -Mid) >= 0.0 ? 1.0 : -1.0;
+			const double Yaw = FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X)) + (ToTrack > 0.0 ? 180.0 : 0.0);
+			const int32 N = FMath::FloorToInt(Len / (SignM + SignGapM));
+			for (int32 K = 0; K < N; ++K)
+			{
+				const FVector2D C = Pt((SignM + SignGapM) * (K + 0.5)) + Normal * (ToTrack * Wl.ThicknessM * 0.5);
+				Signs.Add(Place(C.X, C.Y, G.At(C.X, C.Y) + 0.05, Yaw));
 			}
 		}
 		UProceduralMeshComponent* M = NewMesh(FSDSCollision::PropProfile, true);
 		Emit(M, 0, WallBuf, ConcreteWall, true);
-		Emit(M, 1, PostBuf, Metal, true);
-		Emit(M, 2, FenceBuf, Fence, false);   // the LiDAR sees through mesh fencing; posts and wall it hits
+		Emit(M, 1, FenceBuf, Fence, false);   // the LiDAR sees through mesh fencing; posts and wall it hits
 	}
 
 	// --- buildings: boxes from below the ground to their roof -----------------
@@ -439,6 +529,26 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		B.AlignedBox(A.ComponentMin(Bb), A.ComponentMax(Bb));
 		Emit(NewMesh(FSDSCollision::PropProfile, true), 0, B,
 			Bd.Material == TEXT("glass") ? Glass : BuildingWhite, true);
+
+		// A concrete building gets pit-garage fronts on the face towards the
+		// track, stretched to its length and roof.
+		if (Bd.Material == TEXT("concrete"))
+		{
+			const bool bNearIsMax = FMath::Abs(Bd.YMax) < FMath::Abs(Bd.YMin);
+			const double FaceY = bNearIsMax ? Bd.YMax : Bd.YMin;
+			const int32 N = FMath::Max(1, FMath::RoundToInt((Bd.XMax - Bd.XMin) / GarageM));
+			const double Wd = (Bd.XMax - Bd.XMin) / N;
+			for (int32 K = 0; K < N; ++K)
+			{
+				const double X0 = Bd.XMin + Wd * K;
+				const double Z = G.At(X0 + Wd * 0.5, FaceY);
+				const double H = Bd.TopZ - Z;
+				if (H < 4.0 || H > 20.0) continue;
+				// The module fronts +y; turned round for a building on the +y side.
+				Garages.Add(bNearIsMax ? Place(X0, FaceY, Z, 0.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM))
+				                       : Place(X0 + Wd, FaceY, Z, 180.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM)));
+			}
+		}
 	}
 
 	// --- grandstands: stepped rows, back wall, roof on rear columns -----------
@@ -470,6 +580,18 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 				Rows.Quad(P(X, D0, Base), P(X, D1, Base), P(X, D1, Z), P(X, D0, Z), Facing);
 			}
 			Prev = Z;
+			// Seats on this tread, in bays of six blocks with an aisle between.
+			for (int32 K = 0;; ++K)
+			{
+				const double X = Gs.XMin + 0.6 + K * SeatBlockM + (K / BlocksPerBay) * AisleM;
+				if (X + SeatBlockM > Gs.XMax - 0.6) break;
+				Seats.Add(Sgn > 0.0 ? Place(X, D0, Z, 0.0) : Place(X + SeatBlockM, -D0, Z, 180.0));
+			}
+		}
+		// A handrail along the front edge.
+		for (double X = Gs.XMin; X + RailM <= Gs.XMax + 1e-6; X += RailM)
+		{
+			Rails.Add(Place(X, Sgn * (DF + 0.08), Gs.FrontZ, 0.0));
 		}
 		Rows.Quad(P(Gs.XMin, DB, Base), P(Gs.XMax, DB, Base), P(Gs.XMax, DB, Gs.BackZ), P(Gs.XMin, DB, Gs.BackZ), Out);
 
@@ -486,23 +608,48 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		const double DC = FMath::Min(DB + ColumnSizeM, FMath::Max(RB - ColumnSizeM * 0.5, DB));
 		const double ZRoof = FMath::Lerp(Gs.RoofFrontZ, Gs.RoofBackZ, RB > RF ? (DC - RF) / (RB - RF) : 1.0) - RoofThicknessM;
 		const int32 Cols = FMath::Max(1, FMath::RoundToInt((Gs.XMax - Gs.XMin) / ColumnSpacingM));
-		const double Hc = ColumnSizeM * 50.0;
 		for (int32 K = 0; K <= Cols; ++K)
 		{
 			const double X = FMath::Lerp(Gs.XMin + ColumnSizeM, Gs.XMax - ColumnSizeM, double(K) / Cols);
-			const FVector C0 = P(X, DC, Base), C1 = P(X, DC, ZRoof);
-			Roof.AlignedBox(C0 - FVector(Hc, Hc, 0), C1 + FVector(Hc, Hc, 0));
+			Columns.Add(Place(X, Sgn * DC, Base, 0.0, FVector(1.0, 1.0, ZRoof - Base)));
 		}
 		UProceduralMeshComponent* M = NewMesh(FSDSCollision::PropProfile, true);
 		Emit(M, 0, Rows, ConcreteWall, true);
-		Emit(M, 1, Roof, Metal, true);
+		Emit(M, 1, Roof, Roofing, true);
+	}
+
+	// --- props: instanced, with LODs; no collision (see the header) ----------
+	AddInstances(WorldMesh(TEXT("FencePost")), Posts, 200.0, true);
+	AddInstances(WorldMesh(TEXT("SignBoard")), Signs, 250.0, false);
+	AddInstances(WorldMesh(TEXT("GarageBay")), Garages, 600.0, true);
+	AddInstances(WorldMesh(TEXT("SeatBlock")), Seats, 350.0, false);   // under the roof's shadow
+	AddInstances(WorldMesh(TEXT("Handrail")), Rails, 150.0, false);
+	AddInstances(WorldMesh(TEXT("RoofColumn")), Columns, 500.0, true);
+	{
+		TMap<FString, TArray<FTransform>> ByMesh;
+		for (const FFSDSWorldProp& Pr : World.Props)
+		{
+			ByMesh.FindOrAdd(Pr.Mesh).Add(Place(Pr.X, Pr.Y, G.At(Pr.X, Pr.Y), Pr.YawDeg));
+		}
+		for (const TPair<FString, TArray<FTransform>>& It : ByMesh)
+		{
+			// The gantry's thin truss throws a ragged shadow across the grid at
+			// the sim's shadow quality; it is drawn without one.
+			UHierarchicalInstancedStaticMeshComponent* H =
+				AddInstances(WorldMesh(It.Key), It.Value, 800.0, It.Key != TEXT("StartGantry"));
+			if (H && It.Key == TEXT("StartGantry"))
+			{
+				const int32 Slot = H->GetMaterialIndex(TEXT("LampRed"));
+				if (Slot != INDEX_NONE) StartLights = H->CreateDynamicMaterialInstance(Slot);
+			}
+		}
 	}
 
 	HideFloors();
 	bBuilt = true;
 	BuildSeconds = FPlatformTime::Seconds() - T0;
-	UE_LOG(LogTemp, Log, TEXT("FSDS World: built %s at (%.2f, %.2f) in %.2f s: %d meshes, %d triangles; floor hidden: %s"),
-		*World.Name, OriginCsvM.X, OriginCsvM.Y, BuildSeconds, Meshes.Num(), NumTriangles,
+	UE_LOG(LogTemp, Log, TEXT("FSDS World: built %s at (%.2f, %.2f) in %.2f s: %d meshes, %d triangles; %d prop instances, %lld triangles at full detail; floor hidden: %s"),
+		*World.Name, OriginCsvM.X, OriginCsvM.Y, BuildSeconds, Meshes.Num(), NumTriangles, NumInstances, PropTriangles,
 		HiddenFloorNames.Num() ? *FString::Join(HiddenFloorNames, TEXT(", ")) : TEXT("none found"));
 }
 
@@ -511,18 +658,28 @@ void AFSDSWorldActor::HideFloors()
 	// The level's floor is a big flat WorldStatic slab around the origin; the
 	// terrain replaces it. Anything at least 90 m across and at most 5 m thick
 	// counts. Props, cones and the car are never WorldStatic slabs that size.
+	// The ring of tyre stacks around that floor goes too: it crosses a world's
+	// track (on Montmeló, 100 m past the start), and a world brings its own
+	// barriers, so the car can run on until it brakes.
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 	{
 		AActor* A = *It;
 		if (A == this || A->IsA<AFSDSEnvironmentActor>()) continue;
+		const bool bFloorRing = A->GetClass()->GetName().StartsWith(TEXT("spline_tires"));
 		TInlineComponentArray<UPrimitiveComponent*> Prims(A);
 		for (UPrimitiveComponent* P : Prims)
 		{
-			if (!P || !P->IsRegistered() || P->GetCollisionObjectType() != ECC_WorldStatic) continue;
-			const FVector Size = P->Bounds.GetBox().GetSize();
-			if (Size.X < 9000.0 || Size.Y < 9000.0 || Size.Z > 500.0) continue;
+			if (!P || !P->IsRegistered()) continue;
+			if (!bFloorRing)
+			{
+				if (P->GetCollisionObjectType() != ECC_WorldStatic) continue;
+				const FVector Size = P->Bounds.GetBox().GetSize();
+				if (Size.X < 9000.0 || Size.Y < 9000.0 || Size.Z > 500.0) continue;
+			}
 			HiddenFloors.Add({P, P->IsVisible(), P->GetCollisionEnabled()});
-			HiddenFloorNames.Add(FString::Printf(TEXT("%s.%s"), *A->GetName(), *P->GetName()));
+			// The ring is hundreds of stacks: one name for the lot.
+			if (!bFloorRing) HiddenFloorNames.Add(FString::Printf(TEXT("%s.%s"), *A->GetName(), *P->GetName()));
+			else HiddenFloorNames.AddUnique(A->GetName());
 			P->SetVisibility(false);
 			P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
@@ -551,7 +708,16 @@ void AFSDSWorldActor::Clear()
 		if (M) M->DestroyComponent();
 	}
 	Meshes.Reset();
+	for (UHierarchicalInstancedStaticMeshComponent* H : Instanced)
+	{
+		if (H) H->DestroyComponent();
+	}
+	Instanced.Reset();
+	StartLights = nullptr;
+	bStartLightsOn = false;
 	bBuilt = false;
 	NumTriangles = 0;
+	NumInstances = 0;
+	PropTriangles = 0;
 	BuildSeconds = 0.0;
 }

@@ -31,6 +31,26 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Realistic world assets.** Worlds are drawn with CC0 scanned materials
+  (asphalt, concrete, grass, steel, plastic) and props modelled in Blender to
+  real dimensions: grandstand seats, handrails, roof columns, catch-fence
+  posts, generic advertising boards, pit-garage fronts, a start gantry and
+  marshal posts. Props are instanced with LODs and have no collision.
+  `tools/assetgen` regenerates everything (docs/world_assets.md). A world can
+  place props by name with a new `props` list.
+
+- **Start lights.** A world's start gantry lights red at `AS_READY` and goes
+  out at GO. The ROS bridge forwards `/assi/state` to a new `setStartLights`
+  RPC; `getEnvironment` reports `world.start_lights`.
+
+- **`showcase` rendering preset.** Full resolution, epic scalability and Lumen
+  for demos and renders: `-showcase` on the command line or
+  `FSDS.Quality showcase`. It brings physically based daylight: the sun
+  where it stands during the event, a real-time sky light and fixed
+  exposure (`fsds.Daylight.Exposure`). `FSDS.Shot` takes a high-resolution
+  screenshot once lighting has settled. `getSimStatus` reports `quality`;
+  the default `sim` preset is unchanged (docs/rendering_presets.md).
+
 - **Montmeló main straight world.** Load `montmelo_straight_acceleration` to
   run the acceleration event on the real Circuit de Barcelona-Catalunya
   straight: measured terrain (it falls 7 m towards turn 1), the 20 m track with

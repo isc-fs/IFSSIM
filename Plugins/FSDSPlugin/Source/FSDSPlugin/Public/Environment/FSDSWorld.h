@@ -51,12 +51,22 @@ struct FFSDSWorldGrandstand
 	double RoofFrontY = 0, RoofBackY = 0, RoofFrontZ = 0, RoofBackZ = 0;
 };
 
+/** One placed prop from /Game/Worlds/Meshes (docs/world_assets.md). */
+struct FFSDSWorldProp
+{
+	FString Mesh;        // a name from FSDSWorld::PropMeshes
+	double X = 0, Y = 0, YawDeg = 0;
+};
+
 struct FSDSPLUGIN_API FFSDSWorld
 {
 	FString Dir;
 	FString Name;
 	FString Title;
 	TArray<FString> Attribution;
+
+	/** Compass bearing of +x (degrees clockwise from north): where the sun is. */
+	double XBearingDeg = 0;
 
 	double TerrainX0 = 0, TerrainY0 = 0, CellM = 1, ZUnitM = 0.01;
 	int32 Nx = 0, Ny = 0;
@@ -70,6 +80,7 @@ struct FSDSPLUGIN_API FFSDSWorld
 	TArray<FFSDSWorldWall> Walls;
 	TArray<FFSDSWorldBuilding> Buildings;
 	TArray<FFSDSWorldGrandstand> Grandstands;
+	TArray<FFSDSWorldProp> Props;
 
 	/** Ground height (m, world frame) at (x, y): bilinear, clamped at the edges. */
 	double HeightAt(double X, double Y) const;
@@ -83,6 +94,10 @@ namespace FSDSWorld
 	inline const TCHAR* TerrainFile = TEXT("terrain.i16");
 	constexpr double MaxCoordM = 2000.0;
 	constexpr int32 MaxTerrainCells = 2000000;
+
+	/** Props a world may place by name; the rest are placed by the structures
+	 *  they belong to (seats on grandstands, posts on fences...). */
+	inline constexpr const TCHAR* PropMeshes[] = { TEXT("StartGantry"), TEXT("MarshalPost"), TEXT("SignBoard") };
 
 	/** A world name is letters, digits and underscores (it becomes a path). */
 	FSDSPLUGIN_API bool IsValidName(const FString& Name);

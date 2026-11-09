@@ -143,5 +143,22 @@
       "roof_front_z": 28.52,
       "roof_back_z": 25.59
     }
+  ],
+  "props": [
+    {
+      "mesh": "StartGantry",
+      "x": 0.0,
+      "y": 0.0
+    },
+    {
+      "mesh": "MarshalPost",
+      "x": -80.0,
+      "y": 13.25
+    },
+    {
+      "mesh": "MarshalPost",
+      "x": 170.0,
+      "y": 13.25
+    }
   ]
 }

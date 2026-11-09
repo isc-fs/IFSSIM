@@ -33,11 +33,12 @@ Load `montmelo_straight_acceleration` to drive the acceleration event on the rea
 | Asphalt, concrete, grass surfaces | `FSDSTerrain` (ground) | Draped 3 cm above the terrain, the largest step the matrix allows. |
 | Light painted bands, lines | none | Paint only. |
 | Walls, fence posts | `FSDSProp` | Follow the ground in 2 m steps. The fence mesh has no collision, so the LiDAR sees through it. |
-| Buildings, grandstands | `FSDSProp` | Grandstand: stepped rows, back wall, roof slab on rear columns. |
+| Buildings, grandstands | `FSDSProp` | Grandstand: stepped rows, back wall, roof slab. |
+| Props: seats, rails, roof columns, fence posts, boards, garage fronts, listed props | none | Instanced, with LODs ([world_assets.md](world_assets.md)). |
 
-While a world is built, the level's own flat floor is hidden and its collision turned off: any WorldStatic part at least 90 m across and at most 5 m thick. The log line `FSDS World: built ...` names what it hid. Loading a track without a world puts the floor back.
+While a world is built, the level's own flat floor is hidden and its collision turned off: any WorldStatic part at least 90 m across and at most 5 m thick. So is the ring of tyre stacks around it (`spline_tires`), which would otherwise cross the world's track: the car runs on until it brakes, and the world's own barriers bound it. The log line `FSDS World: built ...` names what it hid. Loading a track without a world puts the floor back.
 
-`getEnvironment` reports the world under `world`: status, name, attribution, triangles, build time and the hidden floor. `loadTrack` replies with `"world": "none" | "loaded" | "invalid"`.
+`getEnvironment` reports the world under `world`: status, name, attribution, generated triangles, prop instances, build time and the hidden floor. `loadTrack` replies with `"world": "none" | "loaded" | "invalid"`.
 
 ## Format (`ifssim-world/1`)
 
@@ -63,6 +64,7 @@ The world frame is in metres: `+x` along the place's main axis, `+y` to its left
 | `walls` | `material` (`concrete`), `x0`, `y0`, `x1`, `y1`, `height_m`, `thickness_m`, optional `fence_height_m` (above `height_m`). |
 | `buildings` | `material` (`concrete` or `glass`), a box, and `top_z`: the roof height in the world frame. |
 | `grandstands` | `x_min`, `x_max`; seating rising from (`front_y`, `front_z`) to (`back_y`, `back_z`); roof from (`roof_front_y`, `roof_front_z`) to (`roof_back_y`, `roof_back_z`). |
+| `props` | `mesh` (`StartGantry`, `MarshalPost` or `SignBoard`), `x`, `y`, optional `yaw_deg` (anticlockwise from +x). Placed on the ground; see [world_assets.md](world_assets.md). |
 
 Coordinates are within ±2000 m, and unknown keys are errors. `tools/worldgen/world.py` and `FSDSWorld::Parse` apply the same rules; `tools/validate_tracks.py` checks every world a sidecar names, in CI.
 
@@ -81,7 +83,7 @@ Measured along the straight (EPSG:25831, 1049 m, bearing 212.7°):
 - Pit wall at y = −11.2 m (1.1 m high, fence to 2.1 m). Barrier on the grandstand side at y = +10.5 m (1.0 m, fence to 1.8 m).
 - The pit building roof is at 8.25 m. The main grandstand roof edge is at 28.5 m, falling to 25.6 m at the back.
 
-The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate. Signage is generic on purpose: no circuit or sponsor logos.
+The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate. Signage is generic on purpose: no circuit or sponsor logos. The start gantry and the two marshal posts are generic models at assumed positions, not surveyed.
 
 ## Regenerating
 

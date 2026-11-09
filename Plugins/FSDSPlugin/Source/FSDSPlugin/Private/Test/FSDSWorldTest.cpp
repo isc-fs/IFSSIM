@@ -67,7 +67,8 @@ bool FFSDSWorldRejectTest::RunTest(const FString& Parameters)
 	struct FCase { const TCHAR* What; FString Json; const TCHAR* Expected; };
 	const TArray<FCase> Cases = {
 		{TEXT("format"), Mutate(TEXT("ifssim-world/1"), TEXT("ifssim-world/2")), TEXT("format")},
-		{TEXT("unknown key"), Mutate(TEXT(R"("name": "mini",)"), TEXT(R"("name": "mini", "props": [],)")), TEXT("unknown key")},
+		{TEXT("unknown key"), Mutate(TEXT(R"("name": "mini",)"), TEXT(R"("name": "mini", "decals": [],)")), TEXT("unknown key")},
+		{TEXT("prop mesh"), Mutate(TEXT(R"("name": "mini",)"), TEXT(R"("name": "mini", "props": [{"mesh": "Tree", "x": 0, "y": 0}],)")), TEXT("not allowed")},
 		{TEXT("no attribution"), Mutate(TEXT(R"(["made up for a test"])"), TEXT("[]")), TEXT("attribution")},
 		{TEXT("terrain file"), Mutate(TEXT(R"("file": "terrain.i16")"), TEXT(R"("file": "t.png")")), TEXT("terrain.file")},
 		{TEXT("too many cells"), Mutate(TEXT(R"("nx": 3, "ny": 2)"), TEXT(R"("nx": 20000, "ny": 20000)")), TEXT("cells")},
@@ -181,9 +182,19 @@ bool FFSDSWorldBuildTest::RunTest(const FString& Parameters)
 	if (TestNotNull(TEXT("actor"), A))
 	{
 		A->Build(W, Origin);
-		AddInfo(FString::Printf(TEXT("built in %.2f s, %d triangles"), A->GetBuildSeconds(), A->GetNumTriangles()));
+		AddInfo(FString::Printf(TEXT("built in %.2f s, %d triangles, %d prop instances (%lld triangles at full detail)"),
+			A->GetBuildSeconds(), A->GetNumTriangles(), A->GetNumInstances(), A->GetPropTriangles()));
 		TestTrue(TEXT("built"), A->IsBuilt());
 		TestTrue(TEXT("under 1.5 M triangles"), A->GetNumTriangles() < 1500000);
+		// Seats, posts, boards, garage fronts, rails, columns and the listed props.
+		TestTrue(TEXT("props placed from /Game/Worlds"), A->GetNumInstances() > 1000);
+		// The listed StartGantry: its lights start out and follow SetStartLights.
+		TestTrue(TEXT("start gantry has lights"), A->HasStartLights());
+		TestFalse(TEXT("start lights out after a build"), A->AreStartLightsOn());
+		A->SetStartLights(true);
+		TestTrue(TEXT("start lights on"), A->AreStartLightsOn());
+		A->SetStartLights(false);
+		TestFalse(TEXT("start lights out at GO"), A->AreStartLightsOn());
 		TestTrue(TEXT("builds in under 3 s"), A->GetBuildSeconds() < 3.0);
 
 		auto Ue = [&](double X, double Y, double Z) { return FVector((X + Origin.X) * 100.0, -(Y + Origin.Y) * 100.0, Z * 100.0); };

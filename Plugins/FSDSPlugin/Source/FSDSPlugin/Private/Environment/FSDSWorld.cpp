@@ -141,7 +141,7 @@ bool FSDSWorld::Parse(const FString& Json, FFSDSWorld& Out, FString& OutError)
 	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid()) return R.Fail(TEXT("not a JSON object"));
 	const FString WR = TEXT("world");
 	if (!R.Keys(*Root, WR, { TEXT("format"), TEXT("name"), TEXT("title"), TEXT("attribution"), TEXT("frame"), TEXT("terrain") },
-		{ TEXT("detail"), TEXT("surfaces"), TEXT("lines"), TEXT("walls"), TEXT("buildings"), TEXT("grandstands") })) return false;
+		{ TEXT("detail"), TEXT("surfaces"), TEXT("lines"), TEXT("walls"), TEXT("buildings"), TEXT("grandstands"), TEXT("props") })) return false;
 
 	FString Format;
 	if (!R.Str(*Root, TEXT("format"), WR, Format)) return false;
@@ -166,7 +166,7 @@ bool FSDSWorld::Parse(const FString& Json, FFSDSWorld& Out, FString& OutError)
 		if (!R.Keys(**Frame, Where, { TEXT("crs"), TEXT("origin_e"), TEXT("origin_n"), TEXT("origin_z"), TEXT("x_bearing_deg") }) ||
 			!R.Str(**Frame, TEXT("crs"), Where, Crs) ||
 			!R.Num(**Frame, TEXT("origin_e"), Where, D, -1e7, 1e7) || !R.Num(**Frame, TEXT("origin_n"), Where, D, -1e7, 1e7) ||
-			!R.Num(**Frame, TEXT("origin_z"), Where, D, -1e7, 1e7) || !R.Num(**Frame, TEXT("x_bearing_deg"), Where, D, 0.0, 360.0))
+			!R.Num(**Frame, TEXT("origin_z"), Where, D, -1e7, 1e7) || !R.Num(**Frame, TEXT("x_bearing_deg"), Where, W.XBearingDeg, 0.0, 360.0))
 			return false;
 	}
 
@@ -256,6 +256,18 @@ bool FSDSWorld::Parse(const FString& Json, FFSDSWorld& Out, FString& OutError)
 			if (FMath::Abs(G.BackY) <= FMath::Abs(G.FrontY)) return R.Fail(Where + TEXT(": back_y must be further from the track (|y|) than front_y"));
 			if (G.BackZ <= G.FrontZ) return R.Fail(Where + TEXT(": the seating must rise from front to back"));
 			W.Grandstands.Add(G);
+			return true;
+		}) &&
+		R.Each(*Root, TEXT("props"), [&](const FObj& E, const FString& Where) {
+			FFSDSWorldProp P;
+			if (!R.Keys(E, Where, { TEXT("mesh"), TEXT("x"), TEXT("y") }, { TEXT("yaw_deg") }) ||
+				!R.Str(E, TEXT("mesh"), Where, P.Mesh) ||
+				!R.Num(E, TEXT("x"), Where, P.X) || !R.Num(E, TEXT("y"), Where, P.Y)) return false;
+			bool bKnown = false;
+			for (const TCHAR* M : PropMeshes) bKnown |= P.Mesh == M;
+			if (!bKnown) return R.Fail(FString::Printf(TEXT("%s.mesh: '%s' is not allowed"), *Where, *P.Mesh));
+			if (E.HasField(TEXT("yaw_deg")) && !R.Num(E, TEXT("yaw_deg"), Where, P.YawDeg, -360.0, 360.0)) return false;
+			W.Props.Add(P);
 			return true;
 		});
 	if (!bOk) return false;

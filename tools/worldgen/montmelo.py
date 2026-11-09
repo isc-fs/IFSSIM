@@ -200,8 +200,16 @@ def build(cache: Path, out_dir: Path) -> Dict:
              "roof_front_y": 18.5, "roof_back_y": 44.0,
              "roof_front_z": round(roof_front, 2), "roof_back_z": round(roof_back, 2)},
         ],
+        # Generic models, not surveyed: the start gantry over the painted start
+        # line, and two marshal posts on the grandstand-side run-off, clear of
+        # the acceleration zone.
+        "props": [
+            {"mesh": "StartGantry", "x": 0.0, "y": 0.0},
+            {"mesh": "MarshalPost", "x": -80.0, "y": 13.25},
+            {"mesh": "MarshalPost", "x": 170.0, "y": 13.25},
+        ],
     }
-    for k in ("surfaces", "walls", "lines", "buildings", "grandstands"):
+    for k in ("surfaces", "walls", "lines", "buildings", "grandstands", "props"):
         for e in world[k]:
             for f, v in list(e.items()):
                 if isinstance(v, float):

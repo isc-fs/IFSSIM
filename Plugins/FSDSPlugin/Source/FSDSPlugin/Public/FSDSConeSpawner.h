@@ -163,6 +163,7 @@ public:
 	const FFSDSWorld& GetTrackWorld() const { return TrackWorld; }
 	FVector2D GetTrackWorldOrigin() const { return TrackWorldOrigin; }
 	const AFSDSWorldActor* GetWorldActor() const { return WorldActor; }
+	AFSDSWorldActor* GetWorldActor() { return WorldActor; }
 
 private:
 	void SpawnTestTrack();

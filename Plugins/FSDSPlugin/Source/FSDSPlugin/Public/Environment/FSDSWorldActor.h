@@ -6,8 +6,10 @@
 #include "FSDSWorldActor.generated.h"
 
 class UProceduralMeshComponent;
+class UHierarchicalInstancedStaticMeshComponent;
 class UPrimitiveComponent;
 class UMaterialInterface;
+class UStaticMesh;
 
 /**
  * Builds a world (docs/worlds.md) at runtime from its data files: the terrain,
@@ -22,6 +24,14 @@ class UMaterialInterface;
  *  - walls, fence posts, buildings and grandstands are FSDSProp: the car and
  *    the LiDAR hit them, they are never ground.
  *  - painted bands, lines and fence mesh have no collision.
+ *  - detail props (seats, fence posts, boards, garage fronts, rails, roof
+ *    columns, the props a world lists) have none either: the GPU LiDAR
+ *    renders them, and the car can't reach them past the walls.
+ *
+ * Materials and props come from /Game/Worlds (docs/world_assets.md): CC0
+ * scanned materials, and props modelled to real dimensions by
+ * tools/assetgen. Generated geometry carries UVs in metres. Props are drawn
+ * as hierarchical instances with LODs and cull distances.
  *
  * While a world is built, the level's own flat floor is hidden and its
  * collision turned off (the terrain replaces it: the ground falls 7 m along
@@ -46,17 +56,37 @@ public:
 	void Clear();
 
 	bool IsBuilt() const { return bBuilt; }
+
+	/** Light or put out the start lights on the world's StartGantry props
+	 *  (red while the car waits for GO, out at GO). No-op without a gantry. */
+	void SetStartLights(bool bOn);
+	bool AreStartLightsOn() const { return bStartLightsOn; }
+	bool HasStartLights() const { return StartLights != nullptr; }
+	/** Generated (procedural) triangles; props are counted apart. */
 	int32 GetNumTriangles() const { return NumTriangles; }
+	int32 GetNumInstances() const { return NumInstances; }
+	/** Prop triangles if every instance drew its full-detail LOD. */
+	int64 GetPropTriangles() const { return PropTriangles; }
 	const TArray<FString>& GetHiddenFloors() const { return HiddenFloorNames; }
 	double GetBuildSeconds() const { return BuildSeconds; }
 
 private:
 	UProceduralMeshComponent* NewMesh(const TCHAR* Profile, bool bCastShadow);
+	/** One instanced prop: Transforms in UE space, culled beyond CullM metres. */
+	UHierarchicalInstancedStaticMeshComponent* AddInstances(UStaticMesh* Mesh, const TArray<FTransform>& Transforms, double CullM, bool bCastShadow);
 	void HideFloors();
 	void RestoreFloors();
 
 	UPROPERTY()
 	TArray<TObjectPtr<UProceduralMeshComponent>> Meshes;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> Instanced;
+
+	/** The gantry's lens material, made dynamic so it can be lit. */
+	UPROPERTY()
+	TObjectPtr<class UMaterialInstanceDynamic> StartLights;
+	bool bStartLightsOn = false;
 
 	struct FHiddenFloor
 	{
@@ -69,5 +99,7 @@ private:
 
 	bool bBuilt = false;
 	int32 NumTriangles = 0;
+	int32 NumInstances = 0;
+	int64 PropTriangles = 0;
 	double BuildSeconds = 0.0;
 };

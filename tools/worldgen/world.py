@@ -37,6 +37,9 @@ SURFACE_MATERIALS = ("asphalt", "asphalt_light", "concrete", "grass")
 LINE_COLOURS = ("white", "yellow")
 WALL_MATERIALS = ("concrete",)
 BUILDING_MATERIALS = ("concrete", "glass")
+# Props a world places by name (docs/world_assets.md); the plugin places the
+# rest itself, from the structures they belong to.
+PROP_MESHES = ("StartGantry", "MarshalPost", "SignBoard")
 
 
 class WorldError(ValueError):
@@ -90,7 +93,7 @@ def _box(e: Dict[str, Any], where: str) -> None:
 def validate(world: Any) -> Dict[str, Any]:
     """Check a parsed world.json the way the plugin does. Returns it unchanged."""
     w = _obj(world, "world", ["format", "name", "title", "attribution", "frame", "terrain"],
-             ["detail", "surfaces", "lines", "walls", "buildings", "grandstands"])
+             ["detail", "surfaces", "lines", "walls", "buildings", "grandstands", "props"])
     if w["format"] != FORMAT:
         raise WorldError(f"world.format: expected {FORMAT!r}")
     _str(w["name"], "world.name")
@@ -170,6 +173,15 @@ def validate(world: Any) -> Dict[str, Any]:
             raise WorldError(f"{where}: back_y must be further from the track (|y|) than front_y")
         if g["back_z"] <= g["front_z"]:
             raise WorldError(f"{where}: the seating must rise from front to back")
+
+    for i, p in enumerate(w.get("props", [])):
+        where = f"world.props[{i}]"
+        _obj(p, where, ["mesh", "x", "y"], ["yaw_deg"])
+        _str(p["mesh"], f"{where}.mesh", PROP_MESHES)
+        _num(p["x"], f"{where}.x")
+        _num(p["y"], f"{where}.y")
+        if "yaw_deg" in p:
+            _num(p["yaw_deg"], f"{where}.yaw_deg", -360.0, 360.0)
     return w
 
 
