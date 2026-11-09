@@ -175,6 +175,31 @@ namespace
 		};
 	}
 
+	/** Crowd barrier along X: a 2.5 m steel panel 1.1 m tall, top and bottom
+	 *  rails and upright bars between two end posts, on two 0.5 m feet. The
+	 *  LiDAR sees through the gaps; every bar is solid to the car. */
+	TArray<FPart> FenceParts()
+	{
+		TArray<FPart> Parts;
+		for (const double X : {-122.0, 122.0})
+		{
+			Parts.Add({EPartMesh::Cylinder, FVector(X, 0.0, 57.0), FRotator::ZeroRotator, FVector(4.0, 4.0, 106.0),
+				FSDSPropStencil::Aluminium});                                                     // post
+			Parts.Add({EPartMesh::Cube, FVector(X, 0.0, 2.0), FRotator::ZeroRotator, FVector(6.0, 50.0, 4.0),
+				FSDSPropStencil::Aluminium});                                                     // foot
+		}
+		Parts.Add({EPartMesh::Cube, FVector(0.0, 0.0, 108.0), FRotator::ZeroRotator, FVector(248.0, 4.0, 4.0),
+			FSDSPropStencil::Aluminium});                                                         // top rail
+		Parts.Add({EPartMesh::Cube, FVector(0.0, 0.0, 22.0), FRotator::ZeroRotator, FVector(248.0, 4.0, 4.0),
+			FSDSPropStencil::Aluminium});                                                         // bottom rail
+		for (int32 I = 0; I < 7; ++I)
+		{
+			Parts.Add({EPartMesh::Cylinder, FVector(-90.0 + 30.0 * I, 0.0, 65.0), FRotator::ZeroRotator,
+				FVector(2.0, 2.0, 82.0), FSDSPropStencil::Aluminium});                            // bars
+		}
+		return Parts;
+	}
+
 	/** Earth bank along X, 10 m long: a 5 m square beam rolled 45 deg and sunk,
 	 *  so a ridge about 2.9 m tall and 5.9 m wide shows. Its box collision is
 	 *  exactly what's drawn (rule 1). A stand-in for a hill until terrain (P3). */
@@ -210,10 +235,11 @@ namespace
 			{TEXT("lamp_post"), LampPostParts(), {{TEXT("/Game/ThirdParty/Props/SM_LampPost.SM_LampPost")}, FVector(0.0, 0.0, 600.0)}},
 			{TEXT("parked_car"), ParkedCarParts(), {{TEXT("/Game/ThirdParty/Props/SM_ParkedCar.SM_ParkedCar")}, FVector(440.0, 180.0, 0.0)}},
 			{TEXT("bench"), BenchParts(), {{TEXT("/Game/ThirdParty/Props/SM_Bench.SM_Bench")}, FVector(180.0, 50.0, 90.0)}},
-			// 2 m x 2 m of sidewalk, 15 cm tall: rows of them make a pavement.
+			// 2 m x 2 m of sidewalk, 20 cm tall: rows of them make a pavement.
 			{TEXT("sidewalk"),
-				{{EPartMesh::Cube, FVector(0.0, 0.0, 7.5), FRotator::ZeroRotator, FVector(200.0, 200.0, 15.0)}},
+				{{EPartMesh::Cube, FVector(0.0, 0.0, 10.0), FRotator::ZeroRotator, FVector(200.0, 200.0, 20.0)}},
 				{}, /*bLidarOnly=*/true},
+			{TEXT("fence"), FenceParts(), {}},
 			{TEXT("berm"), BermParts(), {}},
 		};
 		return Defs;
