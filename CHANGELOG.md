@@ -33,6 +33,20 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **`/lidar_points/viz` is off by default** (`LIDAR_VIZ_DECIMATION=0` in
+  docker-compose.yml, was 4). The quarter-density LiDAR copy for browser
+  visualisers was 18 % of a recorded bag, and with it on, recording made
+  SLAM pause past the pipeline watchdog's 0.6 s budget (829 ms measured on
+  stress_brake_hairpin_75m; 200 ms with it off), so recorded runs got
+  stopped. The sim's pipeline view doesn't use it. For Lichtblick's LiDAR
+  panels: `LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack`.
+- **Autonomous runs drive again after a watchdog stop.** When the pipeline's
+  watchdog (or anything else through `/force_ebs`) braked the car, the bridge
+  latched EBS and dropped every control command until `/signal/ebs_reset`,
+  which the sim supervisor published only when it activated, at stack start.
+  Every later run sat at the start line, armed but never moving, until the
+  stack was restarted. The supervisor now also releases the latch when a new
+  mission is armed (AS off → ready), as the car's uDV does.
 - **A recorded bag is saved in the background.** After a run with Record a
   bag, Mission Control copied the bag out of the pipeline's container while
   holding its state lock, so every other request (the run's state, the next
