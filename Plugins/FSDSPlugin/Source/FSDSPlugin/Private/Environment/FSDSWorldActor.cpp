@@ -273,7 +273,8 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	auto Or = [](UMaterialInterface* A, UMaterialInterface* B) { return A ? A : B; };
 	UMaterialInterface* Grass = Colour(FLinearColor(0.16f, 0.17f, 0.09f));
 	UMaterialInterface* Asphalt = Or(LoadMat(TEXT("Road_Inst_no_lines")), Colour(FLinearColor(0.04f, 0.04f, 0.045f)));
-	UMaterialInterface* Band = Colour(FLinearColor(0.32f, 0.32f, 0.31f));
+	// Lighter, older asphalt (LiDAR intensity), not paint.
+	UMaterialInterface* Band = Colour(FLinearColor(0.10f, 0.10f, 0.10f));
 	UMaterialInterface* ConcreteGround = Or(LoadMat(TEXT("concrete_ground")), Colour(FLinearColor(0.35f, 0.34f, 0.32f)));
 	UMaterialInterface* ConcreteWall = Or(LoadMat(TEXT("concrete_wall")), Colour(FLinearColor(0.45f, 0.45f, 0.43f)));
 	UMaterialInterface* Metal = Or(LoadMat(TEXT("metal")), Colour(FLinearColor(0.5f, 0.5f, 0.52f)));
