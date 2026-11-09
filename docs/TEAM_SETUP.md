@@ -76,6 +76,24 @@ Then:
 Your work goes in a PR to the pipeline repo; once merged, a PR here moves the
 submodule to it.
 
+## Watching the pipeline
+
+All in the sim, no web page or terminal:
+
+- **Pipeline view.** During an autonomous run the sim draws, over the real
+  track, what the pipeline believes: this scan's detected cones (magenta),
+  the SLAM cone map (white rings), where SLAM puts the car (pink arrow), the
+  planned path (green) and the cone chains it follows (blue, yellow). The map
+  sliding off the real cones is SLAM drift. Esc, **Pipeline view**, turns it
+  on or off.
+- **Logs.** The Logs page shows what the pipeline's nodes (or the backend)
+  print, with a filter and **Problems only**; **Save to a file** for a
+  teammate.
+- **Bags.** Pick **Record a bag** on the Drive page before START. The Bags
+  page lists the recordings; **Replay in the sim** puts the car back on the
+  track and moves it as it drove while the pipeline view shows what the
+  pipeline saw at each moment. Esc stops it.
+
 ## Keeping up to date
 
 The sim doesn't pull for you. To get the team's latest code:
@@ -96,8 +114,8 @@ The message under START says what failed and what to do. The usual ones:
 | GitHub said no: the account can't see isc-fs/IFSSIM | Ask to be added to the isc-fs organization, or sign in with that account (Windows Credential Manager, remove `git:https://github.com`, then START again). |
 | Docker isn't installed | Install Docker Desktop (above), open it once, START again. |
 | Docker's host networking is off | Docker Desktop, Settings, Resources, Network, Enable host networking, Apply & restart. |
-| docker compose failed: ... | `docker compose logs dv_pipeline_stack` (or `mission_control_backend`) in the repo folder. |
-| The backend didn't see the sim within 2 minutes | `docker compose logs mission_control_backend`; check nothing else uses ports 8000 or 41451. |
+| docker compose failed: ... | The Logs page (Pipeline or Backend) says why. |
+| The backend didn't see the sim within 2 minutes | The Logs page, Backend; check nothing else uses ports 8000 or 41451. |
 
 A Spanish (or any other language) Windows is fine: the sim asks Windows where
 Documents is rather than guessing its name, and reads git's and Docker's

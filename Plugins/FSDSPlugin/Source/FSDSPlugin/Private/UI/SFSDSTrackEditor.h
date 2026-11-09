@@ -96,6 +96,7 @@ private:
 	void GenerateRandom();
 	int32 GenPoints = 50;
 	int32 GenRegions = 30;
-	int32 GenMaxBound = 150;
+	// 140 m: a lap of about 390 m, most loops inside FS's 200-500 m.
+	int32 GenMaxBound = 140;
 	bool bGenerating = false;
 };

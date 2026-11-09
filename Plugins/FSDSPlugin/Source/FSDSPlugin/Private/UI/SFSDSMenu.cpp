@@ -1,6 +1,7 @@
 #include "UI/SFSDSMenu.h"
 
 #include "UI/SFSDSTrackMap.h"
+#include "UI/SFSDSLogsPage.h"
 #include "UI/FSDSGraphics.h"
 #include "UI/FSDSHud.h"
 #include "UI/FSDSPipelineView.h"
@@ -92,6 +93,10 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	Client = InArgs._Client;
 	EditorState = InArgs._EditorState;
 	if (InArgs._StartInEditor) Page = EPage::Editor;
+	if (InArgs._StartInBags) Page = EPage::Bags;
+	OnReplay = InArgs._OnReplay;
+	BagsNote = InArgs._BagsNote;
+	bBagsNoteError = InArgs._BagsNoteError;
 
 	// Start from the last run's choices, or the first track.
 	if (Last.IsSet())
@@ -320,6 +325,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavLogs", "Logs"), EPage::Logs) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavBags", "Bags"), EPage::Bags) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
 						+ SVerticalBox::Slot().AutoHeight()
@@ -361,6 +368,19 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					]
 					+ SWidgetSwitcher::Slot() [ BuildResultsPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildSettingsPage() ]
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SFSDSLogsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Logs; })
+					]
+					+ SWidgetSwitcher::Slot()
+					[
+						SAssignNew(BagsPage, SFSDSBagsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Bags; })
+						.OnReplay(OnReplay)
+						.Note(BagsNote)
+						.NoteError(bBagsNoteError)
+					]
 				]
 			]
 		];

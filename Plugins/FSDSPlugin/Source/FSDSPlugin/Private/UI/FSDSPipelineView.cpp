@@ -4,6 +4,7 @@
 #include "FSDSVehiclePawn.h"
 
 #include "Components/LineBatchComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -102,6 +103,19 @@ void FFSDSPipelineView::Receive(const FString& JsonLine)
 	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonLine);
 	if (!FJsonSerializer::Deserialize(Reader, O) || !O.IsValid()) return;
 
+	// A replay's recorded pose comes on lines of its own, 30 a second.
+	const TArray<TSharedPtr<FJsonValue>>* Truth = nullptr;
+	if (O->TryGetArrayField(TEXT("truth"), Truth) && Truth->Num() >= 4)
+	{
+		FScopeLock L(&Lock);
+		TruthPrev = TruthLast;
+		TruthLast.At = FPlatformTime::Seconds();
+		TruthLast.Enu = FVector((*Truth)[0]->AsNumber(), (*Truth)[1]->AsNumber(), (*Truth)[2]->AsNumber());
+		TruthLast.Yaw = (*Truth)[3]->AsNumber();
+		++TruthCount;
+		if (!O->HasField(TEXT("map"))) return;
+	}
+
 	FSnapshot S;
 	const TArray<TSharedPtr<FJsonValue>>* Pose = nullptr;
 	if (O->TryGetArrayField(TEXT("pose"), Pose) && Pose->Num() >= 3)
@@ -155,6 +169,8 @@ bool FFSDSPipelineView::IsReceiving() const
 
 bool FFSDSPipelineView::Tick(float Dt)
 {
+	if (bReplay) ApplyReplayPose();   // every frame, not only on a new snapshot
+
 	FSnapshot S;
 	{
 		FScopeLock L(&Lock);
@@ -176,13 +192,28 @@ bool FFSDSPipelineView::Tick(float Dt)
 	if (!P) return true;
 	const AFSDSVehiclePawn::FCarState Car = P->GetCarState();
 
+	// The car's speed: its own, or from its motion (a replay moves it with physics off).
+	double Speed = FMath::Abs(Car.Speed);
+	{
+		const FVector Enu3 = FSDSCoord::UEToENU(Car.Position);
+		const FVector2D Enu(Enu3.X, Enu3.Y);
+		const double Now = FPlatformTime::Seconds();
+		if (LastCarAt > 0.0 && Now - LastCarAt > 1e-3)
+		{
+			Speed = FMath::Max(Speed, FVector2D::Distance(Enu, LastCarEnu) / (Now - LastCarAt));
+		}
+		LastCarEnu = Enu;
+		LastCarAt = Now;
+	}
+
 	// The anchor, while the car stands at the start (see the header).
 	if (S.bHasPose)
 	{
-		const double Speed = FMath::Abs(Car.Speed);
-		if (bAnchorLocked && S.Map.Num() == 0 && Speed < PipelineViewUi::StillMps)
+		// A new session: SLAM starts over at its origin with the car standing
+		// still (its map may still hold the last session's cones for a scan or two).
+		if (bAnchorLocked && S.Pose.Size() < 0.3 && Speed < PipelineViewUi::StillMps)
 		{
-			bAnchorLocked = false;   // a new session
+			bAnchorLocked = false;
 		}
 		if (!bAnchorLocked)
 		{
@@ -197,7 +228,7 @@ bool FFSDSPipelineView::Tick(float Dt)
 
 	// Only while the pipeline drives: the relay keeps sending its last state
 	// after a run, which would linger over the next manual drive.
-	if (IsShown() && P->IsApiControlEnabled()) Draw(S);
+	if (IsShown() && (P->IsApiControlEnabled() || bReplay)) Draw(S);
 	else if (bDrawn) Clear();
 	return true;
 }
@@ -321,6 +352,80 @@ void FFSDSPipelineView::Draw(const FSnapshot& S)
 
 	if (Out.Num() > 0) L->DrawLines(Out);
 	bDrawn = true;
+}
+
+void FFSDSPipelineView::BeginReplay()
+{
+	if (bReplay) return;
+	{
+		FScopeLock L(&Lock);
+		TruthCount = 0;
+	}
+	bAnchored = bAnchorLocked = false;   // the bag's own SLAM frame
+	Clear();
+	if (AFSDSVehiclePawn* P = Pawn.Get())
+	{
+		if (USkeletalMeshComponent* Mesh = P->GetMesh())
+		{
+			bPhysicsWas = Mesh->IsSimulatingPhysics();
+			Mesh->SetSimulatePhysics(false);   // moved by hand along the recording
+		}
+	}
+	bReplay = true;
+}
+
+void FFSDSPipelineView::EndReplay()
+{
+	if (!bReplay) return;
+	bReplay = false;
+	bAnchored = bAnchorLocked = false;   // the next live run anchors afresh
+	if (AFSDSVehiclePawn* P = Pawn.Get())
+	{
+		if (USkeletalMeshComponent* Mesh = P->GetMesh())
+		{
+			Mesh->SetSimulatePhysics(bPhysicsWas);
+			if (bPhysicsWas)
+			{
+				Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+				Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+			}
+		}
+	}
+	Clear();
+}
+
+bool FFSDSPipelineView::HasReplayPose() const
+{
+	FScopeLock L(&Lock);
+	return TruthCount > 0 && FPlatformTime::Seconds() - TruthLast.At < 2.0;
+}
+
+void FFSDSPipelineView::ApplyReplayPose()
+{
+	FTruth A, B;
+	int32 N = 0;
+	{
+		FScopeLock L(&Lock);
+		A = TruthPrev;
+		B = TruthLast;
+		N = TruthCount;
+	}
+	AFSDSVehiclePawn* P = Pawn.Get();
+	if (!P || N == 0) return;
+
+	// Between the last two poses, over the time the last one took to come:
+	// at most one sample (a thirtieth of a second) behind, and smooth.
+	FVector Enu = B.Enu;
+	double Yaw = B.Yaw;
+	if (N >= 2 && B.At > A.At)
+	{
+		const double Alpha = FMath::Clamp((FPlatformTime::Seconds() - B.At) / (B.At - A.At), 0.0, 1.0);
+		Enu = FMath::Lerp(A.Enu, B.Enu, Alpha);
+		Yaw = A.Yaw + FMath::FindDeltaAngleRadians(A.Yaw, B.Yaw) * Alpha;
+	}
+	// ENU heading (0 = east, counter-clockwise) to UE yaw (0 = north, clockwise).
+	const FRotator Rot(0.0, 90.0 - FMath::RadiansToDegrees(Yaw), 0.0);
+	P->SetActorLocationAndRotation(FSDSCoord::ENUToUE(Enu), Rot, false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 void FFSDSPipelineView::Clear()

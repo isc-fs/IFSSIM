@@ -1,4 +1,5 @@
 #include "UI/FSDSMenu.h"
+#include "UI/FSDSPipelineView.h"
 
 #include "FSDSReferee.h"
 #include "FSDSSettings.h"
@@ -278,6 +279,10 @@ void FFSDSMenu::Show(EMode InMode)
 		.Client(Client)
 		.EditorState(Editor)
 		.StartInEditor(Mode == EMode::Main && bReturnToEditor)
+		.StartInBags(Mode == EMode::Main && bReturnToBags)
+		.BagsNote(BagsNote)
+		.BagsNoteError(bBagsNoteError)
+		.OnReplay(FOnFSDSReplayBag::CreateRaw(this, &FFSDSMenu::Replay))
 		.OnTestDrive(FOnFSDSTestDrive::CreateRaw(this, &FFSDSMenu::TestDrive))
 		.OnTracksChanged(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::ScanTracks))
 		.OnStartStack(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::StartStack))
@@ -293,7 +298,12 @@ void FFSDSMenu::Show(EMode InMode)
 		.OnQuit(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::Quit));
 	Root = Widget;
 	Viewport->AddViewportWidgetContent(Root.ToSharedRef(), MenuZOrder);
-	if (Mode == EMode::Main) bReturnToEditor = false;
+	if (Mode == EMode::Main)
+	{
+		bReturnToEditor = false;
+		bReturnToBags = false;
+		BagsNote.Reset();
+	}
 
 	if (APlayerController* PC = GetPC())
 	{
@@ -388,6 +398,7 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	}
 	TickStackUp();
 	TickRebuild();
+	TickReplay();
 	UpdateFrameCap();
 	ThrottleFrame();
 
@@ -1109,6 +1120,113 @@ void FFSDSMenu::TestDrive(const FString& TrackName)
 	Drive(R);
 }
 
+void FFSDSMenu::Replay(const FString& BagDir, const FString& TrackName)
+{
+	auto Note = [this](const FString& Text)
+	{
+		if (Widget) Widget->SetBagsMessage(Text, true);
+	};
+	if (Replayer.IsValid() && Replayer->IsRunning()) return;
+
+	// The relay in the stack forwards the recording to the sim: no stack, no replay.
+	if (!FFSDSPipelineView::Get().IsReceiving())
+	{
+		Note(TEXT("Replay needs the Docker stack running: its viz_relay sends the recording to the sim. "
+			"START an autonomous run once (or Settings, Rebuild pipeline), then replay."));
+		return;
+	}
+	ScanTracks();
+	const FFSDSMenuTrack* T = Tracks.FindByPredicate([&](const FFSDSMenuTrack& X) { return X.Name == TrackName; });
+	AFSDSVehiclePawn* P = Pawn.Get();
+	if (!T || !P || !Rpc)
+	{
+		Note(FString::Printf(TEXT("The bag's track, %s, isn't in the tracks folders the sim reads."), *TrackName));
+		return;
+	}
+	const FString Repo = FFSDSStackStarter::FindComposeDir();
+	if (Repo.IsEmpty())
+	{
+		Note(TEXT("The IFSSIM repo isn't set: START once to set it up."));
+		return;
+	}
+
+	// The track as it was: cones, referee, car on the start gate.
+	const FString Reply = Rpc->LoadTrackLocal(T->Path);
+	if (Reply.Contains(TEXT("\"error\"")))
+	{
+		Note(FString::Printf(TEXT("Couldn't load %s."), *TrackName));
+		return;
+	}
+	if (AFSDSReferee* R = Referee.Get()) R->SetEventType(EFSDSEventType::Trackdrive, PracticeLaps);
+	Rpc->SetApiControl(false);
+	P->ReleaseEbs();
+
+	// ros2 bag play inside the stack, from the repo's bags folder it mounts
+	// read-only at /host_bags (docker-compose.yml): every node there shares
+	// its shared memory, which a second container wouldn't. `up -d` first
+	// gives a stack from before that mount the mount (it does nothing when
+	// the stack is current). Only what the pipeline view draws, and the ground
+	// truth renamed so the live bridge's doesn't mix in.
+	const FString Cmd = FString::Printf(
+		TEXT("docker compose up -d dv_pipeline_stack && docker compose exec -T dv_pipeline_stack bash -lc ")
+		TEXT("\"source /opt/ros/humble/setup.bash && source /dv_pipeline_stack_ws/install/setup.bash && ")
+		TEXT("ros2 bag play /host_bags/%s --topics /Conos_raw /Conos_full /slam/pose /Path /path_planning/debug ")
+		TEXT("/testing_only/odom --remap /testing_only/odom:=/replay/odom\""),
+		*FPaths::GetCleanFilename(BagDir));
+	if (!Replayer.IsValid()) Replayer = MakeShared<FFSDSStackStarter>();
+	FString Error;
+	if (!Replayer->Run(Repo, Cmd, Error))
+	{
+		Note(FString::Printf(TEXT("Couldn't start the replay: %s"), *Error));
+		return;
+	}
+	ReplayBag = FPaths::GetCleanFilename(BagDir);
+	ReplaySince = FPlatformTime::Seconds();
+	FFSDSPipelineView::Get().BeginReplay();
+	if (!FFSDSPipelineView::Get().IsShown()) FFSDSPipelineView::Get().SetShown(true);
+	Hide();
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: replaying %s on %s"), *ReplayBag, *TrackName);
+}
+
+void FFSDSMenu::StopReplay(const FString& Why)
+{
+	if (Replayer.IsValid() && Replayer->IsRunning() && !ComposeDirForStop().IsEmpty())
+	{
+		// The docker client going doesn't stop the player in the stack: stop it there.
+		if (!ReplayStopper.IsValid()) ReplayStopper = MakeShared<FFSDSStackStarter>();
+		FString Error;
+		ReplayStopper->Run(ComposeDirForStop(), TEXT("docker compose exec -T dv_pipeline_stack pkill -f \"ros2 bag play\""), Error);
+	}
+	FFSDSPipelineView::Get().EndReplay();
+	HoldCar();
+	bReturnToBags = true;
+	BagsNote = Why;
+	bBagsNoteError = false;
+	Show(EMode::Main);
+}
+
+FString FFSDSMenu::ComposeDirForStop()
+{
+	return FFSDSStackStarter::FindComposeDir();
+}
+
+void FFSDSMenu::TickReplay()
+{
+	if (ReplayStopper.IsValid() && ReplayStopper->IsRunning()) ReplayStopper->Poll();
+	if (!Replayer.IsValid() || !Replayer->IsRunning()) return;
+	if (Replayer->Poll()) return;
+	// The bag ended (or docker refused it).
+	const bool bOk = Replayer->ExitCode() == 0;
+	const FString Last = Replayer->LastLine();
+	FFSDSPipelineView::Get().EndReplay();
+	HoldCar();
+	bReturnToBags = true;
+	BagsNote = bOk ? FString::Printf(TEXT("Replay of %s finished."), *ReplayBag)
+		: FString::Printf(TEXT("The replay of %s stopped: %s"), *ReplayBag, *Last);
+	bBagsNoteError = !bOk;
+	if (!IsOpen()) Show(EMode::Main);
+}
+
 void FFSDSMenu::StartStack()
 {
 	if (Launcher) Launcher->StartStack();
@@ -1117,6 +1235,11 @@ void FFSDSMenu::StartStack()
 void FFSDSMenu::OnEscape()
 {
 	if (!bEnabled || IsOpen()) return;
+	if (Replayer.IsValid() && Replayer->IsRunning())
+	{
+		StopReplay(FString::Printf(TEXT("Replay of %s stopped."), *ReplayBag));
+		return;
+	}
 	if (bRunLive && Current.IsSet())
 	{
 		// A manual run pauses; an autonomous one keeps going under the box

@@ -177,6 +177,12 @@ private:
 	static FString MissionName(EFSDSEventType Event);
 	/** The track editor's Test drive: the saved track, in Practice. */
 	void TestDrive(const FString& TrackName);
+	/** The Bags page's Replay: the bag's track, the car following the
+	 *  recording, the pipeline view showing what the pipeline saw. */
+	void Replay(const FString& BagDir, const FString& TrackName);
+	void StopReplay(const FString& Why);
+	void TickReplay();
+	static FString ComposeDirForStop();
 	void StartStack();
 	void Resume();
 	void Restart();
@@ -223,6 +229,10 @@ private:
 	FString RepoTracksDir;
 	/** After a test drive, Main menu goes back to the editor. */
 	bool bReturnToEditor = false;
+	/** After a replay, the menu opens on Bags with this note. */
+	bool bReturnToBags = false;
+	FString BagsNote;
+	bool bBagsNoteError = false;
 
 	/** The last START, kept for Restart and to preselect the menu. */
 	TOptional<FFSDSDriveRequest> Current;
@@ -252,6 +262,12 @@ private:
 	FString CloneDir;
 	/** What SyncPipelineSource does once the code is in the container. */
 	TFunction<void()> AfterSync;
+
+	/** The bag replay: `ros2 bag play` in a container of its own (Replay). */
+	TSharedPtr<FFSDSStackStarter> Replayer;
+	TSharedPtr<FFSDSStackStarter> ReplayStopper;
+	FString ReplayBag;
+	double ReplaySince = 0.0;
 
 	TSharedPtr<FFSDSStackStarter> Rebuilder;
 	FString RebuildStatus;

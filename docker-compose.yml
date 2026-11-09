@@ -233,6 +233,12 @@ services:
       # (Lichtblick reads from the host-side ./bags as before; the
       # pull step is the only added handle.)
       - ifssim_bags:/bags
+      # The host's bags, as the backend copies them out, read-only: the
+      # sim's Bags page replays one with `ros2 bag play /host_bags/<name>`
+      # inside this container (a second container wouldn't share its
+      # /dev/shm, and Fast DDS's shared memory would never deliver).
+      # Recording still writes to the volume above.
+      - ./bags:/host_bags:ro
       # /tmp/ifssim_streams bind-mount removed: it existed to share an
       # AF_UNIX LiDAR socket between the host plugin and the bridge
       # container. The UDS LiDAR sender was retired in #322 and the
