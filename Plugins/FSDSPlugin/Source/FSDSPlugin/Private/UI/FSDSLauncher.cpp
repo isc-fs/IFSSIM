@@ -1,6 +1,7 @@
 #include "UI/FSDSLauncher.h"
 
 #include "FSDSReferee.h"
+#include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "UI/FSDSMissionControlClient.h"
 #include "UI/FSDSStackStarter.h"
@@ -41,10 +42,11 @@ FKey FFSDSLauncher::ToggleKey()
 	return Key.IsValid() ? Key : EKeys::Tab;
 }
 
-void FFSDSLauncher::Init(UWorld* InWorld, AFSDSReferee* InReferee)
+void FFSDSLauncher::Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn* InPawn)
 {
 	World = InWorld;
 	Referee = InReferee;
+	Pawn = InPawn;
 
 	const FFSDSSettings& S = FFSDSSettings::Get();
 	// No viewport, no panel: headless runs (-RenderOffscreen, -nullrhi),
@@ -110,6 +112,7 @@ void FFSDSLauncher::Open(APlayerController* PC)
 		.Client(Client)
 		.Stack(Stack)
 		.Referee(Referee)
+		.Pawn(Pawn)
 		.ComposeDir(ComposeDir)
 		.ToggleKey(ToggleKey())
 		.OnClose(FSimpleDelegate::CreateRaw(this, &FFSDSLauncher::Close))
