@@ -8,6 +8,7 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
 #include "Environment/FSDSEnvironmentBuilder.h"
+#include "Environment/FSDSWorldActor.h"
 #include "FSDSConeSpawner.h"
 #include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
@@ -2096,12 +2097,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				bHasStartGate = true;
 				}
 
-				// environment: off | none | loaded | invalid (getEnvironment has
-				// the details, including why a sidecar was invalid).
+				// environment: off | none | loaded | invalid; world: none | loaded |
+				// invalid (getEnvironment has the details, including why).
 				return FString::Printf(
-					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
+					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\",\"world\":\"%s\"}"),
 					*JsonEscape(TrackPath), NumCones, bAligned ? TEXT("true") : TEXT("false"),
-					*JsonEscape(Spawner->GetEnvironmentStatus()));
+					*JsonEscape(Spawner->GetEnvironmentStatus()), *JsonEscape(Spawner->GetWorldStatus()));
 			},
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
@@ -2166,6 +2167,38 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 						for (const auto& Pair : Built->GetMeshSources()) Meshes->SetStringField(Pair.Key, Pair.Value);
 						Out->SetObjectField(TEXT("meshes"), Meshes);
 					}
+				}
+
+				// The world (docs/worlds.md), loaded whatever "enabled" says.
+				{
+					TSharedRef<FJsonObject> Wo = MakeShared<FJsonObject>();
+					Wo->SetStringField(TEXT("status"), Spawner->GetWorldStatus());
+					if (!Spawner->GetWorldError().IsEmpty())
+					{
+						Wo->SetStringField(TEXT("error"), Spawner->GetWorldError());
+					}
+					if (Spawner->GetWorldStatus() == TEXT("loaded"))
+					{
+						const FFSDSWorld& Tw = Spawner->GetTrackWorld();
+						Wo->SetStringField(TEXT("name"), Tw.Name);
+						Wo->SetStringField(TEXT("title"), Tw.Title);
+						Wo->SetStringField(TEXT("dir"), Tw.Dir);
+						Wo->SetNumberField(TEXT("x"), Spawner->GetTrackWorldOrigin().X);
+						Wo->SetNumberField(TEXT("y"), Spawner->GetTrackWorldOrigin().Y);
+						TArray<TSharedPtr<FJsonValue>> Attr;
+						for (const FString& A : Tw.Attribution) Attr.Add(MakeShared<FJsonValueString>(A));
+						Wo->SetArrayField(TEXT("attribution"), Attr);
+						if (const AFSDSWorldActor* Wa = Spawner->GetWorldActor())
+						{
+							Wo->SetBoolField(TEXT("built"), Wa->IsBuilt());
+							Wo->SetNumberField(TEXT("triangles"), Wa->GetNumTriangles());
+							Wo->SetNumberField(TEXT("build_s"), Wa->GetBuildSeconds());
+							TArray<TSharedPtr<FJsonValue>> Hidden;
+							for (const FString& H : Wa->GetHiddenFloors()) Hidden.Add(MakeShared<FJsonValueString>(H));
+							Wo->SetArrayField(TEXT("hidden_floors"), Hidden);
+						}
+					}
+					Out->SetObjectField(TEXT("world"), Wo);
 				}
 
 				FString Json;

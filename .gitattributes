@@ -26,3 +26,6 @@ docker-compose*.yml text eol=lf
 settings.json     text eol=lf
 Default*.ini      text eol=lf
 
+
+# World terrain (docs/worlds.md): raw int16 heights. Never convert line endings.
+*.i16 binary

@@ -31,6 +31,15 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Montmeló main straight world.** Load `montmelo_straight_acceleration` to
+  run the acceleration event on the real Circuit de Barcelona-Catalunya
+  straight: measured terrain (it falls 7 m towards turn 1), the 20 m track with
+  its cross-fall, start and finish lines, pit lane, pit wall and fences, pit
+  building and main grandstand, all LiDAR-visible. Built at runtime from
+  ICGC LiDAR (CC BY 4.0) and OpenStreetMap (ODbL) data by `tools/worldgen`.
+  Worlds are a new sidecar key (`"world"`) and format (`ifssim-world/1`);
+  they load whatever `Environment.Enabled` says, and replace the level's flat
+  floor while loaded. See `docs/worlds.md`.
 - **Car characterisation in the sim check.** `tools/characterise` drives the car
   with scripted inputs (no pipeline) before the missions and checks it against
   `settings.json`: full-lock radius both ways, steering linearity and low-speed

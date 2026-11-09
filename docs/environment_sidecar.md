@@ -30,6 +30,7 @@ The roadmap's design rules shape the file:
 | `profile` | yes | The generator's profile name, for example `flat_baseline` or `stress`. |
 | `ground.extent` | no | The ground the generator laid out: `x_min`, `y_min`, `x_max`, `y_max` in metres, with min below max. |
 | `props` | no | One entry per prop. `class` is a non-empty string; `x` and `y` are in metres; `yaw_deg` is optional (default 0). |
+| `world` | no | A real place to build around the track: `name` (letters, digits, `_`) is a folder in `Content/tracks/worlds/`, and `x`, `y` is where the world's origin sits in this frame, in metres. See [worlds.md](worlds.md). A world loads even with `Environment.Enabled` off; only the props follow that switch. |
 
 ### Prop classes
 

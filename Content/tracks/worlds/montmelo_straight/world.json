@@ -1,0 +1,147 @@
+{
+  "format": "ifssim-world/1",
+  "name": "montmelo_straight",
+  "title": "Circuit de Barcelona-Catalunya, main straight",
+  "attribution": [
+    "Terrain and structure heights: Institut Cartogràfic i Geològic de Catalunya (ICGC), Territorial LiDAR v3r1 2021-2023, CC BY 4.0",
+    "Layout: © OpenStreetMap contributors, ODbL 1.0"
+  ],
+  "frame": {
+    "crs": "EPSG:25831",
+    "origin_e": 438405.46,
+    "origin_n": 4602300.72,
+    "origin_z": 120.54,
+    "x_bearing_deg": 212.74
+  },
+  "terrain": {
+    "file": "terrain.i16",
+    "x0": -425.0,
+    "y0": -160.0,
+    "cell_m": 1.0,
+    "nx": 1171,
+    "ny": 321,
+    "z_unit_m": 0.01
+  },
+  "detail": {
+    "x_min": -100.0,
+    "x_max": 300.0
+  },
+  "surfaces": [
+    {
+      "material": "asphalt",
+      "x_min": -365.3,
+      "x_max": 683.7,
+      "y_min": -10.25,
+      "y_max": 10.0
+    },
+    {
+      "material": "asphalt_light",
+      "x_min": -365.3,
+      "x_max": 683.7,
+      "y_min": -10.0,
+      "y_max": -7.5
+    },
+    {
+      "material": "asphalt_light",
+      "x_min": -365.3,
+      "x_max": 683.7,
+      "y_min": 5.5,
+      "y_max": 9.5
+    },
+    {
+      "material": "asphalt",
+      "x_min": -232.3,
+      "x_max": 172.7,
+      "y_min": -25.5,
+      "y_max": -12.5
+    },
+    {
+      "material": "concrete",
+      "x_min": -215.3,
+      "x_max": 194.7,
+      "y_min": 11.0,
+      "y_max": 15.5
+    }
+  ],
+  "lines": [
+    {
+      "x0": 0.0,
+      "y0": -10.25,
+      "x1": 0.0,
+      "y1": 10.0,
+      "width_m": 0.6,
+      "colour": "white"
+    },
+    {
+      "x0": -142.8,
+      "y0": -10.25,
+      "x1": -142.8,
+      "y1": 10.0,
+      "width_m": 0.6,
+      "colour": "white"
+    },
+    {
+      "x0": -232.3,
+      "y0": -17.75,
+      "x1": 172.7,
+      "y1": -17.75,
+      "width_m": 0.3,
+      "colour": "white"
+    }
+  ],
+  "walls": [
+    {
+      "material": "concrete",
+      "x0": -232.3,
+      "y0": -11.2,
+      "x1": 172.7,
+      "y1": -11.2,
+      "height_m": 1.1,
+      "thickness_m": 0.8,
+      "fence_height_m": 2.1
+    },
+    {
+      "material": "concrete",
+      "x0": -215.3,
+      "y0": 10.5,
+      "x1": 194.7,
+      "y1": 10.5,
+      "height_m": 1.0,
+      "thickness_m": 0.5,
+      "fence_height_m": 1.8
+    },
+    {
+      "material": "concrete",
+      "x0": -156.3,
+      "y0": 16.0,
+      "x1": 132.7,
+      "y1": 16.0,
+      "height_m": 2.7,
+      "thickness_m": 0.4
+    }
+  ],
+  "buildings": [
+    {
+      "material": "concrete",
+      "x_min": -120.3,
+      "x_max": 180.7,
+      "y_min": -46.0,
+      "y_max": -26.0,
+      "top_z": 8.25
+    }
+  ],
+  "grandstands": [
+    {
+      "x_min": -156.3,
+      "x_max": 132.7,
+      "front_y": 18.5,
+      "back_y": 42.5,
+      "front_z": 3.0,
+      "back_z": 20.0,
+      "roof_front_y": 18.5,
+      "roof_back_y": 44.0,
+      "roof_front_z": 28.52,
+      "roof_back_z": 25.59
+    }
+  ]
+}

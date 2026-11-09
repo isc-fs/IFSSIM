@@ -1,0 +1,73 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Actor.h"
+#include "Environment/FSDSWorld.h"
+#include "FSDSWorldActor.generated.h"
+
+class UProceduralMeshComponent;
+class UPrimitiveComponent;
+class UMaterialInterface;
+
+/**
+ * Builds a world (docs/worlds.md) at runtime from its data files: the terrain,
+ * the surfaces and lines painted on it, walls with their fences, buildings and
+ * grandstands. Everything is generated geometry, so a world needs no editor
+ * work and moves with the track when Mission Control recentres it.
+ *
+ * Collision (docs/collision_matrix.md):
+ *  - terrain and the asphalt, concrete and grass surfaces are FSDSTerrain:
+ *    ground for the wheels, the road probe and the cone snap. Surfaces sit
+ *    3 cm above the terrain, the step the matrix allows.
+ *  - walls, fence posts, buildings and grandstands are FSDSProp: the car and
+ *    the LiDAR hit them, they are never ground.
+ *  - painted bands, lines and fence mesh have no collision.
+ *
+ * While a world is built, the level's own flat floor is hidden and its
+ * collision turned off (the terrain replaces it: the ground falls 7 m along
+ * the Montmeló straight); Clear() puts it back.
+ *
+ * The cone spawner owns one and rebuilds it with every track, before the
+ * props and cones are placed on the ground.
+ */
+UCLASS(NotPlaceable)
+class FSDSPLUGIN_API AFSDSWorldActor : public AActor
+{
+	GENERATED_BODY()
+
+public:
+	AFSDSWorldActor();
+
+	/** Replace what was built with World, its origin at OriginCsvM (the
+	 *  sidecar's world x, y: metres in the track CSV frame). */
+	void Build(const FFSDSWorld& World, const FVector2D& OriginCsvM);
+
+	/** Remove everything and give the level its floor back. */
+	void Clear();
+
+	bool IsBuilt() const { return bBuilt; }
+	int32 GetNumTriangles() const { return NumTriangles; }
+	const TArray<FString>& GetHiddenFloors() const { return HiddenFloorNames; }
+	double GetBuildSeconds() const { return BuildSeconds; }
+
+private:
+	UProceduralMeshComponent* NewMesh(const TCHAR* Profile, bool bCastShadow);
+	void HideFloors();
+	void RestoreFloors();
+
+	UPROPERTY()
+	TArray<TObjectPtr<UProceduralMeshComponent>> Meshes;
+
+	struct FHiddenFloor
+	{
+		TWeakObjectPtr<UPrimitiveComponent> Component;
+		bool bWasVisible = true;
+		ECollisionEnabled::Type Collision = ECollisionEnabled::NoCollision;
+	};
+	TArray<FHiddenFloor> HiddenFloors;
+	TArray<FString> HiddenFloorNames;
+
+	bool bBuilt = false;
+	int32 NumTriangles = 0;
+	double BuildSeconds = 0.0;
+};

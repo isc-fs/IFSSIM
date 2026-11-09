@@ -4,9 +4,11 @@
 #include "GameFramework/Actor.h"
 #include "FSDSReferee.h"
 #include "Environment/FSDSEnvironment.h"
+#include "Environment/FSDSWorld.h"
 #include "FSDSConeSpawner.generated.h"
 
 class AFSDSEnvironmentActor;
+class AFSDSWorldActor;
 
 /**
  * Spawns traffic cones on the track at BeginPlay.
@@ -151,6 +153,17 @@ public:
 	 *  has been loaded (so never with Environment.Enabled off). */
 	const AFSDSEnvironmentActor* GetEnvironmentActor() const { return EnvironmentActor; }
 
+	/** The world the track's sidecar names (docs/worlds.md). A world is the
+	 *  place itself, not optional dressing, so it loads whatever
+	 *  Environment.Enabled says; only the props follow that switch.
+	 *  Status: "none" (no world named), "loaded", or "invalid" (the sidecar
+	 *  or the world failed to load; GetWorldError() says why). */
+	const FString& GetWorldStatus() const { return WorldStatus; }
+	const FString& GetWorldError() const { return WorldError; }
+	const FFSDSWorld& GetTrackWorld() const { return TrackWorld; }
+	FVector2D GetTrackWorldOrigin() const { return TrackWorldOrigin; }
+	const AFSDSWorldActor* GetWorldActor() const { return WorldActor; }
+
 private:
 	void SpawnTestTrack();
 	void SpawnFromCSV();
@@ -161,8 +174,14 @@ private:
 	/** Build the loaded sidecar's props, or clear the last track's. */
 	void BuildEnvironment();
 
+	/** Load the world Env names, from the track's worlds/ folder. */
+	void LoadWorld(const FFSDSEnvironment& Env);
+
 	UPROPERTY()
 	TObjectPtr<AFSDSEnvironmentActor> EnvironmentActor = nullptr;
+
+	UPROPERTY()
+	TObjectPtr<AFSDSWorldActor> WorldActor = nullptr;
 	void SpawnCone(UStaticMesh* Mesh, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 	void SpawnConeBP(UClass* BPClass, FVector Location, FRotator Rotation = FRotator::ZeroRotator);
 
@@ -197,6 +216,11 @@ private:
 	FFSDSEnvironment Environment;
 	FString EnvironmentStatus = TEXT("off");
 	FString EnvironmentError;
+
+	FFSDSWorld TrackWorld;
+	FVector2D TrackWorldOrigin = FVector2D::ZeroVector;
+	FString WorldStatus = TEXT("none");
+	FString WorldError;
 
 	UPROPERTY()
 	AFSDSReferee* Referee = nullptr;

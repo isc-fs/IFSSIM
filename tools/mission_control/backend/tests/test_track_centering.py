@@ -42,3 +42,13 @@ def test_no_sidecar_or_a_broken_one(tmp_path):
     bad.write_text("{not json")
     assert not shift_sidecar(str(bad), 1.0, 1.0)
     assert bad.read_text() == "{not json"
+
+
+def test_recentring_moves_the_world_origin(tmp_path):
+    csv = tmp_path / "t.csv"
+    csv.write_text(CSV)
+    (tmp_path / "t.env.json").write_text(json.dumps(
+        {"format": "ifssim-env/1", "seed": 0, "profile": "world_m", "world": {"name": "m", "x": 0.0, "y": 0.0}}))
+    assert ensure_centered(str(csv))
+    env = json.loads((tmp_path / "t.env.json").read_text())
+    assert env["world"] == {"name": "m", "x": -20.0, "y": -2.0}
