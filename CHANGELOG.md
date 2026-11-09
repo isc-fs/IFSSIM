@@ -68,6 +68,11 @@ shipping pipeline, documentation.
   roof is optional. `FSDS.View` places a free camera for renders. The
   showcase preset drops its height fog, which drew a dark band at the
   horizon. Needs a UE recompile.
+- **Acceleration on Montmeló in the sim check.** A new benchmark mission,
+  `acceleration_montmelo`, drives the acceleration cones on the Montmeló
+  straight world. The GPU runner's sim check runs it once per check as an
+  informational mission (reported, never fails the check;
+  `tools/ci/sim_check.json`).
 - **Car characterisation in the sim check.** `tools/characterise` drives the car
   with scripted inputs (no pipeline) before the missions and checks it against
   `settings.json`: full-lock radius both ways, steering linearity and low-speed
