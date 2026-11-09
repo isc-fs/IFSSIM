@@ -33,6 +33,13 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **Clearer Track editor settings.** The random track's fields are named by
+  what they do to the loop, measured over many seeds: SIZE (M) (was max
+  size; the loop fills the square, so it sets the lap length, about 2.8 m
+  per metre; default now 140, ~390 m, inside FS's 200-500 m), BENDS (was
+  points; more is twistier) and COMPLEXITY (was regions; only matters below
+  ~30). The TRACK fields are WIDTH, CONE GAP and IN CORNERS, with a hint
+  line, and SEED moved to TEST SECTIONS, the only thing it affects.
 - **Bags in the menu, and replaying one in the sim.** A Bags page lists the
   runs recorded with Record a bag (the repo's bags folder, as the backend
   copies them out of the stack): event, track, date and size, with Delete
