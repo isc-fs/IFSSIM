@@ -180,6 +180,7 @@ void SFSDSBagsPage::Rescan()
 	for (const FString& N : Names)
 	{
 		if (N.EndsWith(TEXT("_carparity"))) continue;   // the LiDAR+IMU copy goes with its bag
+		if (N.StartsWith(TEXT("."))) continue;          // .<bag>.partial: the backend is still copying it out
 		FBag B;
 		if (!ParseName(N, B)) continue;
 		B.Dir = FPaths::Combine(Dir, N);

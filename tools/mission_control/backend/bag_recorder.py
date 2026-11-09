@@ -360,56 +360,84 @@ def _stream_extract(container, src_path: str, host_dir: str) -> Optional[str]:
     `/bags/<x>` lands as `host_dir/<x>/...`. Returns None on success or a
     diagnostic string on failure.
 
-    Streams to a temp file on disk before extracting — buffering a multi-GB
-    bag in a BytesIO trips mc_backend's mem_limit and gets it SIGKILL'd
-    mid-stop (live RAM stays at the ~256 KB chunk size this way).
+    The archive is extracted as it streams (tarfile's "r|" mode), into a
+    hidden `host_dir/.<x>.partial/` that is renamed to `host_dir/<x>` once
+    complete. On Windows `./bags` is a slow bind mount: the old way (the
+    whole tar to a temp file there, then extracted beside it) wrote every
+    byte twice, and an interrupted pull left multi-GB `bag_pull_*.tar`
+    files behind. RAM stays at the chunk size either way: a multi-GB bag
+    in memory trips mc_backend's mem_limit. The rename means the sim's
+    Bags page never sees a half-copied bag.
     """
-    import tempfile
+    import shutil
+    base = os.path.basename(src_path.rstrip("/"))
+    final = os.path.join(host_dir, base)
+    partial = os.path.join(host_dir, f".{base}.partial")
     try:
         bits, _stat = container.get_archive(src_path)
     except Exception as ex:  # noqa: BLE001
         return f"get_archive({src_path!r}) failed: {ex}"
 
-    tmp = tempfile.NamedTemporaryFile(
-        prefix="bag_pull_", suffix=".tar", dir=host_dir, delete=False,
-    )
+    shutil.rmtree(partial, ignore_errors=True)   # a previous pull's leftover
+    os.makedirs(partial)
     try:
-        for chunk in bits:
-            tmp.write(chunk)
-        tmp.flush()
-        tmp.close()
-    except Exception as ex:  # noqa: BLE001
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-        return f"streaming tarball to temp file failed: {ex}"
-
-    try:
-        with tarfile.open(name=tmp.name, mode="r") as tar:
+        with tarfile.open(fileobj=_ChunkReader(bits), mode="r|") as tar:
             for member in tar:
-                # Refuse any entry whose normalised path escapes host_dir.
+                # The tar's root entry is `base`; land it under `partial`.
+                parts = member.name.split("/", 1)
+                if parts[0] != base:
+                    return (
+                        f"tarball contains suspicious member path: {member.name!r} "
+                        f"(outside {base!r})"
+                    )
+                member.name = parts[1] if len(parts) > 1 else "."
+                # Refuse any entry whose normalised path escapes the target.
                 # `filter="data"` is the 3.12+ safe extraction policy (blocks
                 # abs paths, `..`, special files). Our explicit traversal check
-                # below is belt-and-braces + covers <3.12 where filter is absent.
-                target = os.path.normpath(os.path.join(host_dir, member.name))
-                if not (target == host_dir or target.startswith(host_dir + os.sep)):
+                # is belt-and-braces + covers <3.12 where filter is absent.
+                target = os.path.normpath(os.path.join(partial, member.name))
+                if not (target == partial or target.startswith(partial + os.sep)):
                     return (
                         f"tarball contains suspicious member path: {member.name!r} "
                         f"(would land outside {host_dir!r})"
                     )
+                if member.name == ".":
+                    continue
                 if _TAR_HAS_FILTER:
-                    tar.extract(member, path=host_dir, filter="data")
+                    tar.extract(member, path=partial, filter="data")
                 else:
-                    tar.extract(member, path=host_dir)
+                    tar.extract(member, path=partial)
+        if os.path.exists(final):
+            shutil.rmtree(final)
+        os.rename(partial, final)
+        partial = None
     except Exception as ex:  # noqa: BLE001
         return f"tar extract to {host_dir} failed: {ex}"
     finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError as ex:
-            _LOG.warning("bag_recorder: temp tarball cleanup failed: %s", ex)
+        if partial:
+            shutil.rmtree(partial, ignore_errors=True)
     return None
+
+
+class _ChunkReader:
+    """A file-like read() over docker's archive chunk iterator, for
+    tarfile's streaming mode."""
+
+    def __init__(self, chunks):
+        self._it = iter(chunks)
+        self._buf = b""
+
+    def read(self, n=-1):
+        while n < 0 or len(self._buf) < n:
+            try:
+                self._buf += next(self._it)
+            except StopIteration:
+                break
+        if n < 0:
+            out, self._buf = self._buf, b""
+        else:
+            out, self._buf = self._buf[:n], self._buf[n:]
+        return out
 
 
 def _make_car_parity_copy(container, bag_name: str, cp_name: str) -> tuple:

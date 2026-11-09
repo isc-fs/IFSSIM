@@ -630,3 +630,44 @@ def test_bag_finalised_rejects_traversal(monkeypatch):
     _patch_docker_sdk(monkeypatch, container=container)
     for bad in ("", "../etc", "a/b"):
         assert br.bag_finalised(bad) is False
+
+
+def test_auto_pull_streams_without_leftovers(monkeypatch, tmp_path):
+    """The archive is extracted as it streams: no temp tarball and no
+    .partial folder stay behind (on Windows ./bags is a slow bind mount,
+    and an interrupted pull used to leave a multi-GB bag_pull_*.tar)."""
+    _env(monkeypatch)
+    monkeypatch.setattr(br, "_HOST_BAGS_DIR", str(tmp_path))
+    name = "autocross_hairpin_20261109_150000"
+    big = bytes(range(256)) * 4096          # 1 MB, many stream chunks
+    tarball = _make_tarball_bytes(name, {"metadata.yaml": b"v: 5\n", "bag_0.mcap": big})
+    container = _fake_container_factory(get_archive=lambda path: (
+        iter([tarball[i:i + 65536] for i in range(0, len(tarball), 65536)]), {}))
+    _patch_docker_sdk(monkeypatch, container=container)
+
+    out = br.auto_pull_and_clean(name)
+
+    assert out["ok"] is True, out
+    assert (tmp_path / name / "bag_0.mcap").read_bytes() == big
+    assert sorted(p.name for p in tmp_path.iterdir()) == [name]
+
+
+def test_auto_pull_interrupted_leaves_nothing_half_copied(monkeypatch, tmp_path):
+    """A stream that breaks mid-bag leaves no `<name>` folder (the sim's
+    Bags page would list it) and no .partial folder."""
+    _env(monkeypatch)
+    monkeypatch.setattr(br, "_HOST_BAGS_DIR", str(tmp_path))
+    name = "autocross_hairpin_20261109_150100"
+    tarball = _make_tarball_bytes(name, {"metadata.yaml": b"v: 5\n", "bag_0.mcap": b"x" * 200000})
+
+    def _broken():
+        yield tarball[:4096]
+        raise ConnectionError("docker stream reset")
+    container = _fake_container_factory(get_archive=lambda path: (_broken(), {}))
+    _patch_docker_sdk(monkeypatch, container=container)
+
+    out = br.auto_pull_and_clean(name)
+
+    assert out["ok"] is False
+    assert list(tmp_path.iterdir()) == []
+    container.exec_run.assert_not_called()   # the volume copy is kept for pull-bag.sh
