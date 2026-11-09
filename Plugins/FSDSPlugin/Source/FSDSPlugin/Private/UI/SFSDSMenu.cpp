@@ -548,112 +548,6 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					})
 					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 				]
-				// How fast the simulation runs while the pipeline drives.
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SVerticalBox)
-					.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
-					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						// "Real time" needs more room than the slow motions.
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([]()
-						{
-							const double S = FFSDSRealTime::Get().SpeedFactor();
-							return S >= 1.0
-								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
-									"world, as on track. The HUD warns if this PC can't keep up.")
-								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
-									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
-									"unchanged; the view is choppier."),
-									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
-						})
-						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
-					]
-					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Recording", "RECORDING")) ]
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
-						[
-							MakeChoice(LOCTEXT("NoBag", "No bag"), [this]() { return !bRecordBag; }, [this]() { bRecordBag = false; })
-						]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
-						[
-							MakeChoice(LOCTEXT("Bag", "Record a bag"), [this]() { return bRecordBag; }, [this]() { bRecordBag = true; })
-						]
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
-					[
-						SNew(STextBlock)
-						.Text(LOCTEXT("BagHint", "A rosbag of the run's topics, for replaying it, in the bags folder of the "
-							"team's code (tools/list-bags.sh). Heavy: it records every LiDAR scan (about 15 MB a second), "
-							"so a busy PC can slow the pipeline down, and saving it after the run can take a few minutes."))
-						.Visibility_Lambda([this]() { return bRecordBag ? EVisibility::Visible : EVisibility::Collapsed; })
-						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
-					]
-					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Scoring", "SCORING")) ]
-					+ SVerticalBox::Slot().AutoHeight().Padding(3.f)
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
-						[
-							SNew(STextBlock).Text(LOCTEXT("RefLabel", "Reference time"))
-							.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
-						]
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-						[
-							SNew(SBox).WidthOverride(110.f)
-							[
-								SNew(SEditableTextBox)
-								.Font(MenuUi::MenuFont(11))
-								.HintText(LOCTEXT("RefHint", "none"))
-								.Text_Lambda([this]() { return FText::FromString(Reference()); })
-								.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
-								{
-									FString In = Text.ToString().TrimStartAndEnd().Replace(TEXT(","), TEXT("."));
-									In.RemoveFromEnd(TEXT("s"));
-									In.TrimEndInline();
-									if (In.IsEmpty() || (In.IsNumeric() && FCString::Atod(*In) > 0.0))
-									{
-										SetReference(In);
-										Message.Reset();
-									}
-									else
-									{
-										SetMessage(TEXT("The reference time is a number of seconds, like 62.5, or empty for none."), true);
-									}
-								})
-							]
-						]
-						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
-						[
-							SNew(STextBlock).Text(LOCTEXT("RefUnit", "s")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
-						]
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(3, 4, 3, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this]()
-						{
-							return Reference().IsEmpty()
-								? LOCTEXT("RefNoneHint", "The fastest corrected time for this event on this track, the one FS "
-									"scores against. Without it the run gets its time and penalties but no points.")
-								: LOCTEXT("RefSetHint", "Points are scored against this time, as at FS. Saved for this event "
-									"and track.");
-						})
-						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
-					]
-				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[
 					MakeBigButton(LOCTEXT("Start", "START"), MenuUi::GoBtn,
@@ -717,6 +611,124 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 				SNew(STextBlock)
 				.Text_Lambda([this]() { return TrackSummary(Selected); })
 				.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
+			]
+			// How the pipeline's run goes: under the map, where there is room.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 18, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						// "Real time" needs more room than the slow motions.
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([]()
+						{
+							const double S = FFSDSRealTime::Get().SpeedFactor();
+							return S >= 1.0
+								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
+									"world, as on track. The HUD warns if this PC can't keep up.")
+								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
+									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
+									"unchanged; the view is choppier."),
+									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 18, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Recording", "RECORDING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
+						[
+							MakeChoice(LOCTEXT("NoBag", "No bag"), [this]() { return !bRecordBag; }, [this]() { bRecordBag = false; })
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
+						[
+							MakeChoice(LOCTEXT("Bag", "Record a bag"), [this]() { return bRecordBag; }, [this]() { bRecordBag = true; })
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("BagHint", "A rosbag of the run's topics, for replaying it, in the bags folder of the "
+							"team's code (tools/list-bags.sh). Heavy: it records every LiDAR scan (about 15 MB a second), "
+							"so a busy PC can slow the pipeline down, and saving it after the run can take a few minutes."))
+						.Visibility_Lambda([this]() { return bRecordBag ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 0, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Scoring", "SCORING")) ]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3.f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+						[
+							SNew(STextBlock).Text(LOCTEXT("RefLabel", "Reference time"))
+							.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(SBox).WidthOverride(110.f)
+							[
+								SNew(SEditableTextBox)
+								.Font(MenuUi::MenuFont(11))
+								.HintText(LOCTEXT("RefHint", "none"))
+								.Text_Lambda([this]() { return FText::FromString(Reference()); })
+								.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+								{
+									FString In = Text.ToString().TrimStartAndEnd().Replace(TEXT(","), TEXT("."));
+									In.RemoveFromEnd(TEXT("s"));
+									In.TrimEndInline();
+									if (In.IsEmpty() || (In.IsNumeric() && FCString::Atod(*In) > 0.0))
+									{
+										SetReference(In);
+										Message.Reset();
+									}
+									else
+									{
+										SetMessage(TEXT("The reference time is a number of seconds, like 62.5, or empty for none."), true);
+									}
+								})
+							]
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+						[
+							SNew(STextBlock).Text(LOCTEXT("RefUnit", "s")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 4, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]()
+						{
+							return Reference().IsEmpty()
+								? LOCTEXT("RefNoneHint", "The fastest corrected time for this event on this track, the one FS "
+									"scores against. Without it the run gets its time and penalties but no points.")
+								: LOCTEXT("RefSetHint", "Points are scored against this time, as at FS. Saved for this event "
+									"and track.");
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+				]
 			]
 		];
 }
