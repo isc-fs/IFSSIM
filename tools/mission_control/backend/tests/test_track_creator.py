@@ -112,6 +112,7 @@ def test_a_venue_track_gets_the_venues_props(venue_dir):
     assert body["venue"] == "lot"
     env = json.loads((venue_dir / "lot__a.env.json").read_text())
     assert env["profile"] == "venue_lot" and env["props"][0]["class"] == "tree"
+    assert len(env["props"]) > 1   # and the track's own clutter after the venue's
     tc.remove_venue_sidecar(str(venue_dir / "lot__a.csv"))
     assert not (venue_dir / "lot__a.env.json").exists()
 

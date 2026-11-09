@@ -4,6 +4,7 @@
 #include "UI/FSDSMenu.h"
 #include "UI/FSDSTrackSpec.h"
 #include "UI/FSDSVenue.h"
+#include "UI/SFSDSLocationPicker.h"
 #include "UI/SFSDSTrackEditor.h"
 #include "Widgets/SCompoundWidget.h"
 
@@ -71,14 +72,19 @@ private:
 	TSharedRef<SWidget> MakeHeading(const FText& Title);
 
 	void RebuildTrackList();
-	TSharedRef<SWidget> BuildLocationRow();
 	/** Where to drive: a venue's name, or empty for every track. */
 	void SetLocation(const FString& InLocation);
 	TSharedPtr<const FSDSVenue::FVenue> FindVenue(const FString& Name) const;
 	void SelectTrack(int32 Index);
 	void SetEvent(EFSDSEventType Event, bool bInPractice);
-	/** Whether a track suits the chosen event. */
+	/** Whether a track suits the chosen event, wherever it is. */
+	bool FitsEvent(const FFSDSMenuTrack& Track) const;
+	/** ...and the location and the search: whether the list shows it. */
 	bool Fits(const FFSDSMenuTrack& Track) const;
+	/** The shown tracks in list order: by venue (open floor first) on Anywhere. */
+	TArray<int32> ShownTracks() const;
+	/** The tracks at a venue (empty: all) that suit the event. */
+	int32 CountAt(const FString& Venue) const;
 	FText EventHint() const;
 	FText TrackSummary(int32 Index) const;
 
@@ -88,7 +94,8 @@ private:
 	TArray<FFSDSMenuTrack> Tracks;
 	TArray<FSDSVenue::FVenueRef> Venues;
 	FString Location;
-	TSharedPtr<class SBox> LocationRow;
+	FString Search;
+	TSharedPtr<SFSDSLocationPicker> LocationPicker;
 	TSharedPtr<class SFSDSTrackEditor> EditorPage;
 	TSharedPtr<const TArray<FFSDSRunResult>> Results;
 	TOptional<FFSDSDriveRequest> Last;

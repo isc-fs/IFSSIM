@@ -137,7 +137,7 @@ def create(name: str, spec: Any, tracks_dir: str, builtins, overwrite: bool = Fa
         os.replace(tmp, path)
     if v is not None:
         from envgen import venue as ev
-        ev.write_sidecar(v, csv_path, created.track.offset)
+        ev.write_sidecar(v, csv_path, created.track.offset, parsed.seed)
     return 200, body
 
 

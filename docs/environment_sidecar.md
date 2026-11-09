@@ -5,7 +5,7 @@ A track's cones live in `<track>.csv`. Everything around them lives in a sidecar
 The roadmap's design rules shape the file:
 
 - **Generated, not drawn (rule 3).** A generator (`tools/envgen`) turns a seed and a profile into the sidecar. The plugin only instantiates what the file says and draws no randomness of its own. A world is reproduced exactly by its file.
-- **Opt-in (rule 5).** Nothing is loaded unless `settings.json` has `"Environment": { "Enabled": true }`. The default is `false`, so the flat world stays the regression baseline, and while it is off a sidecar next to a track is ignored.
+- **Opt-in (rule 5).** Nothing is loaded unless `settings.json` has `"Environment": { "Enabled": true }`. The default is `false`, so the flat world stays the regression baseline, and while it is off a sidecar next to a track is ignored. The one exception is a venue's track (profile `venue_<venue>`, written by `envgen.venue`), which loads its sidecar either way ([venues.md](venues.md)).
 - **Loaded with the track, before its cones (rule 4).** This happens both for the track the sim boots with and for `loadTrack`.
 
 ## Format v1

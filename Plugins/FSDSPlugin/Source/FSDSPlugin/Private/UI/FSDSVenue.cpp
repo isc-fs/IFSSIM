@@ -22,6 +22,8 @@ namespace VenueDraw
 	const FLinearColor Bench = FLinearColor::FromSRGBColor(FColor(160, 110, 60));
 	const FLinearColor Berm = FLinearColor::FromSRGBColor(FColor(140, 105, 60));
 	const FLinearColor Small = FLinearColor::FromSRGBColor(FColor(170, 170, 180));
+	const FLinearColor Tyres = FLinearColor::FromSRGBColor(FColor(110, 110, 118));
+	const FLinearColor Fence = FLinearColor::FromSRGBColor(FColor(200, 205, 215));
 
 	/** The footprints in tools/envgen/catalogue.py: a box, or a circle. */
 	struct FShape { float LengthM = 0.f, WidthM = 0.f, RadiusM = 0.f; };
@@ -40,6 +42,7 @@ namespace VenueDraw
 			{ TEXT("parked_car"), { 4.4f, 1.8f, 0.f } },
 			{ TEXT("bench"),      { 1.8f, 0.5f, 0.f } },
 			{ TEXT("sidewalk"),   { 2.0f, 2.0f, 0.f } },
+			{ TEXT("fence"),      { 2.5f, 0.5f, 0.f } },
 			{ TEXT("berm"),       { 10.0f, 5.9f, 0.f } },
 		};
 		for (const FEntry& E : Table)
@@ -57,6 +60,8 @@ namespace VenueDraw
 		if (Class == TEXT("lamp_post")) return Lamp;
 		if (Class == TEXT("bench")) return Bench;
 		if (Class == TEXT("berm")) return Berm;
+		if (Class == TEXT("tyre_wall")) return Tyres;
+		if (Class == TEXT("fence")) return Fence;
 		return Small;
 	}
 
@@ -213,7 +218,7 @@ namespace FSDSVenue
 		return nullptr;
 	}
 
-	bool TrackShift(const FVenue& V, const FString& TrackCsvPath, FVector2D& Out)
+	bool TrackShift(const FVenue& V, const FString& TrackCsvPath, FVector2D& Out, TArray<FProp>* OutOwn)
 	{
 		const FString Side = FPaths::Combine(FPaths::GetPath(TrackCsvPath), FPaths::GetBaseFilename(TrackCsvPath) + TEXT(".env.json"));
 		FString Text;
@@ -221,7 +226,7 @@ namespace FSDSVenue
 		const TArray<TSharedPtr<FJsonValue>>* Props = nullptr;
 		if (V.Props.Num() == 0 || !FFileHelper::LoadFileToString(Text, *Side)
 			|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Obj) || !Obj.IsValid()
-			|| !Obj->TryGetArrayField(TEXT("props"), Props) || Props->Num() != V.Props.Num())
+			|| !Obj->TryGetArrayField(TEXT("props"), Props) || Props->Num() < V.Props.Num())
 		{
 			return false;
 		}
@@ -233,12 +238,27 @@ namespace FSDSVenue
 			P = FVector2D(X, Y);
 			return true;
 		};
-		// The first prop gives the shift; the last confirms it is this venue's sidecar.
+		// The first prop gives the shift; the venue's last confirms it is this venue's sidecar.
 		FVector2D First, Last;
-		if (!PosOf(0, First) || !PosOf(Props->Num() - 1, Last)) return false;
+		if (!PosOf(0, First) || !PosOf(V.Props.Num() - 1, Last)) return false;
 		const FVector2D Shift = First - V.Props[0].Pos;
 		if (!(Last - V.Props.Last().Pos - Shift).IsNearlyZero(0.01)) return false;
 		Out = Shift;
+		if (OutOwn)
+		{
+			OutOwn->Reset();
+			for (int32 I = V.Props.Num(); I < Props->Num(); ++I)
+			{
+				const TSharedPtr<FJsonObject>* O = nullptr;
+				FProp P;
+				double Yaw = 0;
+				if (!PosOf(I, P.Pos) || !(*Props)[I]->TryGetObject(O) || !(*O)->TryGetStringField(TEXT("class"), P.Class)) continue;
+				(*O)->TryGetNumberField(TEXT("yaw_deg"), Yaw);
+				P.Pos -= Shift;
+				P.YawDeg = (float)Yaw;
+				OutOwn->Add(P);
+			}
+		}
 		return true;
 	}
 
