@@ -1055,6 +1055,44 @@ def pipeline_start():
         "message": outcome.message,
     }
 
+# Car copies being made on demand (the sim's Bags page): bag name -> state,
+# "making" until done, then "done" or "error: ...". Under _car_parity_lock.
+_car_parity_jobs: dict = {}
+_car_parity_lock = threading.Lock()
+
+
+def _car_parity_in_background(name: str) -> None:
+    try:
+        res = _bag.make_car_parity(name)
+    except Exception as ex:  # noqa: BLE001 — report it, don't kill the thread silently
+        res = {"ok": False, "error": f"raised: {ex}"}
+    with _car_parity_lock:
+        _car_parity_jobs[name] = "done" if res.get("ok") else f"error: {res.get('error', 'unknown')}"
+    log_event("record_bag", f"car copy of {name}: {_car_parity_jobs[name]}")
+
+
+@app.post("/api/bags/{name}/car_parity", dependencies=[Depends(require_api_key)])
+def bag_car_parity_make(name: str):
+    """Make `<name>_carparity` (LiDAR+IMU only, for the car's test stand) from
+    a bag in the bags folder, in the background (about a minute a lap). Off
+    after each recording by default (IFSSIM_BAG_CAR_PARITY); this makes one
+    when someone needs it. GET the same path for its state."""
+    with _car_parity_lock:
+        if _car_parity_jobs.get(name) == "making":
+            return {"ok": True, "state": "making"}
+        _car_parity_jobs[name] = "making"
+    threading.Thread(target=_car_parity_in_background, args=(name,),
+                     name=f"car-parity-{name}", daemon=True).start()
+    return {"ok": True, "state": "making"}
+
+
+@app.get("/api/bags/{name}/car_parity")
+def bag_car_parity_state(name: str):
+    """none | making | done | error: <why>."""
+    with _car_parity_lock:
+        return {"state": _car_parity_jobs.get(name, "none")}
+
+
 def _pull_bag_in_background(name: str) -> None:
     """#498 auto-pull of a stopped bag onto the host (`./bags/<name>`),
     off `_state_lock` (pipeline_stop starts it in a thread). Best-effort:

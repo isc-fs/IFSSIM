@@ -671,3 +671,47 @@ def test_auto_pull_interrupted_leaves_nothing_half_copied(monkeypatch, tmp_path)
     assert out["ok"] is False
     assert list(tmp_path.iterdir()) == []
     container.exec_run.assert_not_called()   # the volume copy is kept for pull-bag.sh
+
+
+def test_car_parity_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("IFSSIM_BAG_CAR_PARITY", raising=False)
+    assert br.is_car_parity_enabled() is False
+
+
+def test_make_car_parity_on_demand(monkeypatch, tmp_path):
+    """From a bag already in the host's bags folder: converted from the stack's
+    read-only /host_bags mount, streamed out beside the bag, volume copy removed."""
+    _env(monkeypatch)
+    monkeypatch.setattr(br, "_HOST_BAGS_DIR", str(tmp_path))
+    name = "autocross_hairpin_20261109_175950"
+    cp_name = f"{name}_carparity"
+    (tmp_path / name).mkdir()
+    (tmp_path / name / "metadata.yaml").write_text("version: 5\n")
+    cp_tar = _make_tarball_bytes(cp_name, {"metadata.yaml": b"v: 5\n", f"{cp_name}_0.mcap": b"cp"})
+    exec_calls = []
+
+    def _exec_run(cmd, **kw):
+        exec_calls.append(cmd)
+        return (0, b"")
+
+    def _get_archive(path):
+        assert path == f"/bags/{cp_name}", path
+        return (iter([cp_tar]), {})
+    container = _fake_container_factory(get_archive=_get_archive, exec_run=_exec_run)
+    _patch_docker_sdk(monkeypatch, container=container)
+
+    out = br.make_car_parity(name)
+
+    assert out["ok"] is True, out
+    assert (tmp_path / cp_name / f"{cp_name}_0.mcap").read_bytes() == b"cp"
+    assert f"ros2 bag convert -i /host_bags/{name} " in exec_calls[0][2]
+    assert exec_calls[-1] == ["rm", "-rf", f"/bags/{cp_name}"]
+
+
+def test_make_car_parity_refuses_missing_or_odd_names(monkeypatch, tmp_path):
+    _env(monkeypatch)
+    monkeypatch.setattr(br, "_HOST_BAGS_DIR", str(tmp_path))
+    for bad in ("", "../x", "x/y", ".hidden.partial", "a_bag_carparity"):
+        assert br.make_car_parity(bad)["ok"] is False, bad
+    out = br.make_car_parity("autocross_nothere_20261109_120000")
+    assert out["ok"] is False and "no complete bag" in out["error"]
