@@ -7,6 +7,7 @@
 #include "UI/SFSDSLocationPicker.h"
 #include "UI/SFSDSTrackEditor.h"
 #include "Widgets/SCompoundWidget.h"
+#include "UI/SFSDSBagsPage.h"
 
 class SFSDSTrackMap;
 class SScrollBox;
@@ -35,6 +36,10 @@ public:
 		SLATE_ARGUMENT(TSharedPtr<FFSDSMissionControlClient>, Client)
 		SLATE_ARGUMENT(TSharedPtr<FSDSTrackSpec::FEditorState>, EditorState)
 		SLATE_ARGUMENT(bool, StartInEditor)
+		SLATE_ARGUMENT(bool, StartInBags)
+		SLATE_ARGUMENT(FString, BagsNote)
+		SLATE_ARGUMENT(bool, BagsNoteError)
+		SLATE_EVENT(FOnFSDSReplayBag, OnReplay)
 		SLATE_EVENT(FOnFSDSTestDrive, OnTestDrive)
 		SLATE_EVENT(FSimpleDelegate, OnTracksChanged)
 		SLATE_EVENT(FSimpleDelegate, OnStartStack)
@@ -59,12 +64,14 @@ public:
 
 	/** The tracks folders changed, e.g. a track was saved in the editor. */
 	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues);
+	/** A note on the Bags page (a replay that couldn't start). */
+	void SetBagsMessage(const FString& Text, bool bError) { if (BagsPage.IsValid()) BagsPage->SetNote(Text, bError); }
 
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
 
 private:
-	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3, Logs = 4 };
+	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3, Logs = 4, Bags = 5 };
 
 	TSharedRef<SWidget> BuildMain();
 	TSharedRef<SWidget> BuildRunBox();
@@ -124,6 +131,10 @@ private:
 	TSharedPtr<FFSDSMissionControlClient> Client;
 	TSharedPtr<FSDSTrackSpec::FEditorState> EditorState;
 	FSimpleDelegate OnResume, OnRestart, OnMainMenu, OnQuit;
+	FOnFSDSReplayBag OnReplay;
+	TSharedPtr<SFSDSBagsPage> BagsPage;
+	FString BagsNote;
+	bool bBagsNoteError = false;
 
 	int32 Selected = INDEX_NONE;
 	EFSDSEventType Event = EFSDSEventType::Autocross;
