@@ -14,6 +14,15 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Recording a bag no longer freezes the stack (Docker Desktop).** A new
+  one-shot compose service, `docker_vm_tuning`, runs before
+  `dv_pipeline_stack` and makes Docker Desktop's VM write data out in small,
+  frequent steps (`vm.dirty_background_bytes` 32 MB, expire 2 s). With the
+  Linux defaults, a recording's ~16 MB/s came out as a 250-290 MB burst every
+  ~15 s, and a burst could freeze the whole stack for 0.5-1.7 s, so the
+  pipeline watchdog stopped 2 of 3 recorded laps. With it, 0 of 3. It only
+  acts in Docker Desktop's VM (WSL2 or LinuxKit kernel); on a Linux host it
+  does nothing, as these settings would be the machine's own.
 - **Longitudinal plant uses the settings it already had.** Rolling resistance
   (`RollingResistance`, Crr 0.020) is now applied to the Chaos car; Chaos has
   none of its own, so a coasting car only slowed from drag. Drive and regen
