@@ -29,6 +29,7 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -62,4 +63,24 @@ def generate_launch_description() -> LaunchDescription:
         }.items(),
     )
 
-    return LaunchDescription([*args, full_pipeline])
+    # The sim's pipeline view (Esc during an autonomous run): what the
+    # pipeline sees, streamed to the sim to draw over the track. Sim-side,
+    # so it lives here rather than in the pipeline's bringup.
+    viz_relay = Node(
+        package="sim_supervisor",
+        executable="viz_relay",
+        name="viz_relay",
+        output="screen",
+        # The stack's sources live in a named volume that START refreshes
+        # (docker compose cp): on a stack that predates the relay its module
+        # arrives only then, so it retries until it is there.
+        respawn=True,
+        respawn_delay=10.0,
+        parameters=[{
+            "host":         LaunchConfiguration("host"),
+            "port":         LaunchConfiguration("port"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }],
+    )
+
+    return LaunchDescription([*args, full_pipeline, viz_relay])

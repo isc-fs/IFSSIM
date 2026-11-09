@@ -33,6 +33,19 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **The pipeline view: what the pipeline sees, drawn over the track.** During
+  an autonomous run the sim draws, on the real track, this scan's detected
+  cones (magenta), the SLAM cone map (white rings), where SLAM puts the car
+  (pink arrow), the planned path (green) and the planner's cone chains (blue,
+  yellow). The map frame is anchored on where the car really stood when SLAM
+  started, so drift shows as the map sliding off the real cones. On or off
+  from the box over the run (Esc), saved. A new node in the stack,
+  `viz_relay` (ros2/src/sim_supervisor), subscribes to `/Conos_raw`,
+  `/Conos_full`, `/slam/pose`, `/Path` and `/path_planning/debug` and sends
+  a summary ten times a second on a `streamViz` connection to the sim's RPC
+  port. Lines only: no collision and hidden from scene captures, so neither
+  the LiDAR nor the cameras see them. Replaces Lichtblick for watching a run.
+
 - **The sim shows how close to real time it runs.** Every frame is a fixed
   1/60 s of simulation, so a PC that can't draw 60 frames a second slows the
   simulation down, and the pipeline, which computes in real time, gets more
