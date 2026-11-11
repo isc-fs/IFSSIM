@@ -14,6 +14,15 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
+  `tools/ci/sim_build.sh` and `sim_pr_check.sh` take one folder, `CI_HOME`
+  (default `/build/ifssim-ci`, so `gpu-1080` is unchanged), for the shared
+  build, the baseline and the owner marker. Without the box's container
+  wrapper the check starts the packaged build itself. `tools/ci/README.md`
+  says how to run the check on your own machine.
+
+### Changed
+
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
