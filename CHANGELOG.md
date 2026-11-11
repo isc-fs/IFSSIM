@@ -12,6 +12,14 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mission benchmarks on a snap-installed Docker.** The benchmark copied the
+  pipeline into `/tmp` and mounted the copy into its stack, but snap's Docker
+  has a `/tmp` of its own and mounts such a folder as an empty one: the stack
+  built nothing and stopped with "package 'bringup' not found". The copy now
+  sits next to the run's results.
+
 ### Changed
 
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
