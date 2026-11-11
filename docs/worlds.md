@@ -92,7 +92,7 @@ Measured along the straight (EPSG:25831, 1049 m, bearing 212.7°):
 - Pit lane: a white line along the wall at y = −13.06, a red band with white borders at y = −17.5, and green on the verge at two places. The pit wall ends at x = 224 m; the exit lane runs between a green-painted wedge and a white line, and joins the track at x = 316 m.
 - Roofs: six rows of dark panels on each block of the pit roof; two bands of solar panels on the main grandstand roof, in 20 m sections from x = −129 to 94 m.
 - The asphalt is darker left of centre, where the rubber is: 0.86 of its mean brightness at y = 2.75, 1.16 at the unused right edge (linear light, from the photo's brightness to the power 2.2). Along the track the photo varies by under ±1 % per 10 m, and it shows no repair patches or seams, so the wear map adds only ±2 % of gentle noise.
-- Pit wall at y = −11.2 m (1.1 m high, fence to 2.1 m). Barrier on the grandstand side at y = +10.5 m (1.0 m, fence to 1.8 m).
+- Pit wall at y = −11.2 m (1.1 m high, fence to 2.8 m). Barrier on the grandstand side at y = +10.5 m (1.0 m, fence to 2.1 m). The walls' heights are from the LiDAR; the fences' are from a ground-level photo at the start line, scaled by the walls, because the LiDAR only caught the lower part of the mesh. Their leaning tops aren't modelled.
 - The pit building roof is at 8.25 m. The main grandstand roof edge is at 28.5 m, falling to 25.6 m at the back.
 
 Everything else around the straight comes from the LiDAR classes (`tools/worldgen/lidar_features.py`, numpy only):
@@ -103,7 +103,7 @@ Everything else around the straight comes from the LiDAR classes (`tools/worldge
 
 The pit building, the main grandstand and the open grandstands are modelled; LiDAR buildings and trees inside them are dropped. The current build has 44 buildings (7 of them decks), 5 grandstands and 775 trees.
 
-The aerial photo shows roofs a few metres off their footprint (they stand 8 to 28 m up), so roof positions and heights come from the LiDAR, and only the patterns on them from the photo. The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate; so is the structure under the roof (rafters and purlins), and which garages stand open. Signage is generic on purpose: no circuit or sponsor logos. The start gantry and the two marshal posts are generic models at assumed positions, not surveyed.
+The aerial photo shows roofs a few metres off their footprint (they stand 8 to 28 m up), so roof positions and heights come from the LiDAR, and only the patterns on them from the photo. The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate; so is the structure under the roof (rafters and purlins), and which garages stand open. Signage is generic on purpose: no circuit or sponsor logos. The start gantry's shape and sizes are measured on a ground-level photo (about ±10 %, scaled by the walls); its position on the start line is assumed. The two marshal posts are generic models at assumed positions.
 
 ## Regenerating
 

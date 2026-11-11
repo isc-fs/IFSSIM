@@ -38,7 +38,7 @@ Wear comes in as the mesh's vertex colour, not a texture: the world actor writes
 | `SignBoard` | 3.0 × 0.9 m, generic two-tone | Along the track side of walls up to 1.5 m high |
 | `GarageBay` | 6 m wide pit-garage front, scaled to the roof | Along a concrete building's face towards the track |
 | `GarageBayOpen` | The same front with its door up: dark interior, strip light, a tool cabinet, a stack of tyres | Every third garage |
-| `StartGantry` | Truss over the track, columns at y = −12 / +11.5 m, five light modules | Where the world's `props` list says |
+| `StartGantry` | Box truss over the track, 1.3 m deep with its underside at 5.0 m, on columns at y = −12 / +11.5 m. Start lights of five columns of four lamps (the lower two light red) hang under it 2 m towards the grandstand, with a camera dome on a mast above them, and a dark board hangs on the pit side. Sizes measured on a ground-level photo of the Montmeló gantry | Where the world's `props` list says |
 | `MarshalPost` | 2.4 × 1.6 m booth | Where the world's `props` list says |
 | `TreePineA`, `TreePineB` | 10 m stone pine: leaning trunk, umbrella crown of 7 to 9 clumps | At each of the world's `trees` of kind `pine`, scaled to its height and crown |
 | `TreeBroadleafA`, `TreeBroadleafB` | 10 m tree, 4 m crown radius: trunk forking at 3.2 m, 3 to 5 lobes | At each `broadleaf` tree |

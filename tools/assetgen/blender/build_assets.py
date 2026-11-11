@@ -358,37 +358,59 @@ def start_gantry():
 
     Origin: the start line on the track axis, at ground level. Columns stand
     at y = -12.0 (pit side, behind the pit wall) and y = +11.5 (behind the
-    barrier); the truss's underside is at 6.0 m.
+    barrier). Sizes are measured on a ground-level photo of the real one,
+    scaled by the walls beside it: the truss's underside is at 5.0 m and it
+    is 1.3 m deep, with a bay about as wide as it is deep. The start lights
+    (five columns of four lamps, 2.0 x 1.15 m) hang straight under it, 2 m
+    towards the grandstand side, with a camera on a short mast above them;
+    a dark board hangs on the pit side.
     """
     p = Part("StartGantry")
-    y0, y1, z0, d, h = -12.0, 11.5, 6.0, 0.7, 0.9
+    y0, y1, z0, d, h = -12.0, 11.5, 5.0, 0.8, 1.3
+    zt = z0 + h
     for y in (y0, y1):
-        p.box((-0.25, y - 0.25, 0.0), (0.25, y + 0.25, z0 + h + 0.3), "SteelWhite")
+        p.box((-0.15, y - 0.15, 0.0), (0.15, y + 0.15, zt + 0.15), "SteelWhite")
         p.box((-0.4, y - 0.4, 0.0), (0.4, y + 0.4, 0.3), "ConcreteWall")
-    chords = [(-d / 2, z0), (d / 2, z0), (-d / 2, z0 + h), (d / 2, z0 + h)]
-    for (x, z) in chords:
-        p.tube((x, y0, z), (x, y1, z), 0.05, "SteelWhite", segments=8)
-    n = 16
-    for k in range(n):
-        ya, yb = y0 + (y1 - y0) * k / n, y0 + (y1 - y0) * (k + 1) / n
+    for (x, z) in [(-d / 2, z0), (d / 2, z0), (-d / 2, zt), (d / 2, zt)]:
+        p.tube((x, y0, z), (x, y1, z), 0.06, "SteelWhite", segments=8)
+    n = 18
+    ys = [y0 + (y1 - y0) * k / n for k in range(n + 1)]
+    for k, y in enumerate(ys):
+        # Verticals on both faces, cross members top and bottom.
         for x in (-d / 2, d / 2):
-            p.tube((x, ya, z0), (x, yb, z0 + h), 0.025, "SteelWhite", segments=6, caps=False)
-        for z in (z0, z0 + h):
+            p.tube((x, y, z0), (x, y, zt), 0.035, "SteelWhite", segments=6, caps=False)
+        for z in (z0, zt):
+            p.tube((-d / 2, y, z), (d / 2, y, z), 0.03, "SteelWhite", segments=6, caps=False)
+        if k == n:
+            break
+        ya, yb = y, ys[k + 1]
+        # Face diagonals alternate, so the faces read as a row of Vs.
+        za, zb = (z0, zt) if k % 2 == 0 else (zt, z0)
+        for x in (-d / 2, d / 2):
+            p.tube((x, ya, za), (x, yb, zb), 0.03, "SteelWhite", segments=6, caps=False)
+        for z in (z0, zt):
             p.tube((-d / 2, ya, z), (d / 2, yb, z), 0.025, "SteelWhite", segments=6, caps=False)
-        p.tube((-d / 2, ya, z0), (-d / 2, ya, z0 + h), 0.025, "SteelWhite", segments=6, caps=False)
-    # Start lights under the truss, facing the grid (-x): a housing and five
-    # modules, each with two red lenses under visors.
-    bx = -d / 2 - 0.05
-    p.box((bx - 0.30, -1.75, z0 - 1.05), (bx, 1.75, z0 + 0.02), "Rubber")   # black housing
+    # Start lights, facing the grid (-x): five columns, each a housing with
+    # four lenses under visors; the lower two light red, the upper two stay dark.
+    yl, bx = 2.0, -d / 2
     for k in range(5):
-        y = -1.36 + 0.68 * k
-        p.box((bx - 0.38, y - 0.26, z0 - 1.0), (bx - 0.30, y + 0.26, z0 - 0.05), "Rubber")
-        for z in (z0 - 0.33, z0 - 0.73):
-            p.tube((bx - 0.38, y, z), (bx - 0.42, y, z), 0.15, "LampRed", segments=16)
-            # Visor: a hood over the top of the lens.
-            p.box((bx - 0.62, y - 0.17, z + 0.15), (bx - 0.38, y + 0.17, z + 0.18), "Rubber")
-            p.box((bx - 0.62, y - 0.18, z - 0.02), (bx - 0.38, y - 0.15, z + 0.18), "Rubber")
-            p.box((bx - 0.62, y + 0.15, z - 0.02), (bx - 0.38, y + 0.18, z + 0.18), "Rubber")
+        y = yl + 0.4 * (k - 2)
+        p.box((bx - 0.25, y - 0.16, z0 - 1.15), (bx, y + 0.16, z0 - 0.02), "Rubber")
+        for i in range(4):
+            z = z0 - 0.17 - 0.27 * i
+            p.tube((bx - 0.25, y, z), (bx - 0.28, y, z), 0.11, "LampRed" if i >= 2 else "PanelDark",
+                   segments=16)
+            p.box((bx - 0.42, y - 0.13, z + 0.11), (bx - 0.25, y + 0.13, z + 0.13), "Rubber")
+    # Camera mast on the top chord, over the lights: a dome on an arm.
+    p.tube((-d / 2, yl, zt), (-d / 2, yl, zt + 0.65), 0.03, "SteelGrey", segments=8)
+    p.tube((-d / 2, yl, zt + 0.65), (-d / 2 - 0.25, yl, zt + 0.65), 0.025, "SteelGrey", segments=6)
+    p.tube((-d / 2 - 0.3, yl, zt + 0.66), (-d / 2 - 0.3, yl, zt + 0.52), 0.09, "SteelGrey", segments=12)
+    p.cone((-d / 2 - 0.3, yl, zt + 0.52), (-d / 2 - 0.3, yl, zt + 0.44), 0.09, 0.05, "PanelDark", segments=12)
+    # The dark board on the pit side, hung under the truss.
+    yb0, yb1 = -4.7, -2.1
+    p.box((bx - 0.15, yb0, z0 - 1.0), (bx, yb1, z0 - 0.1), "Rubber")
+    for y in (yb0 + 0.2, yb1 - 0.2):
+        p.box((bx - 0.1, y - 0.02, z0 - 0.1), (bx - 0.05, y + 0.02, z0), "SteelGrey")
     return p.finish(bevel=0.004)
 
 

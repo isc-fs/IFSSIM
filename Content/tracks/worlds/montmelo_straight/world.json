@@ -1110,7 +1110,7 @@
       "y1": -11.2,
       "height_m": 1.1,
       "thickness_m": 0.8,
-      "fence_height_m": 2.1
+      "fence_height_m": 2.8
     },
     {
       "material": "concrete",
@@ -1120,7 +1120,7 @@
       "y1": 10.5,
       "height_m": 1.0,
       "thickness_m": 0.5,
-      "fence_height_m": 1.8
+      "fence_height_m": 2.1
     },
     {
       "material": "concrete",

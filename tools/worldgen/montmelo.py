@@ -334,12 +334,16 @@ def build(cache: Path, out_dir: Path) -> Dict:
         ],
         "lines": markings(track, pits),
         "walls": [
-            # Pit wall: about 1.1 m of concrete, catch fence above (LiDAR tops ~2.1 m).
+            # Fence heights come from a ground-level photo at the start line,
+            # scaled by the walls' LiDAR heights; the LiDAR itself only caught
+            # the lower part of the mesh. The fences' leaning tops aren't
+            # modelled; these heights sit between post top and lean top.
+            # Pit wall: about 1.1 m of concrete, catch fence to ~2.7 m (lean to ~2.9 m).
             {"material": "concrete", "x0": pits[0], "y0": -11.2, "x1": PIT_WALL_END_X, "y1": -11.2,
-             "height_m": 1.1, "thickness_m": 0.8, "fence_height_m": 2.1},
-            # Barrier on the grandstand side, fence to ~1.8 m.
+             "height_m": 1.1, "thickness_m": 0.8, "fence_height_m": 2.8},
+            # Barrier on the grandstand side, fence to ~1.9 m (cranked top to ~2.2 m).
             {"material": "concrete", "x0": stand_side[0], "y0": 10.5, "x1": stand_side[1], "y1": 10.5,
-             "height_m": 1.0, "thickness_m": 0.5, "fence_height_m": 1.8},
+             "height_m": 1.0, "thickness_m": 0.5, "fence_height_m": 2.1},
             # The grandstand's front wall (~2.7 m).
             {"material": "concrete", "x0": gs_x[0], "y0": 16.0, "x1": gs_x[1], "y1": 16.0,
              "height_m": 2.7, "thickness_m": 0.4},

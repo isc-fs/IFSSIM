@@ -88,7 +88,11 @@ shipping pipeline, documentation.
   both roofs carry their panels; the grandstand roof has galvanised sheet,
   rafters and purlins underneath. World format: optional `wear`, line
   `end_width_m` and colours `red`/`green`, building `canopy_m` and
-  `roof_panels`, grandstand `roof_panels`. Needs a UE recompile.
+  `roof_panels`, grandstand `roof_panels`. From a ground-level photo at the
+  start line: the start gantry is rebuilt to the real one's shape (deeper
+  truss at 5 m, five columns of four lamps, camera mast, pit-side board) and
+  the catch fences are raised to 2.8 m (pit wall) and 2.1 m (grandstand
+  side). Needs a UE recompile.
 - **Acceleration on Montmeló in the sim check.** A new benchmark mission,
   `acceleration_montmelo`, drives the acceleration cones on the Montmeló
   straight world. The GPU runner's sim check runs it once per check as an
