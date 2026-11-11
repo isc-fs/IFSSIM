@@ -434,6 +434,9 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     assert all(h.is_absolute() and h.parent.name == "pipeline" for h in hosts)
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
+    # ... and the copy sits under the results root, never in /tmp, which snap's Docker
+    # mounts as an empty folder
+    assert all(h.is_relative_to((tmp_path / "results").resolve()) for h in hosts)
     assert ["rm", "-f", rmb.CONTAINER] in docker.calls
     # root-owned files in the copy are removed from a container, as root
     assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
