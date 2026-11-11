@@ -1,4 +1,5 @@
 #include "UI/FSDSMenu.h"
+#include "UI/FSDSPipelineView.h"
 
 #include "FSDSReferee.h"
 #include "FSDSSettings.h"
@@ -283,6 +284,10 @@ void FFSDSMenu::Show(EMode InMode)
 		.Client(Client)
 		.EditorState(Editor)
 		.StartInEditor(Mode == EMode::Main && bReturnToEditor)
+		.StartInBags(Mode == EMode::Main && bReturnToBags)
+		.BagsNote(BagsNote)
+		.BagsNoteError(bBagsNoteError)
+		.OnReplay(FOnFSDSReplayBag::CreateRaw(this, &FFSDSMenu::Replay))
 		.OnTestDrive(FOnFSDSTestDrive::CreateRaw(this, &FFSDSMenu::TestDrive))
 		.OnTracksChanged(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::ScanTracks))
 		.OnStartStack(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::StartStack))
@@ -298,7 +303,12 @@ void FFSDSMenu::Show(EMode InMode)
 		.OnQuit(FSimpleDelegate::CreateRaw(this, &FFSDSMenu::Quit));
 	Root = Widget;
 	Viewport->AddViewportWidgetContent(Root.ToSharedRef(), MenuZOrder);
-	if (Mode == EMode::Main) bReturnToEditor = false;
+	if (Mode == EMode::Main)
+	{
+		bReturnToEditor = false;
+		bReturnToBags = false;
+		BagsNote.Reset();
+	}
 
 	if (APlayerController* PC = GetPC())
 	{
@@ -393,6 +403,7 @@ bool FFSDSMenu::Tick(float DeltaTime)
 	}
 	TickStackUp();
 	TickRebuild();
+	TickReplay();
 	UpdateFrameCap();
 	ThrottleFrame();
 
@@ -407,6 +418,35 @@ bool FFSDSMenu::Tick(float DeltaTime)
 		const bool bHide = FFSDSGraphics::Get().GetSettings().bHideViewWhileAutonomous
 			&& P && P->IsApiControlEnabled() && !P->IsEbsLatched() && !IsOpen();
 		FFSDSGraphics::Get().SetViewDrawn(!bHide);
+	}
+
+	// The pipeline stopped the car itself (its watchdog, RES, a failure): the
+	// EBS latched with the run still on. End the run there, as the referee
+	// would, so the box says so instead of "the pipeline is driving".
+	if (IsAutonomousRunLive() && !bStartingSession)
+	{
+		const AFSDSVehiclePawn* EbsPawn = Pawn.Get();
+		const AFSDSReferee* EbsRef = Referee.Get();
+		const bool bFinishing = EbsRef && EbsRef->GetState().bFinished;   // the referee's own ending, below
+		if (EbsPawn && EbsPawn->IsEbsLatched() && !bFinishing)
+		{
+			const double Now = FPlatformTime::Seconds();
+			if (EbsSince == 0.0) EbsSince = Now;
+			else if (Now - EbsSince > 1.5)
+			{
+				EbsSince = 0.0;
+				UE_LOG(LogTemp, Log, TEXT("FSDS Menu: the car was stopped (EBS) during the autonomous run"));
+				RecordRun();
+				StopSession();
+				bRunLive = false;
+				Show(EMode::Finished);
+				return true;
+			}
+		}
+		else
+		{
+			EbsSince = 0.0;
+		}
 	}
 
 	// The referee ends the run (all laps done, or the far gate of a one-way
@@ -533,7 +573,7 @@ void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTri
 		Say(Msg, true);
 		UE_LOG(LogTemp, Warning, TEXT("FSDS Menu: autonomous start: %s"), *Msg);
 	};
-	Say(TEXT("Stopping any session that is running..."), false);
+	Say(TEXT("Stopping any session that is running (after a run with a bag, saving it can take a few minutes)..."), false);
 
 	// 1. The previous session's pipeline, if any (as the mission benchmark).
 	Client->Post(TEXT("/api/pipeline/stop"), nullptr, [this, Token, Req, Csv, Say, Fail, bStackTried](const FFSDSMcReply& Stop)
@@ -568,7 +608,7 @@ void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTri
 			const TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
 			Body->SetStringField(TEXT("mission"), MissionName(Req.Event));
 			Body->SetNumberField(TEXT("num_laps"), Req.Event == EFSDSEventType::Trackdrive ? Req.Laps : 1);
-			Body->SetBoolField(TEXT("record_bag"), false);
+			Body->SetBoolField(TEXT("record_bag"), Req.bRecordBag);
 			Client->Post(TEXT("/api/event/start"), Body, [this, Token, Req, Fail](const FFSDSMcReply& Start)
 			{
 				if (!Token.IsValid()) return;
@@ -588,7 +628,9 @@ void FFSDSMenu::RunSessionSteps(const FFSDSDriveRequest& Request, bool bStackTri
 					*EventName(Req.Event), *Req.Track.Name, Req.Laps);
 			}, 300.f);
 		}, 60.f);
-	}, 60.f);
+	// The backend copies a recorded bag out of the pipeline's container before
+	// it answers: hundreds of MB (an 870 MB one took four minutes here).
+	}, 420.f);
 }
 
 namespace StackUpUi
@@ -1083,6 +1125,113 @@ void FFSDSMenu::TestDrive(const FString& TrackName)
 	Drive(R);
 }
 
+void FFSDSMenu::Replay(const FString& BagDir, const FString& TrackName)
+{
+	auto Note = [this](const FString& Text)
+	{
+		if (Widget) Widget->SetBagsMessage(Text, true);
+	};
+	if (Replayer.IsValid() && Replayer->IsRunning()) return;
+
+	// The relay in the stack forwards the recording to the sim: no stack, no replay.
+	if (!FFSDSPipelineView::Get().IsReceiving())
+	{
+		Note(TEXT("Replay needs the Docker stack running: its viz_relay sends the recording to the sim. "
+			"START an autonomous run once (or Settings, Rebuild pipeline), then replay."));
+		return;
+	}
+	ScanTracks();
+	const FFSDSMenuTrack* T = Tracks.FindByPredicate([&](const FFSDSMenuTrack& X) { return X.Name == TrackName; });
+	AFSDSVehiclePawn* P = Pawn.Get();
+	if (!T || !P || !Rpc)
+	{
+		Note(FString::Printf(TEXT("The bag's track, %s, isn't in the tracks folders the sim reads."), *TrackName));
+		return;
+	}
+	const FString Repo = FFSDSStackStarter::FindComposeDir();
+	if (Repo.IsEmpty())
+	{
+		Note(TEXT("The IFSSIM repo isn't set: START once to set it up."));
+		return;
+	}
+
+	// The track as it was: cones, referee, car on the start gate.
+	const FString Reply = Rpc->LoadTrackLocal(T->Path);
+	if (Reply.Contains(TEXT("\"error\"")))
+	{
+		Note(FString::Printf(TEXT("Couldn't load %s."), *TrackName));
+		return;
+	}
+	if (AFSDSReferee* R = Referee.Get()) R->SetEventType(EFSDSEventType::Trackdrive, PracticeLaps);
+	Rpc->SetApiControl(false);
+	P->ReleaseEbs();
+
+	// ros2 bag play inside the stack, from the repo's bags folder it mounts
+	// read-only at /host_bags (docker-compose.yml): every node there shares
+	// its shared memory, which a second container wouldn't. `up -d` first
+	// gives a stack from before that mount the mount (it does nothing when
+	// the stack is current). Only what the pipeline view draws, and the ground
+	// truth renamed so the live bridge's doesn't mix in.
+	const FString Cmd = FString::Printf(
+		TEXT("docker compose up -d dv_pipeline_stack && docker compose exec -T dv_pipeline_stack bash -lc ")
+		TEXT("\"source /opt/ros/humble/setup.bash && source /dv_pipeline_stack_ws/install/setup.bash && ")
+		TEXT("ros2 bag play /host_bags/%s --topics /Conos_raw /Conos_full /slam/pose /Path /path_planning/debug ")
+		TEXT("/testing_only/odom --remap /testing_only/odom:=/replay/odom\""),
+		*FPaths::GetCleanFilename(BagDir));
+	if (!Replayer.IsValid()) Replayer = MakeShared<FFSDSStackStarter>();
+	FString Error;
+	if (!Replayer->Run(Repo, Cmd, Error))
+	{
+		Note(FString::Printf(TEXT("Couldn't start the replay: %s"), *Error));
+		return;
+	}
+	ReplayBag = FPaths::GetCleanFilename(BagDir);
+	ReplaySince = FPlatformTime::Seconds();
+	FFSDSPipelineView::Get().BeginReplay();
+	if (!FFSDSPipelineView::Get().IsShown()) FFSDSPipelineView::Get().SetShown(true);
+	Hide();
+	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: replaying %s on %s"), *ReplayBag, *TrackName);
+}
+
+void FFSDSMenu::StopReplay(const FString& Why)
+{
+	if (Replayer.IsValid() && Replayer->IsRunning() && !ComposeDirForStop().IsEmpty())
+	{
+		// The docker client going doesn't stop the player in the stack: stop it there.
+		if (!ReplayStopper.IsValid()) ReplayStopper = MakeShared<FFSDSStackStarter>();
+		FString Error;
+		ReplayStopper->Run(ComposeDirForStop(), TEXT("docker compose exec -T dv_pipeline_stack pkill -f \"ros2 bag play\""), Error);
+	}
+	FFSDSPipelineView::Get().EndReplay();
+	HoldCar();
+	bReturnToBags = true;
+	BagsNote = Why;
+	bBagsNoteError = false;
+	Show(EMode::Main);
+}
+
+FString FFSDSMenu::ComposeDirForStop()
+{
+	return FFSDSStackStarter::FindComposeDir();
+}
+
+void FFSDSMenu::TickReplay()
+{
+	if (ReplayStopper.IsValid() && ReplayStopper->IsRunning()) ReplayStopper->Poll();
+	if (!Replayer.IsValid() || !Replayer->IsRunning()) return;
+	if (Replayer->Poll()) return;
+	// The bag ended (or docker refused it).
+	const bool bOk = Replayer->ExitCode() == 0;
+	const FString Last = Replayer->LastLine();
+	FFSDSPipelineView::Get().EndReplay();
+	HoldCar();
+	bReturnToBags = true;
+	BagsNote = bOk ? FString::Printf(TEXT("Replay of %s finished."), *ReplayBag)
+		: FString::Printf(TEXT("The replay of %s stopped: %s"), *ReplayBag, *Last);
+	bBagsNoteError = !bOk;
+	if (!IsOpen()) Show(EMode::Main);
+}
+
 void FFSDSMenu::StartStack()
 {
 	if (Launcher) Launcher->StartStack();
@@ -1091,6 +1240,11 @@ void FFSDSMenu::StartStack()
 void FFSDSMenu::OnEscape()
 {
 	if (!bEnabled || IsOpen()) return;
+	if (Replayer.IsValid() && Replayer->IsRunning())
+	{
+		StopReplay(FString::Printf(TEXT("Replay of %s stopped."), *ReplayBag));
+		return;
+	}
 	if (bRunLive && Current.IsSet())
 	{
 		// A manual run pauses; an autonomous one keeps going under the box
@@ -1152,8 +1306,9 @@ void FFSDSMenu::RecordRun()
 	bRunRecorded = true;
 
 	const FFSDSRefereeState& S = R->GetState();
-	// A run where nothing happened (restarted at once) isn't worth a line.
-	if (S.Laps.Num() == 0 && S.DooCounter == 0 && S.OffTrackCounter == 0) return;
+	// A run where nothing happened (restarted at once) isn't worth a line;
+	// an autonomous one always is (it may have been stopped at the start).
+	if (!Current->bAutonomous && S.Laps.Num() == 0 && S.DooCounter == 0 && S.OffTrackCounter == 0) return;
 
 	FFSDSRunResult Run;
 	Run.Track = Current->Track.Name;
@@ -1166,7 +1321,34 @@ void FFSDSMenu::RecordRun()
 	Run.bPractice = Current->bPractice;
 	Run.bAutonomous = Current->bAutonomous;
 	Run.When = FDateTime::Now();
-	Results->Add(MoveTemp(Run));
+	Run.bBag = Current->bAutonomous && Current->bRecordBag;
+	const int32 Index = Results->Add(MoveTemp(Run));
+
+	// An autonomous run's FS score, as Mission Control computes it: asked now,
+	// before the next track load clears the referee.
+	if (Current->bAutonomous && Client.IsValid())
+	{
+		const TWeakPtr<bool> Token = Alive;
+		const TSharedPtr<TArray<FFSDSRunResult>> Runs = Results;
+		const FString Path = Current->Reference > 0.0
+			? FString::Printf(TEXT("/api/scoring/summary?t_best=%.3f"), Current->Reference)
+			: FString(TEXT("/api/scoring/summary"));
+		Client->Get(Path, [Token, Runs, Index](const FFSDSMcReply& Reply)
+		{
+			if (!Token.IsValid() || !Runs.IsValid() || !Runs->IsValidIndex(Index)) return;
+			const TSharedPtr<FJsonObject> O = Reply.Object();
+			FString Err;
+			if (!Reply.Ok() || !O.IsValid() || O->TryGetStringField(TEXT("error"), Err)) return;
+			FFSDSRunResult& R = (*Runs)[Index];
+			O->TryGetNumberField(TEXT("corrected_time"), R.Corrected);
+			O->TryGetNumberField(TEXT("doo_penalty_s"), R.DooPenalty);
+			O->TryGetNumberField(TEXT("oc_penalty_s"), R.OcPenalty);
+			O->TryGetNumberField(TEXT("score"), R.Points);
+			O->TryGetNumberField(TEXT("max_points"), R.MaxPoints);
+			R.bHasReference = O->TryGetNumberField(TEXT("t_best_reference"), R.Reference) && R.Reference > 0.0;
+			R.bScored = true;
+		}, 5.f);
+	}
 }
 
 void FFSDSMenu::UpdateFrameCap()

@@ -37,7 +37,10 @@ public class FSDSPlugin : ModuleRules
 			// packaged build. See FSDSZipReader.h.
 			"zlib",
 			// modelDescription.xml parsing.
-			"XmlParser"
+			"XmlParser",
+			// Worlds (Environment/FSDSWorldActor.cpp): terrain and structures
+			// generated at runtime from their data files.
+			"ProceduralMeshComponent"
 		});
 
 		// winmm.lib provides timeBeginPeriod / timeEndPeriod, which we

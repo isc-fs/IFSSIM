@@ -145,7 +145,7 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 |---|---|---|---|
 | Mass | 275 | kg | `Mass` |
 | Drivetrain | RWD | — | `Drivetrain` |
-| Wheel radius | 0.228 | m | `WheelRadius` |
+| Wheel radius | 0.202 | m | `WheelRadius` |
 | Wheel width | 0.190 | m | `WheelWidth` |
 | Max steer angle | 18.2 | ° | `MaxSteerAngle` |
 | Wheelbase | 1.627 | m | `Wheelbase` |
@@ -195,10 +195,10 @@ Regen torque is gated by the **battery cell-input current limit**, not by the mo
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Max regen power | 6,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
+| Max regen power | 11,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
 | Max regen torque | 230 | Nm | `MaxRegenTorque` (settings.json) → `Motor->P.MaxRegenTorqueNm` |
 
-At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=6000` yields ~8.8 Nm of available regen — the power cap binds at all but the lowest speeds.
+At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=11000` yields ~16 Nm of available regen — the power cap binds above ~460 RPM (≈2.3 m/s). 11 kW is the pack's charge limit: 95s6p Sony VTC6 cells at their 5 A maximum continuous charge, 30 A at ~370 V (it was 6 kW, about their 3 A standard charge).
 
 The implementation includes a **single-quadrant regen guard**: regen torque is forced to zero whenever the wheel isn't rotating forward. Asking for regen at `ω ≤ 0` would (a) be electrically unsafe on the real inverter, and (b) produce reverse motor torque on a stationary wheel — driving the car backward from rest, which the real IFS-08 controller cannot do.
 
@@ -242,7 +242,7 @@ Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric lo
 
 #### Wheels
 
-- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.228 m` from settings at runtime), 19 mm width, max steer 22.4° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
+- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.202 m` from settings at runtime), 19 mm width, max steer 18.2° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
 - **Rear (`UFSDSWheelRear`):** Same tire, no steering, drive wheels (motor torque injected via `SetDriveTorque` with `Additive` combine method), `MaxBrakeTorque` sized at `BeginPlay` to `MaxRegenTorque · GearRatio · DrivetrainEfficiency / 2` per wheel so the brake input channel saturates correctly against the regen ceiling.
 
 #### Aerodynamics
@@ -784,7 +784,8 @@ Coordinates are in ENU metres relative to track origin.
 
 | File | Description |
 |---|---|
-| `acceleration.csv` | Standard acceleration straight |
+| `acceleration.csv` | Standard acceleration straight, on the Montmeló straight world (`acceleration.env.json`, [worlds.md](worlds.md)) |
+| `characterisation.csv` | The acceleration cones on flat ground, for `tools/characterise` |
 | `skidpad.csv` | FSG skidpad figure-8 |
 | `random_track.csv` | Example random layout |
 

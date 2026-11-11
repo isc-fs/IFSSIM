@@ -220,7 +220,7 @@ def validate_sidecar(path: Path) -> List[str]:
     if not isinstance(doc, dict):
         return [f"{path}: must be a JSON object"]
 
-    errors = _unknown_keys(doc, {"format", "seed", "profile", "ground", "props"}, f"{path}")
+    errors = _unknown_keys(doc, {"format", "seed", "profile", "ground", "props", "world"}, f"{path}")
     if doc.get("format") != ENV_FORMAT:
         errors.append(f"{path}: 'format' must be {ENV_FORMAT!r} (got {doc.get('format')!r})")
     seed = doc.get("seed")
@@ -266,10 +266,40 @@ def validate_sidecar(path: Path) -> List[str]:
                 if "yaw_deg" in prop and not _is_number(prop["yaw_deg"]):
                     errors.append(f"{where}: 'yaw_deg' must be a number")
 
+    if "world" in doc:
+        errors += _validate_world_ref(path, doc["world"])
+
     track_csv = path.with_name(path.name[: -len(ENV_SUFFIX)] + ".csv")
     if not track_csv.is_file():
         errors.append(f"{path}: no track next to it ({track_csv.name}); the plugin loads a sidecar "
                       f"only with its track")
+    return errors
+
+
+def _validate_world_ref(path: Path, ref) -> List[str]:
+    """The sidecar's "world": a name under worlds/ next to the track, and where
+    its origin sits in the track frame. The world itself is checked too, by
+    worldgen.world (the same rules the plugin applies)."""
+    where = f"{path}: world"
+    if not isinstance(ref, dict):
+        return [f"{where}: must be an object"]
+    errors = _unknown_keys(ref, {"name", "x", "y"}, where)
+    name = ref.get("name")
+    if not isinstance(name, str) or not name or not all(ch.isalnum() or ch == "_" for ch in name):
+        return errors + [f"{where}: 'name' must be letters, digits and underscores"]
+    for k in ("x", "y"):
+        errors += _coord(ref, k, where)[1]
+    world_dir = path.parent / "worlds" / name
+    if not (world_dir / "world.json").is_file():
+        return errors + [f"{where}: no world at {world_dir}"]
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from worldgen import world as worldfmt
+        worldfmt.load(world_dir)
+    except Exception as e:  # WorldError, a bad terrain file, bad JSON
+        errors.append(f"{where}: {world_dir}: {e}")
+    finally:
+        sys.path.pop(0)
     return errors
 
 

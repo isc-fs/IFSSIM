@@ -67,6 +67,12 @@ class RunConfig:
     settle_window_s: float = 5.0
     benchmark_cmd: List[str] = field(default_factory=lambda: [sys.executable, str(BENCHMARK)])
     poll_s: float = 2.0
+    # The car characterisation (tools/characterise): scripted manoeuvres over RPC, no pipeline,
+    # checked against settings.json. Runs once, after the settle and before the benchmark, in the
+    # same sim session. Its result never changes the run's outcome (sim_report.py judges it);
+    # only a sim that dies under it does. None: not run.
+    characterise_cmd: Optional[List[str]] = None
+    characterise_timeout_s: float = 900.0     # ~90 s of sim time, stepped: a few minutes
 
 
 def _now() -> str:
@@ -225,6 +231,17 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
             log(f"[{label or 'run'}] sim at {rec['settle_rtf']:.2f}x real time after "
                 f"{rec['settle_s']:.0f} s" + (" (gave up waiting)" if rec.get("settle_timeout") else ""))
 
+        if cfg.characterise_cmd:
+            log(f"[{label or 'run'}] car characterisation")
+            rec["characterisation"] = run_characterisation(cfg, run_dir, sim, should_stop)
+            log(f"[{label or 'run'}] car characterisation: {rec['characterisation'].get('status')}")
+            if rec["characterisation"].get("status") == "interrupted":
+                rec["outcome"] = "interrupted"
+                return rec
+            if not sim.alive():
+                rec["outcome"], rec["error"] = "sim_crashed", "the sim exited during the car characterisation"
+                return rec
+
         argv = cfg.benchmark_cmd + [
             "--sim", f"{cfg.host}:{cfg.port}", "--mc-url", cfg.mc_url,
             "--results-root", str(run_dir),
@@ -274,6 +291,48 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
                                   ("started", "ended", "label", "outcome", "duration_s", "run_dir",
                                    "mission_runs")}) + "\n")
         log(f"[{label or 'run'}] {rec['outcome']} in {rec['duration_s']} s -> {run_dir}")
+
+
+def run_characterisation(cfg: RunConfig, run_dir: Path, sim: SimProcess,
+                         should_stop: Callable[[], bool]) -> Dict:
+    """tools/characterise against the running sim. Writes <run_dir>/characterisation/ and
+    characterisation.log; returns a summary for run.json. Never raises."""
+    out = run_dir / "characterisation"
+    argv = list(cfg.characterise_cmd or []) + ["--sim", f"{cfg.host}:{cfg.port}", "--out", str(out)]
+    if sim.log_path:
+        argv += ["--sim-log", str(sim.log_path)]
+    rec: Dict = {"cmd": argv, "dir": out.name}
+    t0 = time.monotonic()
+    try:
+        with open(run_dir / "characterisation.log", "wb") as clog:
+            proc = subprocess.Popen(argv, stdout=clog, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                    cwd=str(TOOLS), start_new_session=(sys.platform != "win32"))
+            while proc.poll() is None:
+                time.sleep(min(cfg.poll_s, 0.5))
+                if should_stop():
+                    _terminate(proc)
+                    rec["status"] = "interrupted"
+                    return rec
+                if not sim.alive() or time.monotonic() - t0 > cfg.characterise_timeout_s:
+                    _terminate(proc)
+                    rec["status"] = "timeout" if sim.alive() else "sim_crashed"
+                    return rec
+        rec["exit"] = proc.returncode
+        try:
+            rec["status"] = json.loads((out / "result.json").read_text()).get("status", "error")
+        except (OSError, ValueError):
+            rec["status"] = "error"
+            rec["error"] = "no result.json; see characterisation.log"
+    except OSError as e:
+        rec["status"], rec["error"] = "error", str(e)
+    finally:
+        rec["duration_s"] = round(time.monotonic() - t0, 1)
+        # It steps the sim paused; one killed mid-step must not leave it paused for the missions.
+        try:
+            rpc(cfg.host, "simResume", port=cfg.port)
+        except OSError:
+            pass
+    return rec
 
 
 def exit_code(outcome: str) -> int:

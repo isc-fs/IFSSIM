@@ -72,12 +72,43 @@ void AFSDSReferee::Tick(float DeltaTime)
 			FVector OriginalPos = Pair.Value;
 			float Displacement = FVector::Dist(CurrentPos, OriginalPos);
 
-			if (Displacement > ConeHitThreshold)
+			// "Down or out": moved more than the threshold, or tipped over
+			// even if it stayed put. Tilt is measured from the cone's own
+			// settled orientation, not world up, so a mesh whose pivot is
+			// not authored Z-up is not counted as down at spawn.
+			const FTransform* Settled = ConeOriginalTransforms.Find(ConeActor);
+			const FVector Up0 = Settled ? Settled->GetUnitAxis(EAxis::Z) : FVector::UpVector;
+			const float UpDot = FMath::Clamp((float)FVector::DotProduct(ConeActor->GetActorUpVector(), Up0), -1.f, 1.f);
+			const float TiltDeg = FMath::RadiansToDegrees(FMath::Acos(UpDot));
+			const bool bDisplaced = Displacement > ConeHitThreshold;
+			const bool bTipped = TiltDeg > ConeTipThresholdDeg;
+
+			if (bDisplaced || bTipped)
 			{
 				HitCones.Add(ConeActor);
 				State.DooCounter++;
-				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Cone displaced %.1f cm (DOO count: %d)"),
-					Displacement, State.DooCounter);
+
+				FFSDSConeHit Hit;
+				Hit.TimeSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+				Hit.ConeIndex = ConeIndices.Contains(ConeActor) ? ConeIndices[ConeActor] : -1;
+				Hit.ConeName = ConeActor->GetName();
+				Hit.Color = ConeColors.Contains(ConeActor) ? ConeColors[ConeActor] : EFSDSConeColor::Unknown;
+				Hit.OriginalLocation = FVector2D(OriginalPos.X, OriginalPos.Y);
+				Hit.DisplacementCm = Displacement;
+				Hit.TiltDeg = TiltDeg;
+				Hit.Reason = bDisplaced ? TEXT("displaced") : TEXT("tipped");
+				APawn* Car = GetWorld() && GetWorld()->GetFirstPlayerController() ?
+					GetWorld()->GetFirstPlayerController()->GetPawn() : nullptr;
+				if (Car)
+				{
+					Hit.bHasCar = true;
+					Hit.CarLocation = FVector2D(Car->GetActorLocation().X, Car->GetActorLocation().Y);
+					Hit.CarSpeedCmS = Car->GetVelocity().Size();
+				}
+				State.DooEvents.Add(Hit);
+
+				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Cone %s %s: displaced %.1f cm, tilt %.0f deg (DOO count: %d)"),
+					*Hit.ConeName, *Hit.Reason, Displacement, TiltDeg, State.DooCounter);
 			}
 		}
 	}
@@ -210,6 +241,8 @@ void AFSDSReferee::RegisterConeActor(AActor* ConeActor, EFSDSConeColor Color)
 
 	// Store original position for displacement tracking
 	ConeOriginalPositions.Add(ConeActor, ConeActor->GetActorLocation());
+	ConeColors.Add(ConeActor, Color);
+	ConeIndices.Add(ConeActor, ConeIndices.Num());
 	ConeOriginalTransforms.Add(ConeActor, ConeActor->GetActorTransform());
 
 	// Enable physics on the cone so it can be knocked over
@@ -356,10 +389,13 @@ void AFSDSReferee::UpdateFinishLine()
 void AFSDSReferee::ResetState()
 {
 	State.DooCounter = 0;
+	State.DooEvents.Empty();
 	State.OffTrackCounter = 0;
 	State.Laps.Empty();
 	State.Cones.Empty();
 	ConeOriginalPositions.Empty();
+	ConeColors.Empty();
+	ConeIndices.Empty();
 	ConeOriginalTransforms.Empty();
 	HitCones.Empty();
 	bLapTimerRunning = false;
@@ -380,6 +416,7 @@ void AFSDSReferee::ResetForRepeatRun()
 	// the off-course test, and the finish-line trigger all survive — they
 	// describe the TRACK, which a repeat run does not change.
 	State.DooCounter = 0;
+	State.DooEvents.Empty();
 	State.OffTrackCounter = 0;
 	State.Laps.Empty();
 	HitCones.Empty();

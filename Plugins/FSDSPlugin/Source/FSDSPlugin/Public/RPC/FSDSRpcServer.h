@@ -85,6 +85,8 @@ private:
 	 *  cross-platform from inside the plugin. */
 	void StreamSensors(FSocket* ClientSocket);
 	void StreamLidar(FSocket* ClientSocket);
+	/** The other way: the stack's viz_relay sends the pipeline view (FFSDSPipelineView). */
+	void StreamViz(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;
 
 	/** Pack the sensor stream's frame from the current tick's state. Game
@@ -111,6 +113,12 @@ private:
 	TArray<TFunction<void()>> TickStartWork;
 	FDelegateHandle PreActorTickHandle;
 	uint32 LidarStreamFrameCounter = 0;
+
+	// Engine frame delta (s), sampled on the game thread at the end of every
+	// frame. UE 5.8 lets only the game thread read FApp time, so the RPC
+	// threads (getSimStatus fps) read this copy instead.
+	std::atomic<float> LastFrameDeltaSec{0.f};
+	FDelegateHandle EndFrameHandle;
 
 	// Cached binary data for thread-safe transfer
 	TArray<uint8> CachedImageData;

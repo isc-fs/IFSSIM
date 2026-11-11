@@ -86,10 +86,10 @@ struct FFSDSVehiclePhysics
 	float MaxSteerAngle = 18.2f;     // degrees, measured at the road wheel (#462)
 	// Resistive wheel torque Crr*Fz*Rw. ASSUMED, not measured on the IFS-08.
 	//
-	// CONSUMED BY THE FMU PLANT, NOT BY CHAOS. Chaos has no equivalent knob we
-	// drive, so this field changes nothing in a Plant.Type="chaos" run — it is
-	// here because ifssim_params.m mirrors this struct field-for-field and a
-	// silent divergence between the two is the bug that mirror exists to stop.
+	// Both plants consume it. Chaos has no rolling resistance of its own, so
+	// AFSDSVehiclePawn::ApplyRollingResistance applies Crr*(m*g + downforce)
+	// as a body force; the FMU applies it as wheel torque. ifssim_params.m
+	// mirrors this struct field-for-field.
 	//
 	// It reaches the FMU by being BAKED IN AT EXPORT: export_plant_fmu.m reads
 	// settings.json into IFSSIM_Crr and Simulink freezes it into the .fmu. So
@@ -97,6 +97,14 @@ struct FFSDSVehiclePhysics
 	// (matlab/plant/export_plant_fmu.m) or the number here and the number the
 	// plant actually uses will quietly disagree.
 	float RollingResistance = 0.020f;
+	// EBS (pneumatic, all four corners, on the Chaos handbrake channel).
+	// Torque per wheel = EbsGripMultiple * TireMu * (Mass*g/4) * WheelRadius,
+	// the same formula as ifssim_params.m (P.Derived.EbsTorquePerWheel), so the
+	// two plants brake alike. Both numbers are ASSUMPTIONS until measured on
+	// the car: the multiple only has to clear the grip limit, the fill time
+	// decides the stopping distance.
+	float EbsGripMultiple = 1.5f;
+	float EbsFillTime = 0.f;         // s, 0 = instant (matches ifssim_params.m)
 	float MotorMaxTorque = 230.f;    // Nm (at motor)
 	float MotorMaxPower = 80000.f;   // Watts
 	// Regen braking limits. The IFS-08 has no hydraulic service brake —
@@ -106,7 +114,7 @@ struct FFSDSVehiclePhysics
 	// MaxRegenPower is the cell-limited cap and is the binding limit
 	// at typical driving speeds.
 	float MaxRegenTorque = 230.f;    // Nm (at motor, negative side)
-	float MaxRegenPower = 6000.f;    // Watts — cell input current limit
+	float MaxRegenPower = 11000.f;   // Watts — pack charge limit (95s6p VTC6, 5 A/cell)
 	float GearRatio = 2.909f;
 	float DrivetrainEfficiency = 0.92f;
 	float CdA = 0.95f;              // drag
@@ -270,18 +278,18 @@ public:
 	bool bLauncherPanel = true;
 	FString LauncherKey = TEXT("Tab");
 
-	// --- Front-end menu ----------------------------------------------------
-	//
-	// "Menu": { "Enabled" }. The full-screen menu the sim opens on (event,
-	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
-	bool bMenuEnabled = true;
-
 	// --- HUD (in-game overlay of the car's state) ----------------------
 	//
 	// "HUD": { "Enabled", "Key" }. Shown at start when Enabled; the key
 	// (H by default) shows and hides it. See UI/FSDSHud.h.
 	bool bHudEnabled = true;
 	FString HudKey = TEXT("H");
+
+	// --- Front-end menu ----------------------------------------------------
+	//
+	// "Menu": { "Enabled" }. The full-screen menu the sim opens on (event,
+	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
+	bool bMenuEnabled = true;
 
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;

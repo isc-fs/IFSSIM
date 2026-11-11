@@ -14,6 +14,122 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
+  the car's only service brake, and above ~2 m/s this cap sets how hard it can
+  brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
+  their 5 A maximum continuous charge, 30 A at ~370 V. The old 6 kW was about
+  their 3 A standard charge. Braking at 10 m/s goes from ~2.5 to ~4.4 m/s².
+  The car overshot corners at 8–12 m/s in the speed sweep because of it.
+  `settings.json`, the C++ defaults, `matlab/plant/ifssim_params.m` and
+  `docs/REFERENCE.md` all carry the new value.
+
+- **Longitudinal plant uses the settings it already had.** Rolling resistance
+  (`RollingResistance`, Crr 0.020) is now applied to the Chaos car; Chaos has
+  none of its own, so a coasting car only slowed from drag. Drive and regen
+  use `DrivetrainEfficiency` from settings instead of a hardcoded 0.92, and
+  regen divides by it (losses make the wheel give up more torque, not less).
+  The EMRAX drive power cap is `MotorMaxPower` (80 kW) instead of the 100 kW
+  datasheet figure. EBS torque is sized like the MATLAB plant,
+  `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
+  Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
+
+- **The car copy of a bag is made on demand.** Every recorded run used to
+  also get a `<name>_carparity` bag (LiDAR+IMU only, what the real car
+  replays on its test stand, `tools/lift_to_car.sh`): ~0.8 GB more written
+  per lap and most of the ~2 minutes saving took. `IFSSIM_BAG_CAR_PARITY`
+  now defaults to 0. The sim's Bags page has a **Car copy** button for a bag
+  without one (about a minute a lap), backed by `POST
+  /api/bags/<name>/car_parity` (GET for its state), which converts the bag
+  from the bags folder inside the stack. Set `IFSSIM_BAG_CAR_PARITY=1` to
+  make it after every recording as before.
+- **Recording a bag no longer freezes the stack (Docker Desktop).** A new
+  one-shot compose service, `docker_vm_tuning`, runs before
+  `dv_pipeline_stack` and makes Docker Desktop's VM write data out in small,
+  frequent steps (`vm.dirty_background_bytes` 32 MB, expire 2 s). With the
+  Linux defaults, a recording's ~16 MB/s came out as a 250-290 MB burst every
+  ~15 s, and a burst could freeze the whole stack for 0.5-1.7 s, so the
+  pipeline watchdog stopped 2 of 3 recorded laps. With it, 0 of 3. It only
+  acts in Docker Desktop's VM (WSL2 or LinuxKit kernel); on a Linux host it
+  does nothing, as these settings would be the machine's own.
+- **The HUD shows the car's speed during a bag replay.** The replayed car
+  moves with its physics off, so its speed read 0 km/h. The HUD now shows
+  the recorded car's speed, measured from how far it moves over half a
+  second, with "replay" beside it.
+- **`/lidar_points/viz` is off by default** (`LIDAR_VIZ_DECIMATION=0` in
+  docker-compose.yml, was 4). The quarter-density LiDAR copy for browser
+  visualisers was 18 % of a recorded bag, and with it on, recording made
+  SLAM pause past the pipeline watchdog's 0.6 s budget (829 ms measured on
+  stress_brake_hairpin_75m; 200 ms with it off), so recorded runs got
+  stopped. The sim's pipeline view doesn't use it. The four `lichtblick/`
+  layouts that showed it (pipeline, racing_dashboard, slam_debug,
+  clean_bag_replay) now show `/lidar_points/ground`, the pipeline's cropped
+  cloud (~15k points a scan, in `base_link`, the same colouring), as
+  onboard_live already did: foxglove_bridge's whitelist doesn't pass the full
+  `/lidar_points`, and the ground cloud is in recorded bags too.
+  `LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack` brings the
+  whole-scene copy back.
+- **Autonomous runs drive again after a watchdog stop.** When the pipeline's
+  watchdog (or anything else through `/force_ebs`) braked the car, the bridge
+  latched EBS and dropped every control command until `/signal/ebs_reset`,
+  which the sim supervisor published only when it activated, at stack start.
+  Every later run sat at the start line, armed but never moving, until the
+  stack was restarted. The supervisor now also releases the latch when a new
+  mission is armed (AS off → ready), as the car's uDV does.
+- **A recorded bag is saved in the background.** After a run with Record a
+  bag, Mission Control copied the bag out of the pipeline's container while
+  holding its state lock, so every other request (the run's state, the next
+  START) waited until it was done: about 3 minutes for a 60 s autocross lap
+  (a 1.1 GB bag and its 0.8 GB car-parity copy). The copy now runs in its own
+  thread; `bag_state` reads `saving` until it's done. The archive is also
+  extracted as it streams, into a hidden `.<bag>.partial` folder renamed when
+  complete: on Windows each byte crosses the slow `./bags` bind mount once
+  (it was written there as a tar, read back and written again), an interrupted copy no longer leaves a multi-GB
+  `bag_pull_*.tar` behind, and the sim's Bags page never lists a half-copied
+  bag.
+- **Clearer Track editor settings.** The random track's fields are named by
+  what they do to the loop, measured over many seeds: SIZE (M) (was max
+  size; the loop fills the square, so it sets the lap length, about 2.8 m
+  per metre; default now 140, ~390 m, inside FS's 200-500 m), BENDS (was
+  points; more is twistier) and COMPLEXITY (was regions; only matters below
+  ~30). The TRACK fields are WIDTH, CONE GAP and IN CORNERS, with a hint
+  line, and SEED moved to TEST SECTIONS, the only thing it affects.
+- **Bags in the menu, and replaying one in the sim.** A Bags page lists the
+  runs recorded with Record a bag (the repo's bags folder, as the backend
+  copies them out of the stack): event, track, date and size, with Delete
+  (and its _carparity copy), Open the folder and Replay in the sim. Replay
+  loads the bag's track and moves the car along the recorded ground truth
+  (physics off) while the pipeline view draws what the pipeline saw at each
+  moment; Esc stops it, and the menu comes back to Bags when it ends. The
+  bag plays inside the stack (`ros2 bag play /host_bags/<name>`): the stack
+  now mounts ./bags read-only at /host_bags (recording still writes to its
+  volume), and START's `docker compose up -d` recreates an older stack once
+  to get it. A second container on the host network can't be used: it
+  doesn't share the stack's /dev/shm, so Fast DDS discovers it but never
+  delivers. viz_relay forwards the bag's /testing_only/odom (renamed
+  /replay/odom so the live bridge's doesn't mix in) 30 times a second, and
+  now subscribes best-effort (it matches reliable and best-effort
+  publishers; /Conos_full stays reliable).
+
+- **Logs in the menu.** A Logs page shows what the stack prints, the
+  pipeline's nodes or Mission Control's backend (the last 1500 lines of
+  `docker compose logs`), newest at the bottom, with a filter, Problems only
+  (errors, warnings, tracebacks, EBS), Live (every 3 s while the page is up)
+  and Save to a file (Documents\IFSSIM\Logs). The text can be selected and
+  copied. No terminal needed to see why the pipeline stopped.
+
+- **The pipeline view: what the pipeline sees, drawn over the track.** During
+  an autonomous run the sim draws, on the real track, this scan's detected
+  cones (magenta), the SLAM cone map (white rings), where SLAM puts the car
+  (pink arrow), the planned path (green) and the planner's cone chains (blue,
+  yellow). The map frame is anchored on where the car really stood when SLAM
+  started, so drift shows as the map sliding off the real cones. On or off
+  from the box over the run (Esc), saved. A new node in the stack,
+  `viz_relay` (ros2/src/sim_supervisor), subscribes to `/Conos_raw`,
+  `/Conos_full`, `/slam/pose`, `/Path` and `/path_planning/debug` and sends
+  a summary ten times a second on a `streamViz` connection to the sim's RPC
+  port. Lines only: no collision and hidden from scene captures, so neither
+  the LiDAR nor the cameras see them. Replaces Lichtblick for watching a run.
+
 - **The sim shows how close to real time it runs.** Every frame is a fixed
   1/60 s of simulation, so a PC that can't draw 60 frames a second slows the
   simulation down, and the pipeline, which computes in real time, gets more
@@ -23,6 +139,26 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **What only the Tab panel did is in the menu.** Track editor: OR START
+  FROM A RANDOM TRACK (points, regions, max size): the random generator's
+  loop lands on the canvas as an unsaved drawing, to edit, check and save
+  like any drawn track (new backend `POST /api/track/random_spec`, nothing
+  written). Drive: Delete this track
+  (a second click confirms; official event tracks and the stress library
+  say why they can't be deleted instead) under the track list, RECORDING (No bag / Record a
+  bag) and SCORING (the reference time T_best, saved per event and track)
+  for an autonomous run. Settings, HUD: Basic or Detailed, which adds the
+  motor's regen and the car's position and heading. The box over an
+  autonomous run: RES (stop the car / release) and Pause the sim. The end of
+  an autonomous run and the Results page: Mission Control's FS score (the
+  time with the cone and off-course penalties, and the points against a
+  reference time). Results: the session log, and Save it to a file
+  (Documents/IFSSIM/SessionLogs). When the car is stopped during an
+  autonomous run (RES, or the pipeline's own watchdog or a failure), the
+  menu ends the run with a RUN STOPPED box, instead of still saying the
+  pipeline drives. START waits up to 7 minutes for the previous session to
+  stop: the backend copies a recorded bag out first (four minutes for an
+  870 MB one here).
 - **The sim updates itself from GitHub Releases (Windows).** Settings,
   UPDATES: Builds Stable (tagged releases, the default) or Latest (the
   rolling `latest-dev` pre-release), this build, Check now, Update and
@@ -145,6 +281,73 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Realistic world assets.** Worlds are drawn with CC0 scanned materials
+  (asphalt, concrete, grass, steel, plastic) and props modelled in Blender to
+  real dimensions: grandstand seats, handrails, roof columns, catch-fence
+  posts, generic advertising boards, pit-garage fronts, a start gantry and
+  marshal posts. Props are instanced with LODs and have no collision.
+  `tools/assetgen` regenerates everything (docs/world_assets.md). A world can
+  place props by name with a new `props` list.
+
+- **Start lights.** A world's start gantry lights red at `AS_READY` and goes
+  out at GO. The ROS bridge forwards `/assi/state` to a new `setStartLights`
+  RPC; `getEnvironment` reports `world.start_lights`.
+
+- **`showcase` rendering preset.** Full resolution, epic scalability and Lumen
+  for demos and renders: `-showcase` on the command line or
+  `FSDS.Quality showcase`. It brings physically based daylight: the sun
+  where it stands during the event, a real-time sky light and fixed
+  exposure (`fsds.Daylight.Exposure`). `FSDS.Shot` takes a high-resolution
+  screenshot once lighting has settled. `getSimStatus` reports `quality`;
+  the default `sim` preset is unchanged (docs/rendering_presets.md).
+
+- **Montmeló main straight world.** The acceleration event runs on the real
+  Circuit de Barcelona-Catalunya straight: measured terrain (it falls 7 m towards turn 1), the 20 m track with
+  its cross-fall, start and finish lines, pit lane, pit wall and fences, pit
+  building and main grandstand, all LiDAR-visible. Built at runtime from
+  ICGC LiDAR (CC BY 4.0) and OpenStreetMap (ODbL) data by `tools/worldgen`.
+  Worlds are a new sidecar key (`"world"`) and format (`ifssim-world/1`);
+  they load whatever `Environment.Enabled` says, and replace the level's flat
+  floor while loaded. See `docs/worlds.md`.
+- **Trees and buildings around the Montmeló straight.** From the same LiDAR:
+  775 trees (pine and broadleaf models, scaled to each tree), 43 more
+  buildings, footbridges included, and the four open grandstands opposite
+  the pits. The ground carries on to the horizon. World format: optional
+  `trees`, and building `yaw_deg`, `base_z` and `garages`; a grandstand's
+  roof is optional. `FSDS.View` places a free camera for renders. The
+  showcase preset drops its height fog, which drew a dark band at the
+  horizon. Needs a UE recompile.
+- **Acceleration always runs on the Montmeló straight.** `acceleration.csv`
+  now has the sidecar that loads the `montmelo_straight` world, so Mission
+  Control, the benchmark and the sim check's deciding acceleration runs all
+  drive the real straight; there is no separate Montmeló track or mission. The
+  car characterisation drives the same cones on flat ground
+  (`characterisation.csv`), since its turns need open space beside the
+  start.
+- **Montmeló surfaces and markings from the aerial photo.** Measured on the
+  ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
+  verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
+  the two extra transverse lines, the pit-lane lines, red band and green
+  verges, and the pit exit are painted where they are. Road paint is worn
+  into the asphalt grain (white, yellow, red, green). A wear map (`wear.u8`)
+  darkens the rubbered line left of centre by the measured 14 %. The pit
+  building has its canopy and every third garage open (`GarageBayOpen`);
+  both roofs carry their panels; the grandstand roof has galvanised sheet,
+  rafters and purlins underneath. World format: optional `wear`, line
+  `end_width_m` and colours `red`/`green`, building `canopy_m` and
+  `roof_panels`, grandstand `roof_panels`. From a ground-level photo at the
+  start line: the start gantry is rebuilt to the real one's shape (deeper
+  truss at 5 m, five columns of four lamps, camera mast, pit-side board) and
+  the catch fences are raised to 2.8 m (pit wall) and 2.1 m (grandstand
+  side). Needs a UE recompile.
+- **Car characterisation in the sim check.** `tools/characterise` drives the car
+  with scripted inputs (no pipeline) before the missions and checks it against
+  `settings.json`: full-lock radius both ways, steering linearity and low-speed
+  yaw gain and the solver's wheelbase (from the sim log) fail the check; launch, coast-down and EBS stop are reported. Switch
+  it in `tools/ci/sim_check.json` (`characterisation`).
+- **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
+- **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
+
 - **Venues in the menu.** The Drive page has a Location row (Anywhere, or a
   venue) that lists only that venue's tracks, and its map draws the lot and
   everything around the cones. In the Track editor, pick a venue to draw on
@@ -152,14 +355,6 @@ shipping pipeline, documentation.
   error while you draw, and the track is saved as `<venue>__<name>` with its
   environment sidecar written by the backend at the same time (and deleted
   with it). See docs/venues.md.
-- **Venues, starting with a parking lot.** A venue is a fixed place several
-  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
-  tracks are drawn) and what stands around it, and `python -m envgen venue`
-  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
-  plugin builds it like any environment. New prop classes for it: `tree`,
-  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
-  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
-  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
   Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
   suits it (a gridded top-down map of its cones, in metres), and who drives,
@@ -193,7 +388,9 @@ shipping pipeline, documentation.
   time is set: without one the backend compares the run with itself and
   every run got full points (#719). A run faster than the reference now
   scores the maximum instead of more (271/200 before), and a run with no
-  completed lap scores 0.
+  completed lap, a total time of 0 or a skidpad with fewer than the four
+  timed laps has no score. A reference time of 0 or less is rejected (422 from
+  the API, a message in the web UI) instead of being shown next to full points.
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
@@ -204,6 +401,15 @@ shipping pipeline, documentation.
   off-course. H hides and shows it; `"HUD": {"Enabled", "Key"}` in
   settings.json; off in headless runs and with `-NoHUD`. See
   `docs/OPERATING.md`.
+
+- **Venues, starting with a parking lot.** A venue is a fixed place several
+  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
+  tracks are drawn) and what stands around it, and `python -m envgen venue`
+  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
+  plugin builds it like any environment. New prop classes for it: `tree`,
+  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
+  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
+  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
   with no window, runs the mission benchmark around it and stops it, once
   (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.
@@ -438,14 +644,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
-- **A run on an open track now ends at its finish gate, whatever the event.**
-  A track with two orange gates, start at one end and finish at the other
-  (acceleration, the open stress tracks: slaloms, hairpins), only finished
-  under the Acceleration event: under Autocross or Trackdrive the referee waited
-  for a second crossing that never came, so an autonomous or benchmark run there
-  could only end by timeout. The referee now starts the clock when the car sets
-  off and finishes on one pass of the far gate. Loops are unchanged.
-
+- **Hidden engine-braking drag removed.** Chaos's engine was set to brake the rear wheels with EngineRPM x 0.05 N.m whenever its own throttle was zero, and the pawn always passes it zero (the EMRAX drives the wheels directly). That was a speed-proportional drag of about 0.085·v m/s², present while driving as well as coasting, and most of the coast-down excess the car characterisation found (1.02 vs 0.31 m/s² at 10 m/s). `EngineBrakeEffect` is now 0, and the startup log warns if it isn't.
+- **The sim car kept driving after leaving AS Driving.** The uDV emulator only stopped relaying `/ctrl/cmd`, and the bridge and pawn hold the last command, so an emergency, an e-stop or the end of a run left the car on its last throttle and steering. It now does what the car's firmware does: zeroes the command on leaving Driving or when `/ctrl/cmd` is older than 0.5 s, fires the EBS on AS Emergency, and treats a `/dv/status` heartbeat older than 0.4 s mid-run as an emergency (it was read as idle, with a 1.5 s window). Arming from AS Off releases an EBS latched by the previous run.
+- Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.
 - Full steering lock in the sim is now 18.2° at the road wheel, the measured value and the one the controller assumes (#462). It was 22.4°, so every steering command turned the wheels 1.23x further than the controller intended and the car cut the inside of corners. The bridge's reported `/fsds/steering_angle` uses the same scale.
 - The physics wheelbase is now the IFS-08's 1.627 m from `settings.json`, not the 1.18 m between the car mesh's wheel bones. The controller, odometry and SLAM all assume the real car, so the simulated car turned about 1.38x tighter than they predicted and cut the inside of corners. The front/rear weight split is now the configured 43.8% front (it was about 57%), and the track widths come from `settings.json` too. The visible wheels stay at the mesh bones until the mesh is re-rigged.
 - **RPC replies with an apostrophe or a control character in a string were
@@ -474,6 +675,15 @@ shipping pipeline, documentation.
 - **`loadTrack` and `getSettingsPaths` replied with invalid JSON on Windows.**
   The file paths in them went out with bare backslashes; they are escaped
   now, as the error replies already were.
+
+- **A run on an open track now ends at its finish gate, whatever the event.**
+  A track with two orange gates, start at one end and finish at the other
+  (acceleration, the open stress tracks: slaloms, hairpins), only finished
+  under the Acceleration event: under Autocross or Trackdrive the referee waited
+  for a second crossing that never came, so an autonomous or benchmark run there
+  could only end by timeout. The referee now starts the clock when the car sets
+  off and finishes on one pass of the far gate. Loops are unchanged.
+
 - **After a sim restart the car never moved.** When the sim stopped, the
   bridge reconnected its sensor streams at once, but its command connection
   only failed a moment later, on its next send, and nothing reconnected it:

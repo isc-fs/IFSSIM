@@ -1,0 +1,426 @@
+{
+  "_comment": "World materials (docs/world_assets.md). Texture sets are CC0 scans from ambientcg.com, cached outside the repo; tools/assetgen/ue_import.py imports them into /Game/Worlds. tile_m is the real-world size one texture repeat covers; meshes carry UVs in metres. recolor 0..1 replaces the scan's hue with tint, keeping its detail.",
+  "textures": {
+    "Asphalt031": {
+      "res": "4K",
+      "maps": [
+        "Color",
+        "NormalDX@2048",
+        "Roughness"
+      ]
+    },
+    "Concrete034": {
+      "res": "2K",
+      "maps": [
+        "Color",
+        "NormalDX",
+        "Roughness"
+      ]
+    },
+    "Concrete048": {
+      "res": "2K",
+      "maps": [
+        "Color",
+        "NormalDX",
+        "Roughness",
+        "AmbientOcclusion"
+      ]
+    },
+    "Grass004": {
+      "res": "4K",
+      "maps": [
+        "Color",
+        "NormalDX@2048",
+        "Roughness"
+      ]
+    },
+    "Ground108": {
+      "res": "2K",
+      "maps": [
+        "Color",
+        "NormalDX",
+        "Roughness"
+      ]
+    },
+    "Plastic010": {
+      "res": "2K",
+      "maps": [
+        "Color",
+        "NormalDX",
+        "Roughness"
+      ]
+    },
+    "CorrugatedSteel005": {
+      "res": "2K",
+      "maps": [
+        "Color",
+        "NormalDX",
+        "Roughness",
+        "AmbientOcclusion",
+        "Metalness"
+      ]
+    }
+  },
+  "materials": {
+    "Asphalt": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.63,
+        0.63,
+        0.63
+      ],
+      "recolor": 0.0,
+      "variation": 0.25
+    },
+    "AsphaltTrack": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "recolor": 0.0,
+      "variation": 0.25,
+      "wear": 1.0
+    },
+    "AsphaltWorn": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.72,
+        0.71,
+        0.69
+      ],
+      "recolor": 0.0,
+      "variation": 0.3
+    },
+    "ConcreteGround": {
+      "set": "Concrete034",
+      "tile_m": 3.0,
+      "tint": [
+        0.85,
+        0.84,
+        0.82
+      ],
+      "recolor": 0.0,
+      "variation": 0.2
+    },
+    "ConcreteWall": {
+      "set": "Concrete034",
+      "tile_m": 2.0,
+      "tint": [
+        0.95,
+        0.95,
+        0.93
+      ],
+      "recolor": 0.0,
+      "variation": 0.15
+    },
+    "ConcreteCream": {
+      "set": "Concrete048",
+      "tile_m": 2.0,
+      "tint": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "recolor": 0.0,
+      "variation": 0.1
+    },
+    "Grass": {
+      "set": "Grass004",
+      "tile_m": 2.5,
+      "tint": [
+        0.9,
+        0.74,
+        0.53
+      ],
+      "recolor": 0.8,
+      "variation": 0.35,
+      "roughness": 1.5
+    },
+    "Gravel": {
+      "set": "Ground108",
+      "tile_m": 2.0,
+      "tint": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "recolor": 0.0,
+      "variation": 0.2
+    },
+    "SteelWhite": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.82,
+        0.83,
+        0.84
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "SteelGrey": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.32,
+        0.33,
+        0.35
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "SteelGalv": {
+      "set": "CorrugatedSteel005",
+      "tile_m": 2.0,
+      "tint": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "recolor": 0.0,
+      "variation": 0.0
+    },
+    "SeatPlastic": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.1,
+        0.22,
+        0.48
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "SignPanel": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.92,
+        0.92,
+        0.92
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "SignBlue": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.05,
+        0.16,
+        0.42
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "Paint": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.86,
+        0.86,
+        0.84
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "Rubber": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.03,
+        0.03,
+        0.035
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "DoorPanel": {
+      "set": "Plastic010",
+      "tile_m": 1.0,
+      "tint": [
+        0.55,
+        0.56,
+        0.58
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    },
+    "Bark": {
+      "set": "Ground108",
+      "tile_m": 1.0,
+      "tint": [
+        0.2,
+        0.16,
+        0.13
+      ],
+      "recolor": 1.0,
+      "variation": 0.0
+    }
+  },
+  "flat": {
+    "Glass": {
+      "color": [
+        0.02,
+        0.03,
+        0.04
+      ],
+      "roughness": 0.05,
+      "metallic": 0.6
+    },
+    "Lamp": {
+      "color": [
+        1.0,
+        0.97,
+        0.9
+      ],
+      "roughness": 0.3,
+      "metallic": 0.0,
+      "emissive": 4.0
+    },
+    "LampRed": {
+      "color": [
+        0.4,
+        0.004,
+        0.002
+      ],
+      "roughness": 0.15,
+      "metallic": 0.0,
+      "emissive": 0.0
+    },
+    "SolarPanel": {
+      "color": [
+        0.1,
+        0.1,
+        0.11
+      ],
+      "roughness": 0.35,
+      "metallic": 0.0
+    },
+    "PanelDark": {
+      "color": [
+        0.06,
+        0.048,
+        0.045
+      ],
+      "roughness": 0.7,
+      "metallic": 0.0
+    },
+    "GarageInterior": {
+      "color": [
+        0.035,
+        0.035,
+        0.04
+      ],
+      "roughness": 0.85,
+      "metallic": 0.0
+    }
+  },
+  "_comment_maps": "A map name may end in @N: its source is downscaled to N pixels before import (repo size; the sim's texture quality never shows more).",
+  "_comment_lamp": "LampRed is the start-light lens: off by default; the world actor lights it at runtime (AFSDSWorldActor::SetStartLights).",
+  "_comment_paint": "Painted steel (SteelWhite, SteelGrey, DoorPanel) uses the smooth plastic scan: paint is a dielectric, and the chipped-paint scan read as marble on large panels.",
+  "foliage": {
+    "LeavesBroadleaf": {
+      "tint": [
+        0.11,
+        0.15,
+        0.065
+      ],
+      "tint_vary": [
+        0.15,
+        0.17,
+        0.075
+      ],
+      "translucency": 0.6
+    },
+    "LeavesPine": {
+      "tint": [
+        0.12,
+        0.15,
+        0.07
+      ],
+      "tint_vary": [
+        0.15,
+        0.165,
+        0.08
+      ],
+      "translucency": 0.5
+    }
+  },
+  "_comment_foliage": "Leaf cards (trees): colour and opacity drawn by tools/assetgen/blender (foliage_textures). tint is the average albedo; each tree picks a colour between tint and tint_vary. translucency scales the light let through the leaves.",
+  "_comment_grass": "Grass: late-August Catalonia, dried to straw (recolor 0.8). Tint set so the verges come out 1.5 to 1.9 times as bright as the track's asphalt, as on the orthophoto. roughness 1.5 keeps the scan from glinting in the sun.",
+  "paint": {
+    "_comment": "Road paint (M_WorldPaint): the asphalt scan under a paint layer that covers `coverage` of it; the stones' tops and worn patches show through. set, tile_m and tint are the asphalt's, so the grain lines up with the road around the paint.",
+    "PaintWhite": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "color": [
+        0.78,
+        0.78,
+        0.76
+      ],
+      "coverage": 0.82,
+      "roughness": 0.55
+    },
+    "PaintYellow": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "color": [
+        0.72,
+        0.5,
+        0.06
+      ],
+      "coverage": 0.8,
+      "roughness": 0.55
+    },
+    "PaintRed": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "color": [
+        0.27,
+        0.053,
+        0.05
+      ],
+      "coverage": 0.85,
+      "roughness": 0.55
+    },
+    "PaintGreen": {
+      "set": "Asphalt031",
+      "tile_m": 3.0,
+      "tint": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "color": [
+        0.05,
+        0.17,
+        0.07
+      ],
+      "coverage": 0.88,
+      "roughness": 0.55
+    }
+  },
+  "_comment_wear": "wear 1 (AsphaltTrack): the colour is multiplied by twice the mesh's vertex red, where the world actor writes the wear map (docs/worlds.md); 0 everywhere else.",
+  "_comment_photo": "Checked against the ICGC orthophoto (docs/worlds.md), as linear-light ratios to the track's asphalt in a top-down showcase render: Asphalt (plain, no racing rubber: pit lane and exit) 1.15x the track; Grass 1.5-1.9x; PaintRed and PaintGreen as photographed; PanelDark (pit roof) 0.5x; SolarPanel 0.9x (cells and frames averaged at 25 cm). The photo's whites clip, so the white roofs and lines are not tuned to it."
+}

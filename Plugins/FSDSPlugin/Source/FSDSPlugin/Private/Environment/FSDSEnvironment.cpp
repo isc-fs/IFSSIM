@@ -1,5 +1,7 @@
 #include "Environment/FSDSEnvironment.h"
 
+#include "Environment/FSDSWorld.h"
+
 #include "Dom/JsonObject.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -85,8 +87,8 @@ bool FSDSEnvironment::Parse(const FString& Json, const FString& SourcePath,
 		OutError = TEXT("not a JSON object");
 		return false;
 	}
-	if (!OnlyKnownKeys(*Root, { TEXT("format"), TEXT("seed"), TEXT("profile"), TEXT("ground"), TEXT("props") },
-		TEXT("sidecar"), OutError))
+	if (!OnlyKnownKeys(*Root, { TEXT("format"), TEXT("seed"), TEXT("profile"), TEXT("ground"), TEXT("props"),
+		TEXT("world") }, TEXT("sidecar"), OutError))
 	{
 		return false;
 	}
@@ -187,6 +189,28 @@ bool FSDSEnvironment::Parse(const FString& Json, const FString& SourcePath,
 			}
 			Env.Props.Add(MoveTemp(Prop));
 		}
+	}
+
+	const TSharedPtr<FJsonObject>* World = nullptr;
+	if (Root->HasField(TEXT("world")))
+	{
+		if (!Root->TryGetObjectField(TEXT("world"), World))
+		{
+			OutError = TEXT("'world' must be an object");
+			return false;
+		}
+		if (!OnlyKnownKeys(**World, { TEXT("name"), TEXT("x"), TEXT("y") }, TEXT("world"), OutError)) return false;
+		if (!StrictString(**World, TEXT("name"), Env.WorldName) || !FSDSWorld::IsValidName(Env.WorldName))
+		{
+			OutError = TEXT("world: 'name' must be letters, digits and underscores");
+			return false;
+		}
+		if (!ReadCoord(**World, TEXT("x"), TEXT("world"), Env.WorldX, OutError) ||
+			!ReadCoord(**World, TEXT("y"), TEXT("world"), Env.WorldY, OutError))
+		{
+			return false;
+		}
+		Env.bHasWorld = true;
 	}
 
 	Out = MoveTemp(Env);

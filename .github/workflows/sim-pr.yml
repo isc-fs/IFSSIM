@@ -3,9 +3,12 @@ run-name: >-
   ${{ inputs.pipeline_pr && format('Sim check: pipeline PR #{0}', inputs.pipeline_pr)
       || github.event.pull_request.title || github.event.head_commit.message || 'Sim PR check' }}
 
-# Drives the sim on the GPU box: a headless start-up check, then the missions
+# Drives the sim on the GPU box: a headless start-up check, the car
+# characterisation (tools/characterise: scripted manoeuvres, no pipeline,
+# checked against settings.json), then the missions
 # in tools/ci/sim_check.json through this PR's pipeline, scored by the referee
-# (now acceleration 3 times, which decides the check, then skidpad and one
+# (now acceleration 3 times, which decides the check, then acceleration once on
+# the Montmeló straight world, skidpad and one
 # autocross track, reported only until they're reliable). The result, compared with the last dev run
 # and with a map of each mission, goes to a comment on the PR and a row in the
 # `sim-report` issue (tools/ci/sim_publish.py).
@@ -45,6 +48,7 @@ on:
       - "docker/**"
       - "docker-compose.yml"
       - "tools/headless_run/**"
+      - "tools/characterise/**"
       - "tools/sim_benchmark/**"
       - "tools/ci/**"
       - ".github/workflows/sim-pr.yml"
@@ -64,6 +68,7 @@ on:
       - "ros2/**"
       - "docker/**"
       - "tools/headless_run/**"
+      - "tools/characterise/**"
       - "tools/sim_benchmark/**"
       - "tools/ci/**"
       - ".github/workflows/sim-pr.yml"
@@ -123,10 +128,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          lfs: true
+          # LFS after checkout (next step): the runner's repo is a partial clone
+          # (blob:none), and checkout's own LFS fetch scans the ref before its
+          # pointer files are downloaded, so it fails on any new LFS file.
+          lfs: false
           submodules: true
           # Keep Intermediate/ and Saved/ from the last job: incremental build and cook.
           clean: false
+
+      - name: Fetch LFS files
+        run: git lfs pull
 
       - name: Mark the pipeline commit as pending
         if: inputs.pipeline_sha

@@ -91,14 +91,15 @@ struct FEmraxMotorParams
 	// being constants here.
 
 	/** Battery cell-input-current-limited regen power (W).
-	 *  Default 6000 W matches the IFS-08 accumulator's per-cell
-	 *  charge current limit at nominal voltage. */
+	 *  Default 11000 W is the IFS-08 accumulator's charge limit:
+	 *  95s6p Sony VTC6, 5 A max continuous charge per cell = 30 A
+	 *  at ~370 V. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Regen")
-	float MaxRegenPowerW = 6000.f;
+	float MaxRegenPowerW = 11000.f;
 
 	/** Peak regen torque cap (Nm). Symmetric with motoring at low
-	 *  speed; the power cap above starts to dominate at ~250 RPM
-	 *  (= 26 rad/s = 6000 W / 230 Nm). */
+	 *  speed; the power cap above starts to dominate at ~460 RPM
+	 *  (= 48 rad/s = 11000 W / 230 Nm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Regen")
 	float MaxRegenTorqueNm = 230.f;
 

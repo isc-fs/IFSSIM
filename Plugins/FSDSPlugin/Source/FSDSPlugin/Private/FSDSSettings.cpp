@@ -107,17 +107,17 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 		(*McObj)->TryGetStringField(TEXT("Key"), LauncherKey);
 	}
 
-	const TSharedPtr<FJsonObject>* MenuObj = nullptr;
-	if (Root->TryGetObjectField(TEXT("Menu"), MenuObj))
-	{
-		(*MenuObj)->TryGetBoolField(TEXT("Enabled"), bMenuEnabled);
-	}
-
 	const TSharedPtr<FJsonObject>* HudObj = nullptr;
 	if (Root->TryGetObjectField(TEXT("HUD"), HudObj))
 	{
 		(*HudObj)->TryGetBoolField(TEXT("Enabled"), bHudEnabled);
 		(*HudObj)->TryGetStringField(TEXT("Key"), HudKey);
+	}
+
+	const TSharedPtr<FJsonObject>* MenuObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("Menu"), MenuObj))
+	{
+		(*MenuObj)->TryGetBoolField(TEXT("Enabled"), bMenuEnabled);
 	}
 
 	// Plant selection. A top-level "Plant" block, because which simulator
@@ -229,6 +229,8 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelWidth"), DblVal)) P.WheelWidth = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxSteerAngle"), DblVal)) P.MaxSteerAngle = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollingResistance"), DblVal)) P.RollingResistance = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("EbsGripMultiple"), DblVal)) P.EbsGripMultiple = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("EbsFillTime"), DblVal)) P.EbsFillTime = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxTorque"), DblVal)) P.MotorMaxTorque = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MotorMaxPower"), DblVal)) P.MotorMaxPower = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("MaxRegenTorque"), DblVal)) P.MaxRegenTorque = DblVal;

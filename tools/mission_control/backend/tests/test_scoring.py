@@ -211,13 +211,18 @@ def test_skidpad_uses_average_of_right_then_left_laps() -> None:
     assert r["total_elapsed"] == pytest.approx(5.25 + 6.25, abs=0.01)
 
 
-def test_skidpad_one_run_each_side_falls_back_to_lap_times() -> None:
-    """Edge case: only the first lap of each side (right + left) — averages
-    are just those single laps."""
-    laps = [5.0, 0.0, 6.0, 0.0]  # only first right + first left counted
-    r = compute_scoring("skidpad", lap_times=laps, doo=0, oc=0, t_best=11.0)
-    # avg(5,0) + avg(6,0) = 2.5 + 3 = 5.5 — sum-of-averages including 0s
-    assert r["total_elapsed"] == pytest.approx(5.5, abs=0.01)
+def test_skidpad_partial_run_has_no_score() -> None:
+    """Right side only (or any fewer than four timed laps) is not a scorable run."""
+    for laps in ([5.0, 5.2], [5.0, 5.2, 6.0], []):
+        r = compute_scoring("skidpad", lap_times=laps, doo=0, oc=0, t_best=11.0)
+        assert r["score"] == 0.0
+        assert r["scored"] is False
+
+
+def test_skidpad_full_set_is_scored() -> None:
+    r = compute_scoring("skidpad", lap_times=[5.0, 5.2, 6.0, 6.2], doo=0, oc=0, t_best=11.0)
+    assert r["scored"] is True
+    assert r["score"] > 0.0
 
 
 # ---------------------------------------------------------------------
@@ -260,3 +265,17 @@ def test_response_shape_is_stable() -> None:
         "max_points", "score", "disqualified", "dq_reasons",
     }
     assert expected_keys.issubset(r.keys())
+
+
+@pytest.mark.parametrize("bad", [-5.0, 0.0, float("nan"), float("inf")])
+def test_invalid_reference_is_no_reference(bad: float) -> None:
+    """A non-positive or non-finite t_best is not reported as the reference."""
+    r = compute_scoring("autocross", lap_times=[60.0], doo=0, oc=0, t_best=bad)
+    assert r["t_best_reference"] is None
+    assert r["score"] == pytest.approx(MAX_POINTS["autocross"], abs=0.1)
+
+
+def test_non_positive_total_time_has_no_score() -> None:
+    r = compute_scoring("autocross", lap_times=[0.0], doo=0, oc=0, t_best=60.0)
+    assert r["score"] == 0.0
+    assert r["scored"] is False

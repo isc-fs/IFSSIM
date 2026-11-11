@@ -245,17 +245,37 @@ void UFSDSWheeledVehicleMovementComponent::LogInheritedWheelDefaults() const
 	// Called out separately because it is the one with a safety consequence.
 	// The handbrake channel is this car's EBS (both wheel classes set
 	// bAffectedByHandbrake=true so it acts on all four corners, matching the
-	// pneumatic system). At 3000 N.m per wheel against a grip limit of roughly
-	// mu * Fz * r ~ 1.4 * 675 N * 0.202 m ~ 190 N.m, the commanded torque
-	// exceeds what the tyre can transmit by more than an order of magnitude, so
-	// every EBS application is a guaranteed four-wheel lock-up rather than a
-	// modelled deceleration. Any stopping distance measured from it is a
-	// property of the tyre model alone.
-	UE_LOG(LogTemp, Warning,
-		TEXT("FSDS: EBS runs on the Chaos handbrake channel at the engine-default ")
-		TEXT("3000 N.m/wheel — roughly 15x the ~190 N.m the tyre can transmit, so ")
-		TEXT("EBS is modelled as instant lock-up. Needs a real IFS-08 number ")
-		TEXT("before any stopping-distance claim. See docs/fmu_plant_migration.md."));
+	// pneumatic system). The pawn now sizes it from settings.json
+	// (EbsGripMultiple x TireMu x Fz_static x r, ~286 N.m); this line shouts if
+	// it is still at the engine default, i.e. instant four-wheel lock-up.
+	if (Wheels.Num() > 0 && Wheels[0])
+	{
+		const float Ebs = Wheels[0]->MaxHandBrakeTorque;
+		if (FMath::IsNearlyEqual(Ebs, 3000.f, 1e-3f))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS: EBS is still at the engine-default 3000 N.m/wheel, ")
+				TEXT("~15x the tyre's grip limit: every EBS stop is an instant lock-up."));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS: EBS torque %.0f N.m/wheel (from settings.json)"), Ebs);
+		}
+	}
+	// Chaos engine braking acts on the driven wheels whenever the Chaos
+	// throttle is zero, which for this car is always (the EMRAX drives the
+	// wheels through SetDriveTorque). Anything but 0 is a hidden drag.
+	if (EngineSetup.EngineBrakeEffect != 0.f)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("FSDS: Chaos EngineBrakeEffect is %.3f, not 0: the driven wheels get ")
+			TEXT("EngineRPM x %.3f N.m of brake torque at all times (hidden drag)."),
+			EngineSetup.EngineBrakeEffect, EngineSetup.EngineBrakeEffect);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Log, TEXT("FSDS: Chaos engine braking off (EngineBrakeEffect 0)"));
+	}
 	UE_LOG(LogTemp, Warning, TEXT("FSDS: ---- end unchosen wheel parameters ----"));
 }
 

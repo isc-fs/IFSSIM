@@ -91,6 +91,55 @@ struct FFSDSCone
 	EFSDSConeColor Color = EFSDSConeColor::Unknown;
 };
 
+/**
+ * One cone counted as down-or-out: which cone, when, why, and where the car
+ * was. Positions are UE centimetres; the RPC converts to ENU metres.
+ */
+USTRUCT(BlueprintType)
+struct FFSDSConeHit
+{
+	GENERATED_BODY()
+
+	/** World (game) clock, s: the same clock as getSimStatus "sim_time". */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	double TimeSeconds = 0.0;
+
+	/** Registration order of the cone actor (0-based). */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	int32 ConeIndex = -1;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	FString ConeName;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	EFSDSConeColor Color = EFSDSConeColor::Unknown;
+
+	/** The cone's settled position before the hit (UE cm). */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	FVector2D OriginalLocation = FVector2D::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	float DisplacementCm = 0.f;
+
+	/** Angle between the cone's up vector and its settled up vector, degrees. */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	float TiltDeg = 0.f;
+
+	/** Which criterion fired: "displaced" (> ConeHitThreshold) or "tipped" (tilt > 45 deg). */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	FString Reason;
+
+	/** The car when it happened (UE cm, cm/s); HasCar is false when no pawn was found. */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	bool bHasCar = false;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	FVector2D CarLocation = FVector2D::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	float CarSpeedCmS = 0.f;
+};
+
 USTRUCT(BlueprintType)
 struct FFSDSRefereeState
 {
@@ -98,6 +147,10 @@ struct FFSDSRefereeState
 
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
 	int32 DooCounter = 0;
+
+	/** One record per cone counted by the Tick displacement/tilt test, in order. */
+	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
+	TArray<FFSDSConeHit> DooEvents;
 
 	/** Off-track / out-of-bounds counter */
 	UPROPERTY(BlueprintReadWrite, Category = "FSDS")
@@ -244,6 +297,16 @@ private:
 	// completely different LiDAR signature, and cone perception is the thing
 	// these repeat runs exist to compare.
 	TMap<AActor*, FTransform> ConeOriginalTransforms;
+
+	/** Colour and registration order of each registered cone, for DooEvents. */
+	UPROPERTY()
+	TMap<AActor*, EFSDSConeColor> ConeColors;
+
+	UPROPERTY()
+	TMap<AActor*, int32> ConeIndices;
+
+	/** A cone tipped past this angle from upright counts as down even if it has not moved ConeHitThreshold. */
+	static constexpr float ConeTipThresholdDeg = 45.f;
 
 	UPROPERTY()
 	TSet<AActor*> HitCones; // Already counted cones (avoid double-counting)

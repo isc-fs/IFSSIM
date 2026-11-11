@@ -165,8 +165,8 @@ from its commit plus the diff.
 
 ## Mission benchmarks
 
-`run_mission_benchmark.py` runs acceleration, skidpad, autocross and trackdrive with the pipeline
-driving, scored by the sim's referee: per mission, each track, each repeat (seed). It drives each run
+`run_mission_benchmark.py` runs acceleration (on the real Montmeló straight, docs/worlds.md),
+skidpad, autocross and trackdrive with the pipeline driving, scored by the sim's referee: per mission, each track, each repeat (seed). It drives each run
 the way the Mission Control panel does (load the track, `resetScenario <seed>`, start the event,
 follow the referee, stop), over Mission Control's HTTP API and the sim's RPC, so it needs no ROS.
 
@@ -205,7 +205,7 @@ a container can reach the sim there.
   record which commit it runs. Without them it refuses to start.
 
 Each run is a folder under `results/mission/<mission>_<track>/<commit>/seed<k>/` (`manifest.json`
-with the referee state, `results.json`, `laps.csv`, `events.csv`, a coarse `telemetry.csv`), the
+with the referee state, `results.json`, `laps.csv`, `events.csv` (a `dnf` row, and one `doo` row per cone hit: `key=value` detail, `t` in sim seconds), a coarse `telemetry.csv`), the
 layout the tracker's simulator pages read. Settings: `missions.yaml` (tracks, repeats, start pose
 noise, laps, timeouts), changed per run with the flags or `--mission-overrides <file.json>`.
 

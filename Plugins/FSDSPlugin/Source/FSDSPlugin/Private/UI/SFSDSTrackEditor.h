@@ -89,4 +89,14 @@ private:
 	double OverwriteArmedUntil = 0.0;
 	FString Message;
 	bool bMessageError = false;
+
+	/** OR START FROM A RANDOM TRACK: the random generator's loop as control
+	 *  points (POST /api/track/random_spec), a new unsaved drawing. */
+	TSharedRef<SWidget> BuildRandom();
+	void GenerateRandom();
+	int32 GenPoints = 50;
+	int32 GenRegions = 30;
+	// 140 m: a lap of about 390 m, most loops inside FS's 200-500 m.
+	int32 GenMaxBound = 140;
+	bool bGenerating = false;
 };

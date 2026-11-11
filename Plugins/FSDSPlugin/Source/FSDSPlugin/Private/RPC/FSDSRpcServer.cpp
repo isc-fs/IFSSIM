@@ -9,15 +9,19 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
 #include "Environment/FSDSEnvironmentBuilder.h"
+#include "Environment/FSDSWorldActor.h"
+#include "Rendering/FSDSQualityPreset.h"
 #include "FSDSConeSpawner.h"
 #include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
+#include "UI/FSDSPipelineView.h"
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h"
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
 #include "Kismet/GameplayStatics.h"
@@ -231,6 +235,10 @@ void FFSDSRpcServer::Start(uint16 Port)
 	// Work that must happen at a fixed point in the frame (resetScenario).
 	PreActorTickHandle = FWorldDelegates::OnWorldPreActorTick.AddLambda(
 		[this](UWorld* InWorld, ELevelTick, float) { RunTickStartWork(InWorld); });
+	// Engine frame delta for getSimStatus. Sampled every frame (paused or
+	// not) on the game thread, the only thread UE 5.8 lets read FApp time.
+	EndFrameHandle = FCoreDelegates::OnEndFrame.AddLambda(
+		[this]() { LastFrameDeltaSec.store(static_cast<float>(FApp::GetDeltaTime()), std::memory_order_relaxed); });
 
 	ServerThread = std::make_unique<std::thread>(&FFSDSRpcServer::ServerThreadFunc, this);
 
@@ -246,6 +254,8 @@ void FFSDSRpcServer::Stop()
 	PostActorTickHandle.Reset();
 	FWorldDelegates::OnWorldPreActorTick.Remove(PreActorTickHandle);
 	PreActorTickHandle.Reset();
+	FCoreDelegates::OnEndFrame.Remove(EndFrameHandle);
+	EndFrameHandle.Reset();
 
 	if (ServerThread && ServerThread->joinable())
 	{
@@ -406,6 +416,11 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 				{
 					StreamSensors(ClientSocket);
 					return; // Connection used for streaming, done
+				}
+				if (Request == TEXT("streamViz"))
+				{
+					StreamViz(ClientSocket);
+					return;
 				}
 				if (Request == TEXT("streamLidar"))
 				{
@@ -633,7 +648,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	}
 	else if (Method == TEXT("getRefereeState"))
 	{
-		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[]}");
+		if (!Referee) return TEXT("{\"doo_counter\":0,\"cones\":0,\"laps\":0,\"lap_times\":[],\"cone_positions\":[],\"doo_events\":[]}");
 		auto State = Referee->GetState();
 
 		// Build lap times array
@@ -660,6 +675,25 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		ConesJson += TEXT("]");
 
+		// Per-cone hit records (ENU metres, same frame as cone_positions).
+		// "t" is the game clock, the same one getSimStatus "sim_time" reports.
+		FString DooEventsJson = TEXT("[");
+		for (int32 i = 0; i < State.DooEvents.Num(); i++)
+		{
+			if (i > 0) DooEventsJson += TEXT(",");
+			const FFSDSConeHit& H = State.DooEvents[i];
+			FString CarJson = H.bHasCar
+				? FString::Printf(TEXT(",\"car_x\":%.3f,\"car_y\":%.3f,\"car_speed\":%.3f"),
+					H.CarLocation.Y / 100.f, H.CarLocation.X / 100.f, H.CarSpeedCmS / 100.f)
+				: FString();
+			DooEventsJson += FString::Printf(
+				TEXT("{\"t\":%.3f,\"cone\":%d,\"name\":\"%s\",\"color\":%d,\"x\":%.4f,\"y\":%.4f,\"displacement\":%.3f,\"tilt_deg\":%.1f,\"reason\":\"%s\"%s}"),
+				H.TimeSeconds, H.ConeIndex, *JsonEscape(H.ConeName), (int32)H.Color,
+				H.OriginalLocation.Y / 100.f, H.OriginalLocation.X / 100.f,
+				H.DisplacementCm / 100.f, H.TiltDeg, *JsonEscape(H.Reason), *CarJson);
+		}
+		DooEventsJson += TEXT("]");
+
 		// Event type name
 		FString EventName;
 		switch (State.EventType)
@@ -671,10 +705,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		default: EventName = TEXT("unknown"); break;
 		}
 
-		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s}"),
+		return FString::Printf(TEXT("{\"doo_counter\":%d,\"oc_counter\":%d,\"cones\":%d,\"laps\":%d,\"required_laps\":%d,\"finished\":%s,\"event\":\"%s\",\"lap_times\":%s,\"cone_positions\":%s,\"doo_events\":%s}"),
 			State.DooCounter, State.OffTrackCounter, State.Cones.Num(), State.Laps.Num(), State.RequiredLaps,
 			State.bFinished ? TEXT("true") : TEXT("false"), *EventName,
-			*LapTimesJson, *ConesJson);
+			*LapTimesJson, *ConesJson, *DooEventsJson);
 	}
 	else if (Method.StartsWith(TEXT("setVehicleCommand")) || Method.StartsWith(TEXT("setCarControls")))
 	{
@@ -1934,6 +1968,41 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					}
 				}
 
+				// The world (docs/worlds.md), loaded whatever "enabled" says.
+				{
+					TSharedRef<FJsonObject> Wo = MakeShared<FJsonObject>();
+					Wo->SetStringField(TEXT("status"), Spawner->GetWorldStatus());
+					if (!Spawner->GetWorldError().IsEmpty())
+					{
+						Wo->SetStringField(TEXT("error"), Spawner->GetWorldError());
+					}
+					if (Spawner->GetWorldStatus() == TEXT("loaded"))
+					{
+						const FFSDSWorld& Tw = Spawner->GetTrackWorld();
+						Wo->SetStringField(TEXT("name"), Tw.Name);
+						Wo->SetStringField(TEXT("title"), Tw.Title);
+						Wo->SetStringField(TEXT("dir"), Tw.Dir);
+						Wo->SetNumberField(TEXT("x"), Spawner->GetTrackWorldOrigin().X);
+						Wo->SetNumberField(TEXT("y"), Spawner->GetTrackWorldOrigin().Y);
+						TArray<TSharedPtr<FJsonValue>> Attr;
+						for (const FString& A : Tw.Attribution) Attr.Add(MakeShared<FJsonValueString>(A));
+						Wo->SetArrayField(TEXT("attribution"), Attr);
+						if (const AFSDSWorldActor* Wa = Spawner->GetWorldActor())
+						{
+							Wo->SetBoolField(TEXT("built"), Wa->IsBuilt());
+							Wo->SetNumberField(TEXT("triangles"), Wa->GetNumTriangles());
+							Wo->SetNumberField(TEXT("prop_instances"), Wa->GetNumInstances());
+							Wo->SetStringField(TEXT("start_lights"), !Wa->HasStartLights() ? TEXT("none")
+								: Wa->AreStartLightsOn() ? TEXT("on") : TEXT("out"));
+							Wo->SetNumberField(TEXT("build_s"), Wa->GetBuildSeconds());
+							TArray<TSharedPtr<FJsonValue>> Hidden;
+							for (const FString& H : Wa->GetHiddenFloors()) Hidden.Add(MakeShared<FJsonValueString>(H));
+							Wo->SetArrayField(TEXT("hidden_floors"), Hidden);
+						}
+					}
+					Out->SetObjectField(TEXT("world"), Wo);
+				}
+
 				FString Json;
 				TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
 					TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
@@ -1965,6 +2034,29 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 	// === Event Type Control ===
 
+	else if (Method.StartsWith(TEXT("setStartLights")))
+	{
+		// setStartLights 1|0: the world's start lights (docs/worlds.md). The
+		// ROS bridge sends 1 when /assi/state reaches AS_READY and 0 at GO
+		// (AS_DRIVING) or any other state. Replies "on", "out", or "none"
+		// when the loaded world has no start gantry.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() != 2 || (Parts[1] != TEXT("1") && Parts[1] != TEXT("0")))
+			return TEXT("{\"error\":\"usage: setStartLights 1|0\"}");
+		const bool bOn = Parts[1] == TEXT("1");
+		return CallOnGameThread<FString>(
+			[this, bOn]() -> FString {
+				AFSDSWorldActor* Wa = nullptr;
+				if (World)
+				{
+					if (TActorIterator<AFSDSConeSpawner> It(World); It) Wa = It->GetWorldActor();
+				}
+				if (!Wa || !Wa->HasStartLights()) return TEXT("{\"start_lights\":\"none\"}");
+				Wa->SetStartLights(bOn);
+				return Wa->AreStartLightsOn() ? TEXT("{\"start_lights\":\"on\"}") : TEXT("{\"start_lights\":\"out\"}");
+			}, 2.0, FString(TEXT("{\"error\":\"game thread busy\"}")), TEXT("setStartLights"));
+	}
 	else if (Method.StartsWith(TEXT("setEventType")))
 	{
 		// Parse: setEventType trackdrive [10]
@@ -2002,24 +2094,29 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			MapName = World->GetMapName();
 			MapName.RemoveFromStart(TEXT("UEDPIE_0_"));
 		}
-		FPS = 1.0f / FApp::GetDeltaTime();
+		// Runs on the RPC thread: read the game thread's sampled delta, not
+		// FApp (UE 5.8 ensures on FApp time reads off the game thread).
+		const float DeltaSec = LastFrameDeltaSec.load(std::memory_order_relaxed);
+		FPS = DeltaSec > 0.f ? 1.0f / DeltaSec : 0.f;
 
 		// sim_time: the game clock (s), the same clock the sensor stamps and
 		// /clock use. The mission benchmark counts its timeouts in it, so a
 		// sim running slower than real time doesn't fail runs it finishes.
 		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
-		// real_time_factor: simulated seconds per real second over the last
-		// couple of seconds (FFSDSRealTime), 0 while unknown (paused).
-		// speed_factor: the speed set for while the pipeline drives (1 real
-		// time, below 1 slow motion); target_factor: what real_time_factor
-		// should read now (the slow motion while pacing, else 1).
+		// quality: the rendering preset (docs/rendering_presets.md); a
+		// benchmark should refuse "showcase". real_time_factor: simulated
+		// seconds per real second over the last couple of seconds
+		// (FFSDSRealTime), 0 while unknown (paused). speed_factor: the speed set
+		// for while the pipeline drives (1 real time, below 1 slow motion);
+		// target_factor: what real_time_factor should read now (the slow motion
+		// while pacing, else 1).
 		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
 		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,"
-			"\"real_time_factor\":%.3f,\"real_fps\":%.1f,\"speed_factor\":%.3f,\"target_factor\":%.3f}"),
+			"\"quality\":\"%s\",\"real_time_factor\":%.3f,\"real_fps\":%.1f,\"speed_factor\":%.3f,\"target_factor\":%.3f}"),
 			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
-			SimTime, Rt.Factor(), Rt.Fps(), Rt.SpeedFactor(), Rt.TargetFactor());
+			SimTime, FSDSQuality::Name(FSDSQuality::Current()), Rt.Factor(), Rt.Fps(), Rt.SpeedFactor(), Rt.TargetFactor());
 	}
 
 	// === Timing ===
@@ -2260,6 +2357,41 @@ void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
 	Frame.Throttle = Controls.Throttle;
 	Frame.Steering = Controls.Steering;
 	Frame.Brake = Controls.Regen;
+}
+
+void FFSDSRpcServer::StreamViz(FSocket* ClientSocket)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: pipeline view stream started"));
+	const FTCHARToUTF8 Ack(TEXT("OK\n"));
+	int32 Sent = 0;
+	ClientSocket->Send((const uint8*)Ack.Get(), Ack.Length(), Sent);
+
+	// One JSON object per line, about 10 a second; a line can be several KB
+	// (the whole SLAM map), so bytes are gathered until each newline.
+	TArray<uint8> Line;
+	uint8 Buffer[16384];
+	while (bRunning)
+	{
+		if (!ClientSocket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(5))) continue;
+		int32 Read = 0;
+		if (!ClientSocket->Recv(Buffer, sizeof(Buffer), Read) || Read <= 0) break;
+		for (int32 i = 0; i < Read; ++i)
+		{
+			if (Buffer[i] != '\n')
+			{
+				// A runaway line (no newline in 4 MB) is dropped, not grown forever.
+				if (Line.Num() < 4 * 1024 * 1024) Line.Add(Buffer[i]);
+				continue;
+			}
+			if (Line.Num() > 0)
+			{
+				Line.Add(0);
+				FFSDSPipelineView::Get().Receive(UTF8_TO_TCHAR((const char*)Line.GetData()));
+			}
+			Line.Reset();
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: pipeline view stream ended"));
 }
 
 void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
@@ -2653,12 +2785,12 @@ FString FFSDSRpcServer::LoadTrackOnGameThread(const FString& TrackPath)
 	bHasStartGate = true;
 	}
 
-	// environment: off | none | loaded | invalid (getEnvironment has
-	// the details, including why a sidecar was invalid).
+	// environment: off | none | loaded | invalid; world: none | loaded |
+	// invalid (getEnvironment has the details, including why).
 	return FString::Printf(
-		TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
+		TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\",\"world\":\"%s\"}"),
 		*JsonEscape(TrackPath), NumCones, bAligned ? TEXT("true") : TEXT("false"),
-		*JsonEscape(Spawner->GetEnvironmentStatus()));
+		*JsonEscape(Spawner->GetEnvironmentStatus()), *JsonEscape(Spawner->GetWorldStatus()));
 }
 
 FString FFSDSRpcServer::ResetScenarioOnGameThread(bool bHasSeed, int32 NewSeed, bool bAtTickStart)
@@ -2722,7 +2854,8 @@ FString FFSDSRpcServer::ResetScenarioOnGameThread(bool bHasSeed, int32 NewSeed, 
 	// seed, so a client can number samples from the reset by their
 	// stamps (verify_determinism.py). At the start of a tick the clock
 	// has already advanced to it; a paused world's has not, and its
-	// next tick is one fixed step on.
+	// next tick is one fixed step on. DoReset runs on the game thread,
+	// so reading FApp here is safe under UE 5.8.
 	const double SimTime = !World ? 0.0
 		: World->GetTimeSeconds() + (bAtTickStart ? 0.0 : FApp::GetDeltaTime());
 	const FString Result = FString::Printf(

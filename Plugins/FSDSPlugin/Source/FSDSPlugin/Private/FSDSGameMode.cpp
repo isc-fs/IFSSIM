@@ -1,6 +1,8 @@
 #include "FSDSGameMode.h"
+#include "Rendering/FSDSQualityPreset.h"
 #include "FSDSRealTime.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSPipelineView.h"
 #include "UI/FSDSUpdater.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
@@ -76,6 +78,9 @@ void AFSDSGameMode::StartPlay()
 			ConeSpawnerActor->SpawnedCones.Num());
 	}
 
+	// Rendering preset: -showcase on the command line (docs/rendering_presets.md).
+	FSDSQuality::ApplyCommandLine(GetWorld());
+
 	// Start RPC server (commands + sensor queries)
 	RpcServer.SetVehiclePawn(VehiclePawn);
 	RpcServer.SetReferee(RefereeActor);
@@ -127,6 +132,8 @@ void AFSDSGameMode::StartPlay()
 
 	// How the view is drawn (Settings, Graphics): the saved choice.
 	FFSDSGraphics::Get().Init(GetWorld());
+	// What the pipeline sees, drawn over the track (the stack's viz_relay feeds it).
+	FFSDSPipelineView::Get().Init(GetWorld(), VehiclePawn);
 
 	// A newer published build (Settings, Updates): checked quietly.
 	FFSDSUpdater::Get().Init();
@@ -140,10 +147,11 @@ void AFSDSGameMode::StartPlay()
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	Menu.Shutdown();
 	Hud.Shutdown();
+	Menu.Shutdown();
 	FFSDSRealTime::Get().Stop();
 	FFSDSGraphics::Get().Shutdown();
+	FFSDSPipelineView::Get().Shutdown();
 	FFSDSUpdater::Get().Shutdown();
 	Launcher.Shutdown();
 

@@ -45,6 +45,14 @@ On a dev box where the stack is already up, pass `-- --stack running` to drive
 with it, or `-- --replace-stack` to stop it for the run and start it again
 after.
 
+`--characterise` runs the car characterisation (`tools/characterise`) once,
+after the sim settles and before the missions: scripted manoeuvres over RPC
+(full-lock turns, a steering sweep, launch, coast-down, EBS stop), no
+pipeline, checked against `settings.json`. It needs about 90 s of sim time
+and never changes the run's outcome; `tools/ci/sim_report.py` judges it.
+Run it on its own against any sim with
+`python3 -m characterise --settings ../settings.json --out <dir>`.
+
 ## What it writes
 
 In `tools/sim_benchmark/results/` (or `--results-root`):
@@ -54,6 +62,7 @@ In `tools/sim_benchmark/results/` (or `--results-root`):
 | `headless/<stamp>/run.json` | the run: outcome, timings, sim command, the benchmark's runs |
 | `headless/<stamp>/sim.log`, `benchmark.log` | the two processes' output |
 | `headless/<stamp>/mission/...` | the benchmark's own results for that run |
+| `headless/<stamp>/characterisation/` | with `--characterise`: `result.json`, `summary.md`, `traces.json` (and `characterisation.log` beside it) |
 | `headless/index.jsonl` | one line per run, for a night's summary |
 
 Each run keeps its own benchmark results. The benchmark names its folders by
