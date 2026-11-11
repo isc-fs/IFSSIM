@@ -114,18 +114,28 @@ and says on the main menu when a newer build is out.
 
 ### Publishing a build
 
-Anyone with write access and UE 5.8 publishes their OS's build:
+Every release has Linux: the bench PC builds it on each `v*` tag and merge
+to `dev`, and creates the release. Windows and macOS are added by whoever
+has the sim on that OS, with write access and UE 5.8:
 
 ```bash
 tools/publish_build.sh latest   # the last build of dev, on `latest-dev`
 tools/publish_build.sh stable   # a release: v<ProjectVersion>
 ```
 
-From a clean tree, with `gh` logged in (Git Bash on Windows). For a new
-release, bump `ProjectVersion` in `Config/DefaultGame.ini` first: the first
-person to publish creates the release and its tag on their commit. Whoever
-has time then checks out that tag and adds their OS (Windows, macOS, Linux);
-the script refuses another commit and skips an OS that is already there. Each zip
+From a clean tree, with `gh` logged in (Git Bash on Windows).
+
+- **A new release:** bump `ProjectVersion` in `Config/DefaultGame.ini`
+  above the newest release, merge it to `dev`, then tag it
+  (`git tag v1.2.0 && git push origin v1.2.0`). The bench PC creates the
+  release with Linux. Then `git checkout v1.2.0` and
+  `tools/publish_build.sh stable` adds your OS. If the bench PC is down,
+  `--first` creates the release from your OS.
+- **Latest:** from `dev`, up to date. The script only moves `latest-dev`
+  forward, so publishing from an older commit does nothing.
+
+The script refuses another commit than the tag's and a version older than
+the newest release (Stable would go back), and skips an OS already there. Each zip
 goes up with a `.sha256`. GitHub takes up to 2 GiB per file, with no limit on
 a release's total or on downloads.
 
@@ -141,8 +151,9 @@ config.cmd --url https://github.com/isc-fs/IFSSIM --token <token from an admin> 
 ```
 
 Start it with `run.cmd` when the machine can build; while it's off, the job
-waits and anyone can publish by hand. Labels: `ifssim-package-windows`,
-`ifssim-package-mac`, `ifssim-package-linux`.
+waits and anyone can publish by hand. Labels: `ifssim-package-linux` (the
+bench PC; runs first), `ifssim-package-windows`, `ifssim-package-mac` (after
+Linux).
 
 The repo is public, and a fork's pull request runs the fork's own workflow
 file, which can ask for any label. Settings, Actions, "Require approval for

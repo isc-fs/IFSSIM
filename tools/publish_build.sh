@@ -7,26 +7,39 @@
 #   tools/publish_build.sh stable   # adds this OS's zip to release v<ProjectVersion>
 #   tools/publish_build.sh latest   # this OS's zip on the rolling `latest-dev` pre-release
 #
-# stable: the first person creates the release (and its tag, on this commit);
-#         the next ones must be on that same commit and add their OS's zip.
-#         Bump ProjectVersion in Config/DefaultGame.ini for a new release.
-# latest: moves `latest-dev` to this commit if it's elsewhere (dropping the
-#         older builds on it) and adds this OS's zip,
-#         IFSSIM-v<version>-<commit>-<os>.zip (the commit tells the updater
-#         it's another build).
+# Linux comes first: the bench PC's runner builds it on every v* tag and
+# merge to dev, so every release has it. Windows and macOS are added to that
+# release by whoever has the sim on those OSes.
+#
+# stable: Linux creates the release (and its tag, on this commit); the others
+#         check out the tag and add their OS's zip. Bump ProjectVersion in
+#         Config/DefaultGame.ini for a new release: it must be newer than
+#         every release, so the updater's Stable never goes back.
+# latest: dev's commits only, and only forward. A newer commit moves
+#         `latest-dev` (dropping the older builds on it); the same commit adds
+#         this OS's zip, IFSSIM-v<version>-<commit>-<os>.zip (the commit tells
+#         the updater it's another build).
 #
 # Zips: IFSSIM-v<version>-Windows-x64.zip, -macOS-arm64.zip, -Linux-x64.zip,
 # each with a .sha256 the updater checks.
 # Needs: a clean tree (the build says which commit it is), gh logged in with
 # write access, and package_<os>.sh's own needs (UE 5.8). Pass --skip-build
-# to publish the build already made.
+# to publish the build already made. --first lets Windows or macOS create a
+# release before Linux (when the bench PC is down).
 set -euo pipefail
 
 CHANNEL="${1:-}"
 SKIP_BUILD=0
-[ "${2:-}" = "--skip-build" ] && SKIP_BUILD=1
+FIRST=0
+for A in "${@:2}"; do
+    case "$A" in
+        --skip-build) SKIP_BUILD=1 ;;
+        --first)      FIRST=1 ;;
+        *) echo "unknown option $A" >&2; exit 2 ;;
+    esac
+done
 if [ "$CHANNEL" != "stable" ] && [ "$CHANNEL" != "latest" ]; then
-    echo "usage: $0 stable|latest [--skip-build]" >&2
+    echo "usage: $0 stable|latest [--skip-build] [--first]" >&2
     exit 2
 fi
 
@@ -76,6 +89,20 @@ if [ "$CHANNEL" = "stable" ]; then
         echo "Nothing to do: $TAG already has $NAME (someone published this OS)."
         exit 0
     fi
+    if ! gh release view "$TAG" >/dev/null 2>&1; then
+        # A new release: Linux first, and never older than the newest one.
+        if [ "$OS" != "linux" ] && [ "$FIRST" = "0" ]; then
+            echo "ERROR: $TAG has no release yet. Linux comes first: push the tag (git tag $TAG && git push origin $TAG)" >&2
+            echo "       and the bench PC creates it, then add this OS. --first creates it from here." >&2
+            exit 1
+        fi
+        NEWEST="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+        if [ -n "$NEWEST" ] && [ "$(printf '%s\n%s\n' "${NEWEST#v}" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "ERROR: $TAG is older than the newest release, $NEWEST: Stable would go back to it." >&2
+            echo "       Bump ProjectVersion in Config/DefaultGame.ini above ${NEWEST#v}." >&2
+            exit 1
+        fi
+    fi
     if is_immutable "$TAG"; then
         echo "ERROR: $TAG is an immutable release: it takes no more builds. Keep" >&2
         echo "       Settings, General, 'Immutable releases' off so each OS can be added." >&2
@@ -83,6 +110,20 @@ if [ "$CHANNEL" = "stable" ]; then
     fi
 else
     NAME="IFSSIM-v${VERSION}-${COMMIT}-${SUFFIX}.zip"
+    # dev's builds only, and never back: an older commit would drop newer builds.
+    git fetch -q origin dev
+    if ! git merge-base --is-ancestor HEAD origin/dev; then
+        echo "ERROR: $COMMIT isn't on origin/dev. Latest is dev's last build: publish from dev." >&2
+        exit 1
+    fi
+    AT="$(tag_commit latest-dev)"
+    if [ -n "$AT" ] && [ "$AT" != "$HEAD_SHA" ]; then
+        git cat-file -e "$AT^{commit}" 2>/dev/null || git fetch -q origin "$AT"
+        if git merge-base --is-ancestor HEAD "$AT"; then
+            echo "Nothing to do: latest-dev is ${AT:0:7}, newer than $COMMIT. Pull dev and publish that."
+            exit 0
+        fi
+    fi
 fi
 
 # Build, then bring the zip to its published name.
@@ -114,8 +155,8 @@ echo "Publishing $NAME ($SIZE MB, $CHANNEL) for $COMMIT"
 
 if [ "$CHANNEL" = "stable" ]; then
     if ! gh release view "$TAG" >/dev/null 2>&1; then
-        gh release create "$TAG" --target "$HEAD_SHA" --title "IFSSIM $TAG" \
-            --notes "Build of $COMMIT. Members on Stable get it from Settings, Updates. Each OS's zip is added by whoever builds it (tools/publish_build.sh)."
+        gh release create "$TAG" --target "$HEAD_SHA" --title "IFSSIM $TAG" --latest \
+            --notes "Build of $COMMIT. Members on Stable get it from Settings, Updates. Linux is built by the bench PC; Windows and macOS are added by whoever builds them (tools/publish_build.sh)."
     fi
     gh release upload "$TAG" "$ZIP" "$ZIP.sha256"
 else

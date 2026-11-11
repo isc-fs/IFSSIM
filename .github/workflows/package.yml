@@ -1,14 +1,15 @@
 name: Package builds
 
-# Builds the sim on the machines that offered to, and adds each OS's zip to
-# the GitHub Release the sim's updater reads, with tools/publish_build.sh:
-# the same script a person runs by hand (docs/TEAM_SETUP.md, "Publishing a
-# build"). A v* tag publishes Stable; a merge to dev publishes Latest.
+# Builds the sim and adds each OS's zip to the GitHub Release the sim's
+# updater reads, with tools/publish_build.sh: the same script a person runs
+# by hand (docs/TEAM_SETUP.md, "Publishing a build"). A v* tag publishes
+# Stable; a merge to dev publishes Latest.
 #
-# Each OS waits for a runner registered with only its label
-# (--no-default-labels --labels ifssim-package-<os>). An OS with no runner
-# online just waits, and anyone can publish it by hand meanwhile; a newer
-# run replaces a waiting one.
+# Linux first, on the bench PC: it creates the release, so every release has
+# Linux. Windows and macOS follow on runners their owners registered with
+# only their label (--no-default-labels --labels ifssim-package-<os>). An OS
+# with no runner online just waits, and anyone can publish it by hand
+# meanwhile; a newer run replaces a waiting one.
 
 on:
   push:
@@ -26,11 +27,31 @@ permissions:
   contents: write
 
 jobs:
-  package:
+  linux:
+    runs-on: ifssim-package-linux
+    concurrency:
+      group: package-linux-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CHANNEL: ${{ inputs.channel || (startsWith(github.ref, 'refs/tags/') && 'stable' || 'latest') }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+          fetch-depth: 0
+      - name: Build and publish
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          tools/publish_build.sh "$CHANNEL"
+
+  others:
+    needs: linux
     strategy:
       fail-fast: false
       matrix:
-        os: [windows, mac, linux]
+        os: [windows, mac]
     runs-on: "ifssim-package-${{ matrix.os }}"
     concurrency:
       group: package-${{ matrix.os }}-${{ github.ref }}

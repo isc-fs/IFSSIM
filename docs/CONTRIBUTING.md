@@ -167,7 +167,8 @@ Builds reach the GitHub Release, where the sim's updater finds them, through
 one script, `tools/publish_build.sh stable|latest`. A person runs it by hand
 (docs/TEAM_SETUP.md, "Publishing a build"), and `package.yml` runs it on a
 runner that offered to build: on `v*` tags (Stable) and merges to `dev`
-(Latest).
+(Latest). Linux runs first, on the bench PC, and creates the release, so
+every release has Linux; Windows and macOS are added after it.
 
 | OS | Runner label | Requirements | Packaging script |
 |---|---|---|---|
