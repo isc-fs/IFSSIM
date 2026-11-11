@@ -6,7 +6,9 @@
 #include "Misc/CoreMisc.h"
 #include "RenderTimer.h"
 
-namespace
+// Named, not anonymous: in a unity build an anonymous namespace's names
+// are visible to the other files in the blob and trip -Wshadow there.
+namespace FSDSFrameTimesPrivate
 {
 	constexpr double ReportEveryS = 5.0;
 
@@ -67,18 +69,20 @@ namespace
 
 namespace FSDSFrameTimes
 {
+	namespace P = FSDSFrameTimesPrivate;
+
 	void Start()
 	{
-		if (Handle.IsValid()) return;
-		Totals = FTotals();
-		WindowStart = LastTick = 0.0;
-		Handle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&Tick));
+		if (P::Handle.IsValid()) return;
+		P::Totals = P::FTotals();
+		P::WindowStart = P::LastTick = 0.0;
+		P::Handle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&P::Tick));
 	}
 
 	void Stop()
 	{
-		if (!Handle.IsValid()) return;
-		FTSTicker::GetCoreTicker().RemoveTicker(Handle);
-		Handle.Reset();
+		if (!P::Handle.IsValid()) return;
+		FTSTicker::GetCoreTicker().RemoveTicker(P::Handle);
+		P::Handle.Reset();
 	}
 }
