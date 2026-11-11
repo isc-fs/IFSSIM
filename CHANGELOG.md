@@ -33,6 +33,31 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **Parking lot A is fenced in, and its tracks get clutter of their own.** Tyre
+  walls line the long edges of the lot (bins and bollards in their gaps) and a
+  new `fence` class, a steel crowd barrier, the short ones. The south sidewalk,
+  now 20 cm tall and still LiDAR-only, runs right along the lot in plain view
+  of the LiDAR (a second flat plane for the ground fit), with the barriers
+  behind it, so the car still meets something solid. Each venue track's sidecar also gets tyre walls, bollards, bins,
+  spare cones and timing tripods 0.5–3 m from its cones, on the lot, from the
+  track's seed (profile `venue_clutter`); the Drive map draws them. See
+  docs/venues.md.
+- **A venue's track always loads its surroundings,** even with
+  `"Environment": {"Enabled": false}` in settings.json (the default): the
+  plugin recognises a venue's sidecar by its profile, `venue_<venue>`. Every
+  other sidecar still waits for `Enabled`, and tracks without one are
+  unchanged.
+
+- **The menu's Location is a dropdown, and the track list groups by venue.**
+  Drive and the Track editor pick the venue from one dropdown (with each
+  venue's track count on Drive), so more venues don't push the page down. On
+  Anywhere, Drive lists the open floor's tracks first, then each venue's under
+  its name; a search box filters the list once it is long.
+- **Autocross lists open tracks.** One timed run from the start gate to the
+  finish gate, as the referee already timed them; Trackdrive still needs a loop.
+- **Practice is manual only.** The Autonomous button is hidden while Practice
+  is picked: Mission Control has no practice mission.
+
 - **`dv_pipeline_stack` now compiles C++ packages as Release.** The
   image's `colcon build` had no `CMAKE_BUILD_TYPE`, so CMake left
   optimization off for any package that didn't hardcode its own.
@@ -107,6 +132,49 @@ shipping pipeline, documentation.
 - **Cone hits are diagnostic in the sim check.** The referee records each cone it counts (time, cone, colour, place, displacement or tip, car position and speed) in `getRefereeState` `doo_events`; the benchmark writes them to `events.csv` as `doo` rows, and the report adds a tightest-corner column and a cone-hit table. Cones tipped over 45 degrees now count even if they did not move 15 cm. `gen_tracks.py` rejects random tracks with a centreline corner under 5 m (`--min-radius`, `GEN_MIN_RADIUS_M`), tighter than the car can turn. Needs a UE recompile.
 - **Constants guard test (`tools/tests/test_constants_guard.py`).** Fails when a vehicle constant hardcoded in a tool, test or `docs/REFERENCE.md` drifts from `settings.json`. Also fixes the stale values it found: `circle_test.py` and `track_driver.py` now read wheelbase and steer lock from `settings.json` (were 1.60 m / 22.4°), the benchmark's normalized-steering scale is 18.2° (0.31765 rad, was 0.5), and `REFERENCE.md` / `test_vehicle_physics.py` use the current wheel radius, mass and aero values.
 
+- **Venues in the menu.** The Drive page has a Location row (Anywhere, or a
+  venue) that lists only that venue's tracks, and its map draws the lot and
+  everything around the cones. In the Track editor, pick a venue to draw on
+  it: the lot and its props sit behind the drawing, cones off the lot are an
+  error while you draw, and the track is saved as `<venue>__<name>` with its
+  environment sidecar written by the backend at the same time (and deleted
+  with it). See docs/venues.md.
+- **A front-end menu: the sim opens on it.** Pick the event (Acceleration,
+  Skidpad, Autocross, Trackdrive with laps, or Practice), then a track that
+  suits it (a gridded top-down map of its cones, in metres), and who drives,
+  then START. Practice takes any track, open test tracks included, and has no
+  lap target. A manual run needs only the sim, no Docker:
+  the menu loads the track with `loadTrack`'s own code and hands the car to the
+  keyboard. Esc pauses (Resume, Restart run, Main menu); when the referee ends
+  the run, a results box shows its laps and cones, and the Results page keeps
+  every manual run since the sim started. Autonomous opens Mission Control,
+  where the pipeline's session starts as before. The menu stays out of the way
+  of RPC sessions: it is off with `-NoMenu`, `-RenderOffscreen` or
+  `"Menu": {"Enabled": false}`, and closes when a client loads a track or resets
+  the scenario. The Mission Control panel (Tab) stays, for engineers.
+- **A Track editor in the menu.** Draws tracks in the sim, as the web UI's Draw
+  Track does and through the same track creator (tools/envgen, via Mission
+  Control's backend): click points or draw freehand, see the cones, both cone
+  lines, the start pose and every FS rule issue live, add test sections, save,
+  and Test drive the track in Practice. Drawn tracks reopen for editing.
+- **Telemetry in the in-sim Mission Control panel.** A Telemetry tab with the
+  car's live state read straight from the sim: speed, motor rpm, pedals,
+  steering, who is driving, position and heading, and the motor's regen (torque
+  and power absorbed, torque available, and whether the power or the torque cap
+  binds). The web UI's regen gauges have always read 0: the sim never sent them.
+- **Tracks in the in-sim Mission Control panel.** A Tracks tab with the web UI's
+  track manager: the list with cone counts, the selected track's preview, Load,
+  Delete (confirmed with a second click; not for built-in tracks), and Generate a
+  random track with the web UI's fields and defaults.
+- **Scoring in the in-sim Mission Control panel.** A Scoring tab with the web
+  UI's view: score, elapsed, penalties, corrected time, the reference time
+  (T_best) and the lap times. Both UIs now show no score until a reference
+  time is set: without one the backend compares the run with itself and
+  every run got full points (#719). A run faster than the reference now
+  scores the maximum instead of more (271/200 before), and a run with no
+  completed lap, a total time of 0 or a skidpad with fewer than the four
+  timed laps has no score. A reference time of 0 or less is rejected (422 from
+  the API, a message in the web UI) instead of being shown next to full points.
 - **Tabs and the session log in the in-sim Mission Control panel.** The panel
   (Tab) gets a tab bar: Session, as before, and Log, the web UI's session log
   (newest first, coloured per event type) with Export JSON, which saves to
@@ -117,6 +185,15 @@ shipping pipeline, documentation.
   off-course. H hides and shows it; `"HUD": {"Enabled", "Key"}` in
   settings.json; off in headless runs and with `-NoHUD`. See
   `docs/OPERATING.md`.
+
+- **Venues, starting with a parking lot.** A venue is a fixed place several
+  tracks share: `Content/tracks/venues/<venue>.venue.json` lists its lot (where
+  tracks are drawn) and what stands around it, and `python -m envgen venue`
+  checks it and writes each `<venue>__<track>`'s environment sidecar, so the
+  plugin builds it like any environment. New prop classes for it: `tree`,
+  `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only, under the 0.30 m
+  rule) and `berm` (an earth bank, until terrain). First venue: `parking_a`,
+  80 x 54 m with 144 props and one track. See docs/venues.md.
 - **Headless runs.** `python3 -m headless_run` (in `tools/`) starts the sim
   with no window, runs the mission benchmark around it and stops it, once
   (`run`) or on repeat (`loop`), noticing a sim that crashed or never came up.
@@ -382,6 +459,15 @@ shipping pipeline, documentation.
 - **`loadTrack` and `getSettingsPaths` replied with invalid JSON on Windows.**
   The file paths in them went out with bare backslashes; they are escaped
   now, as the error replies already were.
+
+- **A run on an open track now ends at its finish gate, whatever the event.**
+  A track with two orange gates, start at one end and finish at the other
+  (acceleration, the open stress tracks: slaloms, hairpins), only finished
+  under the Acceleration event: under Autocross or Trackdrive the referee waited
+  for a second crossing that never came, so an autonomous or benchmark run there
+  could only end by timeout. The referee now starts the clock when the car sets
+  off and finishes on one pass of the far gate. Loops are unchanged.
+
 - **After a sim restart the car never moved.** When the sim stopped, the
   bridge reconnected its sensor streams at once, but its command connection
   only failed a moment later, on its next send, and nothing reconnected it:

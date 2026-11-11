@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from sim_client import SimConnection
-from scoring import compute_scoring
+from scoring import compute_scoring, valid_reference
 
 # #465 — bag-record helpers. Pure-Python, no FastAPI coupling, so the
 # test suite can drive subprocess calls with mocks. See bag_recorder.py
@@ -371,6 +371,7 @@ class TrackCreate(BaseModel):
 class TrackPreview(BaseModel):
     spec: dict
     strict: bool = False
+    venue: Optional[str] = None   # also keep the cones on this venue's lot (docs/venues.md)
 
 class TeleportRequest(BaseModel):
     x: float
@@ -1269,6 +1270,7 @@ def vehicle_teleport(req: TeleportRequest):
 # the `HTTPException(400)` shape the endpoints expect.
 from track_validators import (
     TrackNameError,
+    protected_reason,
     validate_track_name as _vt_name,
     validate_track_stem as _vt_stem,
     resolve_track_path as _rt_path,
@@ -1324,6 +1326,8 @@ def track_list():
             "blue": len(cones["blue"]), "yellow": len(cones["yellow"]),
             "orange": len(cones["big_orange"]) + len(cones["small_orange"]),
             "builtin": name in BUILTIN_TRACKS,
+            # can't be replaced or deleted (built-in, or the stress library)
+            "protected": protected_reason(name, BUILTIN_TRACKS) is not None,
             "event_type": BUILTIN_TRACKS.get(name),
             # drawn in the track creator: its spec can be reopened
             "editable": _creator.has_spec(f),
@@ -1426,14 +1430,16 @@ def track_delete(name: str):
     # — replaced with the shared `_validate_track_name` helper for
     # consistency.
     name = _validate_track_name(name)
-    if name in BUILTIN_TRACKS:
-        return JSONResponse({"error": "Cannot delete built-in track"}, status_code=400)
+    reason = protected_reason(name, BUILTIN_TRACKS)
+    if reason:
+        return JSONResponse({"error": f"Cannot delete: {reason}"}, status_code=400)
     filepath = _resolve_track_path(name)
     if os.path.exists(filepath):
         os.remove(filepath)
         spec_file = _creator.spec_path(filepath)
         if os.path.exists(spec_file):
             os.remove(spec_file)
+        _creator.remove_venue_sidecar(filepath)
         return {"deleted": name}
     return JSONResponse({"error": "Not found"}, status_code=404)
 
@@ -1445,7 +1451,8 @@ def track_delete(name: str):
 
 @app.post("/api/track/preview_spec")
 def track_preview_spec(req: TrackPreview):
-    code, body = _creator.preview(req.spec, strict=req.strict)
+    code, body = _creator.preview(req.spec, strict=req.strict, venue=req.venue,
+                                  tracks_dir=TRACKS_DIR)
     return body if code == 200 else JSONResponse(body, status_code=code)
 
 
@@ -1548,6 +1555,9 @@ def scoring_summary(
     t_best: Optional[float] = Query(None),
     uss: bool = Query(False),
 ):
+    if t_best is not None and not valid_reference(t_best):
+        raise HTTPException(status_code=422, detail="t_best must be a number greater than 0")
+
     ref = sim.get_referee_state()
     if not ref:
         return {"error": "No referee data"}

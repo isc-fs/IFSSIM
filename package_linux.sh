@@ -80,6 +80,12 @@ for f in "$TRACKS_SRC/"*.env.json; do
 done
 # ...and the worlds their sidecars name (docs/worlds.md).
 if [ -d "$TRACKS_SRC/worlds" ]; then cp -R "$TRACKS_SRC/worlds" "$TRACKS_DST/"; fi
+
+# Venues: the menu lists them and draws them around their tracks (docs/venues.md).
+if ls "$TRACKS_SRC/venues/"*.venue.json >/dev/null 2>&1; then
+    mkdir -p "$TRACKS_DST/venues"
+    cp "$TRACKS_SRC/venues/"*.venue.json "$TRACKS_DST/venues/"
+fi
 echo "  Tracks staged: $(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') files"
 
 # 3. Copy settings.json to UE5's UserSettingsDir so FSDSSettings::AutoLoad
