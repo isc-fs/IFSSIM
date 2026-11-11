@@ -1,10 +1,9 @@
 {
   "_doc": "What the sim check drives (tools/ci/sim_pr_check.sh) and which missions decide its result (tools/ci/sim_report.py). `overrides` change a mission's defaults in tools/sim_benchmark/missions.yaml. Missions in `informational` run and are reported but never fail the check. `random_tracks` adds that many random tracks (tools/ci/gen_tracks.py) to the mission's runs, new ones every run; the workflow's random_seeds input picks given ones instead. `characterisation` runs tools/characterise once before the missions (scripted manoeuvres, no pipeline, checked against settings.json): `enabled` false skips it; `required` true makes a failed hard check (full-lock radius, steering linearity, yaw gain, physics wheelbase) fail the check, false only reports it.",
   "required": ["acceleration"],
-  "informational": ["acceleration_montmelo", "skidpad", "autocross"],
+  "informational": ["skidpad", "autocross"],
   "overrides": {
     "acceleration": {"repeats": 3},
-    "acceleration_montmelo": {"repeats": 1},
     "skidpad": {"repeats": 1},
     "autocross": {"repeats": 1, "tracks": ["track_20260404_013721.csv"], "timeout_s": 300}
   },

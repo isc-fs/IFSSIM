@@ -60,9 +60,8 @@ shipping pipeline, documentation.
   screenshot once lighting has settled. `getSimStatus` reports `quality`;
   the default `sim` preset is unchanged (docs/rendering_presets.md).
 
-- **Montmeló main straight world.** Load `montmelo_straight_acceleration` to
-  run the acceleration event on the real Circuit de Barcelona-Catalunya
-  straight: measured terrain (it falls 7 m towards turn 1), the 20 m track with
+- **Montmeló main straight world.** The acceleration event runs on the real
+  Circuit de Barcelona-Catalunya straight: measured terrain (it falls 7 m towards turn 1), the 20 m track with
   its cross-fall, start and finish lines, pit lane, pit wall and fences, pit
   building and main grandstand, all LiDAR-visible. Built at runtime from
   ICGC LiDAR (CC BY 4.0) and OpenStreetMap (ODbL) data by `tools/worldgen`.
@@ -77,6 +76,13 @@ shipping pipeline, documentation.
   roof is optional. `FSDS.View` places a free camera for renders. The
   showcase preset drops its height fog, which drew a dark band at the
   horizon. Needs a UE recompile.
+- **Acceleration always runs on the Montmeló straight.** `acceleration.csv`
+  now has the sidecar that loads the `montmelo_straight` world, so Mission
+  Control, the benchmark and the sim check's deciding acceleration runs all
+  drive the real straight; there is no separate Montmeló track or mission. The
+  car characterisation drives the same cones on flat ground
+  (`characterisation.csv`), since its turns need open space beside the
+  start.
 - **Montmeló surfaces and markings from the aerial photo.** Measured on the
   ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
   verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
@@ -93,11 +99,6 @@ shipping pipeline, documentation.
   truss at 5 m, five columns of four lamps, camera mast, pit-side board) and
   the catch fences are raised to 2.8 m (pit wall) and 2.1 m (grandstand
   side). Needs a UE recompile.
-- **Acceleration on Montmeló in the sim check.** A new benchmark mission,
-  `acceleration_montmelo`, drives the acceleration cones on the Montmeló
-  straight world. The GPU runner's sim check runs it once per check as an
-  informational mission (reported, never fails the check;
-  `tools/ci/sim_check.json`).
 - **Car characterisation in the sim check.** `tools/characterise` drives the car
   with scripted inputs (no pipeline) before the missions and checks it against
   `settings.json`: full-lock radius both ways, steering linearity and low-speed

@@ -7,7 +7,8 @@
 Needs a running sim (Play mode or packaged) and nothing else: no pipeline,
 no Mission Control. It drives over the plugin's RPC (FSDSRpcServer.cpp):
 
-  loadTrack acceleration.csv   known cones, car at the start gate, heading reset
+  loadTrack characterisation.csv   the acceleration cones on flat ground (no world),
+                                   car at the start gate, heading reset
   simSetVehiclePose x y z      position-only teleport into open ground beside it
   activateEbs / releaseEbs / enableApiControl / setCarControls t s r
   simPause / simContinueForTime dt / simIsPaused / simResume   sim-time steps
@@ -17,7 +18,7 @@ Manoeuvres (about 90 s of sim time): steady turns at ~2 m/s at full lock
 both ways and at steer 0.25/0.5/0.75, a launch from rest at full throttle
 over 30 m, a coast-down from 10 m/s and an EBS stop from 7 m/s. The turns
 run in a block 25 m left of the start, the straights in a lane 20 m right of
-it, both clear of the acceleration track's cones (|y| <= 1.5 m).
+it, both clear of the cones (|y| <= 1.5 m).
 
 Sim time: the sim is paused and stepped (simContinueForTime) so every
 sample has an exact sim timestamp and the result doesn't depend on the
@@ -237,7 +238,9 @@ class SpeedPI:
 # ------------------------------------------------------------------ manoeuvres
 @dataclass
 class Layout:
-    track: str = "acceleration.csv"
+    # Flat ground: acceleration.csv loads the Montmeló world, where the turns
+    # block would sit in the grandstand.
+    track: str = "characterisation.csv"
     turn_origin: Tuple[float, float] = (-10.0, 25.0)   # start frame: x forward, y left (m)
     lane_origin: Tuple[float, float] = (-40.0, -20.0)
     lane_length_m: float = 85.0

@@ -57,9 +57,13 @@ _EKF_CAL_POLL_S = 0.5
 
 
 # Built-in tracks that ship with the simulator — not deletable, auto-configure event type
+# (acceleration.csv loads the Montmeló straight world through its sidecar;
+# characterisation.csv is the same cones on flat ground for tools/characterise,
+# kept here so it can't be deleted, with no event of its own.)
 BUILTIN_TRACKS = {
     "acceleration.csv": "acceleration",
     "skidpad.csv": "skidpad",
+    "characterisation.csv": None,
 }
 
 # Track generator path
