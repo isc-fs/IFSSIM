@@ -114,6 +114,12 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 		(*HudObj)->TryGetStringField(TEXT("Key"), HudKey);
 	}
 
+	const TSharedPtr<FJsonObject>* MenuObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("Menu"), MenuObj))
+	{
+		(*MenuObj)->TryGetBoolField(TEXT("Enabled"), bMenuEnabled);
+	}
+
 	// Plant selection. A top-level "Plant" block, because which simulator
 	// runs the car is not a property of the car.
 	const TSharedPtr<FJsonObject>* PlantObj;
@@ -149,6 +155,12 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 	}
 	UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Environment %s"),
 		bEnvironmentEnabled ? TEXT("enabled (track sidecars are loaded)") : TEXT("off (flat world)"));
+
+	const TSharedPtr<FJsonObject>* TimingObj;
+	if (Root->TryGetObjectField(TEXT("Timing"), TimingObj))
+	{
+		(*TimingObj)->TryGetNumberField(TEXT("SpeedFactor"), TimingSpeedFactor);
+	}
 
 	// Vehicles
 	const TSharedPtr<FJsonObject>* VehiclesObj;

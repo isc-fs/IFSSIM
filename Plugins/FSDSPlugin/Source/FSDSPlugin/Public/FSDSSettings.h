@@ -285,6 +285,12 @@ public:
 	bool bHudEnabled = true;
 	FString HudKey = TEXT("H");
 
+	// --- Front-end menu ----------------------------------------------------
+	//
+	// "Menu": { "Enabled" }. The full-screen menu the sim opens on (event,
+	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
+	bool bMenuEnabled = true;
+
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;
 
@@ -295,6 +301,15 @@ public:
 	// (docs/environment_sidecar.md). Off by default: the flat world stays the
 	// regression baseline, and while this is off a sidecar is ignored.
 	bool bEnvironmentEnabled = false;
+
+	// --- Timing ------------------------------------------------------------
+	//
+	// "Timing": { "SpeedFactor" }. How fast the simulation runs while the
+	// pipeline drives: 1 is real time (the default, for testing the car's
+	// computer), below 1 a slow motion for comparing algorithms (0.5, 0.25,
+	// 0.1). Manual driving is always real time. The menu and the
+	// setSpeedFactor RPC change it while the sim runs. See FSDSRealTime.h.
+	double TimingSpeedFactor = 1.0;
 
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 

@@ -21,7 +21,7 @@ A track names its world in its environment sidecar ([environment_sidecar.md](env
 
 The world loads whatever `Environment.Enabled` says in `settings.json`: it is the place itself, not optional dressing. Only the sidecar's props follow that switch.
 
-Load `montmelo_straight_acceleration` to drive the acceleration event on the real straight. Its cones match `acceleration.csv`, with the start line on the painted start line.
+The acceleration track always runs here: `acceleration.csv` has a sidecar (`acceleration.env.json`) that loads this world, with the start line on the painted start line. The car characterisation (`tools/characterise`) drives the same cones on flat ground instead (`characterisation.csv`), because its turns need open space beside the start.
 
 ## What the sim builds
 
@@ -115,4 +115,4 @@ python3 -m worldgen build montmelo_straight --cache ~/Library/Caches/ifssim-geo/
 python3 -m worldgen check ../Content/tracks/worlds/montmelo_straight
 ```
 
-It writes `world.json`, `terrain.i16` and `wear.u8`. `--tracks` also writes `montmelo_straight_acceleration.csv` and its sidecar. The tests are `tools/tests/test_worldgen.py` and the `FSDS.World` automation tests.
+It writes `world.json`, `terrain.i16` and `wear.u8`. `--tracks` also writes `acceleration.csv` and its sidecar. The tests are `tools/tests/test_worldgen.py` and the `FSDS.World` automation tests.

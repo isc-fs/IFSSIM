@@ -1,8 +1,45 @@
+# The project name, whatever the folder is called (a clone into IFSSIM-repo,
+# say): containers are <name>-<service>-1, and mission_control_backend finds
+# the pipeline's by that name (DV_PIPELINE_STACK_CONTAINER below).
+# COMPOSE_PROJECT_NAME still overrides it (CI runs as ifssim-ci).
+name: ifssim
+
 services:
+
+  # Docker Desktop's VM flushes written data in small, frequent steps
+  # instead of its Linux defaults (hold up to 30 s or ~10 % of RAM, then
+  # write it all out). Recording a bag writes ~16 MB/s; with the defaults
+  # that came out as a 250-290 MB burst every ~15 s, and during a burst the
+  # whole stack could freeze 0.5-1.7 s (no /imu, no /slam/pose), long enough
+  # for the pipeline watchdog (0.6 s) to stop the run: 2 of 3 recorded laps.
+  # With these settings, 0 of 3 (the 4th lap stalled on a nearly full SSD,
+  # a different cause). vm.* settings belong to the kernel, not the
+  # container: this only touches Docker Desktop's VM (WSL2 or LinuxKit
+  # kernel) and does nothing on a Linux host, where it would change the
+  # machine's own settings. They last until Docker restarts; every
+  # `compose up` applies them again.
+  docker_vm_tuning:
+    image: alpine:3.20
+    privileged: true
+    restart: "no"
+    network_mode: none
+    command:
+      - sh
+      - -c
+      - |
+        case "$$(uname -r)" in
+          *microsoft*|*WSL*|*linuxkit*)
+            sysctl -w vm.dirty_background_bytes=33554432 vm.dirty_expire_centisecs=200 vm.dirty_writeback_centisecs=100 ;;
+          *)
+            echo "not Docker Desktop's VM: leaving the host's settings alone" ;;
+        esac
 
   # ROS2 bridge + full driverless pipeline in one container
   # Connects to UE5/IFSSIM running natively on the host
   dv_pipeline_stack:
+    depends_on:
+      docker_vm_tuning:
+        condition: service_completed_successfully
     build:
       context: .
       dockerfile: docker/dv_pipeline_stack/Dockerfile
@@ -36,13 +73,19 @@ services:
       #
       # Opt-in subsampled LiDAR cloud for browser-based visualisers
       # (Foxglove web, Lichtblick web). 0 (default) disables the
-      # /lidar/Lidar1/viz topic entirely — production runs unaffected.
-      # Set to >=2 to publish every Nth point on /viz alongside the
-      # full /lidar/Lidar1 cloud. Foxglove tab CPU on a 1.5 MB/scan
-      # stream sits around 35 %; LIDAR_VIZ_DECIMATION=4 drops it to
-      # ~10 % at 1/4 spatial density, plenty for "is the autonomy
-      # seeing what I think it's seeing" debugging.
-      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-4}
+      # /lidar_points/viz topic entirely. Set to >=2 to publish every Nth
+      # point on /lidar_points/viz alongside the full /lidar_points cloud.
+      # Foxglove tab CPU on a 1.5 MB/scan stream sits around 35 %;
+      # LIDAR_VIZ_DECIMATION=4 drops it to ~10 % at 1/4 spatial density.
+      # Off by default since the sim draws the pipeline's view itself:
+      # it was 18 % of a recorded bag, and with it on, recording made
+      # SLAM stall past the watchdog's 0.6 s (measured 829 ms; 200 ms
+      # with it off). The lichtblick/ layouts show /lidar_points/ground
+      # instead (the pipeline's cropped cloud, ~15k points, in base_link;
+      # foxglove_bridge's whitelist doesn't pass the full /lidar_points).
+      # To bring the whole-scene copy back:
+      #   LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack
+      - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-0}
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
       # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
       # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single
@@ -227,6 +270,12 @@ services:
       # (Lichtblick reads from the host-side ./bags as before; the
       # pull step is the only added handle.)
       - ifssim_bags:/bags
+      # The host's bags, as the backend copies them out, read-only: the
+      # sim's Bags page replays one with `ros2 bag play /host_bags/<name>`
+      # inside this container (a second container wouldn't share its
+      # /dev/shm, and Fast DDS's shared memory would never deliver).
+      # Recording still writes to the volume above.
+      - ./bags:/host_bags:ro
       # /tmp/ifssim_streams bind-mount removed: it existed to share an
       # AF_UNIX LiDAR socket between the host plugin and the bridge
       # container. The UDS LiDAR sender was retired in #322 and the
@@ -387,19 +436,21 @@ services:
       # to "0" / "false" to keep the manual flow (volume stays
       # populated, retrieve with `tools/pull-bag.sh`).
       - IFSSIM_BAG_AUTO_PULL=${IFSSIM_BAG_AUTO_PULL:-1}
-      # When set (default 1), each auto-pulled full bag also gets a
-      # car-liftable derivative alongside it: `<name>_carparity` (mcap,
-      # LiDAR+IMU only) built via `ros2 bag convert` inside dv_pipeline_stack.
-      # That's the sensor set the real car needs replayed on the stand — the
-      # car supplies motor_rpm/steering/TF live (see tools/lift_to_car.sh).
-      # Set to "0" to record the full dump only.
-      - IFSSIM_BAG_CAR_PARITY=${IFSSIM_BAG_CAR_PARITY:-1}
+      # When set to 1, each auto-pulled full bag also gets a car-liftable
+      # derivative alongside it: `<name>_carparity` (mcap, LiDAR+IMU only)
+      # built via `ros2 bag convert` inside dv_pipeline_stack. That's the
+      # sensor set the real car needs replayed on the stand — the car
+      # supplies motor_rpm/steering/TF live (see tools/lift_to_car.sh).
+      # Off by default: it wrote ~0.8 GB more after every recorded lap, for
+      # a copy only the stand uses. The sim's Bags page makes one when
+      # needed (Car copy; POST /api/bags/<name>/car_parity).
+      - IFSSIM_BAG_CAR_PARITY=${IFSSIM_BAG_CAR_PARITY:-0}
       # Container name of the dv_pipeline_stack — mc_backend's auto-pull
       # talks to the docker daemon via the Python SDK and addresses the
       # source container by this name. Compose names it
-      # `<project>-<service>-<idx>` by default; the project prefix is
-      # `ifssim` (pinned by `image:` in this file) so the full name is
-      # stable.
+      # `<project>-<service>-<idx>` by default; the project is `ifssim`
+      # (`name:` at the top of this file, whatever the folder is called), so
+      # the full name is stable.
       - DV_PIPELINE_STACK_CONTAINER=ifssim-dv_pipeline_stack-1
       - IFSSIM_TOOLS_DIR=/ifssim_tools
       # pipeline/control sources for track_driver Pure Pursuit import.

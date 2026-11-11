@@ -1,8 +1,14 @@
 #include "UI/FSDSHud.h"
 
+#include "FSDSRealTime.h"
+#include "EmraxMotor.h"
+#include "FSDSCoordinates.h"
+#include "Misc/ConfigCacheIni.h"
+
 #include "FSDSReferee.h"
 #include "FSDSSettings.h"
 #include "FSDSVehiclePawn.h"
+#include "UI/FSDSPipelineView.h"
 
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
@@ -194,6 +200,29 @@ public:
 						.ColorAndOpacity(this, &SFSDSHud::PenaltyColor)
 						.Text(this, &SFSDSHud::PenaltyText)
 					]
+
+					// How fast the simulation runs against the real clock.
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(STextBlock)
+						.Font(HudFont(9))
+						.ColorAndOpacity(this, &SFSDSHud::RealTimeColor)
+						.Text(this, &SFSDSHud::RealTimeText)
+						.ToolTipText(LOCTEXT("RealTimeTip",
+							"Simulated seconds per real second. In real time, below 0.95 the pipeline gets "
+							"more time than on the car, so timing results don't hold. In slow motion it "
+							"should read the slow motion's factor."))
+					]
+
+					// Detailed (Settings, HUD): regen and where the car is.
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+					[
+						SNew(STextBlock)
+						.Visibility_Lambda([]() { return FFSDSHud::IsDetailed() ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Font(HudFont(9))
+						.ColorAndOpacity(HudDimColor)
+						.Text(this, &SFSDSHud::MoreText)
+					]
 				]
 			]
 		];
@@ -265,19 +294,53 @@ private:
 		return P && P->IsEbsLatched() ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
 	}
 
+	/** The car state's speed, or in a bag replay (physics off, so that
+	 *  reads zero) the recorded car's. */
+	static double ShownSpeed(const AFSDSVehiclePawn* P)
+	{
+		const FFSDSPipelineView& V = FFSDSPipelineView::Get();
+		return V.IsReplaying() ? V.ReplaySpeed() : P->GetCarState().Speed;
+	}
+
 	FText SpeedText() const
 	{
 		const AFSDSVehiclePawn* P = GetPawn();
 		if (!P) return LOCTEXT("NoSpeed", "--");
-		return FText::AsNumber(FMath::RoundToInt(P->GetCarState().Speed * 3.6f));
+		return FText::AsNumber(FMath::RoundToInt(ShownSpeed(P) * 3.6));
 	}
 
 	FText DetailText() const
 	{
 		const AFSDSVehiclePawn* P = GetPawn();
 		if (!P) return FText::GetEmpty();
+		if (FFSDSPipelineView::Get().IsReplaying())
+			return FText::FromString(FString::Printf(TEXT("%.1f m/s  replay"), ShownSpeed(P)));
 		const AFSDSVehiclePawn::FCarState S = P->GetCarState();
 		return FText::FromString(FString::Printf(TEXT("%.1f m/s  %d rpm"), S.Speed, FMath::RoundToInt(S.RPM)));
+	}
+
+	/** Regen (motor side: shaft torque, the binding cap) and the pose in ENU. */
+	FText MoreText() const
+	{
+		const AFSDSVehiclePawn* P = GetPawn();
+		if (!P) return FText::GetEmpty();
+		FString S;
+		if (const UEmraxMotor* M = P->Motor)
+		{
+			const float Omega = FMath::Abs(M->GetMechRpm()) * 2.f * PI / 60.f;
+			const float Torque = FMath::Max(0.f, -M->GetTorqueNm());
+			const float PowerCap = Omega > 1e-3f ? M->P.MaxRegenPowerW / Omega : TNumericLimits<float>::Max();
+			const bool bPowerCapped = PowerCap < M->P.MaxRegenTorqueNm;
+			S += FString::Printf(TEXT("Regen %.0f Nm  %.1f kW\nof %.0f Nm available (%s cap)\n"),
+				Torque, Torque * Omega / 1000.f, FMath::Min(M->P.MaxRegenTorqueNm, PowerCap),
+				bPowerCapped ? TEXT("power") : TEXT("torque"));
+		}
+		const AFSDSVehiclePawn::FCarState St = P->GetCarState();
+		const FVector E = FSDSCoord::UEToENU(St.Position);
+		const FQuat Q = FSDSCoord::UEQuatToENU(St.Orientation);
+		const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(2.f * (Q.W * Q.Z + Q.X * Q.Y), 1.f - 2.f * (Q.Y * Q.Y + Q.Z * Q.Z)));
+		S += FString::Printf(TEXT("x %.2f  y %.2f  z %.2f m\nheading %.1f deg (0 = east, ccw)"), E.X, E.Y, E.Z, Yaw);
+		return FText::FromString(S);
 	}
 
 	TOptional<float> Throttle() const
@@ -349,6 +412,26 @@ private:
 		return bAny ? FSlateColor(FLinearColor(1.f, 0.62f, 0.25f, 1.f)) : FSlateColor(HudDimColor);
 	}
 
+	FText RealTimeText() const
+	{
+		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
+		const FString What = Rt.IsPacing()
+			? FString::Printf(TEXT("Slow motion %.2gx:"), Rt.SpeedFactor()) : FString(TEXT("Real time"));
+		if (!Rt.IsKnown()) return FText::FromString(What + TEXT(" --"));
+		return FText::FromString(FString::Printf(TEXT("%s %.2fx   %.0f fps"), *What, Rt.Factor(), Rt.Fps()));
+	}
+
+	FSlateColor RealTimeColor() const
+	{
+		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
+		// Against the target: in slow motion 0.25x is the point, not a fault.
+		const double Share = Rt.IsKnown() ? Rt.Factor() / Rt.TargetFactor() : 1.0;
+		if (Share >= FFSDSRealTime::GoodFactor) return FSlateColor(HudDimColor);
+		return Share >= FFSDSRealTime::PoorFactor
+			? FSlateColor(FLinearColor(1.f, 0.62f, 0.25f, 1.f))
+			: FSlateColor(FLinearColor(0.97f, 0.36f, 0.36f, 1.f));
+	}
+
 	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;
 	TWeakObjectPtr<AFSDSReferee> Referee;
 };
@@ -359,6 +442,30 @@ FFSDSHud::~FFSDSHud()
 {
 	Shutdown();
 }
+
+namespace HudConfig { static const TCHAR* Section = TEXT("FSDSHud"); }
+
+bool FFSDSHud::IsDetailed()
+{
+	static bool bLoaded = false;
+	if (!bLoaded && GConfig)
+	{
+		bLoaded = true;
+		GConfig->GetBool(HudConfig::Section, TEXT("Detailed"), bDetailed, GGameUserSettingsIni);
+	}
+	return bDetailed;
+}
+
+void FFSDSHud::SetDetailed(bool bOn)
+{
+	IsDetailed();   // load first, so a later first read doesn't undo this
+	bDetailed = bOn;
+	if (!GConfig) return;
+	GConfig->SetBool(HudConfig::Section, TEXT("Detailed"), bOn, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
+}
+
+bool FFSDSHud::bDetailed = false;
 
 FKey FFSDSHud::ToggleKey()
 {

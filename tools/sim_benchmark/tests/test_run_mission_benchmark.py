@@ -638,6 +638,8 @@ def test_the_timeout_counts_sim_time_not_real_time(tmp_path):
     assert rc == 1 and any(": timeout" in x for x in logs)
     assert res["race/run_sim_time_s"] >= 5.0 and res["race/run_time_s"] < 2.0
     assert not any("counts real time" in x for x in logs)
+    # sim seconds per real second: far above 1 here, so the timing results hold
+    assert res["race/real_time_factor"] > 2.0 and res["race/real_time_ok"] == 1
 
 
 def test_a_stalled_sim_clock_still_ends_on_the_real_time_backstop(tmp_path):
@@ -645,8 +647,27 @@ def test_a_stalled_sim_clock_still_ends_on_the_real_time_backstop(tmp_path):
     rc, _ = _run(tmp_path, frozen, timeout_s=0.1)
     res = _result(tmp_path)
     assert rc == 1 and res["race/run_sim_time_s"] == 0.0
+    assert res["race/real_time_factor"] == 0.0 and res["race/real_time_ok"] == 0
     # past the 0.1 s timeout in real time (the sim clock never moved), stopped by the backstop
     assert 0.1 < res["race/run_time_s"] < 0.1 * rmb.WALL_BACKSTOP + 1.0
+
+
+def test_slow_motion_is_set_for_the_runs_and_put_back(tmp_path):
+    # 1 sim s per poll: far faster than real time, so it passes at any target
+    w = FakeWorld(never_finishes=True, sim_step=1.0)
+    rc, logs = _run(tmp_path, w, timeout_s=3.0, speed_factor=0.25)
+    res = _result(tmp_path)
+    sets = [c for c in w.calls if c.startswith("SIM setSpeedFactor")]
+    assert sets == ["SIM setSpeedFactor 0.25", "SIM setSpeedFactor 1"]
+    assert any("slow motion" in x for x in logs)
+    assert res["race/speed_factor"] == 0.25 and res["race/real_time_ok"] == 1
+
+
+def test_a_bad_speed_factor_stops_before_any_run(tmp_path):
+    w = FakeWorld()
+    with pytest.raises(rmb.BenchmarkError, match="speed-factor"):
+        _run(tmp_path, w, speed_factor=2.0)
+    assert not any(c.startswith("SIM setSpeedFactor") for c in w.calls)
 
 
 def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
@@ -655,3 +676,4 @@ def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
     res = _result(tmp_path)
     assert rc == 1 and any("counts real time" in x for x in logs)
     assert "race/run_sim_time_s" not in res and res["race/run_time_s"] < 1.0
+    assert "race/real_time_factor" not in res   # no sim clock, no factor

@@ -1,4 +1,5 @@
 #include "RPC/FSDSRpcServer.h"
+#include "FSDSRealTime.h"
 #include "FMI/FSDSFmuPackage.h"
 #include "FMI/FSDSFmi3.h"
 #include "Plant/FSDSFmuPlant.h"
@@ -13,6 +14,7 @@
 #include "FSDSConeSpawner.h"
 #include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
+#include "UI/FSDSPipelineView.h"
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
@@ -414,6 +416,11 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 				{
 					StreamSensors(ClientSocket);
 					return; // Connection used for streaming, done
+				}
+				if (Request == TEXT("streamViz"))
+				{
+					StreamViz(ClientSocket);
+					return;
 				}
 				if (Request == TEXT("streamLidar"))
 				{
@@ -1377,81 +1384,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// seed were not the same run. A paused world does not tick, so there
 		// the reset runs at once; the next tick is still the first after it.
 		const bool bAtTickStart = !bSimPaused.load();
+		++ExternalSessionGen;
 		auto DoReset = [this, bHasSeed, NewSeed, bAtTickStart]() -> FString
 		{
-			int32 NumCones = 0;
-
-			// 1. Re-seed. Bumps the RNG generation, which makes every cached
-			//    sensor stream re-seed on next use and clears IMU bias drift.
-			FSDSRandom::SetScenarioSeed(bHasSeed ? NewSeed : FSDSRandom::GetScenarioSeed());
-
-			// 2. Referee counters (DOO / out-of-course / laps / times).
-			//
-			// ResetForRepeatRun, NOT ResetState. ResetState wipes the cone
-			// registry, the cone list and the finish line — fine for
-			// loadTrack, which respawns cones immediately afterwards, but
-			// resetScenario respawns nothing. Using it here left the referee
-			// permanently blind: DOO, off-course and lap detection all dead,
-			// so every run after the first silently scored 0 / 0 / 0. Any A/B
-			// campaign built on resetScenario was comparing empty scorecards.
-			if (Referee) Referee->ResetForRepeatRun();
-
-			// 3. Vehicle: back to the start gate with velocities zeroed, and
-			//    powertrain state cleared. EBS stays as-is deliberately — in
-			//    the real FS-DV flow the RES Go signal owns that transition
-			//    (T 14.8.4), and loadTrack made the same choice.
-			if (IsValid(VehiclePawn))
-			{
-				if (World)
-				{
-					if (TActorIterator<AFSDSConeSpawner> It(World); It)
-					{
-						FVector StartLoc; FQuat StartRot;
-						if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
-						{
-							VehiclePawn->SetActorLocationAndRotation(
-								StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
-							NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
-						}
-						NumCones = It->SpawnedCones.Num();
-					}
-				}
-
-				// Zero the physics body. Chaos keeps its own velocities on the
-				// body instance, so teleporting the actor alone leaves the car
-				// carrying the previous run's momentum into the new one.
-				if (USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh())
-				{
-					if (Mesh->IsSimulatingPhysics())
-					{
-						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-					}
-				}
-
-				// Rotor speed is integrated state; without this the repeat
-				// starts with the previous run's motor spinning.
-				if (VehiclePawn->Motor) VehiclePawn->Motor->Reset();
-			}
-
-			// sim_time: the game time of the first tick that runs with the new
-			// seed, so a client can number samples from the reset by their
-			// stamps (verify_determinism.py). At the start of a tick the clock
-			// has already advanced to it; a paused world's has not, and its
-			// next tick is one fixed step on. DoReset runs on the game thread,
-			// so reading FApp here is safe under UE 5.8.
-			const double SimTime = !World ? 0.0
-				: World->GetTimeSeconds() + (bAtTickStart ? 0.0 : FApp::GetDeltaTime());
-			const FString Result = FString::Printf(
-				TEXT("{\"ok\":true,\"seed\":%d,\"generation\":%u,\"cones\":%d,\"sim_time\":%.6f}"),
-				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration(), NumCones, SimTime);
-
-			UE_LOG(LogTemp, Log,
-				TEXT("FSDS RPC: resetScenario — seed %d (generation %u), referee cleared, "
-					 "vehicle at start gate, velocities and rotor zeroed"),
-				FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration());
-
-			return Result;
+			return ResetScenarioOnGameThread(bHasSeed, NewSeed, bAtTickStart);
 		};
 
 		const FString TimeoutReply = TEXT("{\"error\":\"resetScenario timed out\"}");
@@ -1961,158 +1897,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		Request.ParseIntoArray(Parts, TEXT(" "));
 		if (Parts.Num() < 2) return TEXT("{\"error\":\"usage: loadTrack path.csv\"}");
 
-		FString TrackPath = Parts[1];
-
-		// --- Path resolution ---
-		// If the caller passes an absolute path that exists, use it directly.
-		// Otherwise treat it as a leaf filename and search the same candidate
-		// directories that FSDSConeSpawner uses at BeginPlay, so the track
-		// generator can write generated CSVs to any of those locations and
-		// just pass the bare filename (e.g. "track_20260404_013721.csv").
-		if (!FPaths::IsRelative(TrackPath) && FPaths::FileExists(TrackPath))
-		{
-			// absolute & exists — nothing to do
-		}
-		else
-		{
-			// Packaged: sibling tracks/ dir next to the .app
-		// ProjectDir = {App}/Contents/UE/IFSSIM/  →  ../../../../ = parent of {App}
-		FString SiblingTracksDir = FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../../tracks")));
-		TArray<FString> SearchDirs = {
-				FPaths::Combine(FPaths::ProjectDir(),  TEXT("Content"), TEXT("tracks")), // editor / PIE source tree
-				SiblingTracksDir,                                                         // next to .app (distribution layout)
-				FPaths::Combine(FPaths::LaunchDir(),   TEXT("Content"), TEXT("tracks")), // LaunchDir fallback
-				FPaths::Combine(FPaths::LaunchDir(),   TEXT("tracks")),                  // safety net
-				// User-writable fallback for generated tracks
-				FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM"), TEXT("tracks")),
-			};
-			FString Leaf = FPaths::GetCleanFilename(TrackPath);
-			bool bResolved = false;
-			for (const FString& Dir : SearchDirs)
-			{
-				FString Candidate = FPaths::Combine(Dir, Leaf);
-				if (FPaths::FileExists(Candidate))
-				{
-					UE_LOG(LogTemp, Log, TEXT("FSDS loadTrack: resolved '%s' → %s"), *TrackPath, *Candidate);
-					TrackPath = Candidate;
-					bResolved = true;
-					break;
-				}
-			}
-			if (!bResolved)
-			{
-				// Keep the original path — SpawnFromCSV will log the specific error
-				UE_LOG(LogTemp, Warning, TEXT("FSDS loadTrack: '%s' not found in any search dir, attempting as-is"), *TrackPath);
-			}
-		}
-
-		// Find and reload the ConeSpawner on game thread
+		const FString TrackPath = ResolveTrackPath(Parts[1]);
+		// A track loaded from outside the sim starts a session there (the
+		// backend, the pipeline, the benchmark); the menu steps aside.
+		++ExternalSessionGen;
 		return CallOnGameThread<FString>(
-			[this, TrackPath]() -> FString {
-				if (!World) return TEXT("{\"error\":\"no world\"}");
-
-				AFSDSConeSpawner* Spawner = nullptr;
-				if (TActorIterator<AFSDSConeSpawner> It(World); It)
-				{
-					Spawner = *It;
-				}
-				if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
-
-				// Destroy all previously spawned cone actors (tracked by spawner)
-				for (AActor* ConeActor : Spawner->SpawnedCones)
-				{
-					if (ConeActor && IsValid(ConeActor)) ConeActor->Destroy();
-				}
-				Spawner->SpawnedCones.Empty();
-
-				if (Referee) Referee->ResetState();
-
-				// Set new CSV path and re-run spawning (ReloadTrack avoids
-				// double-calling Super::BeginPlay)
-				Spawner->ReloadTrack(TrackPath);
-
-				int32 NumCones = Spawner->SpawnedCones.Num();
-
-				// Auto-orient the car to the track's start gate. Without
-				// this, the level's PlayerStart pose (e.g. customMap
-				// spawns at (0, 0) yaw=+90°) leaves the autonomy stack
-				// fighting a gross misalignment on every fresh track —
-				// it has to either teleport the car manually or drive
-				// the wrong way through the gate. Spawning behind the
-				// orange cones, facing the bulk of the track, makes
-				// loadTrack a single self-sufficient operation:
-                //   "load this CSV → cones placed → car aligned → ready."
-				FVector StartLoc;
-				FQuat StartRot;
-				bool bAligned = false;
-				if (Spawner->ComputeStartGatePose(StartLoc, StartRot, 300.f) && IsValid(VehiclePawn))
-				{
-					// Mirrors simSetVehiclePose's teleport-with-velocity-reset
-					// path. EBS is intentionally NOT released here — the
-					// previous "soft reset" pattern was wrong: in the
-					// real FS-DV flow the driver releases EBS via the
-					// RES Go signal (T 14.8.4), not as a side-effect of
-					// loading a track. Track load only spawns the car at
-					// the start gate; the autonomous mission state
-					// machine owns EBS transitions. The skeletal mesh
-					// BodyInstance has to be snapped explicitly because
-					// Chaos vehicles otherwise keep their old physics-
-					// body rotation and snap the actor transform back on
-					// the next tick.
-					VehiclePawn->SetActorLocationAndRotation(StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
-					USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
-					if (Mesh && Mesh->IsSimulatingPhysics())
-					{
-						FTransform NewXform(StartRot, StartLoc, Mesh->GetComponentScale());
-						Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
-						Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-						Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-					}
-					NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
-					// Chaos vehicles store *wheel* angular velocity in the
-					// vehicle simulation core (FWheeledVehicleSimulation), not
-					// in the rigid-body's angular velocity. Zeroing the body
-					// above doesn't touch it. Without this, after the teleport
-					// the wheels keep spinning at their pre-teleport speed and
-					// propel the car a few metres in the OLD forward direction
-					// before friction stops them — observed in the autocross
-					// run validating fix/45: car drifted east-southeast even
-					// with throttle=0, the path planner re-anchored to the
-					// drifted position, picked the wrong loop direction, and
-					// the cascade locked in.
-					//
-					// `ResetVehicleState()` does StopMovementImmediately
-					// (redundant with the SetPhysics*Velocity above, but cheap)
-					// + OnDestroyPhysicsState + OnCreatePhysicsState (which
-					// rebuilds the wheels with zero angular velocity) +
-					// shifts to neutral gear + clears raw throttle/brake/
-					// steering inputs. Equivalent to a fresh PIE spawn.
-					if (VehiclePawn->VehicleMovement)
-					{
-						VehiclePawn->VehicleMovement->ResetVehicleState();
-
-					// ResetVehicleState destroys and recreates the physics
-					// state, which re-runs CreateVehicle() and rebuilds every
-					// physics wheel from the CLASS DEFAULT OBJECT — silently
-					// discarding everything settings.json pushed to the solver.
-					// Re-apply and re-verify, or the rest of the session runs a
-					// different car than the one that was configured.
-					VehiclePawn->ApplyWheelSettingsToSolver();
-					}
-					bAligned = true;
-				LastStartGateLoc_UE = StartLoc;
-				LastStartGateRot_UE = StartRot;
-				bHasStartGate = true;
-				}
-
-				// environment: off | none | loaded | invalid; world: none | loaded |
-				// invalid (getEnvironment has the details, including why).
-				return FString::Printf(
-					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\",\"world\":\"%s\"}"),
-					*JsonEscape(TrackPath), NumCones, bAligned ? TEXT("true") : TEXT("false"),
-					*JsonEscape(Spawner->GetEnvironmentStatus()), *JsonEscape(Spawner->GetWorldStatus()));
-			},
+			[this, TrackPath]() -> FString { return LoadTrackOnGameThread(TrackPath); },
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
 			TEXT("loadTrack"));
@@ -2314,12 +2104,36 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// sim running slower than real time doesn't fail runs it finishes.
 		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
 		// quality: the rendering preset (docs/rendering_presets.md); a
-		// benchmark should refuse "showcase".
-		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,\"quality\":\"%s\"}"),
+		// benchmark should refuse "showcase". real_time_factor: simulated
+		// seconds per real second over the last couple of seconds
+		// (FFSDSRealTime), 0 while unknown (paused). speed_factor: the speed set
+		// for while the pipeline drives (1 real time, below 1 slow motion);
+		// target_factor: what real_time_factor should read now (the slow motion
+		// while pacing, else 1).
+		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,"
+			"\"quality\":\"%s\",\"real_time_factor\":%.3f,\"real_fps\":%.1f,\"speed_factor\":%.3f,\"target_factor\":%.3f}"),
 			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
-			SimTime, FSDSQuality::Name(FSDSQuality::Current()));
+			SimTime, FSDSQuality::Name(FSDSQuality::Current()), Rt.Factor(), Rt.Fps(), Rt.SpeedFactor(), Rt.TargetFactor());
+	}
+
+	// === Timing ===
+	//
+	// setSpeedFactor <f>: how fast the simulation runs while the pipeline
+	// drives. 1 is real time; below 1 a slow motion (0.5 gives the pipeline
+	// twice its real time per simulated second). Clamped to [0.05, 1].
+	else if (Method == TEXT("setSpeedFactor"))
+	{
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2 || !Parts[1].IsNumeric())
+		{
+			return TEXT("{\"error\":\"usage: setSpeedFactor <0.05..1>\"}");
+		}
+		FFSDSRealTime::Get().SetSpeedFactor(FCString::Atod(*Parts[1]));
+		return FString::Printf(TEXT("{\"ok\":true,\"speed_factor\":%.3f}"), FFSDSRealTime::Get().SpeedFactor());
 	}
 
 	// === Version ===
@@ -2545,6 +2359,41 @@ void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
 	Frame.Brake = Controls.Regen;
 }
 
+void FFSDSRpcServer::StreamViz(FSocket* ClientSocket)
+{
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: pipeline view stream started"));
+	const FTCHARToUTF8 Ack(TEXT("OK\n"));
+	int32 Sent = 0;
+	ClientSocket->Send((const uint8*)Ack.Get(), Ack.Length(), Sent);
+
+	// One JSON object per line, about 10 a second; a line can be several KB
+	// (the whole SLAM map), so bytes are gathered until each newline.
+	TArray<uint8> Line;
+	uint8 Buffer[16384];
+	while (bRunning)
+	{
+		if (!ClientSocket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(5))) continue;
+		int32 Read = 0;
+		if (!ClientSocket->Recv(Buffer, sizeof(Buffer), Read) || Read <= 0) break;
+		for (int32 i = 0; i < Read; ++i)
+		{
+			if (Buffer[i] != '\n')
+			{
+				// A runaway line (no newline in 4 MB) is dropped, not grown forever.
+				if (Line.Num() < 4 * 1024 * 1024) Line.Add(Buffer[i]);
+				continue;
+			}
+			if (Line.Num() > 0)
+			{
+				Line.Add(0);
+				FFSDSPipelineView::Get().Receive(UTF8_TO_TCHAR((const char*)Line.GetData()));
+			}
+			Line.Reset();
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: pipeline view stream ended"));
+}
+
 void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 {
 	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: Sensor streaming started"));
@@ -2554,6 +2403,20 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	FTCHARToUTF8 AckConv(*Ack);
 	int32 Sent = 0;
 	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
+
+	// 400 frames per second of SIM time. The latest tick's frame is resent
+	// until the next tick replaces it, so at 60 fps each tick goes out about
+	// 6.7 times. Paced on the wall clock alone, slow motion (FFSDSRealTime)
+	// would send far more per sim second (27 per tick at 0.25x): 1600 IMU
+	// samples per sim second and a GPS, GSS and odometry the bridge counts
+	// off this stream at four times their rate. So each new tick earns sends
+	// for the sim time it advanced, one per StreamPeriodNs, and each send
+	// spends one: the same frames as before at real time, the same rate in
+	// sim time in slow motion.
+	constexpr int64 StreamPeriodNs = 2'500'000;   // 400 Hz
+	constexpr double MaxStreamCredit = 40.0;      // 0.1 s of sim time: no burst after a pause
+	uint64 LastStampNs = 0;
+	double StreamCredit = 0.0;
 
 	while (bRunning)
 	{
@@ -2575,6 +2438,17 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		}
 		if (!bHaveFrame) { FPlatformProcess::Sleep(0.0025f); continue; }
 
+		if (Frame.Timestamp != LastStampNs)
+		{
+			// A new tick (or a new session, whose clock went back): its share.
+			StreamCredit = (LastStampNs == 0 || Frame.Timestamp < LastStampNs)
+				? 1.0
+				: FMath::Min(StreamCredit + double(Frame.Timestamp - LastStampNs) / StreamPeriodNs, MaxStreamCredit);
+			LastStampNs = Frame.Timestamp;
+		}
+		if (StreamCredit < 1.0) { FPlatformProcess::Sleep(0.0025f); continue; }
+		StreamCredit -= 1.0;
+
 		Frame.FrameID = StreamFrameCounter++;
 		// Wall clock at send time (latency/health only, never integrated).
 		Frame.ExternalTimestamp =
@@ -2588,7 +2462,8 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			return;
 		}
 
-		// Pace at ~400Hz — matches BMI088 IMU rate
+		// Pace at ~400Hz of wall time between sends (the BMI088's rate); the
+		// credit above holds it to 400 Hz of sim time.
 		FPlatformProcess::Sleep(0.0025f);
 	}
 }
@@ -2752,4 +2627,264 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 
 		LastSentTimestamp = NowSensorTs;
 	}
+}
+
+// --- Shared with the in-sim menu ------------------------------------------------
+
+FString FFSDSRpcServer::ResolveTrackPath(const FString& NameOrPath)
+{
+	FString TrackPath = NameOrPath;
+
+	// --- Path resolution ---
+	// If the caller passes an absolute path that exists, use it directly.
+	// Otherwise treat it as a leaf filename and search the same candidate
+	// directories that FSDSConeSpawner uses at BeginPlay, so the track
+	// generator can write generated CSVs to any of those locations and
+	// just pass the bare filename (e.g. "track_20260404_013721.csv").
+	if (!FPaths::IsRelative(TrackPath) && FPaths::FileExists(TrackPath))
+	{
+		// absolute & exists — nothing to do
+	}
+	else
+	{
+		const TArray<FString> SearchDirs = TrackSearchDirs();
+		FString Leaf = FPaths::GetCleanFilename(TrackPath);
+		bool bResolved = false;
+		for (const FString& Dir : SearchDirs)
+		{
+			FString Candidate = FPaths::Combine(Dir, Leaf);
+			if (FPaths::FileExists(Candidate))
+			{
+				UE_LOG(LogTemp, Log, TEXT("FSDS loadTrack: resolved '%s' → %s"), *TrackPath, *Candidate);
+				TrackPath = Candidate;
+				bResolved = true;
+				break;
+			}
+		}
+		if (!bResolved)
+		{
+			// Keep the original path — SpawnFromCSV will log the specific error
+			UE_LOG(LogTemp, Warning, TEXT("FSDS loadTrack: '%s' not found in any search dir, attempting as-is"), *TrackPath);
+		}
+	}
+	return TrackPath;
+}
+
+TArray<FString> FFSDSRpcServer::TrackSearchDirs()
+{
+	// Editor / PIE source tree first, then the packaged layout's sibling
+	// tracks/ dir (ProjectDir = {App}/Contents/UE/IFSSIM/, so ../../../../ is
+	// the parent of {App}), the launch dir, and the user-writable fallback
+	// for generated tracks.
+	const FString SiblingTracksDir = FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(FPaths::ProjectDir(), TEXT("../../../../tracks")));
+	return {
+		FPaths::Combine(FPaths::ProjectDir(), TEXT("Content"), TEXT("tracks")),
+		SiblingTracksDir,
+		FPaths::Combine(FPaths::LaunchDir(), TEXT("Content"), TEXT("tracks")),
+		FPaths::Combine(FPaths::LaunchDir(), TEXT("tracks")),
+		FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("IFSSIM"), TEXT("tracks")),
+	};
+}
+
+FString FFSDSRpcServer::LoadTrackOnGameThread(const FString& TrackPath)
+{
+	if (!World) return TEXT("{\"error\":\"no world\"}");
+
+	AFSDSConeSpawner* Spawner = nullptr;
+	if (TActorIterator<AFSDSConeSpawner> It(World); It)
+	{
+		Spawner = *It;
+	}
+	if (!Spawner) return TEXT("{\"error\":\"no ConeSpawner found\"}");
+
+	// Destroy all previously spawned cone actors (tracked by spawner)
+	for (AActor* ConeActor : Spawner->SpawnedCones)
+	{
+		if (ConeActor && IsValid(ConeActor)) ConeActor->Destroy();
+	}
+	Spawner->SpawnedCones.Empty();
+
+	if (Referee) Referee->ResetState();
+
+	// Set new CSV path and re-run spawning (ReloadTrack avoids
+	// double-calling Super::BeginPlay)
+	Spawner->ReloadTrack(TrackPath);
+
+	int32 NumCones = Spawner->SpawnedCones.Num();
+
+	// Auto-orient the car to the track's start gate. Without
+	// this, the level's PlayerStart pose (e.g. customMap
+	// spawns at (0, 0) yaw=+90°) leaves the autonomy stack
+	// fighting a gross misalignment on every fresh track —
+	// it has to either teleport the car manually or drive
+	// the wrong way through the gate. Spawning behind the
+	// orange cones, facing the bulk of the track, makes
+	// loadTrack a single self-sufficient operation:
+                //   "load this CSV → cones placed → car aligned → ready."
+	FVector StartLoc;
+	FQuat StartRot;
+	bool bAligned = false;
+	if (Spawner->ComputeStartGatePose(StartLoc, StartRot, 300.f) && IsValid(VehiclePawn))
+	{
+		// Mirrors simSetVehiclePose's teleport-with-velocity-reset
+		// path. EBS is intentionally NOT released here — the
+		// previous "soft reset" pattern was wrong: in the
+		// real FS-DV flow the driver releases EBS via the
+		// RES Go signal (T 14.8.4), not as a side-effect of
+		// loading a track. Track load only spawns the car at
+		// the start gate; the autonomous mission state
+		// machine owns EBS transitions. The skeletal mesh
+		// BodyInstance has to be snapped explicitly because
+		// Chaos vehicles otherwise keep their old physics-
+		// body rotation and snap the actor transform back on
+		// the next tick.
+		VehiclePawn->SetActorLocationAndRotation(StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+		USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh();
+		if (Mesh && Mesh->IsSimulatingPhysics())
+		{
+			FTransform NewXform(StartRot, StartLoc, Mesh->GetComponentScale());
+			Mesh->BodyInstance.SetBodyTransform(NewXform, ETeleportType::TeleportPhysics);
+			Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+			Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		}
+		NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
+		// Chaos vehicles store *wheel* angular velocity in the
+		// vehicle simulation core (FWheeledVehicleSimulation), not
+		// in the rigid-body's angular velocity. Zeroing the body
+		// above doesn't touch it. Without this, after the teleport
+		// the wheels keep spinning at their pre-teleport speed and
+		// propel the car a few metres in the OLD forward direction
+		// before friction stops them — observed in the autocross
+		// run validating fix/45: car drifted east-southeast even
+		// with throttle=0, the path planner re-anchored to the
+		// drifted position, picked the wrong loop direction, and
+		// the cascade locked in.
+		//
+		// `ResetVehicleState()` does StopMovementImmediately
+		// (redundant with the SetPhysics*Velocity above, but cheap)
+		// + OnDestroyPhysicsState + OnCreatePhysicsState (which
+		// rebuilds the wheels with zero angular velocity) +
+		// shifts to neutral gear + clears raw throttle/brake/
+		// steering inputs. Equivalent to a fresh PIE spawn.
+		if (VehiclePawn->VehicleMovement)
+		{
+			VehiclePawn->VehicleMovement->ResetVehicleState();
+
+		// ResetVehicleState destroys and recreates the physics
+		// state, which re-runs CreateVehicle() and rebuilds every
+		// physics wheel from the CLASS DEFAULT OBJECT — silently
+		// discarding everything settings.json pushed to the solver.
+		// Re-apply and re-verify, or the rest of the session runs a
+		// different car than the one that was configured.
+		VehiclePawn->ApplyWheelSettingsToSolver();
+		}
+		bAligned = true;
+	LastStartGateLoc_UE = StartLoc;
+	LastStartGateRot_UE = StartRot;
+	bHasStartGate = true;
+	}
+
+	// environment: off | none | loaded | invalid; world: none | loaded |
+	// invalid (getEnvironment has the details, including why).
+	return FString::Printf(
+		TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\",\"world\":\"%s\"}"),
+		*JsonEscape(TrackPath), NumCones, bAligned ? TEXT("true") : TEXT("false"),
+		*JsonEscape(Spawner->GetEnvironmentStatus()), *JsonEscape(Spawner->GetWorldStatus()));
+}
+
+FString FFSDSRpcServer::ResetScenarioOnGameThread(bool bHasSeed, int32 NewSeed, bool bAtTickStart)
+{
+	int32 NumCones = 0;
+
+	// 1. Re-seed. Bumps the RNG generation, which makes every cached
+	//    sensor stream re-seed on next use and clears IMU bias drift.
+	FSDSRandom::SetScenarioSeed(bHasSeed ? NewSeed : FSDSRandom::GetScenarioSeed());
+
+	// 2. Referee counters (DOO / out-of-course / laps / times).
+	//
+	// ResetForRepeatRun, NOT ResetState. ResetState wipes the cone
+	// registry, the cone list and the finish line — fine for
+	// loadTrack, which respawns cones immediately afterwards, but
+	// resetScenario respawns nothing. Using it here left the referee
+	// permanently blind: DOO, off-course and lap detection all dead,
+	// so every run after the first silently scored 0 / 0 / 0. Any A/B
+	// campaign built on resetScenario was comparing empty scorecards.
+	if (Referee) Referee->ResetForRepeatRun();
+
+	// 3. Vehicle: back to the start gate with velocities zeroed, and
+	//    powertrain state cleared. EBS stays as-is deliberately — in
+	//    the real FS-DV flow the RES Go signal owns that transition
+	//    (T 14.8.4), and loadTrack made the same choice.
+	if (IsValid(VehiclePawn))
+	{
+		if (World)
+		{
+			if (TActorIterator<AFSDSConeSpawner> It(World); It)
+			{
+				FVector StartLoc; FQuat StartRot;
+				if (It->ComputeStartGatePose(StartLoc, StartRot, 300.f))
+				{
+					VehiclePawn->SetActorLocationAndRotation(
+						StartLoc, StartRot, false, nullptr, ETeleportType::TeleportPhysics);
+					NotifyPlantsOfTeleport(VehiclePawn, StartLoc, StartRot);
+				}
+				NumCones = It->SpawnedCones.Num();
+			}
+		}
+
+		// Zero the physics body. Chaos keeps its own velocities on the
+		// body instance, so teleporting the actor alone leaves the car
+		// carrying the previous run's momentum into the new one.
+		if (USkeletalMeshComponent* Mesh = VehiclePawn->GetMesh())
+		{
+			if (Mesh->IsSimulatingPhysics())
+			{
+				Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+				Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+			}
+		}
+
+		// Rotor speed is integrated state; without this the repeat
+		// starts with the previous run's motor spinning.
+		if (VehiclePawn->Motor) VehiclePawn->Motor->Reset();
+	}
+
+	// sim_time: the game time of the first tick that runs with the new
+	// seed, so a client can number samples from the reset by their
+	// stamps (verify_determinism.py). At the start of a tick the clock
+	// has already advanced to it; a paused world's has not, and its
+	// next tick is one fixed step on. DoReset runs on the game thread,
+	// so reading FApp here is safe under UE 5.8.
+	const double SimTime = !World ? 0.0
+		: World->GetTimeSeconds() + (bAtTickStart ? 0.0 : FApp::GetDeltaTime());
+	const FString Result = FString::Printf(
+		TEXT("{\"ok\":true,\"seed\":%d,\"generation\":%u,\"cones\":%d,\"sim_time\":%.6f}"),
+		FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration(), NumCones, SimTime);
+
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS RPC: resetScenario — seed %d (generation %u), referee cleared, "
+			 "vehicle at start gate, velocities and rotor zeroed"),
+		FSDSRandom::GetScenarioSeed(), FSDSRandom::GetGeneration());
+
+	return Result;
+}
+
+FString FFSDSRpcServer::LoadTrackLocal(const FString& NameOrPath)
+{
+	check(IsInGameThread());
+	return LoadTrackOnGameThread(ResolveTrackPath(NameOrPath));
+}
+
+FString FFSDSRpcServer::ResetScenarioLocal()
+{
+	check(IsInGameThread());
+	return ResetScenarioOnGameThread(false, 0, false);
+}
+
+void FFSDSRpcServer::SetApiControl(bool bEnabled)
+{
+	// Both flags, as enableApiControl / disableApiControl do.
+	bApiControlEnabled = bEnabled;
+	if (IsValid(VehiclePawn)) VehiclePawn->SetApiControlEnabled(bEnabled);
 }
