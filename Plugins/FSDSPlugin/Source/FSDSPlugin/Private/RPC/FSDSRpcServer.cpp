@@ -19,6 +19,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h"
 #include "Engine/World.h"
 #include "Engine/StaticMeshActor.h"
 #include "Kismet/GameplayStatics.h"
@@ -232,6 +233,10 @@ void FFSDSRpcServer::Start(uint16 Port)
 	// Work that must happen at a fixed point in the frame (resetScenario).
 	PreActorTickHandle = FWorldDelegates::OnWorldPreActorTick.AddLambda(
 		[this](UWorld* InWorld, ELevelTick, float) { RunTickStartWork(InWorld); });
+	// Engine frame delta for getSimStatus. Sampled every frame (paused or
+	// not) on the game thread, the only thread UE 5.8 lets read FApp time.
+	EndFrameHandle = FCoreDelegates::OnEndFrame.AddLambda(
+		[this]() { LastFrameDeltaSec.store(static_cast<float>(FApp::GetDeltaTime()), std::memory_order_relaxed); });
 
 	ServerThread = std::make_unique<std::thread>(&FFSDSRpcServer::ServerThreadFunc, this);
 
@@ -247,6 +252,8 @@ void FFSDSRpcServer::Stop()
 	PostActorTickHandle.Reset();
 	FWorldDelegates::OnWorldPreActorTick.Remove(PreActorTickHandle);
 	PreActorTickHandle.Reset();
+	FCoreDelegates::OnEndFrame.Remove(EndFrameHandle);
+	EndFrameHandle.Reset();
 
 	if (ServerThread && ServerThread->joinable())
 	{
@@ -1431,7 +1438,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			// seed, so a client can number samples from the reset by their
 			// stamps (verify_determinism.py). At the start of a tick the clock
 			// has already advanced to it; a paused world's has not, and its
-			// next tick is one fixed step on.
+			// next tick is one fixed step on. DoReset runs on the game thread,
+			// so reading FApp here is safe under UE 5.8.
 			const double SimTime = !World ? 0.0
 				: World->GetTimeSeconds() + (bAtTickStart ? 0.0 : FApp::GetDeltaTime());
 			const FString Result = FString::Printf(
@@ -2296,7 +2304,10 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			MapName = World->GetMapName();
 			MapName.RemoveFromStart(TEXT("UEDPIE_0_"));
 		}
-		FPS = 1.0f / FApp::GetDeltaTime();
+		// Runs on the RPC thread: read the game thread's sampled delta, not
+		// FApp (UE 5.8 ensures on FApp time reads off the game thread).
+		const float DeltaSec = LastFrameDeltaSec.load(std::memory_order_relaxed);
+		FPS = DeltaSec > 0.f ? 1.0f / DeltaSec : 0.f;
 
 		// sim_time: the game clock (s), the same clock the sensor stamps and
 		// /clock use. The mission benchmark counts its timeouts in it, so a

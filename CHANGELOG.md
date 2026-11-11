@@ -14,6 +14,15 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
+  the car's only service brake, and above ~2 m/s this cap sets how hard it can
+  brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
+  their 5 A maximum continuous charge, 30 A at ~370 V. The old 6 kW was about
+  their 3 A standard charge. Braking at 10 m/s goes from ~2.5 to ~4.4 m/s².
+  The car overshot corners at 8–12 m/s in the speed sweep because of it.
+  `settings.json`, the C++ defaults, `matlab/plant/ifssim_params.m` and
+  `docs/REFERENCE.md` all carry the new value.
+
 - **Longitudinal plant uses the settings it already had.** Rolling resistance
   (`RollingResistance`, Crr 0.020) is now applied to the Chaos car; Chaos has
   none of its own, so a coasting car only slowed from drag. Drive and regen

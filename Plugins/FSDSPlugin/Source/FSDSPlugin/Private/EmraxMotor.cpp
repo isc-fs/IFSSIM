@@ -103,7 +103,7 @@ float UEmraxMotor::Step(float Throttle, float Dt)
 	// Different power limit because charge current is gated by the
 	// HV battery, not the motor envelope. At low speeds the torque
 	// cap binds; at higher speeds the power cap dominates (e.g. at
-	// 6500 RPM = 680 rad/s, MaxRegenPowerW=6000 → ~8.8 Nm vs the
+	// 6500 RPM = 680 rad/s, MaxRegenPowerW=11000 → ~16 Nm vs the
 	// 230 Nm torque cap).
 	const float TRegenPwr = P.MaxRegenPowerW / OmegaForPowerCap;
 	const float TRegenMax = FMath::Min(P.MaxRegenTorqueNm, TRegenPwr);
