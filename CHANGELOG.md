@@ -12,6 +12,32 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **A local benchmark queue for Mission Control's Benchmarks tab.** `POST /api/bench/launch`
+  (target `local`) queues a run spec in `tools/sim_benchmark/results/.bench/queue/`;
+  `run_spec.py --work` runs the queue on the host, one spec at a time. `GET /api/bench/queue`,
+  `POST /api/bench/cancel/{id}` and `run_spec.py --status / --cancel` show and stop it.
+  `run_spec.py --rig` and `GET /api/bench/rig` say what this machine can run now (GPU,
+  Docker, LattePanda, HIL), for the tab's component boxes.
+
+- **`tools/sim_benchmark/run_spec.py`: run a benchmark spec from IFSSIM itself.**
+  The spec format and runner from IFS-DV-BENCHWEB's `bench-run` now live in
+  `tools/sim_benchmark/launch/`, so the same command runs a spec on a laptop,
+  on the bench PC's runner and, later, from Mission Control. New preset
+  `missions-basic` (every mission once). Each run's `spec.json` records who
+  and where: `$BENCH_TRIGGER` (local, runner, ...), `$BENCH_REQUESTED_BY` (the
+  GitHub user who launched it), the host, and in GitHub Actions the run, the
+  runner and a link to its logs.
+
+### Fixed
+
+- **Mission benchmarks on a snap-installed Docker.** The benchmark copied the
+  pipeline into `/tmp` and mounted the copy into its stack, but snap's Docker
+  has a `/tmp` of its own and mounts such a folder as an empty one: the stack
+  built nothing and stopped with "package 'bringup' not found". The copy now
+  sits next to the run's results.
+
 ### Changed
 
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
