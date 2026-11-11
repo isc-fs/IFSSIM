@@ -8,12 +8,20 @@ Worlds ([worlds.md](worlds.md)) are drawn with scanned materials and props model
 
 - `textures`: CC0 scan sets from ambientcg.com and which maps to import. A map name may end in `@N`: its source is downscaled to N pixels first.
 - `materials`: an `MI_<name>` per entry: the scan set, `tile_m` (the real size one texture repeat covers), a tint, `recolor` (0..1, replaces the scan's hue with the tint and keeps its detail) and `variation` (large-scale brightness variation that hides tiling).
-- `flat`: untextured materials (glass, lamp lenses).
+- `materials` may also set `wear` (0..1): how much of the world's wear map ([worlds.md](worlds.md)) darkens it. `MI_AsphaltTrack` (wear 1) is the track; every other asphalt ignores the map.
+- `flat`: untextured materials (glass, lamp lenses, the dark garage interior, roof and solar panels).
+- `paint`: road paint, one `MI_Paint<Colour>` per line colour (below).
 - `foliage`: leaf materials for the trees (below).
 
 Generated geometry and the props carry UVs in metres, so `tile_m` holds on every surface.
 
 UE stores each texture's source inside its `.uasset`. To keep the repo small the importer re-encodes every source as a JPEG at quality 85 and caps roughness, AO and metalness maps at 1024 px. Only the asphalt and grass colour maps stay at 4K. `Content/Worlds` is about 49 MB. Painted steel uses the smooth plastic scan: paint is not metallic, and a chipped-paint scan read as marble on large panels.
+
+Wear comes in as the mesh's vertex colour, not a texture: the world actor writes the wear map's value into each asphalt vertex (red channel, 0.5 = as scanned). `M_WorldPBR` multiplies the colour by it, scaled by `WearAmount`, and lowers the roughness by half as much: rubber is darker and a little glossier.
+
+**Road paint.** `M_WorldPaint` draws the asphalt scan (the same set, tiling and world-planar UVs as the road under it) and lays the paint over it through a mask: `coverage`, minus the scan's own grain and a coarse patch noise. Paint fills the asphalt's low spots first and wears through on the high ones, so lines look rolled-on and worn rather than flat colour. Each colour sets `colour`, `coverage` (0..1: 1 is fresh paint), `roughness` and the asphalt set's `tile_m` and `tint`.
+
+**Checked against the aerial photo.** The ground colours were compared with the ICGC orthophoto of Montmeló ([worlds.md](worlds.md)): a top-down showcase render, sampled at the same places, as linear-light ratios to the track's asphalt. Tuned to it: grass (dry straw, 1.5 to 1.9 times the asphalt), plain asphalt (the pit lane carries no racing rubber: 1.15 times the track), red paint, the pit-roof panels (0.5) and the grandstand's solar panels (0.9: at 25 cm a pixel averages the cells and their frames). Green paint already matched. The photo's whites clip, so white roofs and lines aren't tuned to it.
 
 `MI_LampRed` is the start-light lens. The world actor lights it at runtime (below).
 
@@ -29,6 +37,7 @@ UE stores each texture's source inside its `.uasset`. To keep the repo small the
 | `FencePost` | 76 mm tube, scaled to the fence | Every 2.5 m along a fenced wall |
 | `SignBoard` | 3.0 × 0.9 m, generic two-tone | Along the track side of walls up to 1.5 m high |
 | `GarageBay` | 6 m wide pit-garage front, scaled to the roof | Along a concrete building's face towards the track |
+| `GarageBayOpen` | The same front with its door up: dark interior, strip light, a tool cabinet, a stack of tyres | Every third garage |
 | `StartGantry` | Truss over the track, columns at y = −12 / +11.5 m, five light modules | Where the world's `props` list says |
 | `MarshalPost` | 2.4 × 1.6 m booth | Where the world's `props` list says |
 | `TreePineA`, `TreePineB` | 10 m stone pine: leaning trunk, umbrella crown of 7 to 9 clumps | At each of the world's `trees` of kind `pine`, scaled to its height and crown |
@@ -62,3 +71,5 @@ UnrealEditor-Cmd IFSSIM.uproject -run=pythonscript -script="$PWD/tools/assetgen/
 ```
 
 The first writes `Saved/AssetGen/fbx/*.fbx`, its `manifest.json` (triangles, bounds, LODs per prop) and the chain-link opacity mask. The second imports the textures, builds `M_WorldPBR` / `M_WorldPBRMasked` and every `MI_*`, then imports the meshes with their LODs. Run both after changing a prop or `materials.json`, and commit `Content/Worlds`.
+
+The importer leaves textures that are already imported alone (re-encoding them would churn LFS for nothing); set `IFSSIM_REIMPORT=1` to force it. `IFSSIM_MESHES=GarageBayOpen,...` imports only those meshes. Materials are always rebuilt. There is no `UnrealEditor-Cmd` on the Mac: run `UnrealEditor` (inside `UnrealEditor.app/Contents/MacOS/`) with the same arguments.

@@ -68,6 +68,18 @@ shipping pipeline, documentation.
   roof is optional. `FSDS.View` places a free camera for renders. The
   showcase preset drops its height fog, which drew a dark band at the
   horizon. Needs a UE recompile.
+- **Montmeló surfaces and markings from the aerial photo.** Measured on the
+  ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
+  verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
+  the two extra transverse lines, the pit-lane lines, red band and green
+  verges, and the pit exit are painted where they are. Road paint is worn
+  into the asphalt grain (white, yellow, red, green). A wear map (`wear.u8`)
+  darkens the rubbered line left of centre by the measured 14 %. The pit
+  building has its canopy and every third garage open (`GarageBayOpen`);
+  both roofs carry their panels; the grandstand roof has galvanised sheet,
+  rafters and purlins underneath. World format: optional `wear`, line
+  `end_width_m` and colours `red`/`green`, building `canopy_m` and
+  `roof_panels`, grandstand `roof_panels`. Needs a UE recompile.
 - **Acceleration on Montmeló in the sim check.** A new benchmark mission,
   `acceleration_montmelo`, drives the acceleration cones on the Montmeló
   straight world. The GPU runner's sim check runs it once per check as an

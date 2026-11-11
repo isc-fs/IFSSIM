@@ -4,7 +4,8 @@
 
 /**
  * A world: a real place the sim builds around a track, read from
- * Content/tracks/worlds/<name>/ (world.json + terrain.i16). Format and frame:
+ * Content/tracks/worlds/<name>/ (world.json + terrain.i16, and wear.u8 if the
+ * world has asphalt wear). Format and frame:
  * docs/worlds.md; the generator and the reference checker are tools/worldgen.
  *
  * World frame: metres, +x along the place's main axis, +y to its left, +z up,
@@ -23,7 +24,14 @@ struct FFSDSWorldLine
 {
 	double X0 = 0, Y0 = 0, X1 = 0, Y1 = 0;
 	double WidthM = 0;
-	FString Colour;     // white | yellow
+	double EndWidthM = 0;   // width at (X1, Y1); WidthM unless the line tapers
+	FString Colour;     // white | yellow | red | green
+};
+
+/** A flat panel on a roof (world frame), lying on the roof's top. */
+struct FFSDSWorldPanel
+{
+	double XMin = 0, XMax = 0, YMin = 0, YMax = 0;
 };
 
 struct FFSDSWorldWall
@@ -43,6 +51,8 @@ struct FFSDSWorldBuilding
 	bool bHasBase = false;
 	double BaseZ = 0;   // with bHasBase: a raised deck (a footbridge) from BaseZ to TopZ
 	bool bGarages = false;   // pit-garage fronts on the face towards the track
+	double CanopyM = 0;      // with bGarages: a canopy this deep over the garage fronts, at roof level
+	TArray<FFSDSWorldPanel> RoofPanels;
 };
 
 /** A grandstand along x. Seating rises from (FrontY, FrontZ) to (BackY,
@@ -54,6 +64,7 @@ struct FFSDSWorldGrandstand
 	double FrontY = 0, BackY = 0, FrontZ = 0, BackZ = 0;
 	bool bHasRoof = false;
 	double RoofFrontY = 0, RoofBackY = 0, RoofFrontZ = 0, RoofBackZ = 0;
+	TArray<FFSDSWorldPanel> RoofPanels;   // solar panels on the roof
 };
 
 /** A tree measured from the LiDAR: trunk at (X, Y), H tall, crown radius R. */
@@ -87,6 +98,13 @@ struct FSDSPLUGIN_API FFSDSWorld
 	bool bHasDetail = false;
 	double DetailXMin = 0, DetailXMax = 0;
 
+	/** Asphalt wear (wear.u8): uint8 nodes, index = j * WearNx + i, value / 128
+	 *  multiplies the asphalt's colour. */
+	bool bHasWear = false;
+	double WearX0 = 0, WearY0 = 0, WearDx = 1, WearDy = 1;
+	int32 WearNx = 0, WearNy = 0;
+	TArray<uint8> Wear;
+
 	TArray<FFSDSWorldSurface> Surfaces;
 	TArray<FFSDSWorldLine> Lines;
 	TArray<FFSDSWorldWall> Walls;
@@ -99,12 +117,20 @@ struct FSDSPLUGIN_API FFSDSWorld
 	double HeightAt(double X, double Y) const;
 	double TerrainXMax() const { return TerrainX0 + (Nx - 1) * CellM; }
 	double TerrainYMax() const { return TerrainY0 + (Ny - 1) * CellM; }
+
+	/** The wear multiplier at (x, y): bilinear between nodes; 1 outside the map. */
+	double WearAt(double X, double Y) const;
+	/** Whether the box lies inside the wear map. */
+	bool WearCovers(double XMin, double XMax, double YMin, double YMax) const;
 };
 
 namespace FSDSWorld
 {
 	inline const TCHAR* FormatV1 = TEXT("ifssim-world/1");
 	inline const TCHAR* TerrainFile = TEXT("terrain.i16");
+	inline const TCHAR* WearFile = TEXT("wear.u8");
+	constexpr double MaxLineWidthM = 10.0;
+	constexpr int32 MaxRoofPanels = 500;
 	constexpr double MaxCoordM = 2000.0;
 	constexpr int32 MaxTerrainCells = 2000000;
 
@@ -126,6 +152,6 @@ namespace FSDSWorld
 	 *  values out of range are errors, as in tools/worldgen/world.py. */
 	FSDSPLUGIN_API bool Parse(const FString& Json, FFSDSWorld& Out, FString& OutError);
 
-	/** Read <Dir>/world.json and its terrain. */
+	/** Read <Dir>/world.json, its terrain and its wear map. */
 	FSDSPLUGIN_API bool Load(const FString& Dir, FFSDSWorld& Out, FString& OutError);
 }

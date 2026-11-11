@@ -1,10 +1,14 @@
 """Build the `montmelo_straight` world: the main straight of the Circuit de
 Barcelona-Catalunya, where Formula Student Spain runs its acceleration event.
 
-Sources (both open, both credited in world.json and ATTRIBUTION.md):
+Sources (all open, all credited in world.json and ATTRIBUTION.md):
 - ICGC Territorial LiDAR v3r1 (2021-2023), CC BY 4.0: the ground, and the
   heights of the grandstand roof and the pit building. Tiles 438601 and
   438602, about 553 MB, are not in the repo; pass --cache to where they are.
+- ICGC territorial orthophoto (current colour, 25 cm), CC BY 4.0: the track
+  width, the painted markings, the roof panels and the asphalt's brightness
+  across the track, measured once by hand into the constants below. The
+  photo itself is not in the repo, and the generator doesn't read it.
 - OpenStreetMap (ODbL): the straight's axis, the start line node, and where
   the pit lane, pit building and main grandstand start and end.
 
@@ -24,6 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from . import lidar_features as LF
+from . import wear as WEAR
 from . import world as W
 
 NAME = "montmelo_straight"
@@ -36,7 +41,9 @@ A = (438603.0, 4602608.0)
 B = (438036.0, 4601726.0)
 START_S = 365.3      # the painted start line, metres from A. LiDAR intensity
                      # shows it at 365.3; OSM's raceway=start node is at 365.2.
-FINISH_S = 222.5     # the painted finish line (LiDAR); OSM's node is at 238.
+# The painted finish line is at x = -127.0 (orthophoto); OSM's node is 11 m
+# further on, and nothing is painted where the LiDAR intensity seemed to put it.
+FINISH_X = -127.0
 
 # Terrain grid around the straight, world frame.
 X0, X1 = -425.0, 745.0
@@ -49,6 +56,133 @@ GROUND_CLASSES = (2, 8)    # ICGC: ground, and ground model key points
 
 def s_to_x(s: float) -> float:
     return s - START_S
+
+
+# --- measured from the orthophoto (world frame, m) ----------------------------
+# Track: asphalt from y -7.3 to 6.05, white edge lines at -7.0 and 5.69. The
+# 3-4 m beyond each edge line is dry grass, not asphalt.
+TRACK_Y = (-7.3, 6.05)
+EDGE_Y = (-7.0, 5.69)
+# Brightness of the asphalt across the track (photo values, sunlit, x 180-295):
+# the left half is darker where the rubber is.
+WEAR_PROFILE = (
+    (5.0, 178.0), (4.5, 184.8), (4.0, 179.1), (3.5, 173.2), (3.0, 169.2), (2.5, 168.4),
+    (2.0, 172.6), (1.5, 177.2), (1.0, 179.2), (0.5, 179.9), (0.0, 179.5), (-0.5, 179.9),
+    (-1.0, 180.7), (-1.5, 182.0), (-2.0, 183.1), (-2.5, 183.5), (-3.0, 183.4), (-3.5, 184.8),
+    (-4.0, 186.6), (-4.5, 188.2), (-5.0, 190.8), (-5.5, 193.3), (-6.0, 190.1),
+)
+# Along the track the photo shows only +-1 % (10 m windows); the noise stays below it.
+WEAR_NOISE = ((40.0, 4.0, 0.02), (9.0, 1.5, 0.015))
+# Other full-width lines (their purpose isn't signed): x, width.
+TRANSVERSE = ((-197.7, 0.3), (32.4, 0.3))
+# Grid slots: the front bar of each, right lane (y -5.0..-2.4); the left lane's
+# (y 1.1..3.7) are 7.38 m further on. Each slot is a white bracket opening
+# backwards, 3.3 m long, with a yellow mark from its inner side to the middle.
+GRID_RIGHT_X = (-208.06, -192.69, -177.31, -161.94, -146.5, -131.06, -115.75,
+                -100.25, -84.88, -69.44, -54.62, -39.88, -25.19, -10.44)
+GRID_STAGGER = 7.38
+GRID_BOX = {"right": (-5.0, -2.4), "left": (1.1, 3.7)}
+GRID_TICK = {"right": (-2.3, 0.05), "left": (1.0, -0.95)}
+GRID_ARM_M, GRID_LINE_M = 3.3, 0.15
+# The pit lane: a white line along the wall at -13.06, and a red band with
+# white borders between the fast lane and the working lane.
+PIT_EDGE_Y = -13.06
+RED_BAND = (-134.1, 176.7, -17.5, 1.1)          # x0, x1, y, width
+RED_BORDERS_Y = (-16.8, -18.2)
+# Green-painted areas on the verge between the track and the pit wall.
+VERGE_GREEN = ((-138.1, -132.2), (-10.4, -1.1))
+# The pit exit: the wall ends at 224; the exit lane runs between a green
+# wedge (track side) and a white line, and joins the track at 316.
+PIT_WALL_END_X = 224.0
+EXIT_JOIN_X = 316.0
+EXIT_WEDGE = ((226.0, -13.5), (292.0, -10.3), (EXIT_JOIN_X, -7.32))   # its lower edge
+EXIT_LINE = ((230.0, -20.6), (332.0, -13.0))
+EXIT_AREA = (172.7, 330.0, -23.0)                # x0, x1, y of its far edge
+# Pit building roof: blocks of panel rows (6 per block, 1.46 m deep), the
+# panels 3 m in from each block's ends. Rows mapped from the photo onto the
+# building (relief-displaced there).
+PIT_BLOCKS = ((-123.9, -83.6), (-83.1, -35.4), (-28.1, 12.7), (13.1, 60.8), (61.2, 108.8), (109.2, 157.1))
+PIT_ROWS_Y = (-27.74, -30.39, -33.13, -38.01, -40.75, -43.54)
+PIT_ROW_M = 1.46
+PIT_CANOPY_M = 2.0
+# Main grandstand roof: two bands of solar panels in ~20 m sections (y mapped
+# onto the roof, which runs 18.5..44).
+GS_PANEL_BANDS = {
+    (23.94, 30.73): ((-128.8, -113.6), (-112.9, -93.4), (-92.7, -73.3), (-72.6, -53.3), (-52.6, -33.3),
+                     (-32.7, -19.7), (-18.9, 0.3), (0.9, 20.6), (21.3, 40.7), (41.3, 60.6), (61.2, 80.7),
+                     (81.3, 94.3)),
+    (32.6, 37.0): ((-128.6, -113.6), (-112.8, -93.4), (-92.7, -73.3), (-72.6, -53.3), (-52.6, -33.2),
+                   (-28.2, -19.7), (-18.9, 0.4), (1.2, 20.6), (21.3, 40.7), (41.3, 60.7), (61.4, 80.8),
+                   (81.6, 94.3)),
+}
+
+
+def _line(x0, y0, x1, y1, w, colour, w1=None) -> Dict:
+    ln = {"x0": x0, "y0": y0, "x1": x1, "y1": y1, "width_m": w, "colour": colour}
+    if w1 is not None:
+        ln["end_width_m"] = w1
+    return ln
+
+
+def markings(track: Tuple[float, float], pits: Tuple[float, float]) -> List[Dict]:
+    """Every painted line and area, from the orthophoto."""
+    lines = []
+    y0, y1 = TRACK_Y
+    # Start, finish and the other full-width lines.
+    lines.append(_line(0.0, y0, 0.0, y1, 0.6, "white"))
+    lines.append(_line(FINISH_X, y0, FINISH_X, y1, 0.6, "white"))
+    for x, w in TRANSVERSE:
+        lines.append(_line(x, y0, x, y1, w, "white"))
+    # Edge lines; the right one stops where the pit exit joins.
+    lines.append(_line(track[0], EDGE_Y[1], track[1], EDGE_Y[1], 0.3, "white"))
+    lines.append(_line(track[0], EDGE_Y[0], PIT_WALL_END_X, EDGE_Y[0], 0.3, "white"))
+    lines.append(_line(EXIT_JOIN_X, EDGE_Y[0], track[1], EDGE_Y[0], 0.3, "white"))
+    # The grid.
+    g = GRID_LINE_M
+    for xr in GRID_RIGHT_X:
+        for lane, xf in (("right", xr), ("left", round(xr + GRID_STAGGER, 2))):
+            a, b = GRID_BOX[lane]
+            lines.append(_line(xf, a, xf, b, g, "white"))
+            for y in (a, b):
+                lines.append(_line(xf - g / 2, y, xf - GRID_ARM_M, y, g, "white"))
+            t0, t1 = GRID_TICK[lane]
+            lines.append(_line(xf, t0, xf, t1, 0.12, "yellow"))
+    # The pit lane.
+    lines.append(_line(pits[0], PIT_EDGE_Y, PIT_WALL_END_X, PIT_EDGE_Y, 0.25, "white"))
+    rx0, rx1, ry, rw = RED_BAND
+    lines.append(_line(rx0, ry, rx1, ry, rw, "red"))
+    for y in RED_BORDERS_Y:
+        lines.append(_line(rx0, y, rx1, y, 0.25, "white"))
+    # Green on the verge, from the asphalt's edge to the pit wall's face (-10.8).
+    for xa, xb in VERGE_GREEN:
+        lines.append(_line(xa, -9.05, xb, -9.05, 3.4, "green"))
+    # The pit exit: the green wedge, its lower edge in two straight pieces and
+    # its upper edge on the asphalt's edge, then the lane's white line.
+    (xa, ya), (xb, yb), (xc, yc) = EXIT_WEDGE
+    top = TRACK_Y[0] - 0.02
+    for (p, q, r, t) in ((xa, ya, xb, yb), (xb, yb, xc, yc)):
+        lines.append(_line(p, (q + top) / 2, r, (t + top) / 2, round(top - q, 2), "green",
+                           max(0.02, round(top - t, 2))))
+    (ea, eb), (ec, ed) = EXIT_LINE
+    lines.append(_line(ea, eb, ec, ed, 0.25, "white"))
+    return lines
+
+
+def pit_roof_panels(pit_x: Tuple[float, float]) -> List[Dict]:
+    out = []
+    for a, b in PIT_BLOCKS:
+        xa, xb = max(a + 3.0, pit_x[0] + 0.5), min(b - 3.0, pit_x[1] - 0.5)
+        if xb - xa < 5.0:
+            continue
+        for y in PIT_ROWS_Y:
+            out.append({"x_min": round(xa, 2), "x_max": round(xb, 2),
+                        "y_min": round(y - PIT_ROW_M / 2, 2), "y_max": round(y + PIT_ROW_M / 2, 2)})
+    return out
+
+
+def grandstand_panels(gs_x: Tuple[float, float]) -> List[Dict]:
+    return [{"x_min": max(a, gs_x[0]), "x_max": min(b, gs_x[1]), "y_min": lo, "y_max": hi}
+            for (lo, hi), runs in GS_PANEL_BANDS.items() for a, b in runs]
 
 
 def _axis() -> Tuple[Tuple[float, float], Tuple[float, float], float]:
@@ -146,6 +280,9 @@ def build(cache: Path, out_dir: Path) -> Dict:
     track = (sx(0.0), sx(1049.0))
     stand_side = (sx(150.0), sx(560.0))      # barrier and run-off in front of the stands
 
+    wear_entry, wear_bytes = WEAR.build(WEAR_PROFILE, track, (TRACK_Y[0] - 0.2, TRACK_Y[1] + 0.2),
+                                        1.0, 0.25, WEAR_NOISE, seed=8)
+
     # Everything else the LiDAR shows: the open grandstands further along the
     # straight, the other buildings and footbridges, and the trees.
     assert CELL == 1.0, "lidar_features works on a 1 m grid"
@@ -170,6 +307,8 @@ def build(cache: Path, out_dir: Path) -> Dict:
         "attribution": [
             "Terrain and structure heights: Institut Cartogràfic i Geològic de Catalunya (ICGC), "
             "Territorial LiDAR v3r1 2021-2023, CC BY 4.0",
+            "Markings, roof panels and asphalt wear: measured from the ICGC territorial orthophoto "
+            "(current colour, 25 cm), CC BY 4.0",
             "Layout: © OpenStreetMap contributors, ODbL 1.0",
         ],
         "frame": {"crs": "EPSG:25831",
@@ -180,24 +319,23 @@ def build(cache: Path, out_dir: Path) -> Dict:
         "terrain": {"file": W.TERRAIN_FILE, "x0": X0, "y0": Y0, "cell_m": CELL,
                     "nx": nx, "ny": ny, "z_unit_m": 0.01},
         "detail": {"x_min": DETAIL[0], "x_max": DETAIL[1]},
-        # Cross-section measured at the acceleration zone (LiDAR ground and
-        # intensity, docs/worlds.md): the track is 20 m of asphalt with a
-        # light painted band along each edge; the pit lane is 13 m wide.
+        # Rubber on the racing line: the asphalt's brightness across the track.
+        "wear": wear_entry,
+        # Cross-section (orthophoto, docs/worlds.md): 13.35 m of asphalt with
+        # dry grass beyond the edge lines; the pit lane is 13 m wide, and its
+        # exit runs on to where it joins the track.
         "surfaces": [
-            {"material": "asphalt", "x_min": track[0], "x_max": track[1], "y_min": -10.25, "y_max": 10.0},
-            {"material": "asphalt_light", "x_min": track[0], "x_max": track[1], "y_min": -10.0, "y_max": -7.5},
-            {"material": "asphalt_light", "x_min": track[0], "x_max": track[1], "y_min": 5.5, "y_max": 9.5},
+            {"material": "asphalt", "x_min": track[0], "x_max": track[1], "y_min": TRACK_Y[0], "y_max": TRACK_Y[1]},
             {"material": "asphalt", "x_min": pits[0], "x_max": pits[1], "y_min": -25.5, "y_max": -12.5},
+            {"material": "asphalt", "x_min": EXIT_AREA[0], "x_max": PIT_WALL_END_X, "y_min": -25.5, "y_max": -12.5},
+            {"material": "asphalt", "x_min": PIT_WALL_END_X, "x_max": EXIT_AREA[1], "y_min": EXIT_AREA[2],
+             "y_max": TRACK_Y[0]},
             {"material": "concrete", "x_min": stand_side[0], "x_max": stand_side[1], "y_min": 11.0, "y_max": 15.5},
         ],
-        "lines": [
-            {"x0": 0.0, "y0": -10.25, "x1": 0.0, "y1": 10.0, "width_m": 0.6, "colour": "white"},
-            {"x0": sx(FINISH_S), "y0": -10.25, "x1": sx(FINISH_S), "y1": 10.0, "width_m": 0.6, "colour": "white"},
-            {"x0": pits[0], "y0": -17.75, "x1": pits[1], "y1": -17.75, "width_m": 0.3, "colour": "white"},
-        ],
+        "lines": markings(track, pits),
         "walls": [
             # Pit wall: about 1.1 m of concrete, catch fence above (LiDAR tops ~2.1 m).
-            {"material": "concrete", "x0": pits[0], "y0": -11.2, "x1": pits[1], "y1": -11.2,
+            {"material": "concrete", "x0": pits[0], "y0": -11.2, "x1": PIT_WALL_END_X, "y1": -11.2,
              "height_m": 1.1, "thickness_m": 0.8, "fence_height_m": 2.1},
             # Barrier on the grandstand side, fence to ~1.8 m.
             {"material": "concrete", "x0": stand_side[0], "y0": 10.5, "x1": stand_side[1], "y1": 10.5,
@@ -208,7 +346,8 @@ def build(cache: Path, out_dir: Path) -> Dict:
         ],
         "buildings": [
             {"material": "concrete", "x_min": pit_x[0], "x_max": pit_x[1], "y_min": -46.0, "y_max": -26.0,
-             "top_z": round(pit_h, 2), "garages": True},
+             "top_z": round(pit_h, 2), "garages": True, "canopy_m": PIT_CANOPY_M,
+             "roof_panels": pit_roof_panels(pit_x)},
         ] + [dict(sorted(b.items())) for b in others],
         "grandstands": [
             # Roof measured; the seating under it is not visible from the air,
@@ -216,7 +355,8 @@ def build(cache: Path, out_dir: Path) -> Dict:
             {"x_min": gs_x[0], "x_max": gs_x[1], "front_y": 18.5, "back_y": 42.5,
              "front_z": 3.0, "back_z": 20.0,
              "roof_front_y": 18.5, "roof_back_y": 44.0,
-             "roof_front_z": round(roof_front, 2), "roof_back_z": round(roof_back, 2)},
+             "roof_front_z": round(roof_front, 2), "roof_back_z": round(roof_back, 2),
+             "roof_panels": grandstand_panels(gs_x)},
         ] + stands,           # the rest along the straight are uncovered
         # Generic models, not surveyed: the start gantry over the painted start
         # line, and two marshal posts on the grandstand-side run-off, clear of
@@ -239,6 +379,7 @@ def build(cache: Path, out_dir: Path) -> Dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "world.json").write_text(json.dumps(world, indent=2, ensure_ascii=False) + "\n")
     (out_dir / W.TERRAIN_FILE).write_bytes(units.tobytes(order="C"))
+    (out_dir / W.WEAR_FILE).write_bytes(wear_bytes)
     (out_dir / "ATTRIBUTION.md").write_text(ATTRIBUTION)
     return world
 
@@ -251,6 +392,10 @@ This world is generated by `tools/worldgen` (`python -m worldgen build montmelo_
   Territorial LiDAR v3r1, 2021-2023, tiles 438601 and 438602. Licensed under
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Derived: a 1 m ground grid
   and a few measured heights.
+- **Markings, roof panels and asphalt wear:** measured by hand from the ICGC territorial
+  orthophoto (current colour, 25 cm/pixel), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/):
+  the track's width, every painted line and area, the panel rows on the pit and grandstand
+  roofs, and the asphalt's brightness across the track (`wear.u8`). The photo is not included.
 - **Layout:** © OpenStreetMap contributors, [ODbL 1.0](https://opendatacommons.org/licenses/odbl/).
   Used: the straight's axis, the start line, and the extents of the pit lane, pit building
   and main grandstand.

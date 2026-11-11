@@ -9,11 +9,15 @@ exported, and writes /Game/Worlds:
     Textures/<Set>/T_<Set>_<Map>   the CC0 scans (cache: ~/Library/Caches/ifssim-geo/ambientcg)
     Materials/M_WorldPBR           one master: tiling in metres, macro variation, recolour
     Materials/M_WorldPBRMasked     the same, two-sided with an opacity mask (fences)
+    Materials/M_WorldPaint         road paint over the asphalt scan, worn through in places
     Materials/MI_<Name>            one instance per material in materials.json
     Meshes/SM_<Name>               the Blender assets, with generated LODs
 
 Environment: IFSSIM_TEXTURE_CACHE overrides the texture cache, IFSSIM_ASSET_DIR
-the folder of exported meshes (default Saved/AssetGen/fbx).
+the folder of exported meshes (default Saved/AssetGen/fbx). Textures already
+imported are kept (each import rewrites megabytes in LFS); IFSSIM_REIMPORT=1
+imports them again. IFSSIM_MESHES=GarageBay,SeatBlock imports only those meshes.
+Materials are always rebuilt.
 """
 
 import json
@@ -27,6 +31,8 @@ CACHE = os.environ.get("IFSSIM_TEXTURE_CACHE",
                        os.path.expanduser("~/Library/Caches/ifssim-geo/ambientcg"))
 PROJECT = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
 ASSET_DIR = os.environ.get("IFSSIM_ASSET_DIR", os.path.join(PROJECT, "Saved", "AssetGen", "fbx"))
+REIMPORT = os.environ.get("IFSSIM_REIMPORT") == "1"
+ONLY_MESHES = {m for m in os.environ.get("IFSSIM_MESHES", "").split(",") if m}
 GEN_DIR = os.path.join(PROJECT, "Saved", "AssetGen")
 
 ROOT = "/Game/Worlds"
@@ -42,6 +48,8 @@ def log(msg):
 # --- textures -----------------------------------------------------------------
 
 def import_file(path, dest, name):
+    if not REIMPORT and EAL.does_asset_exist(f"{dest}/{name}"):
+        return EAL.load_asset(f"{dest}/{name}")
     task = unreal.AssetImportTask()
     task.filename = path
     task.destination_path = dest
@@ -58,14 +66,17 @@ def import_file(path, dest, name):
 
 def configure_texture(tex, kind):
     if kind == "normal":
-        tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
-        tex.set_editor_property("srgb", False)
-        tex.set_editor_property("lod_group", unreal.TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP)
+        want = {"compression_settings": unreal.TextureCompressionSettings.TC_NORMALMAP, "srgb": False,
+                "lod_group": unreal.TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP}
     elif kind == "linear":
-        tex.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_DEFAULT)
-        tex.set_editor_property("srgb", False)
+        want = {"compression_settings": unreal.TextureCompressionSettings.TC_DEFAULT, "srgb": False}
     else:
-        tex.set_editor_property("srgb", True)
+        want = {"srgb": True}
+    # Only touch (and save) a texture whose settings differ: a kept texture stays byte-identical.
+    if all(tex.get_editor_property(k) == v for k, v in want.items()):
+        return
+    for k, v in want.items():
+        tex.set_editor_property(k, v)
     EAL.save_loaded_asset(tex)
 
 
@@ -126,9 +137,13 @@ def import_textures():
             path = os.path.join(CACHE, set_name, "maps", f"{set_name}_{s['res']}-JPG_{m}.jpg")
             if not os.path.exists(path):
                 raise RuntimeError(f"missing {path}: download the set first (docs/world_assets.md)")
+            dest, name = f"{ROOT}/Textures/{set_name}", f"T_{set_name}_{m}"
+            if not REIMPORT and EAL.does_asset_exist(f"{dest}/{name}"):
+                maps[m] = EAL.load_asset(f"{dest}/{name}")   # kept as imported, settings included
+                continue
             cap = int(cap) if cap else (MASK_CAP if KIND[m] == "linear" else 0)
             path = prepare(path, cap)
-            tex = import_file(path, f"{ROOT}/Textures/{set_name}", f"T_{set_name}_{m}")
+            tex = import_file(path, dest, name)
             configure_texture(tex, KIND[m])
             maps[m] = tex
         out[set_name] = maps
@@ -213,14 +228,31 @@ def build_master(name, flat, masked):
     link(tinted, "", mix, "A"); link(lumt, "", mix, "B"); link(recolor, "", mix, "Alpha")
     base = expr(mat, unreal.MaterialExpressionMultiply, 50, -300)
     link(mix, "", base, "A"); link(gain, "", base, "B")
-    MEL.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    # Wear (the track's rubber): the colour times twice the vertex red, which
+    # the world actor fills from the wear map; WearAmount 0 ignores it.
+    vc = expr(mat, unreal.MaterialExpressionVertexColor, -150, -800)
+    vc2 = expr(mat, unreal.MaterialExpressionMultiply, 0, -800, const_b=2.0)
+    link(vc, "R", vc2, "A")
+    wear_amt = expr(mat, unreal.MaterialExpressionScalarParameter, 0, -700, parameter_name="WearAmount", default_value=0.0)
+    wear = expr(mat, unreal.MaterialExpressionLinearInterpolate, 150, -800, const_a=1.0)
+    link(vc2, "", wear, "B"); link(wear_amt, "", wear, "Alpha")
+    worn = expr(mat, unreal.MaterialExpressionMultiply, 250, -300)
+    link(base, "", worn, "A"); link(wear, "", worn, "B")
+    MEL.connect_material_property(worn, "", unreal.MaterialProperty.MP_BASE_COLOR)
 
     MEL.connect_material_property(nrm, "RGB", unreal.MaterialProperty.MP_NORMAL)
 
     rs = expr(mat, unreal.MaterialExpressionScalarParameter, -800, 330, parameter_name="RoughnessScale", default_value=1.0)
     r = expr(mat, unreal.MaterialExpressionMultiply, -600, 250)
     link(rgh, "R", r, "A"); link(rs, "", r, "B")
-    MEL.connect_material_property(r, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    # Rubbered asphalt is a little smoother, the unused edges a little rougher.
+    gloss = expr(mat, unreal.MaterialExpressionScalarParameter, -450, 400, parameter_name="WearGloss", default_value=0.5)
+    rwear = expr(mat, unreal.MaterialExpressionLinearInterpolate, -300, 330, const_a=1.0)
+    link(wear, "", rwear, "B"); link(gloss, "", rwear, "Alpha")
+    r2 = expr(mat, unreal.MaterialExpressionMultiply, -150, 250)
+    link(r, "", r2, "A"); link(rwear, "", r2, "B")
+    MEL.connect_material_property(r2, "", unreal.MaterialProperty.MP_ROUGHNESS)
     MEL.connect_material_property(ao, "R", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
     ms = expr(mat, unreal.MaterialExpressionScalarParameter, -800, 830, parameter_name="MetallicScale", default_value=1.0)
     m = expr(mat, unreal.MaterialExpressionMultiply, -600, 750)
@@ -244,7 +276,7 @@ def build_master(name, flat, masked):
 
 
 def make_instance(name, parent, tex=None, tile_m=1.0, tint=(1, 1, 1), recolor=0.0, variation=0.0,
-                  roughness=1.0, metallic=1.0, emissive=0.0, extra_tex=None):
+                  roughness=1.0, metallic=1.0, emissive=0.0, extra_tex=None, wear=0.0):
     path = f"{ROOT}/Materials/MI_{name}"
     if EAL.does_asset_exist(path):
         EAL.delete_asset(path)
@@ -263,7 +295,120 @@ def make_instance(name, parent, tex=None, tile_m=1.0, tint=(1, 1, 1), recolor=0.
     MEL.set_material_instance_scalar_parameter_value(mi, "RoughnessScale", roughness)
     MEL.set_material_instance_scalar_parameter_value(mi, "MetallicScale", metallic)
     MEL.set_material_instance_scalar_parameter_value(mi, "Emissive", emissive)
+    MEL.set_material_instance_scalar_parameter_value(mi, "WearAmount", wear)
     MEL.set_material_instance_vector_parameter_value(mi, "Tint", unreal.LinearColor(*tint, 1.0))
+    MEL.update_material_instance(mi)
+    EAL.save_loaded_asset(mi)
+    return mi
+
+
+# The asphalt scan's luminance (UE desaturation weights, linear): mean and
+# spread, measured from Asphalt031's colour map. The paint mask is built in
+# units of that spread, so `coverage` means the same whatever the scan.
+GRAIN_MEAN, GRAIN_STD = 0.197, 0.077
+
+
+def build_paint_master(flat):
+    """Road paint: the asphalt scan under a layer of paint covering `Coverage`
+    of it. The stones' tops (bright grain) and larger worn patches (the same
+    scan at 1/16 the frequency) break through; the paint picks up the grain's
+    shading and half its relief."""
+    name = "M_WorldPaint"
+    path = f"{ROOT}/Materials/{name}"
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    mat = TOOLS.create_asset(name, f"{ROOT}/Materials", unreal.Material, unreal.MaterialFactoryNew())
+    S = unreal.MaterialSamplerType
+    tc = expr(mat, unreal.MaterialExpressionTextureCoordinate, -1600, 0)
+    tiling = expr(mat, unreal.MaterialExpressionScalarParameter, -1600, 120, parameter_name="Tiling", default_value=0.333)
+    uv = expr(mat, unreal.MaterialExpressionMultiply, -1400, 40)
+    link(tc, "", uv, "A"); link(tiling, "", uv, "B")
+    col = tex_param(mat, "BaseColorTex", flat["T_White"], S.SAMPLERTYPE_COLOR, -1200, -400)
+    nrm = tex_param(mat, "NormalTex", flat["T_FlatNormal"], S.SAMPLERTYPE_NORMAL, -1200, 0)
+    rgh = tex_param(mat, "RoughnessTex", flat["T_WhiteLinear"], S.SAMPLERTYPE_LINEAR_COLOR, -1200, 300)
+    for t in (col, nrm, rgh):
+        link(uv, "", t, "UVs")
+    puv = expr(mat, unreal.MaterialExpressionMultiply, -1200, -700, const_b=0.061)
+    link(uv, "", puv, "A")
+    patch = expr(mat, unreal.MaterialExpressionTextureSampleParameter2D, -1000, -700,
+                 parameter_name="BaseColorTex", texture=flat["T_White"], sampler_type=S.SAMPLERTYPE_COLOR)
+    link(puv, "", patch, "UVs")
+
+    def z_score(src, x, y, weight):
+        lum = expr(mat, unreal.MaterialExpressionDesaturation, x, y)
+        link(src, "RGB", lum, "")
+        c = expr(mat, unreal.MaterialExpressionSubtract, x + 150, y, const_b=GRAIN_MEAN)
+        link(lum, "", c, "A")
+        z = expr(mat, unreal.MaterialExpressionMultiply, x + 300, y, const_b=weight / GRAIN_STD)
+        link(c, "", z, "A")
+        return lum, z
+
+    grain, zg = z_score(col, -900, -400, 0.45)
+    _, zp = z_score(patch, -900, -700, 0.6)
+    cov = expr(mat, unreal.MaterialExpressionScalarParameter, -900, -900, parameter_name="Coverage", default_value=0.85)
+    bias = expr(mat, unreal.MaterialExpressionSubtract, -750, -900, const_b=0.5)
+    link(cov, "", bias, "A")
+    bias4 = expr(mat, unreal.MaterialExpressionMultiply, -600, -900, const_b=4.0)
+    link(bias, "", bias4, "A")
+    s1 = expr(mat, unreal.MaterialExpressionSubtract, -450, -800)
+    link(bias4, "", s1, "A"); link(zg, "", s1, "B")
+    s2 = expr(mat, unreal.MaterialExpressionSubtract, -300, -800)
+    link(s1, "", s2, "A"); link(zp, "", s2, "B")
+    s3 = expr(mat, unreal.MaterialExpressionMultiply, -150, -800, const_b=1.2)
+    link(s2, "", s3, "A")
+    s4 = expr(mat, unreal.MaterialExpressionAdd, 0, -800, const_b=0.5)
+    link(s3, "", s4, "A")
+    m = expr(mat, unreal.MaterialExpressionSaturate, 150, -800)
+    link(s4, "", m, "")
+
+    tint = expr(mat, unreal.MaterialExpressionVectorParameter, -600, -300, parameter_name="Tint",
+                default_value=unreal.LinearColor(1, 1, 1, 1))
+    road = expr(mat, unreal.MaterialExpressionMultiply, -400, -400)
+    link(col, "RGB", road, "A"); link(tint, "", road, "B")
+    paint = expr(mat, unreal.MaterialExpressionVectorParameter, -600, -150, parameter_name="PaintColor",
+                 default_value=unreal.LinearColor(0.78, 0.78, 0.76, 1))
+    shade = expr(mat, unreal.MaterialExpressionMultiply, -600, -50, const_b=0.75)
+    link(grain, "", shade, "A")
+    shade2 = expr(mat, unreal.MaterialExpressionAdd, -450, -50, const_b=0.85)
+    link(shade, "", shade2, "A")
+    painted = expr(mat, unreal.MaterialExpressionMultiply, -300, -150)
+    link(paint, "", painted, "A"); link(shade2, "", painted, "B")
+    base = expr(mat, unreal.MaterialExpressionLinearInterpolate, 300, -350)
+    link(road, "", base, "A"); link(painted, "", base, "B"); link(m, "", base, "Alpha")
+    MEL.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+
+    pr = expr(mat, unreal.MaterialExpressionScalarParameter, -600, 450, parameter_name="PaintRoughness", default_value=0.55)
+    rough = expr(mat, unreal.MaterialExpressionLinearInterpolate, 300, 300)
+    link(rgh, "R", rough, "A"); link(pr, "", rough, "B"); link(m, "", rough, "Alpha")
+    MEL.connect_material_property(rough, "", unreal.MaterialProperty.MP_ROUGHNESS)
+
+    up = expr(mat, unreal.MaterialExpressionConstant3Vector, -600, 100, constant=unreal.LinearColor(0, 0, 1, 1))
+    half = expr(mat, unreal.MaterialExpressionMultiply, 0, 150, const_b=0.6)
+    link(m, "", half, "A")
+    n = expr(mat, unreal.MaterialExpressionLinearInterpolate, 300, 50)
+    link(nrm, "RGB", n, "A"); link(up, "", n, "B"); link(half, "", n, "Alpha")
+    MEL.connect_material_property(n, "", unreal.MaterialProperty.MP_NORMAL)
+
+    MEL.recompile_material(mat)
+    EAL.save_loaded_asset(mat)
+    log(f"master {name}")
+    return mat
+
+
+def make_paint(name, parent, tex, spec):
+    path = f"{ROOT}/Materials/MI_{name}"
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    mi = TOOLS.create_asset(f"MI_{name}", f"{ROOT}/Materials", unreal.MaterialInstanceConstant,
+                            unreal.MaterialInstanceConstantFactoryNew())
+    MEL.set_material_instance_parent(mi, parent)
+    for m, slot in (("Color", "BaseColorTex"), ("NormalDX", "NormalTex"), ("Roughness", "RoughnessTex")):
+        MEL.set_material_instance_texture_parameter_value(mi, slot, tex[m])
+    MEL.set_material_instance_scalar_parameter_value(mi, "Tiling", 1.0 / spec["tile_m"])
+    MEL.set_material_instance_scalar_parameter_value(mi, "Coverage", spec["coverage"])
+    MEL.set_material_instance_scalar_parameter_value(mi, "PaintRoughness", spec["roughness"])
+    MEL.set_material_instance_vector_parameter_value(mi, "Tint", unreal.LinearColor(*spec["tint"], 1.0))
+    MEL.set_material_instance_vector_parameter_value(mi, "PaintColor", unreal.LinearColor(*spec["color"], 1.0))
     MEL.update_material_instance(mi)
     EAL.save_loaded_asset(mi)
     return mi
@@ -274,7 +419,11 @@ def build_materials(textures, flat):
     masked = build_master("M_WorldPBRMasked", flat, masked=True)
     for name, m in SPEC["materials"].items():
         make_instance(name, master, textures[m["set"]], m["tile_m"], m["tint"], m["recolor"], m["variation"],
-                      roughness=m.get("roughness", 1.0))
+                      roughness=m.get("roughness", 1.0), wear=m.get("wear", 0.0))
+    paint = build_paint_master(flat)
+    for name, m in SPEC.get("paint", {}).items():
+        if not name.startswith("_"):
+            make_paint(name, paint, textures[m["set"]], m)
     for name, m in SPEC["flat"].items():
         make_instance(name, master, None, 1.0, m["color"], 0.0, 0.0,
                       roughness=m["roughness"], metallic=m["metallic"], emissive=m.get("emissive", 0.0),
@@ -287,7 +436,8 @@ def build_materials(textures, flat):
         make_instance("ChainLink", masked, textures["CorrugatedSteel005"], 0.1, (1.1, 1.1, 1.1), 0.0, 0.0,
                       extra_tex={"OpacityTex": op})
     build_foliage(flat)
-    log(f"materials: {len(SPEC['materials']) + len(SPEC['flat'])} instances")
+    n_paint = sum(not k.startswith("_") for k in SPEC.get("paint", {}))
+    log(f"materials: {len(SPEC['materials']) + len(SPEC['flat']) + n_paint} instances")
 
 
 def build_foliage(flat):
@@ -378,6 +528,8 @@ def import_meshes():
         log("no meshes exported yet (run tools/assetgen/blender first)")
         return
     for a in json.load(open(manifest)):
+        if ONLY_MESHES and a["name"] not in ONLY_MESHES:
+            continue
         task = unreal.AssetImportTask()
         task.filename = os.path.join(ASSET_DIR, a["file"])
         task.destination_path = f"{ROOT}/Meshes"

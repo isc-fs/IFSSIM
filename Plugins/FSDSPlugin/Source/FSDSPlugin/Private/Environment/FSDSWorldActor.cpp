@@ -42,6 +42,12 @@ namespace
 	constexpr double AisleM = 1.4;
 	constexpr double SignM = 3.0, SignGapM = 0.05, SignMaxWallM = 1.5;
 	constexpr double GarageM = 6.0, GarageHeightM = 8.25;
+	constexpr int32 GarageOpenEvery = 3;  // every third garage stands open (an event day)
+	constexpr double CanopyThicknessM = 0.6;
+	constexpr double PanelThicknessM = 0.12, PanelLiftM = 0.02;
+	// Under a grandstand roof: a tapered rafter at each column, purlins across them.
+	constexpr double RafterWidthM = 0.35, RafterDepthBackM = 1.2, RafterDepthFrontM = 0.35;
+	constexpr double PurlinSpacingM = 3.0, PurlinWidthM = 0.15, PurlinDepthM = 0.25;
 	// The tree models' nominal size (tools/assetgen/blender: trees); each
 	// instance is scaled to its measured height and crown radius.
 	constexpr double TreeModelHeightM = 10.0, TreeModelRadiusM = 4.0;
@@ -75,6 +81,7 @@ namespace
 		TArray<int32> T;
 		TArray<FVector> N;
 		TArray<FVector2D> UV;
+		TArray<FLinearColor> Col;   // per vertex, or empty (the materials read it only for wear)
 
 		int32 Add(const FVector& P, const FVector& Nrm, const FVector2D& Uv)
 		{
@@ -221,9 +228,24 @@ namespace
 		}
 	};
 
-	/** A grid draped on the ground over Xs x Ys, Lift metres above it. */
+	/** Nodes plus every Start + k * Step strictly inside (Lo, Hi), sorted. */
+	TArray<double> WithSteps(TArray<double> Nodes, double Lo, double Hi, double Start, double Step)
+	{
+		for (double V = Start + FMath::CeilToDouble((Lo - Start) / Step) * Step; V < Hi - 1e-6; V += Step)
+		{
+			if (V > Lo + 1e-6) Nodes.Add(V);
+		}
+		Nodes.Sort();
+		TArray<double> Out;
+		for (double V : Nodes) if (Out.Num() == 0 || V - Out.Last() > 1e-4) Out.Add(V);
+		return Out;
+	}
+
+	/** A grid draped on the ground over Xs x Ys, Lift metres above it. With
+	 *  Wear, each vertex carries the wear map's multiplier / 2 in its red
+	 *  channel (the asphalt material doubles it back). */
 	void Drape(FBuf& Buf, const FGround& G, const FWorldFrame& F, const TArray<double>& Xs, const TArray<double>& Ys,
-		double Lift, double TileM)
+		double Lift, double TileM, const FFSDSWorld* Wear = nullptr)
 	{
 		const int32 Base = Buf.V.Num();
 		const double S = 1.0 / (TileM * 100.0);
@@ -233,6 +255,11 @@ namespace
 				const FVector P = F.Ue(X, Y, G.At(X, Y) + Lift);
 				const int32 I = G.Cell(G.Xs, X), J = G.Cell(G.Ys, Y);
 				Buf.Add(P, G.Normal(I, J), FVector2D(P.X, P.Y) * S);
+				if (Wear)
+				{
+					const float Half = float(FMath::Clamp(Wear->WearAt(X, Y) * 0.5, 0.0, 1.0));
+					Buf.Col.Add(FLinearColor(Half, Half, Half, 1.0f));
+				}
 			}
 		const int32 Nx = Xs.Num();
 		for (int32 J = 0; J + 1 < Ys.Num(); ++J)
@@ -361,19 +388,28 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	UMaterialInterface* Fence = Or(WorldMat(TEXT("ChainLink")), Or(LoadMat(TEXT("Chainlink")), Colour(FLinearColor(0.3f, 0.3f, 0.3f))));
 	UMaterialInterface* BuildingWhite = Or(WorldMat(TEXT("ConcreteCream")), Or(LoadMat(TEXT("Buildings_WHITE")), Colour(FLinearColor(0.7f, 0.7f, 0.68f))));
 	UMaterialInterface* Glass = Or(WorldMat(TEXT("Glass")), Or(LoadMat(TEXT("windows_Inst")), Colour(FLinearColor(0.1f, 0.12f, 0.15f))));
-	UMaterialInterface* White = Or(WorldMat(TEXT("Paint")), Colour(FLinearColor(0.8f, 0.8f, 0.8f)));
-	UMaterialInterface* Yellow = Colour(FLinearColor(0.8f, 0.6f, 0.05f));
+	// Rubber on the racing line: vertex colours from the wear map (docs/worlds.md).
+	UMaterialInterface* AsphaltTrack = Or(WorldMat(TEXT("AsphaltTrack")), Asphalt);
+	// Worn paint: the asphalt's grain shows through (M_WorldPaint).
+	UMaterialInterface* White = Or(WorldMat(TEXT("PaintWhite")), Or(WorldMat(TEXT("Paint")), Colour(FLinearColor(0.8f, 0.8f, 0.8f))));
+	UMaterialInterface* Yellow = Or(WorldMat(TEXT("PaintYellow")), Colour(FLinearColor(0.8f, 0.6f, 0.05f)));
+	UMaterialInterface* Red = Or(WorldMat(TEXT("PaintRed")), Colour(FLinearColor(0.5f, 0.03f, 0.02f)));
+	UMaterialInterface* Green = Or(WorldMat(TEXT("PaintGreen")), Colour(FLinearColor(0.05f, 0.2f, 0.06f)));
+	UMaterialInterface* SteelUnder = Or(WorldMat(TEXT("SteelGalv")), Roofing);
+	UMaterialInterface* SolarPanel = Or(WorldMat(TEXT("SolarPanel")), Colour(FLinearColor(0.03f, 0.035f, 0.045f)));
+	UMaterialInterface* PanelDark = Or(WorldMat(TEXT("PanelDark")), Colour(FLinearColor(0.14f, 0.11f, 0.09f)));
 
 	// Props in the world frame: yaw is anticlockwise from +x towards +y
 	// (UE's yaw turns the other way, since world +y is UE -Y).
 	auto Place = [&](double X, double Y, double Z, double YawDeg, const FVector& Scale = FVector::OneVector) {
 		return FTransform(FRotator(0.0, -YawDeg, 0.0), F.Ue(X, Y, Z), Scale);
 	};
-	TArray<FTransform> Posts, Signs, Seats, Rails, Columns, Garages;
+	TArray<FTransform> Posts, Signs, Seats, Rails, Columns, Garages, GaragesOpen;
 
 	auto Emit = [&](UProceduralMeshComponent* M, int32 Section, FBuf& B, UMaterialInterface* Mat, bool bCollision) {
 		if (B.T.Num() == 0) return;
-		M->CreateMeshSection_LinearColor(Section, B.V, B.T, B.N, B.UV, {}, {}, bCollision);
+		const TArray<FLinearColor> NoColours;
+		M->CreateMeshSection_LinearColor(Section, B.V, B.T, B.N, B.UV, B.Col.Num() == B.V.Num() ? B.Col : NoColours, {}, bCollision);
 		M->SetMaterial(Section, Mat);
 		NumTriangles += B.T.Num() / 3;
 	};
@@ -455,33 +491,43 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	for (const FFSDSWorldSurface& S : World.Surfaces)
 	{
 		const bool bBand = S.Material == TEXT("asphalt_light");
+		// Asphalt inside the wear map: rows at the map's spacing, so the
+		// rubber's profile across the track survives in the vertex colours.
+		const bool bWorn = S.Material == TEXT("asphalt") && World.WearCovers(S.XMin, S.XMax, S.YMin, S.YMax);
 		FBuf B;
-		Drape(B, G, F, FGround::Span(G.Xs, S.XMin, S.XMax), FGround::Span(G.Ys, S.YMin, S.YMax),
-			bBand ? BandLiftM : SurfaceLiftM, 1.0);
+		TArray<double> Xs = FGround::Span(G.Xs, S.XMin, S.XMax), Ys = FGround::Span(G.Ys, S.YMin, S.YMax);
+		if (bWorn)
+		{
+			Xs = WithSteps(Xs, S.XMin, S.XMax, World.WearX0, FMath::Max(World.WearDx, CoarseStepM));
+			Ys = WithSteps(Ys, S.YMin, S.YMax, World.WearY0, World.WearDy);
+		}
+		Drape(B, G, F, Xs, Ys, bBand ? BandLiftM : SurfaceLiftM, 1.0, bWorn ? &World : nullptr);
 		UMaterialInterface* Mat = bBand ? Band
-			: S.Material == TEXT("asphalt") ? Asphalt
+			: S.Material == TEXT("asphalt") ? (bWorn ? AsphaltTrack : Asphalt)
 			: S.Material == TEXT("concrete") ? ConcreteGround : Grass;
 		Emit(NewMesh(bBand ? TEXT("NoCollision") : FSDSCollision::TerrainProfile, false),
 			0, B, Mat, !bBand);
 	}
 
-	// --- lines: thin strips painted on the ground -----------------------------
+	// --- lines: strips painted on the ground, tapering if they say so ----------
 	{
-		FBuf WhiteBuf, YellowBuf;
+		FBuf WhiteBuf, YellowBuf, RedBuf, GreenBuf;
 		for (const FFSDSWorldLine& L : World.Lines)
 		{
 			const FVector2D P0(L.X0, L.Y0), P1(L.X1, L.Y1);
 			const double Len = (P1 - P0).Size();
 			const FVector2D Dir = (P1 - P0) / Len, Side(-Dir.Y, Dir.X);
 			const int32 Steps = FMath::Max(1, FMath::CeilToInt(Len));   // follow the ground every metre
-			FBuf& B = L.Colour == TEXT("yellow") ? YellowBuf : WhiteBuf;
+			FBuf& B = L.Colour == TEXT("yellow") ? YellowBuf : L.Colour == TEXT("red") ? RedBuf
+				: L.Colour == TEXT("green") ? GreenBuf : WhiteBuf;
 			const int32 Base = B.V.Num();
 			for (int32 K = 0; K <= Steps; ++K)
 			{
 				const FVector2D C = P0 + Dir * (Len * K / Steps);
+				const double Width = FMath::Lerp(L.WidthM, L.EndWidthM, double(K) / Steps);
 				for (const double Sgn : {-0.5, 0.5})
 				{
-					const FVector2D Q = C + Side * (L.WidthM * Sgn);
+					const FVector2D Q = C + Side * (Width * Sgn);
 					const FVector P = F.Ue(Q.X, Q.Y, G.At(Q.X, Q.Y) + LineLiftM);
 					B.Add(P, FVector::UpVector, FVector2D(P.X, P.Y) / 100.0);
 				}
@@ -496,6 +542,8 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		UProceduralMeshComponent* M = NewMesh(TEXT("NoCollision"), false);
 		Emit(M, 0, WhiteBuf, White, false);
 		Emit(M, 1, YellowBuf, Yellow, false);
+		Emit(M, 2, RedBuf, Red, false);
+		Emit(M, 3, GreenBuf, Green, false);
 	}
 
 	// --- walls, each following the ground, with its fence ---------------------
@@ -557,7 +605,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	}
 
 	// --- buildings: boxes from below the ground to their roof, or raised decks -
-	FBuf Blocks, GlassBlocks, Windows;
+	FBuf Blocks, GlassBlocks, Windows, PitPanels;
 	for (const FFSDSWorldBuilding& Bd : World.Buildings)
 	{
 		// Corners and edge midpoints, turned about the centre by the yaw.
@@ -626,9 +674,31 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 				const double H = Bd.TopZ - Z;
 				if (H < 4.0 || H > 20.0) continue;
 				// The module fronts +y; turned round for a building on the +y side.
-				Garages.Add(bNearIsMax ? Place(X0, FaceY, Z, 0.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM))
-				                       : Place(X0 + Wd, FaceY, Z, 180.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM)));
+				// Some stand open, the same ones every build.
+				(K % GarageOpenEvery == 1 ? GaragesOpen : Garages).Add(
+					bNearIsMax ? Place(X0, FaceY, Z, 0.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM))
+					           : Place(X0 + Wd, FaceY, Z, 180.0, FVector(Wd / GarageM, 1.0, H / GarageHeightM)));
 			}
+			// A canopy at roof level over the garage fronts (the roof's edge
+			// reaches out over the pit lane).
+			if (Bd.CanopyM > 0.0)
+			{
+				const double Out = bNearIsMax ? Bd.CanopyM : -Bd.CanopyM;
+				const double Y0 = FaceY - (bNearIsMax ? 0.05 : -0.05), Y1 = FaceY + Out;
+				const double Za = Bd.TopZ - CanopyThicknessM, Zb = Bd.TopZ;
+				const FVector Lo[4] = {F.Ue(Bd.XMin, Y0, Za), F.Ue(Bd.XMax, Y0, Za), F.Ue(Bd.XMax, Y1, Za), F.Ue(Bd.XMin, Y1, Za)};
+				const FVector Hi[4] = {F.Ue(Bd.XMin, Y0, Zb), F.Ue(Bd.XMax, Y0, Zb), F.Ue(Bd.XMax, Y1, Zb), F.Ue(Bd.XMin, Y1, Zb)};
+				Blocks.Box(Lo, Hi, /*bWithBottom=*/true);
+			}
+		}
+
+		// Panels lying on a flat roof.
+		for (const FFSDSWorldPanel& P : Bd.RoofPanels)
+		{
+			const double Za = Bd.TopZ + PanelLiftM, Zb = Za + PanelThicknessM;
+			const FVector Lo[4] = {F.Ue(P.XMin, P.YMin, Za), F.Ue(P.XMax, P.YMin, Za), F.Ue(P.XMax, P.YMax, Za), F.Ue(P.XMin, P.YMax, Za)};
+			const FVector Hi[4] = {F.Ue(P.XMin, P.YMin, Zb), F.Ue(P.XMax, P.YMin, Zb), F.Ue(P.XMax, P.YMax, Zb), F.Ue(P.XMin, P.YMax, Zb)};
+			PitPanels.Box(Lo, Hi);
 		}
 	}
 
@@ -637,6 +707,8 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		Emit(M, 0, Blocks, BuildingWhite, true);
 		Emit(M, 1, GlassBlocks, Glass, true);
 		Emit(M, 2, Windows, Glass, false);
+		// Roof panels: out of reach of every sensor, so no collision.
+		Emit(NewMesh(TEXT("NoCollision"), false), 0, PitPanels, PanelDark, false);
 	}
 
 	// --- grandstands: stepped rows, back wall, roof on rear columns -----------
@@ -653,7 +725,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		auto P = [&](double X, double D, double Z) { return F.Ue(X, Sgn * D, Z); };
 		const FVector Out = P(0, 1, 0) - P(0, 0, 0);   // away from the track
 
-		FBuf Rows, Roof;
+		FBuf Rows, Roof, Under, Steel, Panels;
 		const int32 N = FMath::Max(1, FMath::RoundToInt((DB - DF) / TierDepthM));
 		double Prev = Base;
 		for (int32 I = 0; I < N; ++I)
@@ -683,34 +755,83 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 		}
 		Rows.Quad(P(Gs.XMin, DB, Base), P(Gs.XMax, DB, Base), P(Gs.XMax, DB, Gs.BackZ), P(Gs.XMin, DB, Gs.BackZ), Out);
 
-		// Roof slab, its top on the measured edges.
+		// Roof slab, its top on the measured edges; the sheet under it is
+		// galvanised steel, carried by a tapered rafter at each column and
+		// purlins across the rafters.
 		const double RF = FMath::Abs(Gs.RoofFrontY), RB = FMath::Abs(Gs.RoofBackY);
+		auto RoofZ = [&](double D) { return FMath::Lerp(Gs.RoofFrontZ, Gs.RoofBackZ, RB != RF ? (D - RF) / (RB - RF) : 0.0); };
+		const double DC = FMath::Min(DB + ColumnSizeM, FMath::Max(RB - ColumnSizeM * 0.5, DB));
+		const int32 Cols = FMath::Max(1, FMath::RoundToInt((Gs.XMax - Gs.XMin) / ColumnSpacingM));
+		auto ColumnX = [&](int32 K) { return FMath::Lerp(Gs.XMin + ColumnSizeM, Gs.XMax - ColumnSizeM, double(K) / Cols); };
 		if (Gs.bHasRoof)
 		{
-			const FVector Bot[4] = {P(Gs.XMin, RF, Gs.RoofFrontZ - RoofThicknessM), P(Gs.XMax, RF, Gs.RoofFrontZ - RoofThicknessM),
-			                        P(Gs.XMax, RB, Gs.RoofBackZ - RoofThicknessM), P(Gs.XMin, RB, Gs.RoofBackZ - RoofThicknessM)};
+			const double T = RoofThicknessM;
+			const FVector Bot[4] = {P(Gs.XMin, RF, Gs.RoofFrontZ - T), P(Gs.XMax, RF, Gs.RoofFrontZ - T),
+			                        P(Gs.XMax, RB, Gs.RoofBackZ - T), P(Gs.XMin, RB, Gs.RoofBackZ - T)};
 			const FVector Top[4] = {P(Gs.XMin, RF, Gs.RoofFrontZ), P(Gs.XMax, RF, Gs.RoofFrontZ),
 			                        P(Gs.XMax, RB, Gs.RoofBackZ), P(Gs.XMin, RB, Gs.RoofBackZ)};
-			Roof.Box(Bot, Top, /*bWithBottom=*/true);
+			Roof.Box(Bot, Top);
+			Under.Quad(Bot[0], Bot[1], Bot[2], Bot[3], -FVector::UpVector, 1.0);
+
+			const double Lo = RF + 0.2, Hi = RB - 0.2;   // rafter ends, inside the slab's edges
+			for (int32 K = 0; K <= Cols; ++K)
+			{
+				const double X = ColumnX(K), Hw = RafterWidthM * 0.5;
+				auto Depth = [&](double D) {
+					return D >= DC ? RafterDepthBackM
+						: FMath::Lerp(RafterDepthFrontM, RafterDepthBackM, (D - Lo) / FMath::Max(DC - Lo, 0.1));
+				};
+				for (const TPair<double, double>& Seg : {TPair<double, double>(Lo, DC), TPair<double, double>(DC, Hi)})
+				{
+					if (Seg.Value - Seg.Key < 0.1) continue;
+					const double A = Seg.Key, B = Seg.Value, Za = RoofZ(A) - T, Zb = RoofZ(B) - T;
+					const FVector SLo[4] = {P(X - Hw, A, Za - Depth(A)), P(X + Hw, A, Za - Depth(A)), P(X + Hw, B, Zb - Depth(B)), P(X - Hw, B, Zb - Depth(B))};
+					const FVector SHi[4] = {P(X - Hw, A, Za), P(X + Hw, A, Za), P(X + Hw, B, Zb), P(X - Hw, B, Zb)};
+					Steel.Box(SLo, SHi, /*bWithBottom=*/true);
+				}
+			}
+			for (double D = Lo + 1.0; D < Hi - 0.5; D += PurlinSpacingM)
+			{
+				const double Za = RoofZ(D) - T, Zb = Za - PurlinDepthM, Hw = PurlinWidthM * 0.5;
+				const FVector PLo[4] = {P(Gs.XMin + 0.3, D - Hw, Zb), P(Gs.XMax - 0.3, D - Hw, Zb), P(Gs.XMax - 0.3, D + Hw, Zb), P(Gs.XMin + 0.3, D + Hw, Zb)};
+				const FVector PHi[4] = {P(Gs.XMin + 0.3, D - Hw, Za), P(Gs.XMax - 0.3, D - Hw, Za), P(Gs.XMax - 0.3, D + Hw, Za), P(Gs.XMin + 0.3, D + Hw, Za)};
+				Steel.Box(PLo, PHi, /*bWithBottom=*/true);
+			}
+			// Solar panels lying on the roof's slope.
+			for (const FFSDSWorldPanel& Pn : Gs.RoofPanels)
+			{
+				const double A = FMath::Min(FMath::Abs(Pn.YMin), FMath::Abs(Pn.YMax));
+				const double B = FMath::Max(FMath::Abs(Pn.YMin), FMath::Abs(Pn.YMax));
+				const double Za = RoofZ(A) + PanelLiftM, Zb = RoofZ(B) + PanelLiftM, Th = PanelThicknessM;
+				const FVector QLo[4] = {P(Pn.XMin, A, Za), P(Pn.XMax, A, Za), P(Pn.XMax, B, Zb), P(Pn.XMin, B, Zb)};
+				const FVector QHi[4] = {P(Pn.XMin, A, Za + Th), P(Pn.XMax, A, Za + Th), P(Pn.XMax, B, Zb + Th), P(Pn.XMin, B, Zb + Th)};
+				Panels.Box(QLo, QHi);
+			}
 		}
-		// Columns just behind the rows, up to the roof's underside.
-		const double DC = FMath::Min(DB + ColumnSizeM, FMath::Max(RB - ColumnSizeM * 0.5, DB));
-		const double ZRoof = FMath::Lerp(Gs.RoofFrontZ, Gs.RoofBackZ, RB > RF ? (DC - RF) / (RB - RF) : 1.0) - RoofThicknessM;
-		const int32 Cols = FMath::Max(1, FMath::RoundToInt((Gs.XMax - Gs.XMin) / ColumnSpacingM));
+		// Columns just behind the rows, up to the rafters.
+		const double ZRoof = RoofZ(DC) - RoofThicknessM - RafterDepthBackM;
 		for (int32 K = 0; Gs.bHasRoof && K <= Cols; ++K)
 		{
-			const double X = FMath::Lerp(Gs.XMin + ColumnSizeM, Gs.XMax - ColumnSizeM, double(K) / Cols);
-			Columns.Add(Place(X, Sgn * DC, Base, 0.0, FVector(1.0, 1.0, ZRoof - Base)));
+			Columns.Add(Place(ColumnX(K), Sgn * DC, Base, 0.0, FVector(1.0, 1.0, ZRoof - Base)));
 		}
 		UProceduralMeshComponent* M = NewMesh(FSDSCollision::PropProfile, true);
 		Emit(M, 0, Rows, ConcreteWall, true);
 		Emit(M, 1, Roof, Roofing, true);
+		Emit(M, 2, Under, SteelUnder, true);
+		Emit(M, 3, Steel, Roofing, true);
+		Emit(NewMesh(TEXT("NoCollision"), false), 0, Panels, SolarPanel, false);
 	}
 
 	// --- props: instanced, with LODs; no collision (see the header) ----------
 	AddInstances(WorldMesh(TEXT("FencePost")), Posts, 200.0, true);
 	AddInstances(WorldMesh(TEXT("SignBoard")), Signs, 250.0, false);
-	AddInstances(WorldMesh(TEXT("GarageBay")), Garages, 600.0, true);
+	{
+		// The open variant falls back to the closed one if it isn't imported.
+		UStaticMesh* Open = WorldMesh(TEXT("GarageBayOpen"));
+		if (!Open) { Garages.Append(GaragesOpen); GaragesOpen.Reset(); }
+		AddInstances(WorldMesh(TEXT("GarageBay")), Garages, 600.0, true);
+		AddInstances(Open, GaragesOpen, 600.0, true);
+	}
 	AddInstances(WorldMesh(TEXT("SeatBlock")), Seats, 350.0, false);   // under the roof's shadow
 	AddInstances(WorldMesh(TEXT("Handrail")), Rails, 150.0, false);
 	AddInstances(WorldMesh(TEXT("RoofColumn")), Columns, 500.0, true);

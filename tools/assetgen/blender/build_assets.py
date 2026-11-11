@@ -302,26 +302,41 @@ def sign_board():
     return p.finish(bevel=0.003)
 
 
-def garage_bay():
+def garage_bay(open_door=False):
     """One 6 m pit-garage front: roller door, frame, glazed upper floor.
 
     Origin: the bay's left end at the facade, ground level; it runs to
     x = 6 and its front faces +y (the pit lane). The building box behind it
     stays the world's; this is the face you see from the track.
+
+    open_door: the door rolled up into its box, showing a dark garage with a
+    ceiling light, a tool cabinet and a stack of tyres (GarageBayOpen). The
+    garage is only as deep as the frame: the building box sits right behind.
     """
-    p = Part("GarageBay")
+    p = Part("GarageBayOpen" if open_door else "GarageBay")
     w, door_w, door_h = 6.0, 5.0, 4.2
     # Pillars, lintel and floor slab edge.
     p.box((0.0, 0.0, 0.0), (0.5, 0.45, 8.25), "ConcreteCream")
     p.box((5.5, 0.0, 0.0), (6.0, 0.45, 8.25), "ConcreteCream")
     p.box((0.5, 0.0, door_h), (5.5, 0.45, 5.0), "ConcreteCream")
     p.box((0.0, 0.0, 7.4), (w, 0.5, 8.25), "ConcreteCream")
-    # Roller door, recessed, with its slat ribs and bottom rail.
-    p.box((0.5, 0.0, 0.0), (5.5, 0.15, door_h), "DoorPanel")
-    for k in range(1, 14):
-        z = k * door_h / 14
-        p.box((0.5, 0.15, z - 0.012), (5.5, 0.165, z + 0.012), "DoorPanel")
-    p.box((0.5, 0.15, 0.0), (5.5, 0.19, 0.08), "Rubber")
+    if open_door:
+        # The garage behind the opening: dark walls, a light along the ceiling,
+        # a cabinet on the left and tyres on the right.
+        p.box((0.5, 0.0, 0.0), (5.5, 0.02, door_h), "GarageInterior")
+        p.box((0.8, 0.02, door_h - 0.55), (5.2, 0.10, door_h - 0.47), "Lamp")
+        p.box((0.8, 0.02, 0.0), (2.1, 0.42, 1.05), "SteelGrey")
+        for k in range(4):
+            p.box((0.82, 0.42, 0.18 + 0.22 * k), (2.08, 0.43, 0.2 + 0.22 * k), "DoorPanel")   # drawers
+        for k in range(3):
+            p.tube((4.4, 0.33, 0.25 * k), (4.4, 0.33, 0.25 * k + 0.24), 0.31, "Rubber", segments=16)
+    else:
+        # Roller door, recessed, with its slat ribs and bottom rail.
+        p.box((0.5, 0.0, 0.0), (5.5, 0.15, door_h), "DoorPanel")
+        for k in range(1, 14):
+            z = k * door_h / 14
+            p.box((0.5, 0.15, z - 0.012), (5.5, 0.165, z + 0.012), "DoorPanel")
+        p.box((0.5, 0.15, 0.0), (5.5, 0.19, 0.08), "Rubber")
     p.box((0.5, 0.15, door_h - 0.25), (5.5, 0.30, door_h), "SteelGrey")  # door box
     # Upper floor glazing with mullions and a transom.
     p.box((0.5, 0.05, 5.0), (5.5, 0.10, 7.4), "Glass")
@@ -593,6 +608,7 @@ PROPS = [
     (fence_post, [[0.5, 0.05]], None),
     (sign_board, [[0.3, 0.1]], None),
     (garage_bay, [[0.4, 0.3], [0.1, 0.1]], None),
+    (lambda: garage_bay(open_door=True), [[0.4, 0.3], [0.1, 0.1]], None),
     (start_gantry, [[0.4, 0.3], [0.15, 0.1]], None),
     (handrail, [[0.4, 0.08]], None),
     (marshal_post, [[0.4, 0.15]], None),

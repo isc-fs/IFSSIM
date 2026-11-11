@@ -30,10 +30,11 @@ Load `montmelo_straight_acceleration` to drive the acceleration event on the rea
 | Part | Collision ([collision_matrix.md](collision_matrix.md)) | Notes |
 |---|---|---|
 | Terrain | `FSDSTerrain` (ground) | 1 m cells inside the detail zone within 60 m of the axis; 4 m spacing along x outside the detail zone and across y beyond 60 m. |
-| Asphalt, concrete, grass surfaces | `FSDSTerrain` (ground) | Draped 3 cm above the terrain, the largest step the matrix allows. |
-| Light painted bands, lines | none | Paint only. |
+| Asphalt, concrete, grass surfaces | `FSDSTerrain` (ground) | Draped 3 cm above the terrain, the largest step the matrix allows. Asphalt inside the wear map gets a vertex row every `dy_m` across the track, and the map's value in its vertex colour (see below). |
+| Light painted bands, lines | none | Paint only: worn road paint, white, yellow, red or green ([world_assets.md](world_assets.md)). A line can taper (`end_width_m`), so a painted wedge is one line. |
 | Walls, fence posts | `FSDSProp` | Follow the ground in 2 m steps. The fence mesh has no collision, so the LiDAR sees through it. |
-| Buildings, grandstands | `FSDSProp` | Buildings: one box each, turned by `yaw_deg`; plain concrete blocks get a band of windows per 3.5 m storey. A deck (`base_z`) is a slab in the air, for footbridges. Grandstand: stepped rows, back wall, roof slab if it has one. |
+| Buildings, grandstands | `FSDSProp` | Buildings: one box each, turned by `yaw_deg`; plain concrete blocks get a band of windows per 3.5 m storey. A deck (`base_z`) is a slab in the air, for footbridges. The pit building: garage fronts (every third one open), and a canopy (`canopy_m`) at roof level over them. Grandstand: stepped rows, back wall, roof slab if it has one; under the roof, galvanised sheet on a tapered rafter at each column and purlins every 3 m. |
+| Roof panels | none | Thin slabs on a building's flat roof or a grandstand's sloping one. Out of every sensor's reach. |
 | Trees | none | Instanced: two pine and two broadleaf models, scaled to each tree's height and crown, variant and turn picked from its position. Shadows on, culled past 1.5 km. |
 | Ground beyond the survey | none | A flat skirt from the terrain's edge out to 40 km, so the ground reaches the horizon instead of ending in sky. |
 | Props: seats, rails, roof columns, fence posts, boards, garage fronts, listed props | none | Instanced, with LODs ([world_assets.md](world_assets.md)). |
@@ -50,6 +51,7 @@ A world is a folder, `Content/tracks/worlds/<name>/`:
 |---|---|
 | `world.json` | What to build. |
 | `terrain.i16` | Ground heights: `nx × ny` little-endian int16, row-major, index `j * nx + i` (`i` along x). |
+| `wear.u8` | Optional asphalt wear: `nx × ny` uint8, same layout. 128 is the asphalt as scanned; the colour is multiplied by value / 128, so rubber is below 128. |
 | `ATTRIBUTION.md` | Data sources and licences. |
 
 The world frame is in metres: `+x` along the place's main axis, `+y` to its left, `+z` up, with the origin on the ground at a named reference point. For Montmeló, `+x` is the race direction and the origin is the painted start line. The frame maps into the track frame by translation only.
@@ -61,11 +63,13 @@ The world frame is in metres: `+x` along the place's main axis, `+y` to its left
 | `frame` | Provenance: `crs`, `origin_e`, `origin_n`, `origin_z` (the source CRS coordinates of the origin) and `x_bearing_deg`. |
 | `terrain` | `file` (`terrain.i16`), `x0`, `y0` (first sample), `cell_m`, `nx`, `ny`, `z_unit_m` (0.01: heights in cm). At most 2,000,000 cells. |
 | `detail` | Optional `x_min`, `x_max`: where the terrain is drawn at full resolution. |
+| `wear` | Optional: `file` (`wear.u8`), `x0`, `y0` (first node), `dx_m`, `dy_m` (node spacing, 0.05 to 10 m), `nx`, `ny`. At most 2,000,000 nodes. Applies to `asphalt` surfaces that lie wholly inside it; outside it the asphalt is as scanned. |
 | `surfaces` | Boxes of `asphalt`, `asphalt_light`, `concrete` or `grass`: `material`, `x_min`, `x_max`, `y_min`, `y_max`. |
-| `lines` | `x0`, `y0`, `x1`, `y1`, `width_m`, `colour` (`white` or `yellow`). |
+| `lines` | `x0`, `y0`, `x1`, `y1`, `width_m` (0.02 to 10 m), `colour` (`white`, `yellow`, `red` or `green`), optional `end_width_m`: the width at (`x1`, `y1`), tapering from `width_m`. |
 | `walls` | `material` (`concrete`), `x0`, `y0`, `x1`, `y1`, `height_m`, `thickness_m`, optional `fence_height_m` (above `height_m`). |
-| `buildings` | `material` (`concrete` or `glass`), a box, and `top_z`: the roof height in the world frame. Optional: `yaw_deg` (the box turned anticlockwise about its own centre), `base_z` (below `top_z`: the box floats, as a deck or footbridge) and `garages` (`true`: pit-garage fronts on its track-side face; only on unturned buildings). |
-| `grandstands` | `x_min`, `x_max`; seating rising from (`front_y`, `front_z`) to (`back_y`, `back_z`); optional roof from (`roof_front_y`, `roof_front_z`) to (`roof_back_y`, `roof_back_z`), all four or none. |
+| `buildings` | `material` (`concrete` or `glass`), a box, and `top_z`: the roof height in the world frame. Optional: `yaw_deg` (the box turned anticlockwise about its own centre), `base_z` (below `top_z`: the box floats, as a deck or footbridge), `garages` (`true`: pit-garage fronts on its track-side face; only on unturned buildings), `canopy_m` (0.5 to 10 m; needs `garages`: a canopy that deep over the garage fronts, at roof level) and `roof_panels` (on an unturned building without `base_z`, all on one side of the axis: see below). |
+| `grandstands` | `x_min`, `x_max`; seating rising from (`front_y`, `front_z`) to (`back_y`, `back_z`); optional roof from (`roof_front_y`, `roof_front_z`) to (`roof_back_y`, `roof_back_z`), all four or none; optional `roof_panels` on the roof. |
+| `roof_panels` | 1 to 500 boxes (`x_min`, `x_max`, `y_min`, `y_max`) inside the roof: within its x range and, in distance from the axis, between its front and back edges. A panel lies on the roof, following its slope. |
 | `trees` | Optional: `x`, `y`, `h` (height, 1 to 60 m), `r` (crown radius, 0.3 to 20 m), `kind` (`pine` or `broadleaf`). At most 20,000. |
 | `props` | `mesh` (`StartGantry`, `MarshalPost` or `SignBoard`), `x`, `y`, optional `yaw_deg` (anticlockwise from +x). Placed on the ground; see [world_assets.md](world_assets.md). |
 
@@ -76,13 +80,18 @@ Coordinates are within ±2000 m, and unknown keys are errors. `tools/worldgen/wo
 | Source | Licence | Used for |
 |---|---|---|
 | ICGC Territorial LiDAR v3r1 (2021-2023), tiles 438601 and 438602 | CC BY 4.0 | Terrain (ground classes 2 and 8, 1 m grid), roof and wall heights, painted lines (intensity), the other buildings, open grandstands and trees (classes 6 and 3 to 5) |
+| ICGC territorial orthophoto (current colour, 25 cm/pixel) | CC BY 4.0 | Track width, every painted line and area, the roof panels, and the asphalt's brightness across the track (the wear map). Measured by hand once; the generator holds the numbers, not the photo. |
 | OpenStreetMap | ODbL 1.0 | Straight axis, start line, extents of the pit lane, pit building and main grandstand |
 
 Measured along the straight (EPSG:25831, 1049 m, bearing 212.7°):
 
 - The painted start line is 365.3 m from the north-east end; OSM's start node agrees to 0.1 m.
 - The ground falls 2.8 m over the first 225 m, is flat to within 5 cm from 225 m to 525 m (the acceleration zone), then falls 7 m to turn 1.
-- The track is about 20 m of asphalt, with about 2% cross-fall towards the pits.
+- The track is 13.35 m of asphalt (y = −7.3 to 6.05 m), white edge lines at −7.0 and 5.69 m, with about 2% cross-fall towards the pits. The 3 to 4 m beyond each edge line is dry grass, not asphalt.
+- Painted across the track: the start line (x = 0), the finish line (x = −127.0), and two more full-width lines at −197.7 and 32.4 m. The grid's 28 slots (white brackets, each with a yellow mark to the middle) run back to x = −208 in two lanes, 7.38 m staggered.
+- Pit lane: a white line along the wall at y = −13.06, a red band with white borders at y = −17.5, and green on the verge at two places. The pit wall ends at x = 224 m; the exit lane runs between a green-painted wedge and a white line, and joins the track at x = 316 m.
+- Roofs: six rows of dark panels on each block of the pit roof; two bands of solar panels on the main grandstand roof, in 20 m sections from x = −129 to 94 m.
+- The asphalt is darker left of centre, where the rubber is: 0.86 of its mean brightness at y = 2.75, 1.16 at the unused right edge (linear light, from the photo's brightness to the power 2.2). Along the track the photo varies by under ±1 % per 10 m, and it shows no repair patches or seams, so the wear map adds only ±2 % of gentle noise.
 - Pit wall at y = −11.2 m (1.1 m high, fence to 2.1 m). Barrier on the grandstand side at y = +10.5 m (1.0 m, fence to 1.8 m).
 - The pit building roof is at 8.25 m. The main grandstand roof edge is at 28.5 m, falling to 25.6 m at the back.
 
@@ -94,7 +103,7 @@ Everything else around the straight comes from the LiDAR classes (`tools/worldge
 
 The pit building, the main grandstand and the open grandstands are modelled; LiDAR buildings and trees inside them are dropped. The current build has 44 buildings (7 of them decks), 5 grandstands and 775 trees.
 
-The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate. Signage is generic on purpose: no circuit or sponsor logos. The start gantry and the two marshal posts are generic models at assumed positions, not surveyed.
+The aerial photo shows roofs a few metres off their footprint (they stand 8 to 28 m up), so roof positions and heights come from the LiDAR, and only the patterns on them from the photo. The grandstand seating is under the roof and can't be seen from the air, so its rake is an estimate; so is the structure under the roof (rafters and purlins), and which garages stand open. Signage is generic on purpose: no circuit or sponsor logos. The start gantry and the two marshal posts are generic models at assumed positions, not surveyed.
 
 ## Regenerating
 
@@ -106,4 +115,4 @@ python3 -m worldgen build montmelo_straight --cache ~/Library/Caches/ifssim-geo/
 python3 -m worldgen check ../Content/tracks/worlds/montmelo_straight
 ```
 
-`--tracks` also writes `montmelo_straight_acceleration.csv` and its sidecar. The tests are `tools/tests/test_worldgen.py` and the `FSDS.World` automation tests.
+It writes `world.json`, `terrain.i16` and `wear.u8`. `--tracks` also writes `montmelo_straight_acceleration.csv` and its sidecar. The tests are `tools/tests/test_worldgen.py` and the `FSDS.World` automation tests.
