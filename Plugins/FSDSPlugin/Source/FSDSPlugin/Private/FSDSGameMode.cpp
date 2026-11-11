@@ -2,6 +2,7 @@
 #include "Rendering/FSDSQualityPreset.h"
 #include "FSDSRealTime.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSPipelineView.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "FSDSConeSpawner.h"
@@ -130,6 +131,8 @@ void AFSDSGameMode::StartPlay()
 
 	// How the view is drawn (Settings, Graphics): the saved choice.
 	FFSDSGraphics::Get().Init(GetWorld());
+	// What the pipeline sees, drawn over the track (the stack's viz_relay feeds it).
+	FFSDSPipelineView::Get().Init(GetWorld(), VehiclePawn);
 
 	// The HUD: the car's and the mission's state in a corner (H by default).
 	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);
@@ -144,6 +147,7 @@ void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Menu.Shutdown();
 	FFSDSRealTime::Get().Stop();
 	FFSDSGraphics::Get().Shutdown();
+	FFSDSPipelineView::Get().Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

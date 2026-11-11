@@ -33,6 +33,50 @@ shipping pipeline, documentation.
   `EbsGripMultiple × TireMu × Fz_static × r` ≈ 286 N·m/wheel, instead of the
   Chaos default 3000 N·m, with an optional `EbsFillTime` ramp (default 0).
 
+- **Clearer Track editor settings.** The random track's fields are named by
+  what they do to the loop, measured over many seeds: SIZE (M) (was max
+  size; the loop fills the square, so it sets the lap length, about 2.8 m
+  per metre; default now 140, ~390 m, inside FS's 200-500 m), BENDS (was
+  points; more is twistier) and COMPLEXITY (was regions; only matters below
+  ~30). The TRACK fields are WIDTH, CONE GAP and IN CORNERS, with a hint
+  line, and SEED moved to TEST SECTIONS, the only thing it affects.
+- **Bags in the menu, and replaying one in the sim.** A Bags page lists the
+  runs recorded with Record a bag (the repo's bags folder, as the backend
+  copies them out of the stack): event, track, date and size, with Delete
+  (and its _carparity copy), Open the folder and Replay in the sim. Replay
+  loads the bag's track and moves the car along the recorded ground truth
+  (physics off) while the pipeline view draws what the pipeline saw at each
+  moment; Esc stops it, and the menu comes back to Bags when it ends. The
+  bag plays inside the stack (`ros2 bag play /host_bags/<name>`): the stack
+  now mounts ./bags read-only at /host_bags (recording still writes to its
+  volume), and START's `docker compose up -d` recreates an older stack once
+  to get it. A second container on the host network can't be used: it
+  doesn't share the stack's /dev/shm, so Fast DDS discovers it but never
+  delivers. viz_relay forwards the bag's /testing_only/odom (renamed
+  /replay/odom so the live bridge's doesn't mix in) 30 times a second, and
+  now subscribes best-effort (it matches reliable and best-effort
+  publishers; /Conos_full stays reliable).
+
+- **Logs in the menu.** A Logs page shows what the stack prints, the
+  pipeline's nodes or Mission Control's backend (the last 1500 lines of
+  `docker compose logs`), newest at the bottom, with a filter, Problems only
+  (errors, warnings, tracebacks, EBS), Live (every 3 s while the page is up)
+  and Save to a file (Documents\IFSSIM\Logs). The text can be selected and
+  copied. No terminal needed to see why the pipeline stopped.
+
+- **The pipeline view: what the pipeline sees, drawn over the track.** During
+  an autonomous run the sim draws, on the real track, this scan's detected
+  cones (magenta), the SLAM cone map (white rings), where SLAM puts the car
+  (pink arrow), the planned path (green) and the planner's cone chains (blue,
+  yellow). The map frame is anchored on where the car really stood when SLAM
+  started, so drift shows as the map sliding off the real cones. On or off
+  from the box over the run (Esc), saved. A new node in the stack,
+  `viz_relay` (ros2/src/sim_supervisor), subscribes to `/Conos_raw`,
+  `/Conos_full`, `/slam/pose`, `/Path` and `/path_planning/debug` and sends
+  a summary ten times a second on a `streamViz` connection to the sim's RPC
+  port. Lines only: no collision and hidden from scene captures, so neither
+  the LiDAR nor the cameras see them. Replaces Lichtblick for watching a run.
+
 - **The sim shows how close to real time it runs.** Every frame is a fixed
   1/60 s of simulation, so a PC that can't draw 60 frames a second slows the
   simulation down, and the pipeline, which computes in real time, gets more
@@ -42,6 +86,26 @@ shipping pipeline, documentation.
   (`real_time_factor`, `real_fps`), and each mission benchmark run records
   `race/real_time_factor` with `race/real_time_ok` (0 below 0.95: its timing
   results don't hold).
+- **What only the Tab panel did is in the menu.** Track editor: OR START
+  FROM A RANDOM TRACK (points, regions, max size): the random generator's
+  loop lands on the canvas as an unsaved drawing, to edit, check and save
+  like any drawn track (new backend `POST /api/track/random_spec`, nothing
+  written). Drive: Delete this track
+  (a second click confirms; official event tracks and the stress library
+  say why they can't be deleted instead) under the track list, RECORDING (No bag / Record a
+  bag) and SCORING (the reference time T_best, saved per event and track)
+  for an autonomous run. Settings, HUD: Basic or Detailed, which adds the
+  motor's regen and the car's position and heading. The box over an
+  autonomous run: RES (stop the car / release) and Pause the sim. The end of
+  an autonomous run and the Results page: Mission Control's FS score (the
+  time with the cone and off-course penalties, and the points against a
+  reference time). Results: the session log, and Save it to a file
+  (Documents/IFSSIM/SessionLogs). When the car is stopped during an
+  autonomous run (RES, or the pipeline's own watchdog or a failure), the
+  menu ends the run with a RUN STOPPED box, instead of still saying the
+  pipeline drives. START waits up to 7 minutes for the previous session to
+  stop: the backend copies a recorded bag out first (four minutes for an
+  870 MB one here).
 - **Pipeline edits run on the next START; Rebuild pipeline in Settings.**
   START copies the pipeline's source from the team's code into the running
   container before every run (the folders `compose watch` syncs, as

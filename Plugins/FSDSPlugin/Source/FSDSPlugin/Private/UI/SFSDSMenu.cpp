@@ -1,12 +1,24 @@
 #include "UI/SFSDSMenu.h"
 
 #include "UI/SFSDSTrackMap.h"
+#include "UI/SFSDSLogsPage.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSHud.h"
+#include "UI/FSDSPipelineView.h"
 #include "UI/FSDSStackStarter.h"
+#include "UI/FSDSMissionControlClient.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -81,6 +93,10 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	Client = InArgs._Client;
 	EditorState = InArgs._EditorState;
 	if (InArgs._StartInEditor) Page = EPage::Editor;
+	if (InArgs._StartInBags) Page = EPage::Bags;
+	OnReplay = InArgs._OnReplay;
+	BagsNote = InArgs._BagsNote;
+	bBagsNoteError = InArgs._BagsNoteError;
 
 	// Start from the last run's choices, or the first track.
 	if (Last.IsSet())
@@ -89,6 +105,7 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 		bPractice = Last->bPractice;
 		Laps = Last->Event == EFSDSEventType::Trackdrive && !Last->bPractice ? Last->Laps : Laps;
 		bAutonomous = Last->bAutonomous;
+		bRecordBag = Last->bRecordBag;
 		Selected = Tracks.IndexOfByPredicate([this](const FFSDSMenuTrack& T) { return T.Name == Last->Track.Name; });
 		Location = Last->Track.Venue;
 	}
@@ -97,6 +114,24 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	[
 		Screen == EScreen::Main ? BuildMain() : BuildRunBox()
 	];
+
+	// The box over an autonomous run starts from what the backend says.
+	if (Screen == EScreen::Pause && Last.IsSet() && Last->bAutonomous && Client.IsValid())
+	{
+		TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+		Client->Get(TEXT("/api/res/status"), [Weak](const FFSDSMcReply& R)
+		{
+			TSharedPtr<SFSDSMenu> M = Weak.Pin();
+			const TSharedPtr<FJsonObject> O = R.Object();
+			if (M && O.IsValid()) O->TryGetBoolField(TEXT("res_active"), M->bResActive);
+		});
+		Client->Get(TEXT("/api/sim/status"), [Weak](const FFSDSMcReply& R)
+		{
+			TSharedPtr<SFSDSMenu> M = Weak.Pin();
+			const TSharedPtr<FJsonObject> O = R.Object();
+			if (M && O.IsValid()) O->TryGetBoolField(TEXT("paused"), M->bSimPaused);
+		});
+	}
 
 	if (Screen == EScreen::Main)
 	{
@@ -201,7 +236,7 @@ TSharedRef<SWidget> SFSDSMenu::SpeedChoice(const FText& Label, double Speed)
 		[Speed]() { FFSDSRealTime::Get().SetSpeedFactor(Speed); });
 }
 
-TSharedRef<SWidget> SFSDSMenu::MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick)
+TSharedRef<SWidget> SFSDSMenu::MakeChoice(TAttribute<FText> Label, TFunction<bool()> IsOn, TFunction<void()> OnPick)
 {
 	// Slate darkens a button's colour, so "on" is marked by the accent text
 	// on a lighter button, as the panel's tabs are.
@@ -290,6 +325,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavLogs", "Logs"), EPage::Logs) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavBags", "Bags"), EPage::Bags) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
 						+ SVerticalBox::Slot().AutoHeight()
@@ -331,6 +368,19 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 					]
 					+ SWidgetSwitcher::Slot() [ BuildResultsPage() ]
 					+ SWidgetSwitcher::Slot() [ BuildSettingsPage() ]
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SFSDSLogsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Logs; })
+					]
+					+ SWidgetSwitcher::Slot()
+					[
+						SAssignNew(BagsPage, SFSDSBagsPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Bags; })
+						.OnReplay(OnReplay)
+						.Note(BagsNote)
+						.NoteError(bBagsNoteError)
+					]
 				]
 			]
 		];
@@ -433,6 +483,49 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 				[
 					SAssignNew(DriveList, SScrollBox)
 				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					.Visibility_Lambda([this]() { return Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
+					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("NewTracksHint", "New tracks, drawn or random: Track editor."))
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Visibility_Lambda([this]()
+						{
+							return Tracks.IsValidIndex(Selected) && !WhyKept(Tracks[Selected].Name).IsEmpty()
+								? EVisibility::Visible : EVisibility::Collapsed;
+						})
+						.Text_Lambda([this]()
+						{
+							return Tracks.IsValidIndex(Selected) ? FText::FromString(WhyKept(Tracks[Selected].Name)) : FText::GetEmpty();
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
+					[
+						SNew(SBox)
+						.Visibility_Lambda([this]()
+						{
+							return Tracks.IsValidIndex(Selected) && WhyKept(Tracks[Selected].Name).IsEmpty()
+								? EVisibility::Visible : EVisibility::Collapsed;
+						})
+						[
+							MakeChoice(TAttribute<FText>::CreateLambda([this]()
+								{
+									const bool bArmed = FPlatformTime::Seconds() < DeleteArmedUntil
+										&& Tracks.IsValidIndex(Selected) && DeleteArmedFor == Tracks[Selected].Name;
+									return bArmed ? LOCTEXT("DeleteSure", "Click again to delete") : LOCTEXT("Delete", "Delete this track");
+								}),
+								[]() { return false; }, [this]() { DeleteTrack(); })
+						]
+					]
+				]
 				+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Driver", "DRIVER")) ]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
@@ -476,38 +569,6 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					})
 					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 				]
-				// How fast the simulation runs while the pipeline drives.
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SVerticalBox)
-					.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
-					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						// "Real time" needs more room than the slow motions.
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
-						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([]()
-						{
-							const double S = FFSDSRealTime::Get().SpeedFactor();
-							return S >= 1.0
-								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
-									"world, as on track. The HUD warns if this PC can't keep up.")
-								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
-									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
-									"unchanged; the view is choppier."),
-									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
-						})
-						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
-					]
-				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[
 					MakeBigButton(LOCTEXT("Start", "START"), MenuUi::GoBtn,
@@ -520,6 +581,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 							R.bPractice = bPractice;
 							R.Laps = Event == EFSDSEventType::Trackdrive && !bPractice ? Laps : 1;
 							R.bAutonomous = bAutonomous;
+							R.bRecordBag = bAutonomous && bRecordBag;
+							R.Reference = bAutonomous && !Reference().IsEmpty() ? FCString::Atod(*Reference()) : 0.0;
 							OnDrive.ExecuteIfBound(R);
 						}),
 						TAttribute<bool>::CreateLambda([this]() { return Tracks.IsValidIndex(Selected); }))
@@ -570,6 +633,124 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 				.Text_Lambda([this]() { return TrackSummary(Selected); })
 				.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
 			]
+			// How the pipeline's run goes: under the map, where there is room.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SHorizontalBox::Slot().FillWidth(1.6f).Padding(0, 0, 18, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						// "Real time" needs more room than the slow motions.
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([]()
+						{
+							const double S = FFSDSRealTime::Get().SpeedFactor();
+							return S >= 1.0
+								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
+									"world, as on track. The HUD warns if this PC can't keep up.")
+								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
+									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
+									"unchanged; the view is choppier."),
+									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 18, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Recording", "RECORDING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
+						[
+							MakeChoice(LOCTEXT("NoBag", "No bag"), [this]() { return !bRecordBag; }, [this]() { bRecordBag = false; })
+						]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f)
+						[
+							MakeChoice(LOCTEXT("Bag", "Record a bag"), [this]() { return bRecordBag; }, [this]() { bRecordBag = true; })
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("BagHint", "A rosbag of the run's topics, for replaying it, in the bags folder of the "
+							"team's code (tools/list-bags.sh). Heavy: it records every LiDAR scan (about 15 MB a second), "
+							"so a busy PC can slow the pipeline down, and saving it after the run can take a few minutes."))
+						.Visibility_Lambda([this]() { return bRecordBag ? EVisibility::Visible : EVisibility::Collapsed; })
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 0, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Scoring", "SCORING")) ]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3.f)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+						[
+							SNew(STextBlock).Text(LOCTEXT("RefLabel", "Reference time"))
+							.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(SBox).WidthOverride(110.f)
+							[
+								SNew(SEditableTextBox)
+								.Font(MenuUi::MenuFont(11))
+								.HintText(LOCTEXT("RefHint", "none"))
+								.Text_Lambda([this]() { return FText::FromString(Reference()); })
+								.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+								{
+									FString In = Text.ToString().TrimStartAndEnd().Replace(TEXT(","), TEXT("."));
+									In.RemoveFromEnd(TEXT("s"));
+									In.TrimEndInline();
+									if (In.IsEmpty() || (In.IsNumeric() && FCString::Atod(*In) > 0.0))
+									{
+										SetReference(In);
+										Message.Reset();
+									}
+									else
+									{
+										SetMessage(TEXT("The reference time is a number of seconds, like 62.5, or empty for none."), true);
+									}
+								})
+							]
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+						[
+							SNew(STextBlock).Text(LOCTEXT("RefUnit", "s")).Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Muted)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 4, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]()
+						{
+							return Reference().IsEmpty()
+								? LOCTEXT("RefNoneHint", "The fastest corrected time for this event on this track, the one FS "
+									"scores against. Without it the run gets its time and penalties but no points.")
+								: LOCTEXT("RefSetHint", "Points are scored against this time, as at FS. Saved for this event "
+									"and track.");
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
+				]
+			]
 		];
 }
 
@@ -596,6 +777,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 			Body += FString::Printf(TEXT("   best %s   total %s"), *MenuUi::Seconds(Best), *MenuUi::Seconds(Total));
 		}
 		Body += FString::Printf(TEXT("   cones down %d   off course %d"), R.ConesDown, R.OffCourse);
+		if (R.bScored && R.bFinished) Body += TEXT("\n") + ScoreText(R);
+		if (R.bBag) Body += TEXT("\nBag recorded (the bags folder of the team's code).");
 
 		List->AddSlot().AutoHeight().Padding(0, 0, 0, 10)
 		[
@@ -646,14 +829,38 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 		[
 			SNew(STextBlock)
 			.Text(LOCTEXT("ResultsHint",
-				"Manual runs since the sim started, newest first. Manual runs get no FS score yet; "
-				"autonomous sessions are scored in Mission Control."))
+				"Runs since the sim started, newest first. Autonomous runs show Mission Control's FS score: the time "
+				"with the cone and off-course penalties, and the points against a reference time when the event has one."))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
-		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Runs", "RUNS")) ]
 		+ SVerticalBox::Slot().FillHeight(1.f)
 		[
-			SNew(SScrollBox) + SScrollBox::Slot() [ List ]
+			SNew(SScrollBox)
+			+ SScrollBox::Slot() [ MakeHeading(LOCTEXT("Runs", "RUNS")) ]
+			+ SScrollBox::Slot() [ List ]
+			+ SScrollBox::Slot() [ MakeHeading(LOCTEXT("SessionLog", "SESSION LOG")) ]
+			+ SScrollBox::Slot()
+			[
+				SNew(SHorizontalBox)
+				.Visibility_Lambda([this]() { return Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+				[
+					MakeChoice(LOCTEXT("ShowLog", "Show the session log"), [this]() { return bLogLoading; }, [this]() { FetchLog(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+				[
+					MakeChoice(LOCTEXT("SaveLog", "Save it to a file"), []() { return false; }, [this]() { SaveLog(); })
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(9, 0, 0, 0)
+				[
+					SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(LogNote); })
+					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+				]
+			]
+			+ SScrollBox::Slot().Padding(0, 8, 0, 0)
+			[
+				SAssignNew(LogBox, SVerticalBox)
+			]
 		];
 }
 
@@ -729,6 +936,36 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				"goes at the sim's full rate: every frame is a fixed physics step, so fewer frames would "
 				"slow the simulation down and give the pipeline more time than on the car. The HUD's "
 				"\"Real time\" line shows how close a run is to real time."), FText::AsNumber(FFSDSMenu::MinimisedFrameRate)))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Hud", "HUD")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("HudDetail", "What it shows"))
+					.Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("HudBasic", "Basic"), []() { return !FFSDSHud::IsDetailed(); }, []() { FFSDSHud::SetDetailed(false); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("HudDetailed", "Detailed"), []() { return FFSDSHud::IsDetailed(); }, []() { FFSDSHud::SetDetailed(true); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("HudDetailHint",
+				"Basic: speed, pedals, steering, laps and penalties. Detailed adds the motor's regen (torque, "
+				"power and which cap binds) and the car's position and heading. {0} shows and hides the HUD."),
+				FText::FromString(FFSDSHud::ToggleKey().GetDisplayName().ToString())))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Graphics", "GRAPHICS")) ]
@@ -943,7 +1180,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(STextBlock)
-						.Text(!bPause ? LOCTEXT("RunDone", "RUN FINISHED")
+						.Text(!bPause && Last.IsSet() && Last->bAutonomous && Results.IsValid() && Results->Num() > 0 && !Results->Last().bFinished
+							? LOCTEXT("RunStopped", "RUN STOPPED")
+							: !bPause ? LOCTEXT("RunDone", "RUN FINISHED")
 							: Last.IsSet() && Last->bAutonomous ? LOCTEXT("AutoRunning", "THE PIPELINE IS DRIVING")
 							: LOCTEXT("Paused", "PAUSED"))
 						.Font(MenuUi::MenuFont(22, TEXT("Bold"))).ColorAndOpacity(MenuUi::Accent)
@@ -993,10 +1232,122 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 							return FString::FromInt(S.OffTrackCounter);
 						})
 					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 18, 0, 0)
-					[
-						Buttons
-					]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+						[
+							SNew(STextBlock)
+							.Visibility_Lambda([this, bPause]()
+							{
+								return !bPause && Last.IsSet() && Last->bAutonomous ? EVisibility::Visible : EVisibility::Collapsed;
+							})
+							.Text_Lambda([this]()
+							{
+								if (!Results.IsValid() || Results->Num() == 0) return FText::GetEmpty();
+								const FFSDSRunResult& R = Results->Last();
+								// A run stopped short has no FS time worth showing.
+								FString S = !R.bFinished
+									? FString(TEXT("The car was stopped before the finish (EBS). RES shows in the session log "
+										"(Results); otherwise the pipeline stopped it itself, its safety watchdog or a failure: "
+										"its own log says why (docker compose logs dv_pipeline_stack)."))
+									: R.bScored ? ScoreText(R) : FString(TEXT("Asking Mission Control for the score..."));
+								if (R.bBag) S += TEXT("\nBag recorded (the bags folder of the team's code).");
+								return FText::FromString(S);
+							})
+							.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+						]
+						// The box over an autonomous run: the emergency stop and the sim's pause.
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 14, 0, 0)
+						[
+							SNew(SVerticalBox)
+							.Visibility_Lambda([this, bPause]()
+							{
+								return bPause && Last.IsSet() && Last->bAutonomous && Client.IsValid() ? EVisibility::Visible : EVisibility::Collapsed;
+							})
+							+ SVerticalBox::Slot().AutoHeight()
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 3, 0)
+								[
+									MakeChoice(TAttribute<FText>::CreateLambda([this]()
+										{
+											return bResActive ? LOCTEXT("ResRelease", "Release RES") : LOCTEXT("ResStop", "RES: stop the car");
+										}),
+										[this]() { return bResActive; },
+										[this]()
+										{
+											const bool bRelease = bResActive;
+											TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+											Client->Post(bRelease ? TEXT("/api/res/release") : TEXT("/api/res/activate"), nullptr,
+												[Weak, bRelease](const FFSDSMcReply& R)
+											{
+												TSharedPtr<SFSDSMenu> M = Weak.Pin();
+												if (!M) return;
+												if (R.Ok()) M->bResActive = !bRelease;
+												M->RunNote = R.Ok() ? (bRelease ? TEXT("RES released.") : TEXT("RES active: the car is held."))
+													: FString::Printf(TEXT("RES failed: %s"), *R.Error);
+											}, 10.f);
+										})
+								]
+								+ SHorizontalBox::Slot().FillWidth(1.f)
+								[
+									MakeChoice(TAttribute<FText>::CreateLambda([this]()
+										{
+											return bSimPaused ? LOCTEXT("SimResume", "Resume the sim") : LOCTEXT("SimPause", "Pause the sim");
+										}),
+										[this]() { return bSimPaused; },
+										[this]()
+										{
+											const bool bResume = bSimPaused;
+											TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+											Client->Post(bResume ? TEXT("/api/sim/resume") : TEXT("/api/sim/pause"), nullptr,
+												[Weak, bResume](const FFSDSMcReply& R)
+											{
+												TSharedPtr<SFSDSMenu> M = Weak.Pin();
+												if (!M) return;
+												if (R.Ok()) M->bSimPaused = !bResume;
+												M->RunNote = R.Ok() ? (bResume ? TEXT("Resumed.") : TEXT("Paused: the sim and the pipeline's clock stand still."))
+													: FString::Printf(TEXT("Failed: %s"), *R.Error);
+											}, 10.f);
+										})
+								]
+							]
+							// What the pipeline sees, drawn over the track (FFSDSPipelineView).
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+							[
+								MakeChoice(TAttribute<FText>::CreateLambda([]()
+									{
+										return FFSDSPipelineView::Get().IsShown()
+											? LOCTEXT("PipeViewHide", "Pipeline view: on (click to hide)")
+											: LOCTEXT("PipeViewShow", "Pipeline view: off (click to show)");
+									}),
+									[]() { return FFSDSPipelineView::Get().IsShown(); },
+									[]() { FFSDSPipelineView::Get().SetShown(!FFSDSPipelineView::Get().IsShown()); })
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+							[
+								SNew(STextBlock)
+								.Text_Lambda([]()
+								{
+									if (!FFSDSPipelineView::Get().IsShown()) return FText::GetEmpty();
+									return FFSDSPipelineView::Get().IsReceiving()
+										? LOCTEXT("PipeViewLegend", "Over the track: magenta crosses are this scan's detected cones, white "
+											"rings the SLAM map, the pink arrow where SLAM puts the car, green the planned path, "
+											"blue and yellow the cone chains it follows. The map sliding off the real cones is SLAM drift.")
+										: LOCTEXT("PipeViewNone", "Nothing from the pipeline yet: its viz_relay sends the view once "
+											"the stack runs (Settings, Rebuild pipeline, if the stack predates it).");
+								})
+								.Visibility_Lambda([]() { return FFSDSPipelineView::Get().IsShown() ? EVisibility::Visible : EVisibility::Collapsed; })
+								.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+							]
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+							[
+								SNew(STextBlock).Text_Lambda([this]() { return FText::FromString(RunNote); })
+								.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+							]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 18, 0, 0)
+						[
+							Buttons
+						]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
 					[
 						SNew(STextBlock)
@@ -1169,10 +1520,199 @@ void SFSDSMenu::RebuildTrackList()
 	}
 }
 
+FString SFSDSMenu::ScoreText(const FFSDSRunResult& R)
+{
+	FString S = FString::Printf(TEXT("FS time %.2f s (cones +%.1f s, off course +%.1f s)"),
+		R.Corrected, R.DooPenalty, R.OcPenalty);
+	S += R.bHasReference
+		? FString::Printf(TEXT("   %.1f of %.0f points (reference %.2f s)"), R.Points, R.MaxPoints, R.Reference)
+		: FString(TEXT("   no points: set a reference time on the Drive page"));
+	return S;
+}
+
+namespace MenuScoring { static const TCHAR* Section = TEXT("FSDSScoring"); }
+
+FString SFSDSMenu::ReferenceKey() const
+{
+	if (!Tracks.IsValidIndex(Selected)) return FString();
+	// Per event and track: T_best is the fastest time on that course.
+	return FString::Printf(TEXT("Ref_%d_%s"), (int32)Event, *Tracks[Selected].Name);
+}
+
+const FString& SFSDSMenu::Reference() const
+{
+	const FString Key = ReferenceKey();
+	if (Key != ReferenceFor)
+	{
+		ReferenceFor = Key;
+		ReferenceText.Reset();
+		if (GConfig && !Key.IsEmpty())
+		{
+			GConfig->GetString(MenuScoring::Section, *Key, ReferenceText, GGameUserSettingsIni);
+		}
+	}
+	return ReferenceText;
+}
+
+void SFSDSMenu::SetReference(const FString& Seconds)
+{
+	const FString Key = ReferenceKey();
+	if (Key.IsEmpty() || !GConfig) return;
+	ReferenceFor = Key;
+	ReferenceText = Seconds;
+	if (Seconds.IsEmpty()) GConfig->RemoveKey(MenuScoring::Section, *Key, GGameUserSettingsIni);
+	else GConfig->SetString(MenuScoring::Section, *Key, *Seconds, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
+}
+
+FString SFSDSMenu::WhyKept(const FString& Name)
+{
+	// Same rule as protected_reason in tools/mission_control/backend/track_validators.py.
+	if (Name == TEXT("acceleration") || Name == TEXT("skidpad"))
+		return TEXT("Official event track: it can't be deleted.");
+	if (Name.StartsWith(TEXT("stress_")))
+		return TEXT("Test track kept in the repo: it can't be deleted.");
+	return FString();
+}
+
+void SFSDSMenu::DeleteTrack()
+{
+	if (bTrackBusy || !Client.IsValid() || !Tracks.IsValidIndex(Selected)) return;
+	const FString Name = Tracks[Selected].Name;
+	if (!WhyKept(Name).IsEmpty()) return;
+	// Two clicks: the first arms it for 4 s.
+	if (FPlatformTime::Seconds() >= DeleteArmedUntil || DeleteArmedFor != Name)
+	{
+		DeleteArmedFor = Name;
+		DeleteArmedUntil = FPlatformTime::Seconds() + 4.0;
+		return;
+	}
+	DeleteArmedUntil = 0.0;
+	bTrackBusy = true;
+	SetMessage(FString::Printf(TEXT("Deleting %s..."), *Name), false);
+	TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+	Client->Delete(FString::Printf(TEXT("/api/track/%s"), *FFSDSMissionControlClient::EncodeSegment(Name + TEXT(".csv"))),
+		[Weak, Name](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSMenu> M = Weak.Pin();
+		if (!M) return;
+		M->bTrackBusy = false;
+		if (!R.Ok())
+		{
+			// The backend says "Cannot delete: <why>"; drop its prefix so it doesn't repeat ours.
+			FString Why = R.Error;
+			Why.RemoveFromStart(TEXT("Cannot delete: "));
+			M->SetMessage(FString::Printf(TEXT("Couldn't delete %s: %s"), *Name, *Why), true);
+			return;
+		}
+		M->OnTracksChanged.ExecuteIfBound();
+		M->SetMessage(FString::Printf(TEXT("Deleted %s."), *Name), false);
+	});
+}
+
+void SFSDSMenu::FetchLog()
+{
+	if (bLogLoading || !Client.IsValid()) return;
+	bLogLoading = true;
+	LogNote = TEXT("Loading...");
+	TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+	Client->Get(TEXT("/api/session/log"), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSMenu> M = Weak.Pin();
+		if (!M) return;
+		M->bLogLoading = false;
+		const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+		if (!R.Ok() || !R.Body.IsValid() || !R.Body->TryGetArray(Items))
+		{
+			M->LogNote = FString::Printf(TEXT("Couldn't get the log: %s"), R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error);
+			return;
+		}
+		M->LogLines.Reset();
+		for (const TSharedPtr<FJsonValue>& Item : *Items)
+		{
+			const TSharedPtr<FJsonObject>* O = nullptr;
+			if (!Item.IsValid() || !Item->TryGetObject(O)) continue;
+			FLogLine L;
+			FString Stamp;
+			(*O)->TryGetStringField(TEXT("timestamp"), Stamp);
+			(*O)->TryGetStringField(TEXT("type"), L.Type);
+			(*O)->TryGetStringField(TEXT("message"), L.Text);
+			int32 T = INDEX_NONE;
+			L.Time = Stamp.FindChar(TEXT('T'), T) ? Stamp.Mid(T + 1, 8) : Stamp;   // as the web UI shows it
+			M->LogLines.Add(MoveTemp(L));
+		}
+		M->LogNote = FString::Printf(TEXT("%d events in this session."), M->LogLines.Num());
+		M->RebuildLogBox();
+	});
+}
+
+void SFSDSMenu::RebuildLogBox()
+{
+	if (!LogBox.IsValid()) return;
+	LogBox->ClearChildren();
+	// Newest first, as the runs.
+	for (int32 i = LogLines.Num() - 1; i >= 0; --i)
+	{
+		const FLogLine& L = LogLines[i];
+		LogBox->AddSlot().AutoHeight().Padding(0, 1)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(70.f)
+				[
+					SNew(STextBlock).Text(FText::FromString(L.Time)).Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(110.f)
+				[
+					SNew(STextBlock).Text(FText::FromString(L.Type)).Font(MenuUi::MenuFont(10, TEXT("Bold")))
+					.ColorAndOpacity(L.Type.Contains(TEXT("error")) ? MenuUi::Bad : MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(STextBlock).Text(FText::FromString(L.Text)).Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+			]
+		];
+	}
+}
+
+void SFSDSMenu::SaveLog()
+{
+	if (!Client.IsValid()) return;
+	LogNote = TEXT("Saving...");
+	TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+	Client->Get(TEXT("/api/session/export"), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSMenu> M = Weak.Pin();
+		if (!M) return;
+		const TArray<TSharedPtr<FJsonValue>>* Items = nullptr;
+		if (!R.Ok() || !R.Body.IsValid() || !R.Body->TryGetArray(Items))
+		{
+			M->LogNote = FString::Printf(TEXT("Couldn't save the log: %s"), R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error);
+			return;
+		}
+		// Where the panel saves it too: Documents/IFSSIM/SessionLogs.
+		FString Json;
+		const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Json);
+		FJsonSerializer::Serialize(*Items, Writer);
+		FString File = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPlatformProcess::UserDir(), TEXT("IFSSIM"), TEXT("SessionLogs"),
+			FString::Printf(TEXT("session_%s.json"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")))));
+		const bool bOk = FFileHelper::SaveStringToFile(Json, *File, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		FPaths::MakePlatformFilename(File);
+		M->LogNote = bOk ? FString::Printf(TEXT("Saved %d events to %s"), Items->Num(), *File)
+			: FString::Printf(TEXT("Couldn't write %s"), *File);
+	});
+}
+
 void SFSDSMenu::SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues)
 {
 	// Keep the selected track by name: indices shift when one is added.
-	const FString Keep = Tracks.IsValidIndex(Selected) ? Tracks[Selected].Name : FString();
+	FString Keep = Tracks.IsValidIndex(Selected) ? Tracks[Selected].Name : FString();
 	Tracks = InTracks;
 	Venues = InVenues;
 	if (!Location.IsEmpty() && !FindVenue(Location).IsValid()) Location.Reset();

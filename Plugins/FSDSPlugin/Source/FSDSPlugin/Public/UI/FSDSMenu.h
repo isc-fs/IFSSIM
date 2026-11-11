@@ -40,6 +40,10 @@ struct FFSDSDriveRequest
 	int32 Laps = 1;
 	bool bPractice = false;   // any track, no lap target, no results box
 	bool bAutonomous = false;
+	/** Autonomous: record a bag of the run (Mission Control's record_bag). */
+	bool bRecordBag = false;
+	/** Autonomous: the score's reference time T_best in seconds; 0 = none. */
+	double Reference = 0.0;
 };
 
 /** One run, manual or autonomous, for the Results page. */
@@ -55,6 +59,17 @@ struct FFSDSRunResult
 	bool bPractice = false;
 	bool bAutonomous = false;
 	FDateTime When;
+	/** Autonomous: a bag was recorded. */
+	bool bBag = false;
+	/** Autonomous: Mission Control's FS score (/api/scoring/summary), once it answers. */
+	bool bScored = false;
+	double Corrected = 0.0;
+	double DooPenalty = 0.0;
+	double OcPenalty = 0.0;
+	bool bHasReference = false;
+	double Reference = 0.0;
+	double Points = 0.0;
+	double MaxPoints = 0.0;
 };
 
 /**
@@ -162,6 +177,12 @@ private:
 	static FString MissionName(EFSDSEventType Event);
 	/** The track editor's Test drive: the saved track, in Practice. */
 	void TestDrive(const FString& TrackName);
+	/** The Bags page's Replay: the bag's track, the car following the
+	 *  recording, the pipeline view showing what the pipeline saw. */
+	void Replay(const FString& BagDir, const FString& TrackName);
+	void StopReplay(const FString& Why);
+	void TickReplay();
+	static FString ComposeDirForStop();
 	void StartStack();
 	void Resume();
 	void Restart();
@@ -208,6 +229,10 @@ private:
 	FString RepoTracksDir;
 	/** After a test drive, Main menu goes back to the editor. */
 	bool bReturnToEditor = false;
+	/** After a replay, the menu opens on Bags with this note. */
+	bool bReturnToBags = false;
+	FString BagsNote;
+	bool bBagsNoteError = false;
 
 	/** The last START, kept for Restart and to preselect the menu. */
 	TOptional<FFSDSDriveRequest> Current;
@@ -219,6 +244,8 @@ private:
 
 	/** While StartAutonomous runs its steps: the backend's own track load isn't an outside session. */
 	bool bStartingSession = false;
+	/** When the car's EBS latched during an autonomous run (0: it isn't). */
+	double EbsSince = 0.0;
 
 	/** BringUpStack's steps. */
 	enum class EStackUp : uint8 { Idle, NeedRepo, GitInstall, Clone, Compose, Docker, Backend, SyncConfig, Sync };
@@ -235,6 +262,12 @@ private:
 	FString CloneDir;
 	/** What SyncPipelineSource does once the code is in the container. */
 	TFunction<void()> AfterSync;
+
+	/** The bag replay: `ros2 bag play` in a container of its own (Replay). */
+	TSharedPtr<FFSDSStackStarter> Replayer;
+	TSharedPtr<FFSDSStackStarter> ReplayStopper;
+	FString ReplayBag;
+	double ReplaySince = 0.0;
 
 	TSharedPtr<FFSDSStackStarter> Rebuilder;
 	FString RebuildStatus;
