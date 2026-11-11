@@ -510,6 +510,7 @@ class Stack:
     started: bool = False
     tmp: Path | None = None
     log_file: Path | None = None
+    work_dir: Path | None = None  # where the pipeline copy goes (the results root; None: /tmp)
 
     def check(self) -> None:
         if self.mode not in ("own", "running"):
@@ -583,8 +584,14 @@ class Stack:
                 f"{var}={os.environ.get(var, '2')}",
             ]  # as docker-compose.yml (#247)
         if self.where == "bench_pc":
-            # a copy of this checkout's pipeline: the container builds into it, never into the checkout
-            self.tmp = Path(tempfile.mkdtemp(prefix="bench-dv-stack-"))
+            # a copy of this checkout's pipeline: the container builds into it, never into the checkout.
+            # It sits next to the results, not in /tmp: snap's Docker has a /tmp of its own and
+            # mounts a host /tmp folder as an empty one, so the stack built nothing (#837).
+            if self.work_dir is not None:
+                self.work_dir.mkdir(parents=True, exist_ok=True)
+            self.tmp = Path(
+                tempfile.mkdtemp(prefix="bench-dv-stack-", dir=self.work_dir)
+            )
             src = self.tmp / "pipeline"
             shutil.copytree(
                 self.checkout / "pipeline", src, ignore=shutil.ignore_patterns(".git")
@@ -1134,6 +1141,7 @@ def run(
         int(args.sim.rsplit(":", 1)[1]),
         pipeline_overrides,
         args.replace_stack,
+        work_dir=Path(args.results_root).resolve(),
     )
     stack.check()
     sim = sim or Sim(*(args.sim.rsplit(":", 1)[0], int(args.sim.rsplit(":", 1)[1])))
