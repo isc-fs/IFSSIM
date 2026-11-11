@@ -165,9 +165,8 @@ from its commit plus the diff.
 
 ## Mission benchmarks
 
-`run_mission_benchmark.py` runs acceleration, skidpad, autocross and trackdrive with the pipeline
-(and `acceleration_montmelo`: the acceleration cones on the real Montmeló straight, docs/worlds.md)
-driving, scored by the sim's referee: per mission, each track, each repeat (seed). It drives each run
+`run_mission_benchmark.py` runs acceleration (on the real Montmeló straight, docs/worlds.md),
+skidpad, autocross and trackdrive with the pipeline driving, scored by the sim's referee: per mission, each track, each repeat (seed). It drives each run
 the way the Mission Control panel does (load the track, `resetScenario <seed>`, start the event,
 follow the referee, stop), over Mission Control's HTTP API and the sim's RPC, so it needs no ROS.
 

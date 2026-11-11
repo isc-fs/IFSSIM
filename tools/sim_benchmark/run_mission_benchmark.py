@@ -84,7 +84,7 @@ import yaml
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 DEFAULTS_FILE = HERE / "missions.yaml"
-MISSIONS = ("acceleration", "acceleration_montmelo", "skidpad", "autocross", "trackdrive")
+MISSIONS = ("acceleration", "skidpad", "autocross", "trackdrive")
 POSE_KEYS = ("noise", "lateral_m", "longitudinal_m", "yaw_deg")
 MISSION_KEYS = ("mc_name", "tracks", "repeats", "start_pose", "laps", "timeout_s")
 DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
@@ -1151,7 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--missions",
         default="all",
-        help="comma separated: acceleration, acceleration_montmelo, skidpad, autocross, trackdrive; or all",
+        help="comma separated: acceleration, skidpad, autocross, trackdrive; or all",
     )
     ap.add_argument(
         "--tracks", help="these tracks instead of each mission's (comma separated CSVs)"
