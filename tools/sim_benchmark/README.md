@@ -8,8 +8,9 @@ outside `pipeline/` so it is not carried into the car submodule.
 - `capture_benchmark_bag.py` — records simulator-only topics plus a manifest.
 - `run_sim_bag_benchmark.py` — runs every ground-truth benchmark (perception and SLAM) on one simulator bag as one session; `--only` / `--skip` pick benchmarks. See [Simulator bag benchmarks in one command](#simulator-bag-benchmarks-in-one-command).
 - `run_provenance.py` — records which code produced each run (`provenance.json` + diffs). See [Which code produced a run](#which-code-produced-a-run).
-- `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-bench-run).
-- `specs/` — preset run specs for `bench-run`.
+- `pipeline_overrides.py` — applies pipeline parameter overrides (`--pipeline-overrides`) and records the values in effect. See [Running from a spec](#running-from-a-spec-run_specpy).
+- `run_spec.py` — runs a run spec (which benchmarks, settings, overrides) on this checkout; `launch/` holds the manifest reader, the spec format and the runner. See [Running from a spec](#running-from-a-spec-run_specpy).
+- `specs/` — preset run specs for `run_spec.py`.
 - `run_mission_benchmark.py` — the pipeline drives the missions in the simulator, scored by the referee; defaults in `missions.yaml`. See [Mission benchmarks](#mission-benchmarks).
 - `run_perception_benchmark.py` — offline perception replay + sim GT comparison (latched `/testing_only/track` layout + odom at LiDAR stamp, FOV-gated matching). Also scores the perception stressors from `docs/ENVIRONMENT_ROADMAP.md`: big-orange classification, an offline replay of the control node's stop latch, and per-scan structure; `--reference <run>` reports deltas against a baseline run. Clouds are decoded with `cone_detection_node`'s own reader, so real-car `/lidar_points` bags (`--lidar-topic /lidar_points`) decode as they do on the car.
 - `perception_metrics.py` / `perception_report.py` — matching, error stats, detailed HTML (BEV plots, histograms).
@@ -236,20 +237,21 @@ into the copy mounted into the stack, and recorded in each run's `manifest.json`
 **Which code ran:** each run records where the pipeline ran and how its commit is known: this
 checkout's (`--stack own`), the latte panda's (`--panda-sha`), or unsure (`--stack running`).
 
-## Running from a spec (`bench-run`)
+## Running from a spec (`run_spec.py`)
 
 A **run spec** is a YAML file that says which benchmarks to run, on which bags, with which
-settings and pipeline parameter overrides. `bench-run` (in [IFS-DV-BENCHWEB](https://github.com/isc-fs/IFS-DV-BENCHWEB), a checkout next to this one) runs one on this
-machine, one job at a time. What it can run is listed in `bench.yaml` at the repository root.
-Presets are in `specs/`.
+settings and pipeline parameter overrides. `run_spec.py` runs one on this checkout, one job
+at a time. It is the same command on a laptop, on the bench PC's runner and from Mission
+Control. What it can run is listed in `bench.yaml` at the repository root. Presets are in
+`specs/`.
 
 ```bash
-cd ../IFS-DV-BENCHWEB                                    # next to IFSSIM, or set IFSSIM_ROOT
-uv run bench-run --list                                   # benchmarks, settings, bags, presets
-uv run bench-run sim-bag --dry-run                        # the merged spec and the commands
-uv run bench-run sim-bag-quick --set benchmarks.sim_bag.bags=<bag>
-uv run bench-run sim-bag --set pipeline.cone_detection.residual_gate_mse=0.05 \
-                         --set pipeline.slam_node.motion_model=imu
+python3 tools/sim_benchmark/run_spec.py --list            # benchmarks, settings, bags, presets
+python3 tools/sim_benchmark/run_spec.py sim-bag --dry-run  # the merged spec and the commands
+python3 tools/sim_benchmark/run_spec.py sim-bag-quick --set benchmarks.sim_bag.bags=<bag>
+python3 tools/sim_benchmark/run_spec.py sim-bag --set pipeline.cone_detection.residual_gate_mse=0.05 \
+                                               --set pipeline.slam_node.motion_model=imu
+python3 tools/sim_benchmark/run_spec.py missions-basic     # every mission once (sim and Mission Control up)
 ```
 
 ```yaml
@@ -269,9 +271,12 @@ sweep:                        # one job per value
 The benchmarks take the overrides as `--pipeline-overrides <file.json>`
 (`pipeline_overrides.py`). A misspelled parameter stops the run before it starts. Each run
 folder gets `params/<component>.json` (every value in effect, and which were overridden), and
-`spec.json` when `bench-run` started it. Runs with the same code but other settings get another
+`spec.json` when `run_spec.py` started it. That records who and where: `trigger` (`local`,
+or what the launcher sets in `$BENCH_TRIGGER`), `requested_by` (`$BENCH_REQUESTED_BY`, the
+GitHub user who launched it, else `user@host`), `host`, and inside GitHub Actions a `github`
+block with the run, the runner and a link to the logs. Runs with the same code but other settings get another
 **spec id**, so the viewer doesn't show them as reruns. The format:
-`bench_tracking/launch/spec.py` in IFS-DV-BENCHWEB.
+`launch/spec.py`. It came from IFS-DV-BENCHWEB's launcher, whose queue and worker are frozen.
 
 ## Uploading to the team server
 
@@ -280,10 +285,9 @@ Benchmarks don't upload anything themselves. Upload finished runs by hand with
 have yet, once. The server and login come from `~/.config/ifssim-bench/tracking.env`.
 Setting up the server and a machine: IFS-DV-BENCHWEB's `DEPLOY.md`.
 
-Benchmarks are meant to run on the central machine, launched from the web page, on PRs
-and on commits (not built yet; design in
-`docs/history/2026-09-28_benchmark-launcher-design.md` in IFS-DV-BENCHWEB).
-Running them on your own machine is the fallback.
+Long benchmarks are meant to run on the bench PC's runner: a workflow there runs the same
+`run_spec.py` on a spec, launched from Mission Control or GitHub's Run workflow form (not
+built yet). Running them on your own machine works the same way.
 
 ### SLAM benchmark bag topics
 

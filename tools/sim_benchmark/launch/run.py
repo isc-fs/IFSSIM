@@ -1,0 +1,309 @@
+"""run_spec: run a spec's benchmarks on this machine, one job at a time.
+
+    python3 tools/sim_benchmark/run_spec.py sim-bag          # a preset from tools/sim_benchmark/specs
+    python3 tools/sim_benchmark/run_spec.py my.yaml --set pipeline.slam_node.motion_model=imu
+    python3 tools/sim_benchmark/run_spec.py sim-bag extra.yaml --dry-run   # merged spec + commands
+    python3 tools/sim_benchmark/run_spec.py --list           # benchmarks, settings, bags, presets
+
+The same command runs a spec on a laptop, on the bench PC's runner and from
+Mission Control. It runs the checkout it is started in, as it is: the
+benchmarks record the code themselves (provenance.json), dirty or not. A
+spec's ``code:`` is checked out by whoever launches it (the bench PC's
+workflow); here it is only reported. Nothing is uploaded.
+
+Each job gets ``<results>/.bench/<batch>/<n>/``: ``spec.json`` (the job and
+the spec it came from; the benchmark copies it into its run folder through
+``$BENCH_SPEC``) and ``overrides.json`` (the ``pipeline:`` section, handed to
+the benchmark's overrides flag).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+import yaml
+
+from . import manifest as mf
+from . import spec as sp
+
+ENV_SPEC = "BENCH_SPEC"
+ENV_TRIGGER = "BENCH_TRIGGER"
+ENV_REQUESTED_BY = "BENCH_REQUESTED_BY"
+WORK = ".bench"
+
+
+def build_spec(m: mf.Manifest, sources: list[str], sets: list[str]) -> dict[str, Any]:
+    docs = []
+    for src in sources:
+        path = Path(src)
+        if not path.is_file():
+            path = m.preset(src) or path
+        if not path.is_file():
+            known = ", ".join(m.preset_names()) or "none"
+            raise sp.SpecError(f"{src}: no such file or preset (presets: {known})")
+        docs.append(sp.load_file(path))
+    docs += [sp.assignment(s) for s in sets]
+    return sp.validate(sp.merge(*docs), m)
+
+
+def command(m: mf.Manifest, rec: dict[str, Any], workdir: Path) -> list[str]:
+    """The benchmark's command line for one job (``rec`` = ``Job.record``)."""
+    bench = m.benchmarks[rec["benchmark"]]
+    bag = rec.get("bag")
+    subst = {
+        "bag": str(m.bag_path(bench.bags, bag)) if bench.bags and bag else "",
+        "results": str(m.results),
+        "root": str(m.root),
+    }
+    cmd = [c.format(**subst) for c in bench.command]
+    for k, v in (rec.get("settings") or {}).items():
+        cmd += bench.settings[k].args(v)
+    if rec.get("only") and bench.parts_flag:
+        cmd += [bench.parts_flag, *rec["only"]]
+    if rec.get("pipeline"):
+        if not bench.overrides_flag:
+            raise sp.SpecError(f"{rec['benchmark']} takes no pipeline overrides")
+        cmd += [bench.overrides_flag, str(workdir / "overrides.json")]
+    return cmd
+
+
+def timeout_of(m: mf.Manifest, rec: dict[str, Any]) -> float:
+    per = ((rec.get("spec") or {}).get("benchmarks") or {}).get(rec["benchmark"]) or {}
+    return float(per.get("timeout_s") or m.benchmarks[rec["benchmark"]].timeout_s)
+
+
+def execute(
+    m: mf.Manifest,
+    rec: dict[str, Any],
+    workdir: Path,
+    *,
+    log: Path | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run one job in ``m.root``: write its spec.json (and overrides.json), start the
+    benchmark, and wait. Exit 124 = timed out, 130 = stopped (``should_stop``)."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "spec.json").write_text(json.dumps(rec, indent=2, default=str))
+    if rec.get("pipeline"):
+        (workdir / "overrides.json").write_text(json.dumps(rec["pipeline"], indent=2))
+    cmd = command(m, rec, workdir)
+    full_env = {**os.environ, **(env or {}), ENV_SPEC: str(workdir / "spec.json")}
+    out = log.open("a") if log else None
+    try:
+        if out:
+            out.write(f"$ {shlex.join(cmd)}\n")
+            out.flush()
+        proc = subprocess.Popen(
+            cmd,
+            cwd=m.root,
+            env=full_env,
+            start_new_session=True,
+            stdout=out,
+            stderr=subprocess.STDOUT if out else None,
+        )
+        return _wait(proc, timeout_of(m, rec), should_stop)
+    finally:
+        if out:
+            out.close()
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    os.killpg(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+
+
+def _wait(
+    proc: subprocess.Popen, timeout_s: float, should_stop: Callable[[], bool] | None
+) -> int:
+    deadline = time.monotonic() + timeout_s
+    try:
+        while True:
+            try:
+                return proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() > deadline:
+                print(
+                    f"!!! timed out after {timeout_s:.0f} s; stopping it",
+                    file=sys.stderr,
+                )
+                _stop(proc)
+                return 124
+            if should_stop is not None and should_stop():
+                _stop(proc)
+                return 130
+    except KeyboardInterrupt:
+        _stop(proc)
+        raise
+
+
+def _me() -> str:
+    import getpass
+    import socket
+
+    return f"{getpass.getuser()}@{socket.gethostname()}"
+
+
+def where_and_who() -> dict[str, Any]:
+    """Who asked for the run and where it runs, for each job's spec.json.
+
+    ``requested_by`` is the person: what the launcher sets in ``$BENCH_REQUESTED_BY``
+    (the GitHub user who started the workflow, or who is signed in to Mission Control),
+    else ``user@host`` here. ``host`` is always this machine. Inside GitHub Actions,
+    ``github`` says which run and runner, with a link to its logs."""
+    import socket
+
+    out: dict[str, Any] = {
+        "requested_by": os.environ.get(ENV_REQUESTED_BY) or _me(),
+        "host": socket.gethostname(),
+    }
+    env = os.environ
+    if env.get("GITHUB_ACTIONS") == "true":
+        server = env.get("GITHUB_SERVER_URL", "https://github.com")
+        repo, run_id = env.get("GITHUB_REPOSITORY"), env.get("GITHUB_RUN_ID")
+        out["github"] = {
+            "run_id": run_id,
+            "run_attempt": env.get("GITHUB_RUN_ATTEMPT"),
+            "workflow": env.get("GITHUB_WORKFLOW"),
+            "actor": env.get("GITHUB_ACTOR"),
+            "runner": env.get("RUNNER_NAME"),
+            "url": f"{server}/{repo}/actions/runs/{run_id}" if repo and run_id else None,
+        }
+    return out
+
+
+def print_list(m: mf.Manifest) -> None:
+    print(f"repository  {m.root}")
+    print(f"results     {m.results}")
+    for name, b in m.benchmarks.items():
+        print(f"\n{name}: {b.title}")
+        if b.description:
+            print(f"  {b.description}")
+        if b.parts:
+            print(f"  parts (only:) {', '.join(b.parts)}")
+        comps = sorted(b.components())
+        if comps:
+            print(f"  pipeline:     {', '.join(comps)}")
+        for s in b.settings.values():
+            extra = f" [{'|'.join(map(str, s.choices))}]" if s.choices else ""
+            print(f"  settings.{s.name:<18} {s.type}{extra}  {s.help}")
+        if b.bags:
+            bags = m.bags(b.bags)
+            print(f"  bags ({len(bags)} in {m.bag_dirs[b.bags]}):")
+            for x in bags:
+                print(f"    {x}")
+    print(f"\npresets: {', '.join(m.preset_names()) or 'none'}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="run_spec.py",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument(
+        "spec", nargs="*", help="spec files or preset names, merged in order"
+    )
+    ap.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="one value, e.g. benchmarks.sim_bag.repeats=3 (wins over the files)",
+    )
+    ap.add_argument(
+        "--repo", help="repository with bench.yaml (default: this checkout)"
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="print the jobs, run nothing"
+    )
+    ap.add_argument("--list", action="store_true", help="what the manifest offers")
+    ap.add_argument("--stop-on-error", action="store_true")
+    a = ap.parse_args(argv)
+    # Who started it, recorded in each run's spec.json: "local" by hand, or what the
+    # launcher sets (the bench PC's workflow: "runner"; Mission Control: "mission_control").
+    trigger = os.environ.get(ENV_TRIGGER, "local")
+
+    try:
+        m = mf.load(Path(a.repo) if a.repo else mf.find_root())
+    except mf.ManifestError as e:
+        print(e, file=sys.stderr)
+        return 2
+    if a.list:
+        print_list(m)
+        return 0
+    if not a.spec and not a.set:
+        ap.error("give a spec file or preset (--list shows them)")
+
+    try:
+        spec = build_spec(m, a.spec, a.set)
+        jobs = sp.expand(spec, m)
+    except sp.SpecError as e:
+        print(f"The spec has problems:\n{e}", file=sys.stderr)
+        return 2
+
+    batch = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
+    work = m.results / WORK / batch
+    print("--- spec (merged) ---")
+    print(yaml.safe_dump(spec, sort_keys=False).rstrip())
+    print(f"--- {len(jobs)} job(s) ---")
+    if spec.get("code"):
+        print(
+            f"note: code {spec['code']} is checked out by whoever launches the spec; "
+            f"this runs the checkout in {m.root} as it is"
+        )
+    records = []
+    origin = where_and_who()
+    for i, job in enumerate(jobs, 1):
+        rec = job.record(spec) | {
+            "job_id": f"{trigger}:{batch}/{i}",
+            "batch_id": batch,
+            "trigger": trigger,
+            **origin,
+        }
+        records.append(rec)
+        cmd = command(m, rec, work / str(i))
+        print(f"[{i}] {job.label()}  (spec {job.spec_id})\n    {shlex.join(cmd)}")
+    if a.dry_run:
+        return 0
+
+    results = []
+    for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
+        print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
+        t0 = time.time()
+        rc = execute(m, rec, work / str(i))
+        results.append((job, rc, time.time() - t0))
+        if rc != 0:
+            print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)
+            if a.stop_on_error:
+                break
+
+    print("\nDone:")
+    for job, rc, dt in results:
+        print(f"  {'ok    ' if rc == 0 else 'FAILED'} {dt:8.1f} s  {job.label()}")
+    for job in jobs[len(results) :]:
+        print(f"  not run            {job.label()}")
+    print(f"\nResults: {m.results}")
+    return (
+        0 if all(rc == 0 for _, rc, _ in results) and len(results) == len(jobs) else 1
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
