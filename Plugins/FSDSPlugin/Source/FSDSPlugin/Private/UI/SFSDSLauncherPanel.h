@@ -8,14 +8,18 @@
 class FFSDSMissionControlClient;
 class FFSDSStackStarter;
 class AFSDSReferee;
+class AFSDSVehiclePawn;
 class FJsonObject;
 class SVerticalBox;
+struct FSlateDynamicImageBrush;
 struct FFSDSMcReply;
 
 /**
  * The in-game Mission Control panel: load a track, start and stop a
  * session, reset the car, RES (the Session tab), and the session log with
- * its export (the Log tab). A client of the backend, like the web UI; the
+ * its export (the Log tab), the event score (the Scoring tab), and the
+ * tracks: preview, load, delete, generate (the Tracks tab), and the car's
+ * live state with the motor's regen (the Telemetry tab). A client of the backend, like the web UI; the
  * backend owns the session sequence.
  *
  * Built from code in Slate (no widget Blueprint to keep in sync with the C++).
@@ -30,6 +34,7 @@ public:
 		SLATE_ARGUMENT(TSharedPtr<FFSDSMissionControlClient>, Client)
 		SLATE_ARGUMENT(TSharedPtr<FFSDSStackStarter>, Stack)
 		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSReferee>, Referee)
+		SLATE_ARGUMENT(TWeakObjectPtr<AFSDSVehiclePawn>, Pawn)
 		SLATE_ARGUMENT(FString, ComposeDir)
 		SLATE_ARGUMENT(FKey, ToggleKey)
 		SLATE_EVENT(FSimpleDelegate, OnClose)
@@ -60,7 +65,38 @@ private:
 	};
 
 	/** The tabs, in the order of the tab bar. */
-	enum class ETab : int32 { Session = 0, Log = 1 };
+	enum class ETab : int32 { Session = 0, Log = 1, Scoring = 2, Tracks = 3, Telemetry = 4 };
+
+	/** One /api/track/list entry. */
+	struct FTrackInfo
+	{
+		FString Name;
+		int32 Cones = 0;
+		int32 Blue = 0;
+		int32 Yellow = 0;
+		int32 Orange = 0;
+		bool bBuiltin = false;
+		FString EventType;
+	};
+
+	/** One /api/scoring/summary reply. */
+	struct FScoring
+	{
+		FString Event;
+		int32 Laps = 0;
+		TArray<double> LapTimes;
+		double BestLap = 0.0;
+		double Total = 0.0;
+		int32 Doo = 0;
+		double DooPenalty = 0.0;
+		int32 Oc = 0;
+		double OcPenalty = 0.0;
+		double Corrected = 0.0;
+		bool bHasReference = false;
+		double Reference = 0.0;
+		double MaxPoints = 0.0;
+		double Score = 0.0;
+	};
 	using FTrackPtr = TSharedPtr<FString>;
 
 	// --- backend -------------------------------------------------------
@@ -77,6 +113,13 @@ private:
 	/** The session log, while the Log tab is open. */
 	void FetchLog();
 	void RebuildLogList();
+	/** The score, while the Scoring tab is open. */
+	void FetchScoring();
+	void RebuildLapList();
+	/** Select a track in the Tracks tab and fetch its preview. */
+	void SelectTrackInfo(const FString& Name);
+	void FetchPreview(const FString& Name);
+	void RebuildTrackInfoList();
 
 	// --- actions -------------------------------------------------------
 	FReply OnLoadTrack();
@@ -86,6 +129,9 @@ private:
 	FReply OnPause();
 	FReply OnRes();
 	FReply OnExportLog();
+	FReply OnTracksLoad();
+	FReply OnTracksDelete();
+	FReply OnGenerate();
 
 	// --- layout --------------------------------------------------------
 	TSharedRef<SWidget> MakeStatusRow(const FText& Label, TAttribute<FText> Value, TAttribute<FSlateColor> Color);
@@ -100,6 +146,9 @@ private:
 	TSharedRef<SWidget> MakeTab(const FText& Label, ETab Tab);
 	TSharedRef<SWidget> BuildSessionTab();
 	TSharedRef<SWidget> BuildLogTab();
+	TSharedRef<SWidget> BuildScoringTab();
+	TSharedRef<SWidget> BuildTracksTab();
+	TSharedRef<SWidget> BuildTelemetryTab();
 
 	bool CanAct() const;
 	FText BackendText() const;
@@ -118,6 +167,7 @@ private:
 	TSharedPtr<FFSDSMissionControlClient> Client;
 	TSharedPtr<FFSDSStackStarter> Stack;
 	TWeakObjectPtr<AFSDSReferee> Referee;
+	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;
 	FString ComposeDir;
 	FKey ToggleKey;
 	FSimpleDelegate OnClose;
@@ -155,6 +205,25 @@ private:
 	FString LogError;
 	bool bLogInFlight = false;
 	TSharedPtr<SVerticalBox> LogList;
+
+	TOptional<FScoring> Scoring;
+	FString ScoringError;
+	bool bScoringInFlight = false;
+	/** The reference time typed in, in seconds; empty for the best lap. */
+	FString ReferenceInput;
+	TSharedPtr<SVerticalBox> LapList;
+
+	TArray<FTrackInfo> TrackInfos;
+	FString SelectedInfo;
+	TSharedPtr<SVerticalBox> TrackInfoList;
+	TSharedPtr<FSlateDynamicImageBrush> PreviewBrush;
+	FString PreviewFor;
+	FString PreviewState;
+	int32 PreviewSerial = 0;
+	int32 GenPoints = 50;
+	int32 GenRegions = 30;
+	int32 GenMaxBound = 150;
+	FString GenName;
 
 	/** Non-empty while an action is in flight: what it is doing. */
 	FString Busy;

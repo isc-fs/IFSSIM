@@ -31,6 +31,10 @@ and what still has to be true before the FMU takes over.
 
 ## I just want to run it
 
+→ **[`docs/TEAM_SETUP.md`](docs/TEAM_SETUP.md)**: got the build zip (Windows)?
+Install Docker Desktop, run the sim, pick Autonomous and press START: it
+gets the team's code, builds and starts the stack for you.
+
 → **[`docs/SETUP.md`](docs/SETUP.md)** — 20–45 min, end-to-end first
 time setup. Windows and macOS in parallel. Covers prereqs, clone,
 sim build (or pre-built download), Docker stack, first session in

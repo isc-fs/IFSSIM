@@ -1,6 +1,9 @@
 #include "UI/SFSDSLauncherPanel.h"
 
 #include "FSDSReferee.h"
+#include "EmraxMotor.h"
+#include "FSDSCoordinates.h"
+#include "FSDSVehiclePawn.h"
 #include "UI/FSDSMissionControlClient.h"
 #include "UI/FSDSStackStarter.h"
 
@@ -16,6 +19,16 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/SOverlay.h"
+#include "Brushes/SlateDynamicImageBrush.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
+#include "Misc/Base64.h"
+#include "Modules/ModuleManager.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -59,6 +72,7 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 	Client = InArgs._Client;
 	Stack = InArgs._Stack;
 	Referee = InArgs._Referee;
+	Pawn = InArgs._Pawn;
 	ComposeDir = InArgs._ComposeDir;
 	ToggleKey = InArgs._ToggleKey;
 	OnClose = InArgs._OnClose;
@@ -104,6 +118,9 @@ void SFSDSLauncherPanel::Construct(const FArguments& InArgs)
 					.WidgetIndex_Lambda([this]() { return (int32)ActiveTab; })
 					+ SWidgetSwitcher::Slot() [ BuildSessionTab() ]
 					+ SWidgetSwitcher::Slot() [ BuildLogTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildScoringTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildTracksTab() ]
+					+ SWidgetSwitcher::Slot() [ BuildTelemetryTab() ]
 				]
 
 				// Outcome of the last action
@@ -163,6 +180,10 @@ EActiveTimerReturnType SFSDSLauncherPanel::Poll(double, float)
 	if (ActiveTab == ETab::Log)
 	{
 		FetchLog();
+	}
+	else if (ActiveTab == ETab::Scoring)
+	{
+		FetchScoring();
 	}
 
 	if (PollsInFlight > 0 || !Client.IsValid())
@@ -254,6 +275,7 @@ void SFSDSLauncherPanel::FetchLists()
 		const FString Keep = P->SelectedTrack.IsValid() ? *P->SelectedTrack : FString();
 		P->Tracks.Reset();
 		P->SelectedTrack.Reset();
+		P->TrackInfos.Reset();
 		for (const TSharedPtr<FJsonValue>& V : R.Body->AsArray())
 		{
 			const TSharedPtr<FJsonObject>* O = nullptr;
@@ -262,7 +284,23 @@ void SFSDSLauncherPanel::FetchLists()
 			{
 				P->Tracks.Add(MakeShared<FString>(Name));
 				if (Name == Keep) P->SelectedTrack = P->Tracks.Last();
+
+				FTrackInfo Info;
+				Info.Name = Name;
+				(*O)->TryGetNumberField(TEXT("cones"), Info.Cones);
+				(*O)->TryGetNumberField(TEXT("blue"), Info.Blue);
+				(*O)->TryGetNumberField(TEXT("yellow"), Info.Yellow);
+				(*O)->TryGetNumberField(TEXT("orange"), Info.Orange);
+				(*O)->TryGetBoolField(TEXT("builtin"), Info.bBuiltin);
+				(*O)->TryGetStringField(TEXT("event_type"), Info.EventType);
+				P->TrackInfos.Add(MoveTemp(Info));
 			}
+		}
+		P->RebuildTrackInfoList();
+		if (!P->SelectedInfo.IsEmpty() && !P->TrackInfos.ContainsByPredicate(
+				[&P](const FTrackInfo& I) { return I.Name == P->SelectedInfo; }))
+		{
+			P->SelectedInfo.Reset();
 		}
 		if (!P->SelectedTrack.IsValid() && P->Tracks.Num() > 0) P->SelectedTrack = P->Tracks[0];
 		if (P->TrackCombo.IsValid())
@@ -506,6 +544,78 @@ FReply SFSDSLauncherPanel::OnExportLog()
 	return FReply::Handled();
 }
 
+FReply SFSDSLauncherPanel::OnTracksLoad()
+{
+	if (SelectedInfo.IsEmpty()) return FReply::Handled();
+	// One load path: the Session tab's, with the track picked here.
+	const FTrackPtr* Match = Tracks.FindByPredicate([this](const FTrackPtr& T) { return T.IsValid() && *T == SelectedInfo; });
+	SelectedTrack = Match ? *Match : MakeShared<FString>(SelectedInfo);
+	if (TrackCombo.IsValid()) TrackCombo->SetSelectedItem(SelectedTrack);
+	return OnLoadTrack();
+}
+
+FReply SFSDSLauncherPanel::OnTracksDelete()
+{
+	if (SelectedInfo.IsEmpty() || !Confirmed(TEXT("delete"))) return FReply::Handled();
+	const FString Name = SelectedInfo;
+	Busy = FString::Printf(TEXT("Deleting %s"), *Name);
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Delete(FString::Printf(TEXT("/api/track/%s"), *FFSDSMissionControlClient::EncodeSegment(Name)),
+		[Weak, Name](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->Busy.Reset();
+		if (!R.Ok())
+		{
+			P->Say(FString::Printf(TEXT("Deleting %s failed: %s"), *Name, *R.Error), true);
+			return;
+		}
+		P->Say(FString::Printf(TEXT("Deleted %s"), *Name), false);
+		P->SelectedInfo.Reset();
+		P->PreviewFor.Reset();
+		P->PreviewBrush.Reset();
+		P->PreviewState.Reset();
+		P->FetchLists();
+	});
+	return FReply::Handled();
+}
+
+FReply SFSDSLauncherPanel::OnGenerate()
+{
+	TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetNumberField(TEXT("n_points"), GenPoints);
+	Body->SetNumberField(TEXT("n_regions"), GenRegions);
+	Body->SetNumberField(TEXT("max_bound"), GenMaxBound);
+	Body->SetStringField(TEXT("name"), GenName);
+
+	Busy = TEXT("Generating a track");
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Post(TEXT("/api/track/generate"), Body, [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->Busy.Reset();
+		FString Name;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("name"), Name))
+		{
+			P->Say(FString::Printf(TEXT("Generating failed: %s"), R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error), true);
+			return;
+		}
+		double Cones = 0;
+		O->TryGetNumberField(TEXT("cones"), Cones);
+		P->Say(FString::Printf(TEXT("Generated %s (%d cones)"), *Name, (int32)Cones), false);
+		P->GenName.Reset();
+		// Show it: the list gains it, and it becomes the selection.
+		P->SelectedInfo = Name;
+		P->FetchLists();
+		P->FetchPreview(Name);
+	}, 60.f);
+	return FReply::Handled();
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 
@@ -613,13 +723,25 @@ TSharedRef<SWidget> SFSDSLauncherPanel::BuildSessionTab()
 TSharedRef<SWidget> SFSDSLauncherPanel::BuildTabBar()
 {
 	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
 		[
 			MakeTab(LOCTEXT("TabSession", "Session"), ETab::Session)
 		]
-		+ SHorizontalBox::Slot().AutoWidth()
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
 		[
 			MakeTab(LOCTEXT("TabLog", "Log"), ETab::Log)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+		[
+			MakeTab(LOCTEXT("TabScoring", "Scoring"), ETab::Scoring)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+		[
+			MakeTab(LOCTEXT("TabTracks", "Tracks"), ETab::Tracks)
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			MakeTab(LOCTEXT("TabTelemetry", "Telemetry"), ETab::Telemetry)
 		];
 }
 
@@ -627,7 +749,7 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 {
 	return SNew(SButton)
 		.IsFocusable(false)          // a focused button would eat Space (the brake)
-		.ContentPadding(FMargin(12.f, 3.f))
+		.ContentPadding(FMargin(7.f, 3.f))
 		// Slate darkens a button's colour, so the active tab is marked by its
 		// text (the accent) rather than by a yellow button black text can't
 		// be read on.
@@ -639,6 +761,8 @@ TSharedRef<SWidget> SFSDSLauncherPanel::MakeTab(const FText& Label, ETab Tab)
 		{
 			ActiveTab = Tab;
 			if (Tab == ETab::Log) FetchLog();
+			if (Tab == ETab::Scoring) FetchScoring();
+			if (Tab == ETab::Tracks && !SelectedInfo.IsEmpty() && SelectedInfo != PreviewFor) FetchPreview(SelectedInfo);
 			return FReply::Handled();
 		})
 		[
@@ -797,6 +921,645 @@ void SFSDSLauncherPanel::RebuildLogList()
 			]
 		];
 	}
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildScoringTab()
+{
+	auto Seconds = [](double S) { return FText::FromString(FString::Printf(TEXT("%.3f s"), S)); };
+
+	return SNew(SVerticalBox)
+		// The score, as big as the web UI makes it.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("ScoreHeading", "EVENT SCORE"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom)
+			[
+				SNew(STextBlock)
+				.Font(Font(28, TEXT("Bold")))
+				.ColorAndOpacity(Accent)
+				.Text_Lambda([this]()
+				{
+					// With no reference the backend compares the run with itself,
+					// so every run "scores" the maximum: show no number at all.
+					if (!Scoring || !Scoring->bHasReference) return LOCTEXT("NoScore", "--");
+					return FText::FromString(FString::Printf(TEXT("%.1f"), Scoring->Score));
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Bottom).Padding(8, 0, 0, 6)
+			[
+				SNew(STextBlock)
+				.Font(Font(10))
+				.ColorAndOpacity(Muted)
+				.Text_Lambda([this]()
+				{
+					if (!Scoring) return FText::GetEmpty();
+					return FText::Format(LOCTEXT("OfPoints", "/ {0} points   {1}"),
+						FText::AsNumber(FMath::RoundToInt(Scoring->MaxPoints)), FText::FromString(Scoring->Event));
+				})
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(STextBlock)
+			.Font(Font(9))
+			.AutoWrapText(true)
+			.ColorAndOpacity(Warn)
+			.Visibility_Lambda([this]() { return ScoringError.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			.Text_Lambda([this]() { return FText::Format(LOCTEXT("ScoreError", "No score: {0}"), FText::FromString(ScoringError)); })
+		]
+
+		// The time breakdown.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			MakeStatusRow(LOCTEXT("Elapsed", "Elapsed"),
+				TAttribute<FText>::CreateLambda([this, Seconds]() { return Scoring ? Seconds(Scoring->Total) : FText::GetEmpty(); }),
+				FSlateColor(Ink))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Penalties", "Penalties"),
+				TAttribute<FText>::CreateLambda([this]()
+				{
+					if (!Scoring) return FText::GetEmpty();
+					return FText::FromString(FString::Printf(TEXT("+%.1f s   (DOO %d: +%.1f s, OC %d: +%.1f s)"),
+						Scoring->DooPenalty + Scoring->OcPenalty, Scoring->Doo, Scoring->DooPenalty,
+						Scoring->Oc, Scoring->OcPenalty));
+				}),
+				TAttribute<FSlateColor>::CreateLambda([this]()
+				{
+					return FSlateColor(Scoring && (Scoring->DooPenalty + Scoring->OcPenalty) > 0.0 ? Warn : Ink);
+				}))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeStatusRow(LOCTEXT("Corrected", "Corrected"),
+				TAttribute<FText>::CreateLambda([this, Seconds]() { return Scoring ? Seconds(Scoring->Corrected) : FText::GetEmpty(); }),
+				FSlateColor(Accent))
+		]
+
+		// The reference time the score is computed against.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("RefHeading", "REFERENCE TIME (T_BEST)"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+			[
+				SNew(SBox).WidthOverride(120.f)
+				[
+					SNew(SEditableTextBox)
+					.Font(Font(10))
+					.HintText(LOCTEXT("RefHint", "seconds"))
+					.Text_Lambda([this]() { return FText::FromString(ReferenceInput); })
+					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+					{
+						const FString In = Text.ToString().TrimStartAndEnd();
+						if (In.IsEmpty() || (In.IsNumeric() && FCString::Atod(*In) > 0.0))
+						{
+							ReferenceInput = In;
+							FetchScoring();
+						}
+						else
+						{
+							Say(TEXT("The reference time is a number of seconds, or empty for the best lap."), true);
+						}
+						// Hand the keys back to the car.
+						FSlateApplication::Get().SetAllUserFocusToGameViewport();
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Font(Font(9))
+				.AutoWrapText(true)
+				.ColorAndOpacity_Lambda([this]()
+				{
+					return FSlateColor(Scoring && !Scoring->bHasReference && ReferenceInput.IsEmpty() ? Warn : Muted);
+				})
+				.Text_Lambda([this]()
+				{
+					if (!ReferenceInput.IsEmpty()) return FText::Format(LOCTEXT("RefUsing", "Scoring against {0} s"), FText::FromString(ReferenceInput));
+					if (Scoring && Scoring->bHasReference)
+					{
+						return FText::FromString(FString::Printf(TEXT("Scoring against %.3f s"), Scoring->Reference));
+					}
+					return LOCTEXT("RefNone",
+						"None set. Without one the run is compared with itself and always gets full points, so no score is shown.");
+				})
+			]
+		]
+
+		// The laps.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("LapsHeading", "LAP TIMES"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.MaxDesiredHeight(220.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(LapList, SVerticalBox)
+				]
+			]
+		];
+}
+
+void SFSDSLauncherPanel::FetchScoring()
+{
+	if (bScoringInFlight || !Client.IsValid()) return;
+	bScoringInFlight = true;
+
+	FString Path = TEXT("/api/scoring/summary");
+	if (!ReferenceInput.IsEmpty())
+	{
+		Path += TEXT("?t_best=") + ReferenceInput;
+	}
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Get(Path, [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P) return;
+		P->bScoringInFlight = false;
+
+		const TSharedPtr<FJsonObject> O = R.Object();
+		FString Err;
+		if (!R.Ok() || !O.IsValid())
+		{
+			P->ScoringError = R.Error.IsEmpty() ? TEXT("malformed reply") : R.Error;
+			return;
+		}
+		// No referee yet comes back as 200 {"error": "No referee data"}.
+		if (O->TryGetStringField(TEXT("error"), Err))
+		{
+			P->ScoringError = Err;
+			return;
+		}
+		P->ScoringError.Reset();
+
+		FScoring S;
+		O->TryGetStringField(TEXT("event"), S.Event);
+		O->TryGetNumberField(TEXT("laps_completed"), S.Laps);
+		O->TryGetNumberField(TEXT("best_lap"), S.BestLap);
+		O->TryGetNumberField(TEXT("total_elapsed"), S.Total);
+		O->TryGetNumberField(TEXT("doo_count"), S.Doo);
+		O->TryGetNumberField(TEXT("doo_penalty_s"), S.DooPenalty);
+		O->TryGetNumberField(TEXT("oc_count"), S.Oc);
+		O->TryGetNumberField(TEXT("oc_penalty_s"), S.OcPenalty);
+		O->TryGetNumberField(TEXT("corrected_time"), S.Corrected);
+		O->TryGetNumberField(TEXT("max_points"), S.MaxPoints);
+		O->TryGetNumberField(TEXT("score"), S.Score);
+		S.bHasReference = O->TryGetNumberField(TEXT("t_best_reference"), S.Reference);
+		const TArray<TSharedPtr<FJsonValue>>* Laps = nullptr;
+		if (O->TryGetArrayField(TEXT("lap_times"), Laps))
+		{
+			for (const TSharedPtr<FJsonValue>& L : *Laps)
+			{
+				double T = 0.0;
+				if (L.IsValid() && L->TryGetNumber(T)) S.LapTimes.Add(T);
+			}
+		}
+
+		const bool bLapsChanged = !P->Scoring || P->Scoring->LapTimes != S.LapTimes
+			|| P->Scoring->BestLap != S.BestLap || (P->LapList.IsValid() && P->LapList->NumSlots() == 0);
+		P->Scoring = MoveTemp(S);
+		if (bLapsChanged) P->RebuildLapList();
+	});
+}
+
+void SFSDSLauncherPanel::RebuildLapList()
+{
+	if (!LapList.IsValid()) return;
+	LapList->ClearChildren();
+
+	if (!Scoring || Scoring->LapTimes.Num() == 0)
+	{
+		LapList->AddSlot().AutoHeight()
+		[
+			SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted).Text(LOCTEXT("NoLaps", "No laps completed yet"))
+		];
+		return;
+	}
+
+	for (int32 i = 0; i < Scoring->LapTimes.Num(); ++i)
+	{
+		const double T = Scoring->LapTimes[i];
+		const bool bBest = FMath::IsNearlyEqual(T, Scoring->BestLap, 1e-6);
+		LapList->AddSlot().AutoHeight().Padding(0, 1)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(LabelWidth)
+				[
+					SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted)
+					.Text(FText::Format(LOCTEXT("LapN", "Lap {0}"), FText::AsNumber(i + 1)))
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 16, 0)
+			[
+				SNew(STextBlock).Font(Font(10, TEXT("Bold"))).ColorAndOpacity(Ink)
+				.Text(FText::FromString(FString::Printf(TEXT("%.3f s"), T)))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(STextBlock).Font(Font(10)).ColorAndOpacity(bBest ? Good : Muted)
+				.Text(bBest ? LOCTEXT("Best", "BEST")
+					: FText::FromString(FString::Printf(TEXT("+%.3f"), T - Scoring->BestLap)))
+			]
+		];
+	}
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildTracksTab()
+{
+	auto NumberRow = [this](const FText& Label, int32* Value, int32 Min, int32 Max) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(LabelWidth)
+				[
+					SNew(STextBlock).Text(Label).Font(Font(10)).ColorAndOpacity(Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(90.f)
+				[
+					SNew(SSpinBox<int32>)
+					.Font(Font(10))
+					.MinValue(Min).MaxValue(Max)
+					.Value_Lambda([Value]() { return *Value; })
+					.OnValueChanged_Lambda([Value](int32 V) { *Value = V; })
+				]
+			];
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("TracksHeading", "TRACKS"))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.MaxDesiredHeight(170.f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					SAssignNew(TrackInfoList, SVerticalBox)
+				]
+			]
+		]
+
+		// Preview of the selected track, as the web UI draws it.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SBox)
+			.HeightOverride(230.f)
+			.HAlign(HAlign_Center)
+			.VAlign(VAlign_Center)
+			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()
+				[
+					SNew(SScaleBox)
+					.Stretch(EStretch::ScaleToFit)
+					.Visibility_Lambda([this]() { return PreviewBrush.IsValid() ? EVisibility::Visible : EVisibility::Collapsed; })
+					[
+						SNew(SImage).Image_Lambda([this]() -> const FSlateBrush* { return PreviewBrush.Get(); })
+					]
+				]
+				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Font(Font(10))
+					.ColorAndOpacity(Muted)
+					.Visibility_Lambda([this]() { return PreviewState.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+					.Text_Lambda([this]() { return FText::FromString(PreviewState); })
+				]
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				MakeButton(LOCTEXT("TracksLoad", "Load"), GoBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnTracksLoad),
+					TAttribute<bool>::CreateLambda([this]() { return CanAct() && bSimConnected && !SelectedInfo.IsEmpty(); }))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				MakeButton(
+					TAttribute<FText>::CreateLambda([this]()
+					{
+						return IsArmed(TEXT("delete")) ? LOCTEXT("DeleteConfirm", "Click again to delete")
+							: LOCTEXT("Delete", "Delete");
+					}),
+					StopBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnTracksDelete),
+					TAttribute<bool>::CreateLambda([this]()
+					{
+						const FTrackInfo* T = TrackInfos.FindByPredicate([this](const FTrackInfo& I) { return I.Name == SelectedInfo; });
+						return CanAct() && T && !T->bBuiltin;
+					}))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeButton(LOCTEXT("TracksRefresh", "Refresh"), PlainBtn,
+					FOnClicked::CreateLambda([this]() { FetchLists(); return FReply::Handled(); }),
+					TAttribute<bool>::CreateLambda([this]() { return bBackendUp && !bListsLoading; }))
+			]
+		]
+
+		// A random track, from the same generator and defaults as the web UI.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			MakeHeading(LOCTEXT("GenerateHeading", "GENERATE A RANDOM TRACK"))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			NumberRow(LOCTEXT("GenPoints", "Points"), &GenPoints, 10, 200)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			NumberRow(LOCTEXT("GenRegions", "Regions"), &GenRegions, 5, 100)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			NumberRow(LOCTEXT("GenMax", "Max size (m)"), &GenMaxBound, 50, 300)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 1)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(LabelWidth)
+				[
+					SNew(STextBlock).Text(LOCTEXT("GenName", "Name")).Font(Font(10)).ColorAndOpacity(Muted)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				SNew(SBox).WidthOverride(160.f)
+				[
+					SNew(SEditableTextBox)
+					.Font(Font(10))
+					.HintText(LOCTEXT("GenNameHint", "auto"))
+					.Text_Lambda([this]() { return FText::FromString(GenName); })
+					.OnTextCommitted_Lambda([this](const FText& Text, ETextCommit::Type)
+					{
+						GenName = Text.ToString().TrimStartAndEnd();
+						FSlateApplication::Get().SetAllUserFocusToGameViewport();
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeButton(LOCTEXT("Generate", "Generate"), GoBtn,
+					FOnClicked::CreateSP(this, &SFSDSLauncherPanel::OnGenerate),
+					TAttribute<bool>::CreateLambda([this]() { return CanAct(); }))
+			]
+		];
+}
+
+void SFSDSLauncherPanel::RebuildTrackInfoList()
+{
+	if (!TrackInfoList.IsValid()) return;
+	TrackInfoList->ClearChildren();
+
+	if (TrackInfos.Num() == 0)
+	{
+		TrackInfoList->AddSlot().AutoHeight()
+		[
+			SNew(STextBlock).Font(Font(10)).ColorAndOpacity(Muted)
+			.Text(bBackendUp ? LOCTEXT("NoTracks", "No tracks") : LOCTEXT("TracksNoBackend", "The backend isn't running"))
+		];
+		return;
+	}
+
+	for (const FTrackInfo& T : TrackInfos)
+	{
+		const FString Name = T.Name;
+		const FString Detail = FString::Printf(TEXT("%d cones (B %d  Y %d  O %d)%s"), T.Cones, T.Blue, T.Yellow, T.Orange,
+			T.bBuiltin ? *FString::Printf(TEXT("   built-in%s%s"), T.EventType.IsEmpty() ? TEXT("") : TEXT(", "), *T.EventType) : TEXT(""));
+		TrackInfoList->AddSlot().AutoHeight()
+		[
+			SNew(SButton)
+			.IsFocusable(false)          // a focused button would eat Space (the brake)
+			.ContentPadding(FMargin(6.f, 2.f))
+			.ButtonColorAndOpacity_Lambda([this, Name]()
+			{
+				return FSlateColor(SelectedInfo == Name ? PlainBtn : FLinearColor(0.f, 0.f, 0.f, 0.f));
+			})
+			.OnClicked_Lambda([this, Name]() { SelectTrackInfo(Name); return FReply::Handled(); })
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 10, 0)
+				[
+					SNew(STextBlock)
+					.Font(Font(10, TEXT("Bold")))
+					.OverflowPolicy(ETextOverflowPolicy::Ellipsis)
+					.ColorAndOpacity_Lambda([this, Name]() { return FSlateColor(SelectedInfo == Name ? Accent : Ink); })
+					.Text(FText::FromString(Name))
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(STextBlock).Font(Font(9)).ColorAndOpacity(Muted).Text(FText::FromString(Detail))
+				]
+			]
+		];
+	}
+}
+
+void SFSDSLauncherPanel::SelectTrackInfo(const FString& Name)
+{
+	SelectedInfo = Name;
+	if (Name != PreviewFor) FetchPreview(Name);
+}
+
+void SFSDSLauncherPanel::FetchPreview(const FString& Name)
+{
+	if (!Client.IsValid() || Name.IsEmpty()) return;
+	PreviewFor = Name;
+	PreviewBrush.Reset();
+	PreviewState = TEXT("Drawing the track...");
+
+	TWeakPtr<SFSDSLauncherPanel> Weak = StaticCastSharedRef<SFSDSLauncherPanel>(AsShared());
+	Client->Get(FString::Printf(TEXT("/api/track/%s/preview"), *FFSDSMissionControlClient::EncodeSegment(Name)),
+		[Weak, Name](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSLauncherPanel> P = Weak.Pin();
+		if (!P || P->PreviewFor != Name) return;   // a newer selection won
+
+		FString Base64;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid() || !O->TryGetStringField(TEXT("image"), Base64))
+		{
+			P->PreviewState = FString::Printf(TEXT("No preview: %s"), R.Error.IsEmpty() ? TEXT("malformed reply") : *R.Error);
+			return;
+		}
+
+		// The backend draws it with matplotlib and sends a base64 PNG.
+		TArray<uint8> Png;
+		TArray<uint8> Bgra;
+		IImageWrapperModule& Images = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		const TSharedPtr<IImageWrapper> Wrapper = Images.CreateImageWrapper(EImageFormat::PNG);
+		if (!FBase64::Decode(Base64, Png) || !Wrapper.IsValid()
+			|| !Wrapper->SetCompressed(Png.GetData(), Png.Num())
+			|| !Wrapper->GetRaw(ERGBFormat::BGRA, 8, Bgra))
+		{
+			P->PreviewState = TEXT("No preview: the image didn't decode");
+			return;
+		}
+		P->PreviewBrush = FSlateDynamicImageBrush::CreateWithImageData(
+			FName(*FString::Printf(TEXT("FSDSTrackPreview_%d"), ++P->PreviewSerial)),
+			FVector2D((double)Wrapper->GetWidth(), (double)Wrapper->GetHeight()), Bgra);
+		P->PreviewState = P->PreviewBrush.IsValid() ? FString() : TEXT("No preview");
+	}, 15.f);
+}
+
+TSharedRef<SWidget> SFSDSLauncherPanel::BuildTelemetryTab()
+{
+	// Read from the car itself at paint time: the panel runs in the sim, so
+	// it needs neither the backend nor its websocket for this.
+	auto Row = [this](const FText& Label, TFunction<FString(const AFSDSVehiclePawn&)> Value) -> TSharedRef<SWidget>
+	{
+		return MakeStatusRow(Label,
+			TAttribute<FText>::CreateLambda([this, Value]()
+			{
+				const AFSDSVehiclePawn* P = Pawn.Get();
+				return P ? FText::FromString(Value(*P)) : LOCTEXT("NoCar", "no car");
+			}),
+			FSlateColor(Ink));
+	};
+	// The motor's regen state. Torque is at the motor shaft; negative is
+	// regen. The cap is whichever of the two limits binds at this speed.
+	struct FRegen { float Torque = 0, PowerW = 0, Avail = 0; bool bPowerCapped = false, bValid = false; };
+	auto Regen = [](const AFSDSVehiclePawn& P) -> FRegen
+	{
+		FRegen R;
+		const UEmraxMotor* M = P.Motor;
+		if (!M) return R;
+		R.bValid = true;
+		const float Omega = FMath::Abs(M->GetMechRpm()) * 2.f * PI / 60.f;
+		R.Torque = FMath::Max(0.f, -M->GetTorqueNm());
+		R.PowerW = R.Torque * Omega;
+		const float PowerCapTorque = Omega > 1e-3f ? M->P.MaxRegenPowerW / Omega : TNumericLimits<float>::Max();
+		R.bPowerCapped = PowerCapTorque < M->P.MaxRegenTorqueNm;
+		R.Avail = FMath::Min(M->P.MaxRegenTorqueNm, PowerCapTorque);
+		return R;
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("TelCar", "CAR")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelSpeed", "Speed"), [](const AFSDSVehiclePawn& P)
+			{
+				const float V = P.GetCarState().Speed;
+				return FString::Printf(TEXT("%.2f m/s   %.1f km/h"), V, V * 3.6f);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRpm", "Motor"), [](const AFSDSVehiclePawn& P)
+			{
+				// Rounded to an int so a tiny negative jitter at rest shows 0, not -0.
+				return FString::Printf(TEXT("%d rpm"), FMath::RoundToInt(P.GetCarState().RPM));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelPedals", "Pedals"), [](const AFSDSVehiclePawn& P)
+			{
+				const AFSDSVehiclePawn::FCarControls C = P.GetCarControls();
+				return FString::Printf(TEXT("throttle %.0f%%   brake %.0f%%%s"),
+					FMath::Clamp(C.Throttle, 0.f, 1.f) * 100.f, FMath::Clamp(C.Regen, 0.f, 1.f) * 100.f,
+					C.bHandbrake ? TEXT("   mechanical brake on") : TEXT(""));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelSteer", "Steering"), [](const AFSDSVehiclePawn& P)
+			{
+				const float S = P.GetCarControls().Steering;
+				return FString::Printf(TEXT("%+.2f   %s"), S,
+					FMath::Abs(S) < 0.01f ? TEXT("straight") : S > 0.f ? TEXT("right") : TEXT("left"));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelDriver", "Driver"), [](const AFSDSVehiclePawn& P)
+			{
+				return FString::Printf(TEXT("%s%s"), P.IsApiControlEnabled() ? TEXT("autonomous") : TEXT("manual"),
+					P.IsEbsLatched() ? TEXT(", EBS latched") : TEXT(""));
+			})
+		]
+
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("TelRegen", "REGEN (MOTOR SIDE)")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRegenNow", "Absorbing"), [Regen](const AFSDSVehiclePawn& P)
+			{
+				const FRegen R = Regen(P);
+				if (!R.bValid) return FString(TEXT("no motor model"));
+				return FString::Printf(TEXT("%.1f Nm   %.2f kW"), R.Torque, R.PowerW / 1000.f);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRegenAvail", "Available"), [Regen](const AFSDSVehiclePawn& P)
+			{
+				const FRegen R = Regen(P);
+				if (!R.bValid) return FString();
+				return FString::Printf(TEXT("%.1f Nm   (%s)"), R.Avail,
+					R.bPowerCapped ? TEXT("power cap binds") : TEXT("torque cap binds"));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelRegenLimits", "Limits"), [](const AFSDSVehiclePawn& P)
+			{
+				const UEmraxMotor* M = P.Motor;
+				return M ? FString::Printf(TEXT("%.0f Nm, %.1f kW"), M->P.MaxRegenTorqueNm, M->P.MaxRegenPowerW / 1000.f)
+					: FString();
+			})
+		]
+
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("TelPose", "POSITION (ENU, METRES)")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelXyz", "x  y  z"), [](const AFSDSVehiclePawn& P)
+			{
+				const FVector E = FSDSCoord::UEToENU(P.GetCarState().Position);
+				return FString::Printf(TEXT("%.3f   %.3f   %.3f"), E.X, E.Y, E.Z);
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Row(LOCTEXT("TelYaw", "Heading"), [](const AFSDSVehiclePawn& P)
+			{
+				const FQuat Q = FSDSCoord::UEQuatToENU(P.GetCarState().Orientation);
+				const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(2.f * (Q.W * Q.Z + Q.X * Q.Y),
+					1.f - 2.f * (Q.Y * Q.Y + Q.Z * Q.Z)));
+				return FString::Printf(TEXT("%.1f deg (0 = east, counter-clockwise)"), Yaw);
+			})
+		];
 }
 
 TSharedRef<SWidget> SFSDSLauncherPanel::BuildStackBlock()

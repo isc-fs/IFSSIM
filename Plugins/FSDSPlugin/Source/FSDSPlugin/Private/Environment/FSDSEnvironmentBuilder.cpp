@@ -14,11 +14,12 @@ namespace
 	// /Engine/BasicShapes is cooked (Config/DefaultGame.ini).
 	const TCHAR* CylinderPath = TEXT("/Engine/BasicShapes/Cylinder.Cylinder");
 	const TCHAR* CubePath = TEXT("/Engine/BasicShapes/Cube.Cube");
+	const TCHAR* SpherePath = TEXT("/Engine/BasicShapes/Sphere.Sphere");
 	// The small cone the spawner uses for yellow cones: 228 x 228 x 325 mm.
 	const TCHAR* SmallConePath =
 		TEXT("/Game/RaceCourse/Model/Environment/trafficones_scaled/trafficone_mini_yellow.trafficone_mini_yellow");
 
-	enum class EPartMesh : uint8 { Cylinder, Cube, SmallCone };
+	enum class EPartMesh : uint8 { Cylinder, Cube, SmallCone, Sphere };
 
 	/** One piece of a primitive prop, in the prop's frame: cm, X along its yaw,
 	 *  Z up from the ground at its centre. A basic shape is placed by its centre
@@ -58,6 +59,10 @@ namespace
 		const TCHAR* Name;
 		TArray<FPart> Parts;
 		FRealMesh Real;
+		/** Seen by the LiDAR only (FSDSPropLidarOnly): a phantom to the car.
+		 *  For anything under 0.30 m a wheel could reach, e.g. a sidewalk's
+		 *  kerb (roadmap rule 2, docs/collision_matrix.md). */
+		bool bLidarOnly = false;
 	};
 
 	/** Bollard: a 20 cm post, 75 cm tall, with a 10 cm retroreflective band near the top. */
@@ -115,6 +120,96 @@ namespace
 		return Parts;
 	}
 
+	// --- Venue classes (docs/venues.md): what stands around a parking lot. ---
+
+	/** Tree: a 30 cm trunk 2.5 m tall under a 3 m round canopy (top at 5.3 m). */
+	TArray<FPart> TreeParts()
+	{
+		return {
+			{EPartMesh::Cylinder, FVector(0.0, 0.0, 125.0), FRotator::ZeroRotator, FVector(30.0, 30.0, 250.0)},
+			{EPartMesh::Sphere, FVector(0.0, 0.0, 380.0), FRotator::ZeroRotator, FVector(300.0)},
+		};
+	}
+
+	/** Street lamp: a 16 cm pole 6 m tall, an arm along X and a head at its end. */
+	TArray<FPart> LampPostParts()
+	{
+		return {
+			{EPartMesh::Cylinder, FVector(0.0, 0.0, 300.0), FRotator::ZeroRotator, FVector(16.0, 16.0, 600.0),
+				FSDSPropStencil::Aluminium},
+			{EPartMesh::Cube, FVector(60.0, 0.0, 592.0), FRotator::ZeroRotator, FVector(120.0, 10.0, 10.0),
+				FSDSPropStencil::Aluminium},
+			{EPartMesh::Cube, FVector(110.0, 0.0, 580.0), FRotator::ZeroRotator, FVector(45.0, 22.0, 12.0),
+				FSDSPropStencil::DarkPlastic},
+		};
+	}
+
+	/** A parked car facing X: 4.4 x 1.8 m body, a cabin, four wheels; 1.5 m tall. */
+	TArray<FPart> ParkedCarParts()
+	{
+		TArray<FPart> Parts = {
+			{EPartMesh::Cube, FVector(0.0, 0.0, 65.0), FRotator::ZeroRotator, FVector(440.0, 180.0, 70.0)},
+			{EPartMesh::Cube, FVector(-20.0, 0.0, 125.0), FRotator::ZeroRotator, FVector(240.0, 165.0, 50.0)},
+		};
+		for (int32 I = 0; I < 4; ++I)
+		{
+			const double X = I < 2 ? 135.0 : -135.0;
+			const double Y = (I % 2) ? 80.0 : -80.0;
+			// A cylinder's axis is Z: roll it onto Y for a wheel.
+			Parts.Add({EPartMesh::Cylinder, FVector(X, Y, 32.0), FRotator(0.0, 0.0, 90.0), FVector(64.0, 64.0, 22.0),
+				FSDSPropStencil::Rubber});
+		}
+		return Parts;
+	}
+
+	/** Bench along X: 1.8 m seat at 45 cm, a back rest, two legs. */
+	TArray<FPart> BenchParts()
+	{
+		return {
+			{EPartMesh::Cube, FVector(0.0, 0.0, 45.0), FRotator::ZeroRotator, FVector(180.0, 45.0, 6.0)},
+			{EPartMesh::Cube, FVector(0.0, -20.0, 70.0), FRotator::ZeroRotator, FVector(180.0, 5.0, 40.0)},
+			{EPartMesh::Cube, FVector(-75.0, 0.0, 21.0), FRotator::ZeroRotator, FVector(6.0, 40.0, 42.0),
+				FSDSPropStencil::Aluminium},
+			{EPartMesh::Cube, FVector(75.0, 0.0, 21.0), FRotator::ZeroRotator, FVector(6.0, 40.0, 42.0),
+				FSDSPropStencil::Aluminium},
+		};
+	}
+
+	/** Crowd barrier along X: a 2.5 m steel panel 1.1 m tall, top and bottom
+	 *  rails and upright bars between two end posts, on two 0.5 m feet. The
+	 *  LiDAR sees through the gaps; every bar is solid to the car. */
+	TArray<FPart> FenceParts()
+	{
+		TArray<FPart> Parts;
+		for (const double X : {-122.0, 122.0})
+		{
+			Parts.Add({EPartMesh::Cylinder, FVector(X, 0.0, 57.0), FRotator::ZeroRotator, FVector(4.0, 4.0, 106.0),
+				FSDSPropStencil::Aluminium});                                                     // post
+			Parts.Add({EPartMesh::Cube, FVector(X, 0.0, 2.0), FRotator::ZeroRotator, FVector(6.0, 50.0, 4.0),
+				FSDSPropStencil::Aluminium});                                                     // foot
+		}
+		Parts.Add({EPartMesh::Cube, FVector(0.0, 0.0, 108.0), FRotator::ZeroRotator, FVector(248.0, 4.0, 4.0),
+			FSDSPropStencil::Aluminium});                                                         // top rail
+		Parts.Add({EPartMesh::Cube, FVector(0.0, 0.0, 22.0), FRotator::ZeroRotator, FVector(248.0, 4.0, 4.0),
+			FSDSPropStencil::Aluminium});                                                         // bottom rail
+		for (int32 I = 0; I < 7; ++I)
+		{
+			Parts.Add({EPartMesh::Cylinder, FVector(-90.0 + 30.0 * I, 0.0, 65.0), FRotator::ZeroRotator,
+				FVector(2.0, 2.0, 82.0), FSDSPropStencil::Aluminium});                            // bars
+		}
+		return Parts;
+	}
+
+	/** Earth bank along X, 10 m long: a 5 m square beam rolled 45 deg and sunk,
+	 *  so a ridge about 2.9 m tall and 5.9 m wide shows. Its box collision is
+	 *  exactly what's drawn (rule 1). A stand-in for a hill until terrain (P3). */
+	TArray<FPart> BermParts()
+	{
+		return {
+			{EPartMesh::Cube, FVector(0.0, 0.0, -60.0), FRotator(0.0, 0.0, 45.0), FVector(1000.0, 500.0, 500.0)},
+		};
+	}
+
 	/** Names and footprints match tools/envgen/catalogue.py. */
 	const TArray<FPropClassDef>& Classes()
 	{
@@ -134,6 +229,18 @@ namespace
 				 FVector(60.0, 60.0, 0.0), 4, 60.0, FSDSPropStencil::Rubber}},
 			// Already a real mesh: the sim's own small cone.
 			{TEXT("cone_stack"), ConeStackParts(), {}},
+
+			// Venues (docs/venues.md).
+			{TEXT("tree"), TreeParts(), {{TEXT("/Game/ThirdParty/Props/SM_Tree.SM_Tree")}, FVector(300.0, 300.0, 530.0)}},
+			{TEXT("lamp_post"), LampPostParts(), {{TEXT("/Game/ThirdParty/Props/SM_LampPost.SM_LampPost")}, FVector(0.0, 0.0, 600.0)}},
+			{TEXT("parked_car"), ParkedCarParts(), {{TEXT("/Game/ThirdParty/Props/SM_ParkedCar.SM_ParkedCar")}, FVector(440.0, 180.0, 0.0)}},
+			{TEXT("bench"), BenchParts(), {{TEXT("/Game/ThirdParty/Props/SM_Bench.SM_Bench")}, FVector(180.0, 50.0, 90.0)}},
+			// 2 m x 2 m of sidewalk, 20 cm tall: rows of them make a pavement.
+			{TEXT("sidewalk"),
+				{{EPartMesh::Cube, FVector(0.0, 0.0, 10.0), FRotator::ZeroRotator, FVector(200.0, 200.0, 20.0)}},
+				{}, /*bLidarOnly=*/true},
+			{TEXT("fence"), FenceParts(), {}},
+			{TEXT("berm"), BermParts(), {}},
 		};
 		return Defs;
 	}
@@ -178,7 +285,7 @@ TArray<FString> AFSDSEnvironmentActor::KnownClasses()
 	return Names;
 }
 
-void AFSDSEnvironmentActor::AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTransform& WorldXf)
+void AFSDSEnvironmentActor::AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTransform& WorldXf, bool bLidarOnly)
 {
 	// One plain component per part, not instanced: a material needs the
 	// "used with instanced static meshes" flag to render instanced, and the
@@ -189,7 +296,7 @@ void AFSDSEnvironmentActor::AddPart(UStaticMesh* Mesh, uint8 Stencil, const FTra
 	// Movable first: a Static component refuses SetStaticMesh at runtime.
 	C->SetMobility(EComponentMobility::Movable);
 	C->SetStaticMesh(Mesh);
-	C->SetCollisionProfileName(FSDSCollision::PropProfile);
+	C->SetCollisionProfileName(bLidarOnly ? FSDSCollision::PropLidarOnlyProfile : FSDSCollision::PropProfile);
 	C->SetupAttachment(RootComponent);
 	C->SetWorldTransform(WorldXf);
 	C->RegisterComponent();
@@ -257,12 +364,13 @@ int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
 	UWorld* World = GetWorld();
 	if (!World) return 0;
 
-	UStaticMesh* Meshes[3] = {
+	UStaticMesh* Meshes[4] = {
 		LoadObject<UStaticMesh>(nullptr, CylinderPath),
 		LoadObject<UStaticMesh>(nullptr, CubePath),
 		LoadObject<UStaticMesh>(nullptr, SmallConePath),
+		LoadObject<UStaticMesh>(nullptr, SpherePath),
 	};
-	for (int32 I = 0; I < 3; ++I)
+	for (int32 I = 0; I < 4; ++I)
 	{
 		if (!Meshes[I])
 		{
@@ -331,7 +439,7 @@ int32 AFSDSEnvironmentActor::Build(const FFSDSEnvironment& Env)
 			{
 				Local = FTransform(Part.Rotation, Part.Location, Part.SizeCm / 100.0);
 			}
-			AddPart(Mesh, Part.Stencil, Local * PropXf);
+			AddPart(Mesh, Part.Stencil, Local * PropXf, Def->bLidarOnly);
 			bPlaced = true;
 		}
 		if (!bPlaced)

@@ -1,0 +1,36 @@
+{
+  "format": "ifssim-venue/1",
+  "name": "parking_a",
+  "title": "Parking lot A",
+  "lot": [[-40, -27], [40, -27], [40, 27], [-40, 27]],
+  "margin_m": 2.0,
+  "rows": [
+    {"class": "sidewalk", "from": [-41, -28], "to": [41, -28], "spacing": 2.0},
+    {"class": "sidewalk", "from": [-41, 29], "to": [41, 29], "spacing": 2.0},
+    {"class": "lamp_post", "from": [-36, -31.5], "to": [36, -31.5], "spacing": 18.0, "yaw_deg": 90},
+    {"class": "lamp_post", "from": [-36, 31.5], "to": [36, 31.5], "spacing": 18.0, "yaw_deg": -90},
+    {"class": "tree", "from": [-38, -35.5], "to": [38, -35.5], "spacing": 9.5},
+    {"class": "tree", "from": [-38, 35.5], "to": [38, 35.5], "spacing": 9.5},
+    {"class": "parked_car", "from": [-46, -22], "to": [-46, 22], "spacing": 2.75, "yaw_deg": 0},
+    {"class": "berm", "from": [50, -20], "to": [50, 20], "spacing": 10.0, "yaw_deg": 90},
+    {"class": "fence", "from": [-40.8, -29.3], "to": [40.8, -29.3], "spacing": 2.55},
+    {"class": "tyre_wall", "from": [-37.5, 27.35], "to": [37.5, 27.35], "spacing": 3.0},
+    {"class": "fence", "from": [-40.3, -27.75], "to": [-40.3, 25.75], "spacing": 2.5476},
+    {"class": "fence", "from": [40.3, -27.75], "to": [40.3, 25.75], "spacing": 2.5476}
+  ],
+  "props": [
+    {"class": "bench", "x": -23.75, "y": -32.75, "yaw_deg": 180},
+    {"class": "bench", "x": 4.75, "y": -32.75, "yaw_deg": 180},
+    {"class": "bench", "x": 23.75, "y": 32.75},
+    {"class": "bin", "x": -24.0, "y": -28.4},
+    {"class": "bollard", "x": -12.0, "y": -28.4},
+    {"class": "bin", "x": 0.0, "y": -28.4},
+    {"class": "bollard", "x": 12.0, "y": -28.4},
+    {"class": "bin", "x": 24.0, "y": -28.4},
+    {"class": "bollard", "x": -21.0, "y": 27.35},
+    {"class": "bin", "x": -9.0, "y": 27.35},
+    {"class": "bollard", "x": 3.0, "y": 27.35},
+    {"class": "bin", "x": 15.0, "y": 27.35},
+    {"class": "bollard", "x": 27.0, "y": 27.35}
+  ]
+}
