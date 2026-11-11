@@ -33,6 +33,21 @@ namespace UpdaterUi
 	const TCHAR* PlatformName = TEXT("Linux");
 #endif
 
+	/** "v1.10.0" > "v1.9.2": by number, part by part. */
+	bool VersionLess(const FString& A, const FString& B)
+	{
+		TArray<FString> Pa, Pb;
+		A.TrimChar(TEXT('v')).ParseIntoArray(Pa, TEXT("."));
+		B.TrimChar(TEXT('v')).ParseIntoArray(Pb, TEXT("."));
+		for (int32 i = 0; i < FMath::Max(Pa.Num(), Pb.Num()); ++i)
+		{
+			const int32 X = Pa.IsValidIndex(i) ? FCString::Atoi(*Pa[i]) : 0;
+			const int32 Y = Pb.IsValidIndex(i) ? FCString::Atoi(*Pb[i]) : 0;
+			if (X != Y) return X < Y;
+		}
+		return false;
+	}
+
 	FString Mb(int64 Bytes) { return FString::Printf(TEXT("%.0f MB"), Bytes / (1024.0 * 1024.0)); }
 
 	FString Date(const FDateTime& T) { return T.ToString(TEXT("%Y-%m-%d")); }
@@ -271,11 +286,47 @@ void FFSDSUpdater::FetchRelease()
 {
 	State = EState::Checking;
 	Status = TEXT("Checking...");
+	// Stable: the recent releases, to take the newest version with this OS's zip.
 	const FString Url = Channel == EChannel::Latest
 		? FString::Printf(TEXT("%s/releases/tags/%s"), UpdaterUi::Api, UpdaterUi::LatestTag)
-		: FString::Printf(TEXT("%s/releases/latest"), UpdaterUi::Api);
+		: FString::Printf(TEXT("%s/releases?per_page=30"), UpdaterUi::Api);
 	UpdaterUi::GetText(Url, Token, TEXT("application/vnd.github+json"), Alive,
 		[this](int32 Code, const FString& Body) { OnRelease(Body, Code); });
+}
+
+FFSDSUpdater::FRelease FFSDSUpdater::ReadRelease(const FJsonObject& Obj)
+{
+	FRelease R;
+	FString When;
+	Obj.TryGetStringField(TEXT("tag_name"), R.Tag);
+	Obj.TryGetStringField(TEXT("name"), R.Name);
+	Obj.TryGetStringField(TEXT("published_at"), When);
+	FDateTime::ParseIso8601(*When, R.Published);
+	const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
+	if (!Obj.TryGetArrayField(TEXT("assets"), Assets)) return R;
+	for (const TSharedPtr<FJsonValue>& V : *Assets)
+	{
+		const TSharedPtr<FJsonObject> A = V.IsValid() ? V->AsObject() : nullptr;
+		FString Name, Url;
+		if (!A.IsValid() || !A->TryGetStringField(TEXT("name"), Name) || !A->TryGetStringField(TEXT("url"), Url)) continue;
+		if (Name.EndsWith(UpdaterUi::AssetSuffix))
+		{
+			R.AssetName = Name;
+			R.AssetUrl = Url;
+			A->TryGetNumberField(TEXT("size"), R.AssetSize);
+		}
+	}
+	for (const TSharedPtr<FJsonValue>& V : *Assets)
+	{
+		const TSharedPtr<FJsonObject> A = V.IsValid() ? V->AsObject() : nullptr;
+		FString Name, Url;
+		if (A.IsValid() && A->TryGetStringField(TEXT("name"), Name) && A->TryGetStringField(TEXT("url"), Url)
+			&& !R.AssetName.IsEmpty() && Name == R.AssetName + TEXT(".sha256"))
+		{
+			R.ChecksumUrl = Url;
+		}
+	}
+	return R;
 }
 
 void FFSDSUpdater::OnRelease(const FString& Body, int32 Code)
@@ -302,50 +353,58 @@ void FFSDSUpdater::OnRelease(const FString& Body, int32 Code)
 		Status = Channel == EChannel::Latest ? TEXT("No Latest build published yet.") : TEXT("No release published yet.");
 		return;
 	}
-	TSharedPtr<FJsonObject> Obj;
-	if (Code != 200 || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Body), Obj) || !Obj.IsValid())
-	{
-		Fail(FString::Printf(TEXT("GitHub answered %d."), Code));
-		return;
-	}
-
 	FRelease R;
-	FString When;
-	Obj->TryGetStringField(TEXT("tag_name"), R.Tag);
-	Obj->TryGetStringField(TEXT("name"), R.Name);
-	Obj->TryGetStringField(TEXT("published_at"), When);
-	FDateTime::ParseIso8601(*When, R.Published);
-	const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
-	if (Obj->TryGetArrayField(TEXT("assets"), Assets))
+	if (Channel == EChannel::Latest)
 	{
-		for (const TSharedPtr<FJsonValue>& V : *Assets)
+		TSharedPtr<FJsonObject> Obj;
+		if (Code != 200 || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Body), Obj) || !Obj.IsValid())
 		{
-			const TSharedPtr<FJsonObject> A = V->AsObject();
-			FString Name, Url;
-			if (!A.IsValid() || !A->TryGetStringField(TEXT("name"), Name) || !A->TryGetStringField(TEXT("url"), Url)) continue;
-			if (Name.EndsWith(UpdaterUi::AssetSuffix))
-			{
-				R.AssetName = Name;
-				R.AssetUrl = Url;
-				A->TryGetNumberField(TEXT("size"), R.AssetSize);
-			}
+			Fail(FString::Printf(TEXT("GitHub answered %d."), Code));
+			return;
 		}
-		for (const TSharedPtr<FJsonValue>& V : *Assets)
+		R = ReadRelease(*Obj);
+		if (R.AssetName.IsEmpty())
 		{
-			const TSharedPtr<FJsonObject> A = V->AsObject();
-			FString Name, Url;
-			if (A.IsValid() && A->TryGetStringField(TEXT("name"), Name) && A->TryGetStringField(TEXT("url"), Url)
-				&& !R.AssetName.IsEmpty() && Name == R.AssetName + TEXT(".sha256"))
-			{
-				R.ChecksumUrl = Url;
-			}
+			State = EState::UpToDate;
+			Status = FString::Printf(TEXT("The Latest build has no %s zip yet."), UpdaterUi::PlatformName);
+			return;
 		}
 	}
-	if (R.AssetName.IsEmpty())
+	else
 	{
-		State = EState::UpToDate;
-		Status = FString::Printf(TEXT("%s has no %s build yet."), *R.Tag, UpdaterUi::PlatformName);
-		return;
+		TArray<TSharedPtr<FJsonValue>> List;
+		if (Code != 200 || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Body), List))
+		{
+			Fail(FString::Printf(TEXT("GitHub answered %d."), Code));
+			return;
+		}
+		// The newest version with this OS's zip: a release is created with
+		// Linux, and the other OSes are added to it later.
+		FString NewestTag;
+		for (const TSharedPtr<FJsonValue>& V : List)
+		{
+			const TSharedPtr<FJsonObject> O = V.IsValid() ? V->AsObject() : nullptr;
+			bool bDraft = false, bPre = false;
+			if (!O.IsValid()) continue;
+			O->TryGetBoolField(TEXT("draft"), bDraft);
+			O->TryGetBoolField(TEXT("prerelease"), bPre);
+			if (bDraft || bPre) continue;
+			const FRelease C = ReadRelease(*O);
+			if (NewestTag.IsEmpty() || UpdaterUi::VersionLess(NewestTag, C.Tag)) NewestTag = C.Tag;
+			if (!C.AssetName.IsEmpty() && (R.AssetName.IsEmpty() || UpdaterUi::VersionLess(R.Tag, C.Tag))) R = C;
+		}
+		if (R.AssetName.IsEmpty())
+		{
+			State = EState::UpToDate;
+			Status = NewestTag.IsEmpty() ? FString(TEXT("No release published yet."))
+				: FString::Printf(TEXT("No release has a %s build yet."), UpdaterUi::PlatformName);
+			return;
+		}
+		if (NewestTag != R.Tag)
+		{
+			const FString Out = FString::Printf(TEXT("%s is out, without a %s build yet."), *NewestTag, UpdaterUi::PlatformName);
+			Note = Note.IsEmpty() ? Out : Note + TEXT(" ") + Out;
+		}
 	}
 
 	// Newer: published after this build's commit, and not this build.

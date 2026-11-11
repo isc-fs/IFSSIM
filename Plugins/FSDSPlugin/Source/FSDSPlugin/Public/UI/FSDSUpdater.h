@@ -4,6 +4,7 @@
 #include "Containers/Ticker.h"
 
 class FFSDSStackStarter;
+class FJsonObject;
 
 /**
  * The sim updates itself from the builds published on the repo's GitHub
@@ -11,7 +12,9 @@ class FFSDSStackStarter;
  *
  * Two channels: Stable, the tagged releases (vX.Y.Z), and Latest, the
  * rolling `latest-dev` pre-release of the last build of dev. Each OS takes
- * its own zip from the release. The repo is public, so checks need no
+ * its own zip: Stable is the newest version whose release has this OS's zip
+ * (Linux is published first; Windows and macOS follow when someone builds
+ * them). The repo is public, so checks need no
  * sign-in; when GitHub refuses one (60 an hour per network without a token),
  * it asks git for its GitHub login (`git credential fill`) and tries again.
  * $IFSSIM_GITHUB_TOKEN also works.
@@ -100,6 +103,8 @@ private:
 	void AskToken(bool bInteractive);
 	void FetchRelease();
 	void OnRelease(const FString& Body, int32 Code);
+	/** A release from GitHub's JSON, with this OS's zip and its .sha256 if it has them. */
+	static FRelease ReadRelease(const FJsonObject& Obj);
 	void Download(const FString& Url, bool bWithAuth);
 	void FetchChecksumThenHandOver();
 	void HandOver(const FString& Sha256);
