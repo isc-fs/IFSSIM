@@ -83,6 +83,11 @@ shipping pipeline, documentation.
   car characterisation drives the same cones on flat ground
   (`characterisation.csv`), since its turns need open space beside the
   start.
+- **Worlds keep the sim at real time.** On the `sim` preset a world's props
+  (trees, garages, seats, posts) are drawn only out to 300 m and cast no
+  shadows; `showcase` keeps the full detail. The LiDAR reaches 30 m, so its
+  view is unchanged. On the GPU box the Montmeló straight ran at about
+  51 FPS (0.85× real time) with the full detail. Needs a UE recompile.
 - **Montmeló surfaces and markings from the aerial photo.** Measured on the
   ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
   verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,

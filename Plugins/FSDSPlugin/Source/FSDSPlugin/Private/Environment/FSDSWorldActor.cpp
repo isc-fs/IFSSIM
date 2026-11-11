@@ -13,6 +13,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Engine/StaticMesh.h"
 #include "ProceduralMeshComponent.h"
+#include "Rendering/FSDSQualityPreset.h"
 
 namespace
 {
@@ -51,7 +52,7 @@ namespace
 	// The tree models' nominal size (tools/assetgen/blender: trees); each
 	// instance is scaled to its measured height and crown radius.
 	constexpr double TreeModelHeightM = 10.0, TreeModelRadiusM = 4.0;
-	constexpr double TreeCullM = 1500.0;   // the whole world: trees frame every view
+	constexpr double TreeCullM = 1500.0;   // the whole world in showcase; sim stops at SimPropCullM
 	// The ground beyond the survey: out this far, sloping down this much.
 	constexpr double SkirtM = 40000.0, SkirtBlendM = 300.0, SkirtDropM = 2.0;
 	// Window bands on plain LiDAR blocks: a 1.4 m band per 3.5 m storey, from
@@ -336,16 +337,32 @@ UHierarchicalInstancedStaticMeshComponent* AFSDSWorldActor::AddInstances(UStatic
 	H->SetMobility(EComponentMobility::Static);
 	H->SetCollisionProfileName(TEXT("NoCollision"));
 	H->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	H->SetCastShadow(bCastShadow);
-	H->SetCullDistances(int32(CullM * 80.0), int32(CullM * 100.0));   // fade out over the last 20 %
+	Instanced.Add(H);
+	InstancedDetail.Add({CullM, bCastShadow});
+	ApplyDetail(Instanced.Num() - 1);   // before registering, so the first render state is final
 	H->SetupAttachment(RootComponent);
 	H->RegisterComponent();
 	H->AddInstances(Transforms, /*bShouldReturnIndices=*/false, /*bWorldSpace=*/true);
-	Instanced.Add(H);
 	NumInstances += Transforms.Num();
 	PropTriangles += Transforms.Num() * (Mesh->GetRenderData() && Mesh->GetRenderData()->LODResources.Num()
 		? Mesh->GetRenderData()->LODResources[0].GetNumTriangles() : 0);
 	return H;
+}
+
+void AFSDSWorldActor::ApplyDetail(int32 Index)
+{
+	UHierarchicalInstancedStaticMeshComponent* H = Instanced[Index];
+	if (!H) return;
+	const FPropDetail& D = InstancedDetail[Index];
+	const double CullM = bShowcaseDetail ? D.CullM : FMath::Min(D.CullM, SimPropCullM);
+	H->SetCastShadow(bShowcaseDetail && D.bCastShadow);
+	H->SetCullDistances(int32(CullM * 80.0), int32(CullM * 100.0));   // fade out over the last 20 %
+}
+
+void AFSDSWorldActor::SetDetail(bool bShowcase)
+{
+	bShowcaseDetail = bShowcase;
+	for (int32 i = 0; i < Instanced.Num(); ++i) ApplyDetail(i);
 }
 
 void AFSDSWorldActor::SetStartLights(bool bOn)
@@ -362,6 +379,7 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	Clear();
 	if (!GetWorld() || World.Nx < 2 || World.Ny < 2) return;
 	const double T0 = FPlatformTime::Seconds();
+	bShowcaseDetail = FSDSQuality::Current() == FSDSQuality::EPreset::Showcase;
 
 	const FWorldFrame F{OriginCsvM};
 	const FGround G(World);
@@ -876,8 +894,9 @@ void AFSDSWorldActor::Build(const FFSDSWorld& World, const FVector2D& OriginCsvM
 	HideFloors();
 	bBuilt = true;
 	BuildSeconds = FPlatformTime::Seconds() - T0;
-	UE_LOG(LogTemp, Log, TEXT("FSDS World: built %s at (%.2f, %.2f) in %.2f s: %d meshes, %d triangles; %d prop instances, %lld triangles at full detail; floor hidden: %s"),
+	UE_LOG(LogTemp, Log, TEXT("FSDS World: built %s at (%.2f, %.2f) in %.2f s: %d meshes, %d triangles; %d prop instances, %lld triangles at full detail; %s detail; floor hidden: %s"),
 		*World.Name, OriginCsvM.X, OriginCsvM.Y, BuildSeconds, Meshes.Num(), NumTriangles, NumInstances, PropTriangles,
+		bShowcaseDetail ? TEXT("showcase") : TEXT("sim (props to 300 m, no prop shadows)"),
 		HiddenFloorNames.Num() ? *FString::Join(HiddenFloorNames, TEXT(", ")) : TEXT("none found"));
 }
 
@@ -941,6 +960,7 @@ void AFSDSWorldActor::Clear()
 		if (H) H->DestroyComponent();
 	}
 	Instanced.Reset();
+	InstancedDetail.Reset();
 	StartLights = nullptr;
 	bStartLightsOn = false;
 	bBuilt = false;

@@ -9,6 +9,8 @@
 #include "Environment/FSDSEnvironment.h"
 #include "Environment/FSDSWorld.h"
 #include "Environment/FSDSWorldActor.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Rendering/FSDSQualityPreset.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "FSDSCollision.h"
@@ -268,6 +270,31 @@ bool FFSDSWorldBuildTest::RunTest(const FString& Parameters)
 		A->SetStartLights(false);
 		TestFalse(TEXT("start lights out at GO"), A->AreStartLightsOn());
 		TestTrue(TEXT("builds in under 3 s"), A->GetBuildSeconds() < 3.0);
+
+		// Prop detail follows the rendering preset: sim (the default here)
+		// culls at SimPropCullM without shadows, showcase restores both.
+		auto Detail = [&](double& MaxCullM, bool& bAnyShadow)
+		{
+			MaxCullM = 0.0; bAnyShadow = false;
+			TInlineComponentArray<UHierarchicalInstancedStaticMeshComponent*> Hs(A);
+			for (UHierarchicalInstancedStaticMeshComponent* H : Hs)
+			{
+				MaxCullM = FMath::Max(MaxCullM, H->InstanceEndCullDistance / 100.0);
+				bAnyShadow |= H->CastShadow;
+			}
+		};
+		double CullM = 0.0; bool bShadow = false;
+		TestEqual(TEXT("built at the sim preset"), FSDSQuality::Current(), FSDSQuality::EPreset::Sim);
+		Detail(CullM, bShadow);
+		TestTrue(FString::Printf(TEXT("sim: props culled by %.0f m (%.0f)"), AFSDSWorldActor::SimPropCullM, CullM), CullM <= AFSDSWorldActor::SimPropCullM + 0.5);
+		TestFalse(TEXT("sim: no prop shadows"), bShadow);
+		A->SetDetail(true);
+		Detail(CullM, bShadow);
+		TestTrue(FString::Printf(TEXT("showcase: trees out to 1.5 km (%.0f)"), CullM), CullM > 1400.0);
+		TestTrue(TEXT("showcase: prop shadows"), bShadow);
+		A->SetDetail(false);
+		Detail(CullM, bShadow);
+		TestTrue(TEXT("back to sim"), CullM <= AFSDSWorldActor::SimPropCullM + 0.5 && !bShadow);
 
 		auto Ue = [&](double X, double Y, double Z) { return FVector((X + Origin.X) * 100.0, -(Y + Origin.Y) * 100.0, Z * 100.0); };
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(FSDSWorldBuildTest), /*bTraceComplex=*/true);

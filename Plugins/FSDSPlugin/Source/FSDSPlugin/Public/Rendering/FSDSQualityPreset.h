@@ -14,7 +14,9 @@
  *    frame time, so never benchmark on it.
  *
  * Neither changes what the sensors measure: the LiDAR's depth capture turns
- * lighting, GI and post-processing off whatever the preset.
+ * lighting, GI and post-processing off whatever the preset. In a world, sim
+ * also draws props (trees, garages, seats) only out to 300 m and without
+ * shadows (AFSDSWorldActor::SetDetail); the LiDAR reaches 30 m.
  *
  * Switch with the console command `FSDS.Quality sim|showcase`, or start with
  * `-showcase` on the command line. getSimStatus reports the active one.

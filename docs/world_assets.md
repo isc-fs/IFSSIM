@@ -43,7 +43,7 @@ Wear comes in as the mesh's vertex colour, not a texture: the world actor writes
 | `TreePineA`, `TreePineB` | 10 m stone pine: leaning trunk, umbrella crown of 7 to 9 clumps | At each of the world's `trees` of kind `pine`, scaled to its height and crown |
 | `TreeBroadleafA`, `TreeBroadleafB` | 10 m tree, 4 m crown radius: trunk forking at 3.2 m, 3 to 5 lobes | At each `broadleaf` tree |
 
-The world actor draws them as hierarchical instances with LODs (built by the importer) and cull distances. They have no collision: the GPU LiDAR renders them, and the car can't reach them past the walls.
+The world actor draws them as hierarchical instances with LODs (built by the importer) and cull distances. The `sim` preset culls them all by 300 m and turns their shadows off (docs/rendering_presets.md). They have no collision: the GPU LiDAR renders them, and the car can't reach them past the walls.
 
 ## Trees
 

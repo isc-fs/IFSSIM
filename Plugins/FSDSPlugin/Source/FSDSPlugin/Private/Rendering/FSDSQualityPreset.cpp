@@ -9,6 +9,7 @@
 #include "Containers/Ticker.h"
 #include "EngineUtils.h"
 #include "Environment/FSDSDaylight.h"
+#include "Environment/FSDSWorldActor.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -169,6 +170,10 @@ namespace FSDSQuality
 	void Apply(EPreset Preset, UWorld* World)
 	{
 		SetDaylight(World, Preset == EPreset::Showcase);
+		if (World)
+		{
+			for (TActorIterator<AFSDSWorldActor> It(World); It; ++It) It->SetDetail(Preset == EPreset::Showcase);
+		}
 		if (Preset == Active) return;
 		if (Preset == EPreset::Showcase)
 		{

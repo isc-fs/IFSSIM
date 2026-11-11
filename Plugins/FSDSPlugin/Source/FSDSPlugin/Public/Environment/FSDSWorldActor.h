@@ -33,6 +33,11 @@ class UStaticMesh;
  * tools/assetgen. Generated geometry carries UVs in metres. Props are drawn
  * as hierarchical instances with LODs and cull distances.
  *
+ * The rendering preset sets how far they reach (SetDetail): showcase draws
+ * every prop out to its own cull distance with shadows; sim culls them at
+ * SimPropCullM and drops their shadows, which keeps the sim at real time on
+ * a GTX 1080. Both keep everything the LiDAR (30 m) can reach.
+ *
  * While a world is built, the level's own flat floor is hidden and its
  * collision turned off (the terrain replaces it: the ground falls 7 m along
  * the Montmeló straight); Clear() puts it back.
@@ -70,6 +75,13 @@ public:
 	/** Prop triangles if every instance drew its full-detail LOD. */
 	int64 GetPropTriangles() const { return PropTriangles; }
 	const TArray<FString>& GetHiddenFloors() const { return HiddenFloorNames; }
+
+	/** Props culled at SimPropCullM without shadows (sim), or at their own
+	 *  distance with shadows (showcase). Build applies the active preset;
+	 *  FSDSQuality::Apply calls this when the preset changes. */
+	void SetDetail(bool bShowcase);
+	bool IsShowcaseDetail() const { return bShowcaseDetail; }
+	static constexpr double SimPropCullM = 300.0;
 	double GetBuildSeconds() const { return BuildSeconds; }
 
 private:
@@ -84,6 +96,11 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> Instanced;
+	/** Each instanced prop's showcase detail, index for index with Instanced. */
+	struct FPropDetail { double CullM = 0.0; bool bCastShadow = false; };
+	TArray<FPropDetail> InstancedDetail;
+	bool bShowcaseDetail = false;
+	void ApplyDetail(int32 Index);
 
 	/** The gantry's lens material, made dynamic so it can be lit. */
 	UPROPERTY()

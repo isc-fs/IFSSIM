@@ -11,6 +11,8 @@ The sim has two rendering presets.
 
 Neither preset changes what the sensors measure: the LiDAR depth capture turns lighting, GI and post-processing off whatever the preset.
 
+In a world (docs/worlds.md), `sim` draws the props (trees, garages, seats, posts) only out to 300 m and without shadows; `showcase` draws them to their own cull distances (trees to 1.5 km) with shadows. The LiDAR reaches 30 m, so it sees the same props either way. On the GPU box's GTX 1080, the full detail held the Montmeló straight to about 51 FPS (0.85× real time) against 60 FPS on flat ground.
+
 ## Switching
 
 - Start with it: add `-showcase` to the sim's command line.

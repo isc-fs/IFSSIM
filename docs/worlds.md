@@ -35,7 +35,7 @@ The acceleration track always runs here: `acceleration.csv` has a sidecar (`acce
 | Walls, fence posts | `FSDSProp` | Follow the ground in 2 m steps. The fence mesh has no collision, so the LiDAR sees through it. |
 | Buildings, grandstands | `FSDSProp` | Buildings: one box each, turned by `yaw_deg`; plain concrete blocks get a band of windows per 3.5 m storey. A deck (`base_z`) is a slab in the air, for footbridges. The pit building: garage fronts (every third one open), and a canopy (`canopy_m`) at roof level over them. Grandstand: stepped rows, back wall, roof slab if it has one; under the roof, galvanised sheet on a tapered rafter at each column and purlins every 3 m. |
 | Roof panels | none | Thin slabs on a building's flat roof or a grandstand's sloping one. Out of every sensor's reach. |
-| Trees | none | Instanced: two pine and two broadleaf models, scaled to each tree's height and crown, variant and turn picked from its position. Shadows on, culled past 1.5 km. |
+| Trees | none | Instanced: two pine and two broadleaf models, scaled to each tree's height and crown, variant and turn picked from its position. Shadows on and culled past 1.5 km in `showcase`; culled past 300 m without shadows in `sim`. |
 | Ground beyond the survey | none | A flat skirt from the terrain's edge out to 40 km, so the ground reaches the horizon instead of ending in sky. |
 | Props: seats, rails, roof columns, fence posts, boards, garage fronts, listed props | none | Instanced, with LODs ([world_assets.md](world_assets.md)). |
 
