@@ -1,4 +1,5 @@
 #include "FSDSGameMode.h"
+#include "Rendering/FSDSQualityPreset.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "FSDSConeSpawner.h"
@@ -72,6 +73,9 @@ void AFSDSGameMode::StartPlay()
 		UE_LOG(LogTemp, Log, TEXT("FSDS: ConeSpawner spawned with Referee wired (%d cones)"),
 			ConeSpawnerActor->SpawnedCones.Num());
 	}
+
+	// Rendering preset: -showcase on the command line (docs/rendering_presets.md).
+	FSDSQuality::ApplyCommandLine(GetWorld());
 
 	// Start RPC server (commands + sensor queries)
 	RpcServer.SetVehiclePawn(VehiclePawn);

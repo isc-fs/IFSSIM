@@ -39,6 +39,13 @@ struct FFSDSEnvironment
 	double GroundXMin = 0.0, GroundYMin = 0.0, GroundXMax = 0.0, GroundYMax = 0.0;
 
 	TArray<FFSDSEnvProp> Props;
+
+	/** A world (docs/worlds.md) to build around the track: its name under
+	 *  Content/tracks/worlds/, and where its origin sits in the track CSV
+	 *  frame (m). Mission Control's recentring moves it with the cones. */
+	bool bHasWorld = false;
+	FString WorldName;
+	double WorldX = 0.0, WorldY = 0.0;
 };
 
 namespace FSDSEnvironment

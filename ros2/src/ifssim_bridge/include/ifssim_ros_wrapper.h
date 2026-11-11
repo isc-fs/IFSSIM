@@ -17,6 +17,7 @@
 #include <fs_msgs/msg/extra_info.hpp>
 #include <fs_msgs/srv/reset.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 
@@ -105,6 +106,7 @@ private:
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
     void ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg);
     void ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg);
+    void assiStateCb(const std_msgs::msg::UInt8::SharedPtr msg);
     void resetSrvCb(
         const std::shared_ptr<fs_msgs::srv::Reset::Request> request,
         std::shared_ptr<fs_msgs::srv::Reset::Response> response);
@@ -278,6 +280,14 @@ private:
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_request_sub_;
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_reset_sub_;
     bool ebs_triggered_ = false;
+
+    // /assi/state (sim_supervisor) drives the start lights of a world's
+    // start gantry (docs/worlds.md): on at AS_READY, out at GO (AS_DRIVING)
+    // and in every other state. Sent on change, and again every few seconds
+    // so a restarted sim picks the state up; the plugin ignores repeats.
+    rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr assi_state_sub_;
+    int start_lights_sent_ = -1;   // -1: never sent
+    rclcpp::Time start_lights_sent_at_{0, 0, RCL_ROS_TIME};
     rclcpp::Service<fs_msgs::srv::Reset>::SharedPtr reset_srv_;
 
     // TF

@@ -78,6 +78,8 @@ cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
 for f in "$TRACKS_SRC/"*.env.json; do
     if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
 done
+# ...and the worlds their sidecars name (docs/worlds.md).
+if [ -d "$TRACKS_SRC/worlds" ]; then cp -R "$TRACKS_SRC/worlds" "$TRACKS_DST/"; fi
 echo "  Tracks staged: $(ls "$TRACKS_DST"/*.csv | wc -l | tr -d ' ') files"
 
 # 3. Copy settings.json to UE5's UserSettingsDir so FSDSSettings::AutoLoad

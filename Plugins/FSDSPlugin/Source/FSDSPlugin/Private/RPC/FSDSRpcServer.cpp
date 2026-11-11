@@ -8,6 +8,8 @@
 #include "FSDSVehiclePawn.h"
 #include "FSDSReferee.h"
 #include "Environment/FSDSEnvironmentBuilder.h"
+#include "Environment/FSDSWorldActor.h"
+#include "Rendering/FSDSQualityPreset.h"
 #include "FSDSConeSpawner.h"
 #include "FSDSSettings.h"
 #include "FSDSCoordinates.h"
@@ -2104,12 +2106,12 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 				bHasStartGate = true;
 				}
 
-				// environment: off | none | loaded | invalid (getEnvironment has
-				// the details, including why a sidecar was invalid).
+				// environment: off | none | loaded | invalid; world: none | loaded |
+				// invalid (getEnvironment has the details, including why).
 				return FString::Printf(
-					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\"}"),
+					TEXT("{\"loaded\":\"%s\",\"cones\":%d,\"car_aligned\":%s,\"environment\":\"%s\",\"world\":\"%s\"}"),
 					*JsonEscape(TrackPath), NumCones, bAligned ? TEXT("true") : TEXT("false"),
-					*JsonEscape(Spawner->GetEnvironmentStatus()));
+					*JsonEscape(Spawner->GetEnvironmentStatus()), *JsonEscape(Spawner->GetWorldStatus()));
 			},
 			5.0,
 			FString(TEXT("{\"error\":\"timeout\"}")),
@@ -2176,6 +2178,41 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 					}
 				}
 
+				// The world (docs/worlds.md), loaded whatever "enabled" says.
+				{
+					TSharedRef<FJsonObject> Wo = MakeShared<FJsonObject>();
+					Wo->SetStringField(TEXT("status"), Spawner->GetWorldStatus());
+					if (!Spawner->GetWorldError().IsEmpty())
+					{
+						Wo->SetStringField(TEXT("error"), Spawner->GetWorldError());
+					}
+					if (Spawner->GetWorldStatus() == TEXT("loaded"))
+					{
+						const FFSDSWorld& Tw = Spawner->GetTrackWorld();
+						Wo->SetStringField(TEXT("name"), Tw.Name);
+						Wo->SetStringField(TEXT("title"), Tw.Title);
+						Wo->SetStringField(TEXT("dir"), Tw.Dir);
+						Wo->SetNumberField(TEXT("x"), Spawner->GetTrackWorldOrigin().X);
+						Wo->SetNumberField(TEXT("y"), Spawner->GetTrackWorldOrigin().Y);
+						TArray<TSharedPtr<FJsonValue>> Attr;
+						for (const FString& A : Tw.Attribution) Attr.Add(MakeShared<FJsonValueString>(A));
+						Wo->SetArrayField(TEXT("attribution"), Attr);
+						if (const AFSDSWorldActor* Wa = Spawner->GetWorldActor())
+						{
+							Wo->SetBoolField(TEXT("built"), Wa->IsBuilt());
+							Wo->SetNumberField(TEXT("triangles"), Wa->GetNumTriangles());
+							Wo->SetNumberField(TEXT("prop_instances"), Wa->GetNumInstances());
+							Wo->SetStringField(TEXT("start_lights"), !Wa->HasStartLights() ? TEXT("none")
+								: Wa->AreStartLightsOn() ? TEXT("on") : TEXT("out"));
+							Wo->SetNumberField(TEXT("build_s"), Wa->GetBuildSeconds());
+							TArray<TSharedPtr<FJsonValue>> Hidden;
+							for (const FString& H : Wa->GetHiddenFloors()) Hidden.Add(MakeShared<FJsonValueString>(H));
+							Wo->SetArrayField(TEXT("hidden_floors"), Hidden);
+						}
+					}
+					Out->SetObjectField(TEXT("world"), Wo);
+				}
+
 				FString Json;
 				TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
 					TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
@@ -2207,6 +2244,29 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 	// === Event Type Control ===
 
+	else if (Method.StartsWith(TEXT("setStartLights")))
+	{
+		// setStartLights 1|0: the world's start lights (docs/worlds.md). The
+		// ROS bridge sends 1 when /assi/state reaches AS_READY and 0 at GO
+		// (AS_DRIVING) or any other state. Replies "on", "out", or "none"
+		// when the loaded world has no start gantry.
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() != 2 || (Parts[1] != TEXT("1") && Parts[1] != TEXT("0")))
+			return TEXT("{\"error\":\"usage: setStartLights 1|0\"}");
+		const bool bOn = Parts[1] == TEXT("1");
+		return CallOnGameThread<FString>(
+			[this, bOn]() -> FString {
+				AFSDSWorldActor* Wa = nullptr;
+				if (World)
+				{
+					if (TActorIterator<AFSDSConeSpawner> It(World); It) Wa = It->GetWorldActor();
+				}
+				if (!Wa || !Wa->HasStartLights()) return TEXT("{\"start_lights\":\"none\"}");
+				Wa->SetStartLights(bOn);
+				return Wa->AreStartLightsOn() ? TEXT("{\"start_lights\":\"on\"}") : TEXT("{\"start_lights\":\"out\"}");
+			}, 2.0, FString(TEXT("{\"error\":\"game thread busy\"}")), TEXT("setStartLights"));
+	}
 	else if (Method.StartsWith(TEXT("setEventType")))
 	{
 		// Parse: setEventType trackdrive [10]
@@ -2253,11 +2313,13 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// /clock use. The mission benchmark counts its timeouts in it, so a
 		// sim running slower than real time doesn't fail runs it finishes.
 		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
-		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f}"),
+		// quality: the rendering preset (docs/rendering_presets.md); a
+		// benchmark should refuse "showcase".
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,\"quality\":\"%s\"}"),
 			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
-			SimTime);
+			SimTime, FSDSQuality::Name(FSDSQuality::Current()));
 	}
 
 	// === Version ===

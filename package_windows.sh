@@ -116,6 +116,8 @@ cp "$TRACKS_SRC/"*.csv "$TRACKS_DST/"
 for f in "$TRACKS_SRC/"*.env.json; do
     if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
 done
+# ...and the worlds their sidecars name (docs/worlds.md).
+if [ -d "$TRACKS_SRC/worlds" ]; then cp -R "$TRACKS_SRC/worlds" "$TRACKS_DST/"; fi
 N_TRACKS=$(ls "$TRACKS_DST"/*.csv 2>/dev/null | wc -l | tr -d ' ')
 echo "    Tracks staged: $N_TRACKS files"
 

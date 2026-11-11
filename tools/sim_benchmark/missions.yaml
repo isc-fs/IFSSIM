@@ -22,6 +22,16 @@ acceleration:
   laps: 1
   timeout_s: 60
 
+# The same acceleration cones on the real Circuit de Barcelona-Catalunya straight
+# (docs/worlds.md): terrain, cross-fall, walls, grandstands and trees around the car.
+acceleration_montmelo:
+  mc_name: accel
+  tracks: [montmelo_straight_acceleration.csv]
+  repeats: 1
+  start_pose: {noise: false, lateral_m: 0.3, longitudinal_m: 0.3, yaw_deg: 5}
+  laps: 1
+  timeout_s: 60
+
 skidpad:
   mc_name: skidpad
   tracks: [skidpad.csv]

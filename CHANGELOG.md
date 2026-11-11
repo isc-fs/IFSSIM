@@ -40,6 +40,64 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **Realistic world assets.** Worlds are drawn with CC0 scanned materials
+  (asphalt, concrete, grass, steel, plastic) and props modelled in Blender to
+  real dimensions: grandstand seats, handrails, roof columns, catch-fence
+  posts, generic advertising boards, pit-garage fronts, a start gantry and
+  marshal posts. Props are instanced with LODs and have no collision.
+  `tools/assetgen` regenerates everything (docs/world_assets.md). A world can
+  place props by name with a new `props` list.
+
+- **Start lights.** A world's start gantry lights red at `AS_READY` and goes
+  out at GO. The ROS bridge forwards `/assi/state` to a new `setStartLights`
+  RPC; `getEnvironment` reports `world.start_lights`.
+
+- **`showcase` rendering preset.** Full resolution, epic scalability and Lumen
+  for demos and renders: `-showcase` on the command line or
+  `FSDS.Quality showcase`. It brings physically based daylight: the sun
+  where it stands during the event, a real-time sky light and fixed
+  exposure (`fsds.Daylight.Exposure`). `FSDS.Shot` takes a high-resolution
+  screenshot once lighting has settled. `getSimStatus` reports `quality`;
+  the default `sim` preset is unchanged (docs/rendering_presets.md).
+
+- **Montmeló main straight world.** Load `montmelo_straight_acceleration` to
+  run the acceleration event on the real Circuit de Barcelona-Catalunya
+  straight: measured terrain (it falls 7 m towards turn 1), the 20 m track with
+  its cross-fall, start and finish lines, pit lane, pit wall and fences, pit
+  building and main grandstand, all LiDAR-visible. Built at runtime from
+  ICGC LiDAR (CC BY 4.0) and OpenStreetMap (ODbL) data by `tools/worldgen`.
+  Worlds are a new sidecar key (`"world"`) and format (`ifssim-world/1`);
+  they load whatever `Environment.Enabled` says, and replace the level's flat
+  floor while loaded. See `docs/worlds.md`.
+- **Trees and buildings around the Montmeló straight.** From the same LiDAR:
+  775 trees (pine and broadleaf models, scaled to each tree), 43 more
+  buildings, footbridges included, and the four open grandstands opposite
+  the pits. The ground carries on to the horizon. World format: optional
+  `trees`, and building `yaw_deg`, `base_z` and `garages`; a grandstand's
+  roof is optional. `FSDS.View` places a free camera for renders. The
+  showcase preset drops its height fog, which drew a dark band at the
+  horizon. Needs a UE recompile.
+- **Montmeló surfaces and markings from the aerial photo.** Measured on the
+  ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
+  verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
+  the two extra transverse lines, the pit-lane lines, red band and green
+  verges, and the pit exit are painted where they are. Road paint is worn
+  into the asphalt grain (white, yellow, red, green). A wear map (`wear.u8`)
+  darkens the rubbered line left of centre by the measured 14 %. The pit
+  building has its canopy and every third garage open (`GarageBayOpen`);
+  both roofs carry their panels; the grandstand roof has galvanised sheet,
+  rafters and purlins underneath. World format: optional `wear`, line
+  `end_width_m` and colours `red`/`green`, building `canopy_m` and
+  `roof_panels`, grandstand `roof_panels`. From a ground-level photo at the
+  start line: the start gantry is rebuilt to the real one's shape (deeper
+  truss at 5 m, five columns of four lamps, camera mast, pit-side board) and
+  the catch fences are raised to 2.8 m (pit wall) and 2.1 m (grandstand
+  side). Needs a UE recompile.
+- **Acceleration on Montmeló in the sim check.** A new benchmark mission,
+  `acceleration_montmelo`, drives the acceleration cones on the Montmeló
+  straight world. The GPU runner's sim check runs it once per check as an
+  informational mission (reported, never fails the check;
+  `tools/ci/sim_check.json`).
 - **Car characterisation in the sim check.** `tools/characterise` drives the car
   with scripted inputs (no pipeline) before the missions and checks it against
   `settings.json`: full-lock radius both ways, steering linearity and low-speed
