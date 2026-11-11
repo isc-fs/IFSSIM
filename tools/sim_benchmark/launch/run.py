@@ -188,6 +188,151 @@ def where_and_who() -> dict[str, Any]:
     return out
 
 
+ENV_PROGRESS = "BENCH_PROGRESS_FILE"
+
+
+def run_queued(
+    m: mf.Manifest, j: dict[str, Any], on_tick: Callable[[], None] = lambda: None
+) -> str:
+    """Run one queued spec (``localq``) here, job by job; returns its final state."""
+    from . import localq as lq
+
+    jid = j["id"]
+    d = lq.queue_dir(m.results) / jid
+    try:
+        spec = sp.validate(j["spec"], m)
+        jobs = sp.expand(spec, m)
+    except sp.SpecError as e:
+        lq.set_state(m.results, jid, state="failed", ended=lq.now(), error=str(e))
+        return "failed"
+    lq.set_state(
+        m.results, jid, state="running", started=lq.now(), total=len(jobs), done=0,
+        waiting=None,
+    )
+    origin = where_and_who() | {"requested_by": j.get("requested_by") or _me()}
+    trigger = j.get("trigger") or "local"
+    failed = 0
+    for i, job in enumerate(jobs, 1):
+        rec = job.record(spec) | {
+            "job_id": f"{trigger}:{jid}/{i}",
+            "batch_id": jid,
+            "trigger": trigger,
+            **origin,
+        }
+        progress = d / f"progress_{i}.json"
+        lq.set_state(m.results, jid, current=job.label(), index=i, progress=None)
+
+        def stop(progress: Path = progress) -> bool:
+            on_tick()
+            p = lq.read_json(progress)
+            if p is not None:
+                lq.set_state(m.results, jid, progress=p)
+            return lq.cancel_requested(m.results, jid)
+
+        rc = execute(
+            m, rec, d / str(i), log=d / "worker.log", should_stop=stop,
+            env={ENV_PROGRESS: str(progress)},
+        )
+        last = lq.read_json(progress)  # a job may end before its first check
+        if rc == 130 and lq.cancel_requested(m.results, jid):
+            lq.set_state(m.results, jid, state="cancelled", ended=lq.now(), exit=130)
+            return "cancelled"
+        failed += rc != 0
+        lq.set_state(
+            m.results, jid, done=i, failed_jobs=failed,
+            **({"progress": last} if last is not None else {}),
+        )
+    final = "done" if failed == 0 else "failed"
+    lq.set_state(m.results, jid, state=final, ended=lq.now(), current=None)
+    return final
+
+
+def work(
+    m: mf.Manifest,
+    *,
+    once: bool = False,
+    poll_s: float = 2.0,
+    rig_every_s: float = 60.0,
+    check_rig: Callable[[], dict[str, Any]] | None = None,
+) -> int:
+    """``--work``: run the local queue's specs one at a time, oldest first. One worker
+    per results folder (a lock file); exit 3 if another holds it. ``once``: stop when
+    nothing is left to run."""
+    import fcntl
+
+    from . import localq as lq
+    from . import rig as rg
+
+    check_rig = check_rig or rg.check
+    bd = lq.bench_dir(m.results)
+    bd.mkdir(parents=True, exist_ok=True)
+    lock = (bd / "worker.lock").open("w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"another worker is running for {m.results}", file=sys.stderr)
+        return 3
+    status: dict[str, Any] = {}
+    last_rig = -1e9
+
+    def tick(current: str | None = None) -> None:
+        nonlocal status, last_rig
+        if time.monotonic() - last_rig > rig_every_s:
+            status = check_rig()
+            lq.write_json(bd / "rig.json", status)
+            last_rig = time.monotonic()
+        lq.heartbeat(m.results, job=current)
+
+    print(f"worker for {m.results}: waiting for queued specs", flush=True)
+    while True:
+        tick()
+        picked = None
+        for j in reversed([j for j in lq.jobs(m.results) if j["state"] == "queued"]):
+            probs = rg.problems(j["spec"], status)
+            if any(p["status"] == rg.ABSENT for p in probs):
+                lq.set_state(
+                    m.results, j["id"], state="failed", ended=lq.now(),
+                    error=f"this rig can't run it: {rg.describe(probs)}",
+                )
+                continue
+            if probs:  # not now: it waits, and others may go first
+                if j["status"].get("waiting") != rg.describe(probs):
+                    lq.set_state(m.results, j["id"], waiting=rg.describe(probs))
+                continue
+            picked = j
+            break
+        if picked is None:
+            if once:
+                return 0
+            time.sleep(poll_s)
+            continue
+        print(f"=== {picked['id']} {picked.get('name') or ''}", flush=True)
+        state = run_queued(m, picked, on_tick=lambda: tick(picked["id"]))
+        print(f"    {state}", flush=True)
+
+
+def print_status(summary: dict[str, Any]) -> None:
+    w = summary["worker"]
+    print(
+        f"worker: {'running' if w['alive'] else 'not running'}"
+        + (f" on {w.get('host')} (pid {w.get('pid')})" if w.get("pid") else "")
+    )
+    for j in summary["jobs"]:
+        st = j["status"]
+        bits = [st.get("current") or "", st.get("waiting") and f"waiting: {st['waiting']}",
+                st.get("error")]
+        if st.get("total"):
+            bits.insert(0, f"{st.get('done', 0)}/{st['total']} jobs")
+        extra = "  ".join(b for b in bits if b)
+        print(f"  {j['id']}  {j['state']:<9} {j.get('name') or '-':<30} {extra}")
+
+
+def print_rig(status: dict[str, Any]) -> None:
+    print(f"rig {status['id']} on {status['host']}")
+    for name, p in status["parts"].items():
+        print(f"  {name:<18} {p['status']:<12} {p.get('reason') or ''}")
+
+
 def print_list(m: mf.Manifest) -> None:
     print(f"repository  {m.root}")
     print(f"results     {m.results}")
@@ -235,6 +380,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--list", action="store_true", help="what the manifest offers")
     ap.add_argument("--stop-on-error", action="store_true")
+    local = ap.add_argument_group(
+        "the local queue",
+        "Mission Control's Local target queues specs; one worker runs them, one at a time",
+    )
+    local.add_argument(
+        "--queue", action="store_true", help="queue the spec instead of running it now"
+    )
+    local.add_argument(
+        "--work", action="store_true", help="run queued specs, one at a time, until stopped"
+    )
+    local.add_argument(
+        "--once", action="store_true", help="with --work: stop when nothing is left to run"
+    )
+    local.add_argument("--status", action="store_true", help="the worker and the queue")
+    local.add_argument("--cancel", metavar="ID", help="cancel a queued or running spec")
+    local.add_argument(
+        "--rig", action="store_true", help="what this machine can run now (launch/rig.py)"
+    )
+    local.add_argument("--json", action="store_true", help="--status / --rig as JSON")
     a = ap.parse_args(argv)
     # Who started it, recorded in each run's spec.json: "local" by hand, or what the
     # launcher sets (the bench PC's workflow: "runner"; Mission Control: "mission_control").
@@ -248,6 +412,26 @@ def main(argv: list[str] | None = None) -> int:
     if a.list:
         print_list(m)
         return 0
+    from . import localq as lq
+    from . import rig as rg
+
+    if a.rig:
+        status = rg.check()
+        print(json.dumps(status, indent=2)) if a.json else print_rig(status)
+        return 0
+    if a.status:
+        summary = lq.summary(m.results)
+        print(json.dumps(summary, indent=2, default=str)) if a.json else print_status(summary)
+        return 0
+    if a.cancel:
+        state = lq.cancel(m.results, a.cancel)
+        if state is None:
+            print(f"no queued spec {a.cancel}", file=sys.stderr)
+            return 1
+        print(f"{a.cancel}: {state}" + (" (cancel requested)" if state == "running" else ""))
+        return 0
+    if a.work:
+        return work(m, once=a.once)
     if not a.spec and not a.set:
         ap.error("give a spec file or preset (--list shows them)")
 
@@ -258,8 +442,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"The spec has problems:\n{e}", file=sys.stderr)
         return 2
 
+    if a.queue:
+        probs = rg.problems(spec, rg.check())
+        if probs:
+            print(f"note: not runnable here right now: {rg.describe(probs)}", file=sys.stderr)
+        jid = lq.enqueue(
+            m.results, spec, requested_by=where_and_who()["requested_by"], trigger=trigger
+        )
+        print(f"queued {jid} ({len(jobs)} job(s)); run_spec.py --work runs it")
+        return 0
+
     batch = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
-    work = m.results / WORK / batch
+    batch_dir = m.results / WORK / batch
     print("--- spec (merged) ---")
     print(yaml.safe_dump(spec, sort_keys=False).rstrip())
     print(f"--- {len(jobs)} job(s) ---")
@@ -278,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
             **origin,
         }
         records.append(rec)
-        cmd = command(m, rec, work / str(i))
+        cmd = command(m, rec, batch_dir / str(i))
         print(f"[{i}] {job.label()}  (spec {job.spec_id})\n    {shlex.join(cmd)}")
     if a.dry_run:
         return 0
@@ -287,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
         print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
         t0 = time.time()
-        rc = execute(m, rec, work / str(i))
+        rc = execute(m, rec, batch_dir / str(i))
         results.append((job, rc, time.time() - t0))
         if rc != 0:
             print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)

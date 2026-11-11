@@ -14,6 +14,13 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **A local benchmark queue for Mission Control's Benchmarks tab.** `POST /api/bench/launch`
+  (target `local`) queues a run spec in `tools/sim_benchmark/results/.bench/queue/`;
+  `run_spec.py --work` runs the queue on the host, one spec at a time. `GET /api/bench/queue`,
+  `POST /api/bench/cancel/{id}` and `run_spec.py --status / --cancel` show and stop it.
+  `run_spec.py --rig` and `GET /api/bench/rig` say what this machine can run now (GPU,
+  Docker, LattePanda, HIL), for the tab's component boxes.
+
 - **`tools/sim_benchmark/run_spec.py`: run a benchmark spec from IFSSIM itself.**
   The spec format and runner from IFS-DV-BENCHWEB's `bench-run` now live in
   `tools/sim_benchmark/launch/`, so the same command runs a spec on a laptop,

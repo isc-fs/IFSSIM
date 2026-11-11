@@ -34,6 +34,7 @@ from scoring import compute_scoring, valid_reference
 # for the orchestration contract this module relies on.
 import bag_recorder as _bag
 import benchmark_control_runner as _benchmark
+import bench_queue as _bench
 import mission_catalog as _missions
 import track_creator as _creator
 from ros_bridge import RosBridge, StartMissionOutcome
@@ -1668,6 +1669,47 @@ def export_session_log():
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename=session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"}
     )
+
+
+# === Benchmarks tab (bench_queue.py) ===
+
+class BenchLaunch(BaseModel):
+    spec: dict
+    target: str = "local"
+    name: Optional[str] = None
+    requested_by: Optional[str] = None
+
+
+@app.post("/api/bench/launch", dependencies=[Depends(require_api_key)])
+def bench_launch(req: BenchLaunch):
+    """Queue a run spec. Local: a worker on this machine runs it (run_spec.py --work)."""
+    try:
+        out = _bench.launch(req.spec, req.target, req.requested_by, req.name)
+    except _bench.LaunchError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    log_event("benchmark", f"queued {out['id']} ({req.target})")
+    return out
+
+
+@app.get("/api/bench/queue")
+def bench_queue(limit: int = Query(50, ge=1, le=500)):
+    """The local worker and the queued, running and finished specs, newest first."""
+    return _bench.queue(limit)
+
+
+@app.post("/api/bench/cancel/{job_id}", dependencies=[Depends(require_api_key)])
+def bench_cancel(job_id: str):
+    state = _bench.cancel(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no queued spec {job_id}")
+    log_event("benchmark", f"cancel {job_id}: {state}")
+    return {"id": job_id, "state": state}
+
+
+@app.get("/api/bench/rig")
+def bench_rig():
+    """What this machine can run now (sim, Docker, LattePanda, HIL), for the component boxes."""
+    return _bench.rig()
 
 
 # === WebSocket Telemetry ===
