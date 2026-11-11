@@ -213,7 +213,18 @@ noise, laps, timeouts), changed per run with the flags or `--mission-overrides <
 `sim_time`), so a sim running slower than real time (an editor build at 15 fps runs at a quarter of
 real time) still gets its full budget. Six times `timeout_s` of real time ends the run anyway, in
 case the sim stalls. A sim build that doesn't report `sim_time` falls back to real time and the
-log says so. `results.json` carries `race/run_sim_time_s` next to the real-time `race/run_time_s`.
+log says so. `results.json` carries `race/run_sim_time_s` next to the real-time `race/run_time_s`,
+and their ratio, `race/real_time_factor` (sim seconds per real second). Below 0.95,
+`race/real_time_ok` is 0: the sim ran slower than real time, so the pipeline had more time per sim
+second than on the car, and the run's timing results (lap times, latency) don't hold. Its driving
+results (cones, path) still do.
+
+**Slow motion** (`--speed-factor 0.25`, or 0.5, 0.1): the sim runs the pipeline's sessions at that
+fraction of real time, so the pipeline gets four (two, ten) times its real time per sim second. Use
+it to compare algorithms without the PC's speed in the result; its timing results are not the
+car's. The benchmark sets it before the first run and puts back the sim's own speed at the end;
+`race/speed_factor` records it, and `race/real_time_ok` is judged against it. See
+`docs/sim_timing.md`.
 
 **Pipeline parameter overrides** (`--pipeline-overrides <file.json>`, `{node: {param: value}}`; the
 `pipeline:` section of a run spec): checked against the pipeline's `bringup/config/params.yaml`

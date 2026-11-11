@@ -1,5 +1,7 @@
 #include "FSDSGameMode.h"
 #include "Rendering/FSDSQualityPreset.h"
+#include "FSDSRealTime.h"
+#include "UI/FSDSGraphics.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "FSDSConeSpawner.h"
@@ -123,6 +125,12 @@ void AFSDSGameMode::StartPlay()
 	// same backend as the web UI; off when there is no viewport.
 	Launcher.Init(GetWorld(), RefereeActor, VehiclePawn);
 
+	// How fast the simulation runs against the real clock (the HUD, getSimStatus).
+	FFSDSRealTime::Get().Start(GetWorld(), VehiclePawn);
+
+	// How the view is drawn (Settings, Graphics): the saved choice.
+	FFSDSGraphics::Get().Init(GetWorld());
+
 	// The HUD: the car's and the mission's state in a corner (H by default).
 	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);
 
@@ -133,8 +141,9 @@ void AFSDSGameMode::StartPlay()
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	Hud.Shutdown();
-
 	Menu.Shutdown();
+	FFSDSRealTime::Get().Stop();
+	FFSDSGraphics::Get().Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

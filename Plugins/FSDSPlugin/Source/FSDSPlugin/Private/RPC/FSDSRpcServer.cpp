@@ -1,4 +1,5 @@
 #include "RPC/FSDSRpcServer.h"
+#include "FSDSRealTime.h"
 #include "FMI/FSDSFmuPackage.h"
 #include "FMI/FSDSFmi3.h"
 #include "Plant/FSDSFmuPlant.h"
@@ -2097,12 +2098,36 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		// sim running slower than real time doesn't fail runs it finishes.
 		const double SimTime = World ? World->GetTimeSeconds() : 0.0;
 		// quality: the rendering preset (docs/rendering_presets.md); a
-		// benchmark should refuse "showcase".
-		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,\"quality\":\"%s\"}"),
+		// benchmark should refuse "showcase". real_time_factor: simulated
+		// seconds per real second over the last couple of seconds
+		// (FFSDSRealTime), 0 while unknown (paused). speed_factor: the speed set
+		// for while the pipeline drives (1 real time, below 1 slow motion);
+		// target_factor: what real_time_factor should read now (the slow motion
+		// while pacing, else 1).
+		const FFSDSRealTime& Rt = FFSDSRealTime::Get();
+		return FString::Printf(TEXT("{\"map\":\"%s\",\"fps\":%.1f,\"paused\":%s,\"api_control\":%s,\"sim_time\":%.3f,"
+			"\"quality\":\"%s\",\"real_time_factor\":%.3f,\"real_fps\":%.1f,\"speed_factor\":%.3f,\"target_factor\":%.3f}"),
 			*JsonEscape(MapName), FPS,
 			bSimPaused ? TEXT("true") : TEXT("false"),
 			bApiControlEnabled ? TEXT("true") : TEXT("false"),
-			SimTime, FSDSQuality::Name(FSDSQuality::Current()));
+			SimTime, FSDSQuality::Name(FSDSQuality::Current()), Rt.Factor(), Rt.Fps(), Rt.SpeedFactor(), Rt.TargetFactor());
+	}
+
+	// === Timing ===
+	//
+	// setSpeedFactor <f>: how fast the simulation runs while the pipeline
+	// drives. 1 is real time; below 1 a slow motion (0.5 gives the pipeline
+	// twice its real time per simulated second). Clamped to [0.05, 1].
+	else if (Method == TEXT("setSpeedFactor"))
+	{
+		TArray<FString> Parts;
+		Request.ParseIntoArray(Parts, TEXT(" "));
+		if (Parts.Num() < 2 || !Parts[1].IsNumeric())
+		{
+			return TEXT("{\"error\":\"usage: setSpeedFactor <0.05..1>\"}");
+		}
+		FFSDSRealTime::Get().SetSpeedFactor(FCString::Atod(*Parts[1]));
+		return FString::Printf(TEXT("{\"ok\":true,\"speed_factor\":%.3f}"), FFSDSRealTime::Get().SpeedFactor());
 	}
 
 	// === Version ===
@@ -2338,6 +2363,20 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	int32 Sent = 0;
 	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
 
+	// 400 frames per second of SIM time. The latest tick's frame is resent
+	// until the next tick replaces it, so at 60 fps each tick goes out about
+	// 6.7 times. Paced on the wall clock alone, slow motion (FFSDSRealTime)
+	// would send far more per sim second (27 per tick at 0.25x): 1600 IMU
+	// samples per sim second and a GPS, GSS and odometry the bridge counts
+	// off this stream at four times their rate. So each new tick earns sends
+	// for the sim time it advanced, one per StreamPeriodNs, and each send
+	// spends one: the same frames as before at real time, the same rate in
+	// sim time in slow motion.
+	constexpr int64 StreamPeriodNs = 2'500'000;   // 400 Hz
+	constexpr double MaxStreamCredit = 40.0;      // 0.1 s of sim time: no burst after a pause
+	uint64 LastStampNs = 0;
+	double StreamCredit = 0.0;
+
 	while (bRunning)
 	{
 		if (!IsValid(VehiclePawn)) { FPlatformProcess::Sleep(0.1f); continue; }
@@ -2358,6 +2397,17 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		}
 		if (!bHaveFrame) { FPlatformProcess::Sleep(0.0025f); continue; }
 
+		if (Frame.Timestamp != LastStampNs)
+		{
+			// A new tick (or a new session, whose clock went back): its share.
+			StreamCredit = (LastStampNs == 0 || Frame.Timestamp < LastStampNs)
+				? 1.0
+				: FMath::Min(StreamCredit + double(Frame.Timestamp - LastStampNs) / StreamPeriodNs, MaxStreamCredit);
+			LastStampNs = Frame.Timestamp;
+		}
+		if (StreamCredit < 1.0) { FPlatformProcess::Sleep(0.0025f); continue; }
+		StreamCredit -= 1.0;
+
 		Frame.FrameID = StreamFrameCounter++;
 		// Wall clock at send time (latency/health only, never integrated).
 		Frame.ExternalTimestamp =
@@ -2371,7 +2421,8 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 			return;
 		}
 
-		// Pace at ~400Hz — matches BMI088 IMU rate
+		// Pace at ~400Hz of wall time between sends (the BMI088's rate); the
+		// credit above holds it to 400 Hz of sim time.
 		FPlatformProcess::Sleep(0.0025f);
 	}
 }

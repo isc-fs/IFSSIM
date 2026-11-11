@@ -38,6 +38,10 @@ public:
 		SLATE_EVENT(FOnFSDSTestDrive, OnTestDrive)
 		SLATE_EVENT(FSimpleDelegate, OnTracksChanged)
 		SLATE_EVENT(FSimpleDelegate, OnStartStack)
+		SLATE_EVENT(FSimpleDelegate, OnRebuildPipeline)
+		SLATE_ARGUMENT(TFunction<FString()>, RebuildStatus)
+		SLATE_ARGUMENT(TFunction<bool()>, IsRebuilding)
+		SLATE_ARGUMENT(TFunction<bool()>, RebuildFailed)
 		SLATE_EVENT(FOnFSDSDrive, OnDrive)
 		SLATE_EVENT(FSimpleDelegate, OnResume)
 		SLATE_EVENT(FSimpleDelegate, OnRestart)
@@ -49,6 +53,9 @@ public:
 
 	/** A line under START, e.g. why a track would not load. */
 	void SetMessage(const FString& Msg, bool bError);
+	/** START's question when the team's code isn't on this PC: Text and the
+	 *  answers (FFSDSMenu::OnRepoChoice). An empty Text hides it. */
+	void SetRepoPrompt(const FString& Text, TFunction<void(int32)> OnChoice);
 
 	/** The tracks folders changed, e.g. a track was saved in the editor. */
 	void SetTracks(const TArray<FFSDSMenuTrack>& InTracks, const TArray<FSDSVenue::FVenueRef>& InVenues);
@@ -67,6 +74,13 @@ private:
 
 	TSharedRef<SWidget> MakeNavButton(const FText& Label, EPage Page);
 	TSharedRef<SWidget> MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick);
+	/** A TIMING choice: the speed while the pipeline drives (FFSDSRealTime). */
+	TSharedRef<SWidget> SpeedChoice(const FText& Label, double Speed);
+	/** A Settings, Graphics row: a label, then one button per choice (FFSDSGraphics). */
+	struct FGraphicsChoice { FText Label; TFunction<bool()> IsOn; TFunction<void()> OnPick; };
+	TSharedRef<SWidget> GraphicsRow(const FText& Label, const TArray<FGraphicsChoice>& Choices);
+	/** What Find the best settled on, shown beside the button. */
+	FString RecommendResult;
 	TSharedRef<SWidget> MakeBigButton(const FText& Label, FLinearColor Color, FSimpleDelegate OnClick,
 		TAttribute<bool> Enabled = true);
 	TSharedRef<SWidget> MakeHeading(const FText& Title);
@@ -117,6 +131,16 @@ private:
 
 	FString Message;
 	bool bMessageError = false;
+	FString RepoPrompt;
+	TFunction<void(int32)> OnRepoChoice;
+	/** Settings, PIPELINE CODE: the folder, and what the last Change... said. */
+	FString RepoShown;
+	FString RepoNote;
+	/** Settings, Rebuild pipeline (FFSDSMenu::RebuildPipeline). */
+	FSimpleDelegate OnRebuildPipeline;
+	TFunction<FString()> RebuildStatus;
+	TFunction<bool()> IsRebuilding;
+	TFunction<bool()> RebuildFailed;
 
 	TSharedPtr<SScrollBox> DriveList;
 	TSharedPtr<SFSDSTrackMap> DriveMap;

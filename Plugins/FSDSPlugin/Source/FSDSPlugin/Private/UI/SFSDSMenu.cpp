@@ -1,6 +1,8 @@
 #include "UI/SFSDSMenu.h"
 
 #include "UI/SFSDSTrackMap.h"
+#include "UI/FSDSGraphics.h"
+#include "UI/FSDSStackStarter.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -12,6 +14,7 @@
 #include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -71,6 +74,10 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	OnTestDrive = InArgs._OnTestDrive;
 	OnTracksChanged = InArgs._OnTracksChanged;
 	OnStartStack = InArgs._OnStartStack;
+	OnRebuildPipeline = InArgs._OnRebuildPipeline;
+	RebuildStatus = InArgs._RebuildStatus;
+	IsRebuilding = InArgs._IsRebuilding;
+	RebuildFailed = InArgs._RebuildFailed;
 	Client = InArgs._Client;
 	EditorState = InArgs._EditorState;
 	if (InArgs._StartInEditor) Page = EPage::Editor;
@@ -95,6 +102,12 @@ void SFSDSMenu::Construct(const FArguments& InArgs)
 	{
 		SetEvent(Event, bPractice);   // fills the list, keeps the last track if it fits
 	}
+}
+
+void SFSDSMenu::SetRepoPrompt(const FString& Text, TFunction<void(int32)> OnChoice)
+{
+	RepoPrompt = Text;
+	OnRepoChoice = MoveTemp(OnChoice);
 }
 
 void SFSDSMenu::SetMessage(const FString& Msg, bool bError)
@@ -162,6 +175,30 @@ TSharedRef<SWidget> SFSDSMenu::MakeNavButton(const FText& Label, EPage InPage)
 				return FSlateColor(Page == InPage ? MenuUi::Accent : MenuUi::Ink);
 			})
 		];
+}
+
+TSharedRef<SWidget> SFSDSMenu::GraphicsRow(const FText& Label, const TArray<FGraphicsChoice>& Choices)
+{
+	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SBox).WidthOverride(200.f)
+			[
+				SNew(STextBlock).Text(Label).Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+			]
+		];
+	for (const FGraphicsChoice& C : Choices)
+	{
+		Row->AddSlot().AutoWidth().Padding(0, 0, 3, 0) [ MakeChoice(C.Label, C.IsOn, C.OnPick) ];
+	}
+	return Row;
+}
+
+TSharedRef<SWidget> SFSDSMenu::SpeedChoice(const FText& Label, double Speed)
+{
+	return MakeChoice(Label,
+		[Speed]() { return FMath::IsNearlyEqual(FFSDSRealTime::Get().SpeedFactor(), Speed, 1e-3); },
+		[Speed]() { FFSDSRealTime::Get().SetSpeedFactor(Speed); });
 }
 
 TSharedRef<SWidget> SFSDSMenu::MakeChoice(const FText& Label, TFunction<bool()> IsOn, TFunction<void()> OnPick)
@@ -412,7 +449,14 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 						.Visibility_Lambda([this]() { return bPractice ? EVisibility::Collapsed : EVisibility::Visible; })
 						[
 							MakeChoice(LOCTEXT("Autonomous", "Autonomous"),
-								[this]() { return bAutonomous; }, [this]() { bAutonomous = true; })
+								[this]() { return bAutonomous; },
+								[this]()
+								{
+									// Switching to the pipeline starts at real time; slow
+									// motion is a choice made after.
+									if (!bAutonomous) FFSDSRealTime::Get().SetSpeedFactor(1.0);
+									bAutonomous = true;
+								})
 						]
 					]
 				]
@@ -423,13 +467,46 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					{
 						return bAutonomous
 							? FText::Format(LOCTEXT("AutoHint",
-								"The DV pipeline drives. START opens Mission Control ({0}), where the session starts; "
-								"it needs the Docker stack."), LauncherKey)
+								"The DV pipeline drives. START loads the track and starts the session through "
+								"Mission Control's backend, starting the Docker stack first if it isn't running. Esc during the run: stop "
+								"it or start again. ({0} opens the engineers' panel.)"), LauncherKey)
 							: bPractice ? LOCTEXT("ManualHintPractice", "You drive with the keyboard or a gamepad. Esc pauses. "
 								"Practice is for you; for the pipeline, pick an event.")
 							: LOCTEXT("ManualHint", "You drive with the keyboard or a gamepad. Esc pauses.");
 					})
 					.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+				]
+				// How fast the simulation runs while the pipeline drives.
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SVerticalBox)
+					.Visibility_Lambda([this]() { return bAutonomous ? EVisibility::Visible : EVisibility::Collapsed; })
+					+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Timing", "TIMING")) ]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						// "Real time" needs more room than the slow motions.
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.7f).Padding(3.f) [ SpeedChoice(LOCTEXT("RealTime", "Real time"), 1.0) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow50", "0.5x"), 0.5) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow25", "0.25x"), 0.25) ]
+						+ SHorizontalBox::Slot().FillWidth(1.f).Padding(3.f) [ SpeedChoice(LOCTEXT("Slow10", "0.1x"), 0.1) ]
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(3, 6, 3, 0)
+					[
+						SNew(STextBlock)
+						.Text_Lambda([]()
+						{
+							const double S = FFSDSRealTime::Get().SpeedFactor();
+							return S >= 1.0
+								? LOCTEXT("RealTimeHint", "For the car's computer: the sim keeps pace with the real "
+									"world, as on track. The HUD warns if this PC can't keep up.")
+								: FText::Format(LOCTEXT("SlowHint", "For comparing algorithms: the sim runs at {0} of real "
+									"time, so the pipeline gets {1}x its real time per step. Physics and sensors are "
+									"unchanged; the view is choppier."),
+									FText::FromString(FString::Printf(TEXT("%gx"), S)), FText::AsNumber(FMath::RoundToInt(1.0 / S)));
+						})
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(3, 14, 3, 0)
 				[
@@ -454,6 +531,29 @@ TSharedRef<SWidget> SFSDSMenu::BuildDrivePage()
 					.Visibility_Lambda([this]() { return Message.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 					.ColorAndOpacity_Lambda([this]() { return FSlateColor(bMessageError ? MenuUi::Bad : MenuUi::Good); })
 					.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(3, 8, 3, 0)
+				[
+					SNew(SVerticalBox)
+					.Visibility_Lambda([this]() { return RepoPrompt.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]() { return FText::FromString(RepoPrompt); })
+						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+					[
+						SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(3.f, 3.f))
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoGet", "Get it"), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(0); }) ]
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoElsewhere", "Somewhere else..."), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(1); }) ]
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoHave", "I have it..."), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(2); }) ]
+						+ SWrapBox::Slot() [ MakeChoice(LOCTEXT("RepoNotNow", "Not now"), []() { return false; },
+							[this]() { if (OnRepoChoice) OnRepoChoice(3); }) ]
+					]
 				]
 			]
 		]
@@ -487,7 +587,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 			Best = Best > 0.f ? FMath::Min(Best, L) : L;
 		}
 		const FString Head = FString::Printf(TEXT("%s   %s  ·  %s"),
-			*R.When.ToString(TEXT("%H:%M")), *R.Track, *FFSDSMenu::EventName(R.Event, R.bPractice));
+			*R.When.ToString(TEXT("%H:%M")), *R.Track,
+			*(FFSDSMenu::EventName(R.Event, R.bPractice) + (R.bAutonomous ? TEXT(", autonomous") : TEXT(""))));
 		FString Body = R.bPractice ? FString::Printf(TEXT("Laps %d"), R.Laps.Num())
 			: FString::Printf(TEXT("Laps %d/%d"), R.Laps.Num(), R.RequiredLaps);
 		if (R.Laps.Num() > 0)
@@ -558,6 +659,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildResultsPage()
 
 TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 {
+	RepoShown = FFSDSStackStarter::FindComposeDir();
 	TSharedRef<SVerticalBox> Keys = SNew(SVerticalBox);
 	auto Row = [&Keys](const FText& Key, const FText& What)
 	{
@@ -593,6 +695,174 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Controls", "CONTROLS")) ]
 		+ SVerticalBox::Slot().AutoHeight() [ Keys ]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Performance", "PERFORMANCE")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("MenuFps", "Menu frame rate"))
+					.Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("Fps60", "60"), []() { return FFSDSMenu::GetMenuFrameRate() == 60; }, []() { FFSDSMenu::SetMenuFrameRate(60); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("Fps30", "30"), []() { return FFSDSMenu::GetMenuFrameRate() == 30; }, []() { FFSDSMenu::SetMenuFrameRate(30); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("Fps15", "15"), []() { return FFSDSMenu::GetMenuFrameRate() == 15; }, []() { FFSDSMenu::SetMenuFrameRate(15); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("MenuFpsHint",
+				"While this menu is up and nothing drives, the sim draws this many frames a second "
+				"({0} when its window is minimised), so it costs less in the background. A run always "
+				"goes at the sim's full rate: every frame is a fixed physics step, so fewer frames would "
+				"slow the simulation down and give the pipeline more time than on the car. The HUD's "
+				"\"Real time\" line shows how close a run is to real time."), FText::AsNumber(FFSDSMenu::MinimisedFrameRate)))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Graphics", "GRAPHICS")) ]
+		+ SVerticalBox::Slot().AutoHeight() [ GraphicsRow(LOCTEXT("GQuality", "Quality"),
+			{ { LOCTEXT("GLow", "Low"), []() { return FFSDSGraphics::Get().GetSettings().Quality == FFSDSGraphics::EQuality::Low; },
+				  []() { FFSDSGraphics::Get().SetQuality(FFSDSGraphics::EQuality::Low); } },
+			  { LOCTEXT("GMedium", "Medium"), []() { return FFSDSGraphics::Get().GetSettings().Quality == FFSDSGraphics::EQuality::Medium; },
+				  []() { FFSDSGraphics::Get().SetQuality(FFSDSGraphics::EQuality::Medium); } },
+			  { LOCTEXT("GHigh", "High"), []() { return FFSDSGraphics::Get().GetSettings().Quality == FFSDSGraphics::EQuality::High; },
+				  []() { FFSDSGraphics::Get().SetQuality(FFSDSGraphics::EQuality::High); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0) [ GraphicsRow(LOCTEXT("GRes", "Resolution"),
+			{ { LOCTEXT("G25", "25%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 25; }, []() { FFSDSGraphics::Get().SetResolution(25); } },
+			  { LOCTEXT("G50", "50%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 50; }, []() { FFSDSGraphics::Get().SetResolution(50); } },
+			  { LOCTEXT("G75", "75%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 75; }, []() { FFSDSGraphics::Get().SetResolution(75); } },
+			  { LOCTEXT("G100", "100%"), []() { return FFSDSGraphics::Get().GetSettings().ResolutionPct == 100; }, []() { FFSDSGraphics::Get().SetResolution(100); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0) [ GraphicsRow(LOCTEXT("GView", "View while the pipeline drives"),
+			{ { LOCTEXT("GShown", "Shown"), []() { return !FFSDSGraphics::Get().GetSettings().bHideViewWhileAutonomous; },
+				  []() { FFSDSGraphics::Get().SetHideViewWhileAutonomous(false); } },
+			  { LOCTEXT("GHidden", "Hidden"), []() { return FFSDSGraphics::Get().GetSettings().bHideViewWhileAutonomous; },
+				  []() { FFSDSGraphics::Get().SetHideViewWhileAutonomous(true); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				MakeChoice(LOCTEXT("GFind", "Find the best for this PC"),
+					[]() { return FFSDSGraphics::Get().IsRecommending(); },
+					[this]()
+					{
+						RecommendResult.Reset();
+						TWeakPtr<SFSDSMenu> Weak = SharedThis(this);
+						FFSDSGraphics::Get().Recommend([Weak](const FString& Msg)
+						{
+							if (TSharedPtr<SFSDSMenu> M = Weak.Pin()) M->RecommendResult = Msg;
+						});
+					})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					const FFSDSGraphics& G = FFSDSGraphics::Get();
+					return FText::FromString(G.IsRecommending() ? G.RecommendProgress() : RecommendResult);
+				})
+				.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("GraphicsHint",
+				"These only change the view you watch: the LiDAR renders its own images of the scene, and its "
+				"scans stay the same at every setting. Low at 25% is the cheapest. Hiding the view while the "
+				"pipeline drives gives its GPU and CPU time back (the HUD and the Esc box still show). Find the "
+				"best tries each setting for a few seconds and keeps the best looking one that leaves the GPU "
+				"room within each 1/60 s frame."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("PipelineCode", "PIPELINE CODE")) ]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				MakeChoice(LOCTEXT("RepoChange", "Change..."), []() { return false; }, [this]()
+				{
+					FString Picked;
+					if (!FFSDSStackStarter::PickFolder(TEXT("The IFSSIM folder (with docker-compose.yml in it)"),
+						RepoShown.IsEmpty() ? FFSDSStackStarter::SuggestedRepoDir() : RepoShown, Picked)) return;
+					if (!FFSDSStackStarter::IsRepo(Picked))
+					{
+						RepoNote = FString::Printf(TEXT("%s has no docker-compose.yml: pick the IFSSIM folder itself."), *Picked);
+						return;
+					}
+					FFSDSStackStarter::SaveRepoDir(Picked);
+					RepoShown = FFSDSStackStarter::FindComposeDir();
+					RepoNote = RepoShown == Picked ? FString()
+						: TEXT("Saved, but settings.json's MissionControl.ComposeDir or IFSSIM_ROOT points elsewhere and wins.");
+					OnTracksChanged.ExecuteIfBound();   // its tracks
+				})
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]()
+				{
+					if (RepoShown.IsEmpty()) return FText::FromString(TEXT("Not on this PC. START with Autonomous offers to get it."));
+					FString Shown = RepoShown;
+					FPaths::MakePlatformFilename(Shown);   // C:\Users\..., as Windows shows it
+					return FText::FromString(Shown);
+				})
+				.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Ink).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this]()
+			{
+				return FText::FromString(RepoNote.IsEmpty()
+					? FString(TEXT("The team's code (the IFSSIM repo): the pipeline and Mission Control's backend run from it in Docker, "
+						"and START with Autonomous starts them."))
+					: RepoNote);
+			})
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity_Lambda([this]() { return FSlateColor(RepoNote.IsEmpty() ? MenuUi::Muted : MenuUi::Bad); })
+			.AutoWrapText(true)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				MakeChoice(LOCTEXT("Rebuild", "Rebuild pipeline"),
+					[this]() { return IsRebuilding && IsRebuilding(); },
+					[this]() { OnRebuildPipeline.ExecuteIfBound(); })
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() { return FText::FromString(RebuildStatus ? RebuildStatus() : FString()); })
+				.ColorAndOpacity_Lambda([this]() { return FSlateColor(RebuildFailed && RebuildFailed() ? MenuUi::Bad : MenuUi::Good); })
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("RebuildHint",
+				"Python changes in pipeline/ need nothing: START copies your pipeline code into the container before "
+				"every run. Rebuild after changing C++, messages, launch files or a setup.py, or after a git pull: it "
+				"builds the pipeline and the backend from your code (seconds to minutes) and restarts them."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Config", "CONFIGURATION")) ]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
@@ -641,7 +911,8 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 	{
 		Buttons->AddSlot().AutoHeight().Padding(0, 4)
 		[
-			MakeBigButton(LOCTEXT("Resume", "Resume"), MenuUi::GoBtn, OnResume)
+			MakeBigButton(Last.IsSet() && Last->bAutonomous ? LOCTEXT("BackToRun", "Back to the run") : LOCTEXT("Resume", "Resume"),
+			MenuUi::GoBtn, OnResume)
 		];
 	}
 	Buttons->AddSlot().AutoHeight().Padding(0, 4)
@@ -672,7 +943,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(STextBlock)
-						.Text(bPause ? LOCTEXT("Paused", "PAUSED") : LOCTEXT("RunDone", "RUN FINISHED"))
+						.Text(!bPause ? LOCTEXT("RunDone", "RUN FINISHED")
+							: Last.IsSet() && Last->bAutonomous ? LOCTEXT("AutoRunning", "THE PIPELINE IS DRIVING")
+							: LOCTEXT("Paused", "PAUSED"))
 						.Font(MenuUi::MenuFont(22, TEXT("Bold"))).ColorAndOpacity(MenuUi::Accent)
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
@@ -727,7 +1000,9 @@ TSharedRef<SWidget> SFSDSMenu::BuildRunBox()
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
 					[
 						SNew(STextBlock)
-						.Text(bPause ? LOCTEXT("EscResume", "Esc: resume") : FText::GetEmpty())
+						.Text(!bPause ? FText::GetEmpty()
+							: Last.IsSet() && Last->bAutonomous ? LOCTEXT("EscBack", "The run goes on behind this box. Main menu stops it.")
+							: LOCTEXT("EscResume", "Esc: resume"))
 						.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
 					]
 				]

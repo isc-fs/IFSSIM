@@ -156,6 +156,12 @@ bool FFSDSSettings::LoadFromString(const FString& JsonString)
 	UE_LOG(LogTemp, Log, TEXT("FSDS Settings: Environment %s"),
 		bEnvironmentEnabled ? TEXT("enabled (track sidecars are loaded)") : TEXT("off (flat world)"));
 
+	const TSharedPtr<FJsonObject>* TimingObj;
+	if (Root->TryGetObjectField(TEXT("Timing"), TimingObj))
+	{
+		(*TimingObj)->TryGetNumberField(TEXT("SpeedFactor"), TimingSpeedFactor);
+	}
+
 	// Vehicles
 	const TSharedPtr<FJsonObject>* VehiclesObj;
 	if (Root->TryGetObjectField(TEXT("Vehicles"), VehiclesObj))
