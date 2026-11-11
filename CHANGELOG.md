@@ -163,12 +163,13 @@ shipping pipeline, documentation.
   UPDATES: Builds Stable (tagged releases, the default) or Latest (the
   rolling `latest-dev` pre-release), this build, Check now, Update and
   restart, Back to the previous build; the main menu says when a newer build
-  is out. It signs in with the GitHub login git keeps (`git credential
-  fill`; `IFSSIM_GITHUB_TOKEN` also works), downloads the zip, and a
+  is out. No sign-in (the repo is public; if GitHub refuses a check it
+  uses git's GitHub login, or `IFSSIM_GITHUB_TOKEN`), downloads the zip, and a
   PowerShell helper checks its `.sha256`, unzips it, keeps the old folder as
   `<folder>-previous` and restarts the sim. `package_windows.sh` writes
   `build.json` (version, commit, commit time) next to the exe, and
-  `tools/publish_windows_build.sh stable|latest` publishes a build. The sim
+  `tools/publish_build.sh stable|latest` publishes this OS's build: whoever
+  has time on a release adds theirs to it, by hand or from a runner. The sim
   also compares the team's code with its own commit (Settings, PIPELINE
   CODE): when the copy is older, clean and on `dev`, Bring the stack in step
   fast-forwards it and rebuilds; the pipeline submodule moves with it only

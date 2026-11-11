@@ -7,12 +7,14 @@ class FFSDSStackStarter;
 
 /**
  * The sim updates itself from the builds published on the repo's GitHub
- * Releases (tools/publish_windows_build.sh): Settings, UPDATES.
+ * Releases (tools/publish_build.sh): Settings, UPDATES.
  *
  * Two channels: Stable, the tagged releases (vX.Y.Z), and Latest, the
- * rolling `latest-dev` pre-release of the last build of dev. The repo is
- * private, so the API needs a GitHub token: the one git already keeps from
- * cloning the team's code (`git credential fill`), or $IFSSIM_GITHUB_TOKEN.
+ * rolling `latest-dev` pre-release of the last build of dev. Each OS takes
+ * its own zip from the release. The repo is public, so checks need no
+ * sign-in; when GitHub refuses one (60 an hour per network without a token),
+ * it asks git for its GitHub login (`git credential fill`) and tries again.
+ * $IFSSIM_GITHUB_TOKEN also works.
  *
  * A build knows what it is from build.json next to IFSSIM.exe (written by
  * package_windows.sh). A newer build is one published after this build's
@@ -39,7 +41,7 @@ public:
 	EChannel GetChannel() const { return Channel; }
 	void SetChannel(EChannel InChannel);
 
-	/** Ask GitHub. Interactive: git may open the browser to sign in. */
+	/** Ask GitHub. Interactive: if GitHub refuses, git may open the browser to sign in. */
 	void Check(bool bInteractive);
 	/** Download the newer build, then hand over to the helper and quit. */
 	void Update();
@@ -131,6 +133,8 @@ private:
 
 	TSharedPtr<FFSDSStackStarter> Proc;
 	bool bTokenInteractive = false;
+	/** A refused check already asked git for a login: the next refusal fails. */
+	bool bTriedSignIn = false;
 	FTSTicker::FDelegateHandle TickHandle;
 	/** Gone with Shutdown: HTTP replies check it. */
 	TSharedPtr<bool> Alive;

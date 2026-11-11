@@ -21,7 +21,17 @@ namespace UpdaterUi
 	const TCHAR* Section = TEXT("FSDSUpdates");
 	const TCHAR* Api = TEXT("https://api.github.com/repos/isc-fs/IFSSIM");
 	const TCHAR* LatestTag = TEXT("latest-dev");
+	// Each OS takes its own zip from a release (tools/publish_build.sh names them).
+#if PLATFORM_WINDOWS
 	const TCHAR* AssetSuffix = TEXT("-Windows-x64.zip");
+	const TCHAR* PlatformName = TEXT("Windows");
+#elif PLATFORM_MAC
+	const TCHAR* AssetSuffix = TEXT("-macOS-arm64.zip");
+	const TCHAR* PlatformName = TEXT("macOS");
+#else
+	const TCHAR* AssetSuffix = TEXT("-Linux-x64.zip");
+	const TCHAR* PlatformName = TEXT("Linux");
+#endif
 
 	FString Mb(int64 Bytes) { return FString::Printf(TEXT("%.0f MB"), Bytes / (1024.0 * 1024.0)); }
 
@@ -169,13 +179,12 @@ void FFSDSUpdater::Fail(const FString& Msg)
 void FFSDSUpdater::Check(bool bInteractive)
 {
 	if (State == EState::NoBuildInfo || State == EState::SigningIn || State == EState::Checking || State == EState::Downloading) return;
+	// The repo is public: no sign-in. A token (IFSSIM_GITHUB_TOKEN, or git's
+	// GitHub login after a refusal) only lifts GitHub's 60 checks an hour.
 	if (Token.IsEmpty()) Token = FPlatformMisc::GetEnvironmentVariable(TEXT("IFSSIM_GITHUB_TOKEN"));
-	if (!Token.IsEmpty())
-	{
-		FetchRelease();
-		return;
-	}
-	AskToken(bInteractive);
+	bTokenInteractive = bInteractive;
+	bTriedSignIn = false;
+	FetchRelease();
 }
 
 void FFSDSUpdater::AskToken(bool bInteractive)
@@ -183,8 +192,8 @@ void FFSDSUpdater::AskToken(bool bInteractive)
 	if (!FFSDSStackStarter::HasTool(TEXT("git")))
 	{
 		State = EState::Idle;
-		Status = TEXT("Not checked: it signs in to GitHub with git, which isn't installed. Getting the team's code "
-			"(START with Autonomous) installs it.");
+		Status = TEXT("Not checked: GitHub refused (too many checks from this network?) and git, which would sign in, "
+			"isn't installed. Try again in an hour, or set IFSSIM_GITHUB_TOKEN.");
 		return;
 	}
 	if (!Proc.IsValid()) Proc = MakeShared<FFSDSStackStarter>();
@@ -224,8 +233,8 @@ bool FFSDSUpdater::Tick(float)
 		{
 			State = bTokenInteractive ? EState::Failed : EState::Idle;
 			Status = bTokenInteractive
-				? FString(TEXT("Couldn't sign in to GitHub. Check now again, or set IFSSIM_GITHUB_TOKEN."))
-				: FString(TEXT("Not checked: not signed in to GitHub yet. Check now signs in."));
+				? FString(TEXT("GitHub refused the check and signing in didn't work. Try again later, or set IFSSIM_GITHUB_TOKEN."))
+				: FString(TEXT("Not checked: GitHub refused (too many checks from this network?). Check now signs in."));
 			return true;
 		}
 		FetchRelease();
@@ -274,8 +283,17 @@ void FFSDSUpdater::OnRelease(const FString& Body, int32 Code)
 	if (Code == 0) { Fail(TEXT("Couldn't reach GitHub.")); return; }
 	if (Code == 401 || Code == 403)
 	{
+		// Without a token: GitHub's limit for anonymous checks. Sign in once
+		// with git's login and ask again.
+		if (!bTriedSignIn)
+		{
+			bTriedSignIn = true;
+			Token.Reset();
+			AskToken(bTokenInteractive);
+			return;
+		}
 		Token.Reset();
-		Fail(TEXT("GitHub refused the login: the account needs to see isc-fs/IFSSIM. Check now to sign in again."));
+		Fail(TEXT("GitHub refused the check. Try again later, or set IFSSIM_GITHUB_TOKEN."));
 		return;
 	}
 	if (Code == 404)
@@ -326,7 +344,7 @@ void FFSDSUpdater::OnRelease(const FString& Body, int32 Code)
 	if (R.AssetName.IsEmpty())
 	{
 		State = EState::UpToDate;
-		Status = FString::Printf(TEXT("%s has no Windows build."), *R.Tag);
+		Status = FString::Printf(TEXT("%s has no %s build yet."), *R.Tag, UpdaterUi::PlatformName);
 		return;
 	}
 

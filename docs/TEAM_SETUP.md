@@ -105,8 +105,6 @@ and says on the main menu when a newer build is out.
   build you had next to it (`<folder>-previous`): **Back to the previous
   build** returns to it. A `settings.json` you changed in the sim's folder is
   kept as `settings.previous.json`, and tracks you added there come along.
-- It signs in to GitHub with the login git keeps from getting the team's
-  code; **Check now** signs in if it can't.
 - The sim compares the team's code with the commit it was built from
   (Settings, PIPELINE CODE). When your copy is older, has no changes and is
   on `dev`, **Bring the stack in step** moves it forward and rebuilds. The
@@ -114,8 +112,42 @@ and says on the main menu when a newer build is out.
   own or any change in `pipeline/` stays exactly as it is. Otherwise it only
   warns, and nothing is moved.
 
-Builds are published with `tools/publish_windows_build.sh stable|latest`
-(Git Bash, UE 5.8, `gh` logged in), until a CI runner does it.
+### Publishing a build
+
+Anyone with write access and UE 5.8 publishes their OS's build:
+
+```bash
+tools/publish_build.sh latest   # the last build of dev, on `latest-dev`
+tools/publish_build.sh stable   # a release: v<ProjectVersion>
+```
+
+From a clean tree, with `gh` logged in (Git Bash on Windows). For a new
+release, bump `ProjectVersion` in `Config/DefaultGame.ini` first: the first
+person to publish creates the release and its tag on their commit. Whoever
+has time then checks out that tag and adds their OS (Windows, macOS, Linux);
+the script refuses another commit and skips an OS that is already there. Each zip
+goes up with a `.sha256`. GitHub takes up to 2 GiB per file, with no limit on
+a release's total or on downloads.
+
+### A machine that builds on its own (optional)
+
+A runner builds on every `v*` tag (`.github/workflows/package-*.yml`, which
+call the same script). Register it for packaging only, with its own label
+and none of the defaults, so no other job lands on it:
+
+```
+config.cmd --url https://github.com/isc-fs/IFSSIM --token <token from an admin> ^
+  --name <you>-win --labels ifssim-package-windows --no-default-labels
+```
+
+Start it with `run.cmd` when the machine can build; while it's off, the job
+waits and anyone can publish by hand. Labels: `ifssim-package-windows`,
+`ifssim-package-mac`, `ifssim-package-linux`.
+
+The repo is public, and a fork's pull request runs the fork's own workflow
+file, which can ask for any label. Settings, Actions, "Require approval for
+all external contributors" stays on, and a fork's run that changes
+`.github/workflows` is never approved.
 
 ## Keeping the code up to date
 

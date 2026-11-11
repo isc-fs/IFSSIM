@@ -1093,7 +1093,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 			SNew(STextBlock)
 			.Text(LOCTEXT("UpdatesHint",
 				"New builds come from the repo's GitHub Releases. Stable: the tagged releases. Latest: the last build of "
-				"dev, newer but less tested. It signs in with the GitHub login git keeps from getting the team's code. "
+				"dev, newer but less tested. "
 				"Updating downloads the build, restarts the sim into it, and keeps this one: Back to the previous build "
 				"returns to it. After updating, Rebuild pipeline below so the stack matches."))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
