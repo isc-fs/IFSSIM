@@ -39,6 +39,7 @@ from . import spec as sp
 
 ENV_SPEC = "BENCH_SPEC"
 ENV_TRIGGER = "BENCH_TRIGGER"
+ENV_REQUESTED_BY = "BENCH_REQUESTED_BY"
 WORK = ".bench"
 
 
@@ -159,6 +160,34 @@ def _me() -> str:
     return f"{getpass.getuser()}@{socket.gethostname()}"
 
 
+def where_and_who() -> dict[str, Any]:
+    """Who asked for the run and where it runs, for each job's spec.json.
+
+    ``requested_by`` is the person: what the launcher sets in ``$BENCH_REQUESTED_BY``
+    (the GitHub user who started the workflow, or who is signed in to Mission Control),
+    else ``user@host`` here. ``host`` is always this machine. Inside GitHub Actions,
+    ``github`` says which run and runner, with a link to its logs."""
+    import socket
+
+    out: dict[str, Any] = {
+        "requested_by": os.environ.get(ENV_REQUESTED_BY) or _me(),
+        "host": socket.gethostname(),
+    }
+    env = os.environ
+    if env.get("GITHUB_ACTIONS") == "true":
+        server = env.get("GITHUB_SERVER_URL", "https://github.com")
+        repo, run_id = env.get("GITHUB_REPOSITORY"), env.get("GITHUB_RUN_ID")
+        out["github"] = {
+            "run_id": run_id,
+            "run_attempt": env.get("GITHUB_RUN_ATTEMPT"),
+            "workflow": env.get("GITHUB_WORKFLOW"),
+            "actor": env.get("GITHUB_ACTOR"),
+            "runner": env.get("RUNNER_NAME"),
+            "url": f"{server}/{repo}/actions/runs/{run_id}" if repo and run_id else None,
+        }
+    return out
+
+
 def print_list(m: mf.Manifest) -> None:
     print(f"repository  {m.root}")
     print(f"results     {m.results}")
@@ -240,12 +269,13 @@ def main(argv: list[str] | None = None) -> int:
             f"this runs the checkout in {m.root} as it is"
         )
     records = []
+    origin = where_and_who()
     for i, job in enumerate(jobs, 1):
         rec = job.record(spec) | {
             "job_id": f"{trigger}:{batch}/{i}",
             "batch_id": batch,
             "trigger": trigger,
-            "requested_by": _me(),
+            **origin,
         }
         records.append(rec)
         cmd = command(m, rec, work / str(i))

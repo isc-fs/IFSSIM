@@ -18,8 +18,10 @@ shipping pipeline, documentation.
   The spec format and runner from IFS-DV-BENCHWEB's `bench-run` now live in
   `tools/sim_benchmark/launch/`, so the same command runs a spec on a laptop,
   on the bench PC's runner and, later, from Mission Control. New preset
-  `missions-basic` (every mission once). `$BENCH_TRIGGER` records who started
-  a run in its `spec.json`.
+  `missions-basic` (every mission once). Each run's `spec.json` records who
+  and where: `$BENCH_TRIGGER` (local, runner, ...), `$BENCH_REQUESTED_BY` (the
+  GitHub user who launched it), the host, and in GitHub Actions the run, the
+  runner and a link to its logs.
 
 ### Changed
 

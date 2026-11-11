@@ -261,8 +261,10 @@ sweep:                        # one job per value
 The benchmarks take the overrides as `--pipeline-overrides <file.json>`
 (`pipeline_overrides.py`). A misspelled parameter stops the run before it starts. Each run
 folder gets `params/<component>.json` (every value in effect, and which were overridden), and
-`spec.json` when `run_spec.py` started it (with `trigger`: `local`, or what the launcher
-sets in `$BENCH_TRIGGER`). Runs with the same code but other settings get another
+`spec.json` when `run_spec.py` started it. That records who and where: `trigger` (`local`,
+or what the launcher sets in `$BENCH_TRIGGER`), `requested_by` (`$BENCH_REQUESTED_BY`, the
+GitHub user who launched it, else `user@host`), `host`, and inside GitHub Actions a `github`
+block with the run, the runner and a link to the logs. Runs with the same code but other settings get another
 **spec id**, so the viewer doesn't show them as reruns. The format:
 `launch/spec.py`. It came from IFS-DV-BENCHWEB's launcher, whose queue and worker are frozen.
 

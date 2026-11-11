@@ -304,13 +304,51 @@ def test_bags_without_what_the_benchmark_needs_are_refused(repo: Path) -> None:
     sp.validate({"benchmarks": {"sim_bag": {"bags": ["bag_a"]}}}, mf.load(repo))
 
 
-def test_the_trigger_is_recorded(repo: Path, monkeypatch) -> None:
+def _only_spec(repo: Path) -> dict:
+    (line,) = (repo / "results" / "ran.jsonl").read_text().splitlines()
+    return json.loads(Path(json.loads(line)["spec"]).read_text())
+
+
+def test_a_local_run_records_who_and_where(repo: Path, monkeypatch) -> None:
+    import socket
+
+    (repo / "results").mkdir()
+    for k in ("BENCH_TRIGGER", "BENCH_REQUESTED_BY", "GITHUB_ACTIONS"):
+        monkeypatch.delenv(k, raising=False)
+    assert run.main(["base", "--repo", str(repo)]) == 0
+    spec = _only_spec(repo)
+    assert spec["trigger"] == "local" and spec["job_id"].startswith("local:")
+    assert spec["host"] == socket.gethostname()
+    assert spec["requested_by"].endswith("@" + socket.gethostname())
+    assert "github" not in spec
+
+
+def test_a_runner_run_records_the_person_and_the_github_run(
+    repo: Path, monkeypatch
+) -> None:
     (repo / "results").mkdir()
     monkeypatch.setenv("BENCH_TRIGGER", "runner")
+    monkeypatch.setenv("BENCH_REQUESTED_BY", "Alberto-cd")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "isc-fs/IFSSIM")
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.setenv("GITHUB_WORKFLOW", "Bench")
+    monkeypatch.setenv("GITHUB_ACTOR", "Alberto-cd")
+    monkeypatch.setenv("RUNNER_NAME", "bench-pc")
     assert run.main(["base", "--repo", str(repo)]) == 0
-    (line,) = (repo / "results" / "ran.jsonl").read_text().splitlines()
-    spec = json.loads(Path(json.loads(line)["spec"]).read_text())
+    spec = _only_spec(repo)
     assert spec["trigger"] == "runner" and spec["job_id"].startswith("runner:")
+    assert spec["requested_by"] == "Alberto-cd"
+    assert spec["github"] == {
+        "run_id": "123",
+        "run_attempt": "2",
+        "workflow": "Bench",
+        "actor": "Alberto-cd",
+        "runner": "bench-pc",
+        "url": "https://github.com/isc-fs/IFSSIM/actions/runs/123",
+    }
 
 
 def test_find_root_is_this_checkout() -> None:
