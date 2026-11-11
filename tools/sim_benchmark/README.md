@@ -268,6 +268,29 @@ block with the run, the runner and a link to the logs. Runs with the same code b
 **spec id**, so the viewer doesn't show them as reruns. The format:
 `launch/spec.py`. It came from IFS-DV-BENCHWEB's launcher, whose queue and worker are frozen.
 
+### The local queue and the rig
+
+Mission Control's Benchmarks tab (target *Local*) doesn't run benchmarks itself: its
+backend is in a container, and a benchmark needs the host's Docker and paths. It queues
+the spec in `results/.bench/queue/`, which the container and the host share, and one
+worker on the host runs the queue, one spec at a time:
+
+```bash
+python3 tools/sim_benchmark/run_spec.py --work            # run queued specs until stopped
+python3 tools/sim_benchmark/run_spec.py missions-basic --queue   # queue one from a shell
+python3 tools/sim_benchmark/run_spec.py --status          # the worker and the queue (--json)
+python3 tools/sim_benchmark/run_spec.py --cancel <id>
+python3 tools/sim_benchmark/run_spec.py --rig             # what this machine can run now
+```
+
+`--rig` checks the parts a spec may need: the GPU (sim), Docker (the pipeline on this
+machine), the LattePanda (over SSH) and the HIL bench. Each is *ready*, *unavailable*
+(the rig has it, not now: a queued spec waits) or *absent* (this rig never can: the
+spec fails at once). The rig's descriptor is `$IFSSIM_RIG` or
+`~/.config/ifssim/rig.yaml` (`launch/rig.py`); without one, it is this machine with no
+LattePanda and no HIL. The worker refreshes the checks every minute in
+`results/.bench/rig.json`, which Mission Control reads (`GET /api/bench/rig`).
+
 ## Uploading to the team server
 
 Benchmarks don't upload anything themselves. Upload finished runs by hand with
