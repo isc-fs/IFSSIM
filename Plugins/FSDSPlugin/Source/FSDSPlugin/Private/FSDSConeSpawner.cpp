@@ -373,6 +373,21 @@ void AFSDSConeSpawner::LoadEnvironmentSidecar()
 	const bool bExists = FPaths::FileExists(Sidecar);
 	if (!FFSDSSettings::Get().bEnvironmentEnabled)
 	{
+		// A venue's track loads its surroundings anyway: the place is why it
+		// was picked (docs/venues.md). envgen.venue writes them with the
+		// profile "venue_<venue>", which nothing else uses. Every other
+		// sidecar waits for Environment.Enabled, so the flat world stays the
+		// regression baseline.
+		if (bExists && FSDSEnvironment::Load(Sidecar, Environment, EnvironmentError)
+			&& Environment.Profile.StartsWith(TEXT("venue_")))
+		{
+			EnvironmentStatus = TEXT("loaded");
+			UE_LOG(LogTemp, Log, TEXT("FSDS Environment: loaded %s (a venue, %s: %d props) with Environment.Enabled false"),
+				*Sidecar, *Environment.Profile, Environment.Props.Num());
+			return;
+		}
+		Environment = FFSDSEnvironment();
+		EnvironmentError.Reset();
 		EnvironmentStatus = TEXT("off");
 		if (bExists)
 		{
@@ -458,7 +473,7 @@ void AFSDSConeSpawner::BuildEnvironment()
 	if (EnvironmentStatus != TEXT("loaded"))
 	{
 		// Off, no sidecar, or an invalid one: no props, including the last
-		// track's. With Environment.Enabled off nothing is ever created.
+		// track's. With Environment.Enabled off only a venue's track builds any.
 		if (EnvironmentActor) EnvironmentActor->Clear();
 		return;
 	}

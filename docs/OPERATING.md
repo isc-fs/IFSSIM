@@ -197,6 +197,9 @@ connect to the bag via the WS bridge — same UI as live.
 - **Standard tracks** — `acceleration.csv` and `skidpad.csv` ship in
   `Content/tracks/`. Click **Load**; the bridge's `loadTrack` RPC
   spawns the cones in UE5 and sets the appropriate event type.
+  Acceleration always runs on the real Montmeló straight: its sidecar
+  loads that world ([worlds.md](worlds.md)). `characterisation.csv` is the
+  same cones on flat ground, for `tools/characterise`.
 - **Generated tracks** — the **Generate** panel runs the
   `random-track-generator` submodule with a chosen length/curvature
   profile and writes the CSV next to the standard ones. Generated

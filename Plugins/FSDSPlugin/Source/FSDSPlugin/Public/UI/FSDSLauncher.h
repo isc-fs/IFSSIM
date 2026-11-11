@@ -5,6 +5,7 @@
 #include "InputCoreTypes.h"
 
 class AFSDSReferee;
+class AFSDSVehiclePawn;
 class APlayerController;
 class FFSDSMissionControlClient;
 class FFSDSStackStarter;
@@ -26,7 +27,7 @@ public:
 	FFSDSLauncher();
 	~FFSDSLauncher();
 
-	void Init(UWorld* InWorld, AFSDSReferee* InReferee);
+	void Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn* InPawn = nullptr);
 	void Shutdown();
 
 	void Toggle(APlayerController* PC);
@@ -36,16 +37,20 @@ public:
 	/** The key from settings ("Key"), or Tab when that isn't a key name. */
 	static FKey ToggleKey();
 
-private:
+	/** Also the front-end menu's: it opens the panel for autonomous runs and closes it over itself. */
 	void Open(APlayerController* PC);
 	void Close();
+	/** docker compose up -d, as the panel's Start stack button (the menu's track editor too). */
 	void StartStack();
+
+private:
 	bool Tick(float DeltaTime);
 	void ShowHint();
 	void HideHint();
 
 	TWeakObjectPtr<UWorld> World;
 	TWeakObjectPtr<AFSDSReferee> Referee;
+	TWeakObjectPtr<AFSDSVehiclePawn> Pawn;
 	TWeakObjectPtr<APlayerController> Controller;
 	TSharedPtr<FFSDSMissionControlClient> Client;
 	TSharedPtr<FFSDSStackStarter> Stack;

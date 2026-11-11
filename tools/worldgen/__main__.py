@@ -38,11 +38,13 @@ def main(argv=None) -> int:
     out = a.tracks / "worlds" / a.name
     world = montmelo.build(a.cache, out)
     csv, sidecar = montmelo.acceleration_track()
-    (a.tracks / f"{a.name}_acceleration.csv").write_text(csv)
-    (a.tracks / f"{a.name}_acceleration.env.json").write_text(json.dumps(sidecar, indent=2) + "\n")
+    # The acceleration event always runs on this world: acceleration.csv and
+    # its sidecar, which loads the world.
+    (a.tracks / "acceleration.csv").write_text(csv)
+    (a.tracks / "acceleration.env.json").write_text(json.dumps(sidecar, indent=2) + "\n")
     print(f"wrote {out} (origin z {world['frame']['origin_z']} m, roof "
           f"{world['grandstands'][0]['roof_front_z']}/{world['grandstands'][0]['roof_back_z']} m, "
-          f"pit building {world['buildings'][0]['top_z']} m) and {a.name}_acceleration.csv")
+          f"pit building {world['buildings'][0]['top_z']} m) and acceleration.csv with its sidecar")
     return 0
 
 

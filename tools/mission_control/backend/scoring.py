@@ -10,6 +10,7 @@ USS (Unsafe Stop, D 10.1.7) is accepted as an input flag; actual detection
 belongs in the referee and is not implemented yet.
 """
 
+import math
 from typing import Optional, List, Union
 
 # Pmax per discipline (Table 3 — DV column, DC-only where specified)
@@ -70,6 +71,15 @@ def _score_formula(t_team: float, t_min: float, t_max: float,
         return p_min
     ratio = (t_max - t_team) / (t_max - t_min)
     return (p_max - p_min) * ratio * ratio + p_min
+
+
+# Skidpad (D 4.2.5): two timed laps on each side
+SKIDPAD_TIMED_LAPS = 4
+
+
+def valid_reference(t_best: Optional[float]) -> bool:
+    """A usable reference time is a finite number greater than zero."""
+    return t_best is not None and math.isfinite(t_best) and t_best > 0
 
 
 def _skidpad_elapsed(lap_times: List[float]) -> float:
@@ -142,10 +152,20 @@ def compute_scoring(
     disqualified = bool(dq_reasons)
 
     # D 9.1.1 scoring
-    if disqualified:
+    # A skidpad needs all four timed laps (both sides); a non-positive total
+    # is no time at all (it would otherwise beat any reference).
+    complete = bool(lap_times) and total_elapsed > 0
+    if event == "skidpad" and len(lap_times) < SKIDPAD_TIMED_LAPS:
+        complete = False
+    scored = complete and not disqualified
+    if not scored:
         score = 0.0
     else:
-        t_min = t_best if (t_best and t_best > 0) else t_corrected
+        t_min = t_best if valid_reference(t_best) else t_corrected
+        # D 9.1.1: Tmin is the fastest corrected time of all teams, this run
+        # included, so a run faster than the reference is the new Tmin and
+        # scores Pmax; without this the formula extrapolated past Pmax.
+        t_min = min(t_min, t_corrected)
         t_max = t_min * TMAX_FACTOR.get(event, 1.5)
         p_min = max_points * PMIN_FACTOR.get(event, 0.1)
         score = _score_formula(t_corrected, t_min, t_max, max_points, p_min)
@@ -167,9 +187,10 @@ def compute_scoring(
         "uss_rule": uss_rule,
         "points_adjustment": points_adjustment,
         "corrected_time": round(t_corrected, 3),
-        "t_best_reference": round(t_best, 3) if t_best else None,
+        "t_best_reference": round(t_best, 3) if valid_reference(t_best) else None,
         "max_points": max_points,
         "score": round(score, 1),
+        "scored": scored,
         "disqualified": disqualified,
         "dq_reasons": dq_reasons,
     }

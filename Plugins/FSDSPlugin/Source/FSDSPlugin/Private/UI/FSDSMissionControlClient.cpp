@@ -34,6 +34,11 @@ void FFSDSMissionControlClient::Get(const FString& Path, FCallback Done, float T
 	Send(TEXT("GET"), Path, FString(), MoveTemp(Done), TimeoutS);
 }
 
+void FFSDSMissionControlClient::Delete(const FString& Path, FCallback Done, float TimeoutS) const
+{
+	Send(TEXT("DELETE"), Path, FString(), MoveTemp(Done), TimeoutS);
+}
+
 void FFSDSMissionControlClient::Post(const FString& Path, const TSharedPtr<FJsonObject>& Body, FCallback Done, float TimeoutS) const
 {
 	FString Content = TEXT("{}");
@@ -67,6 +72,10 @@ void FFSDSMissionControlClient::Send(const FString& Verb, const FString& Path, c
 	Req->SetURL(BaseUrl + Path);
 	Req->SetVerb(Verb);
 	Req->SetTimeout(TimeoutS);
+	// And the silence allowed: the engine's default (30 s) fails a call that
+	// waits for its answer, like /api/event/start while a fresh pipeline
+	// compiles (the first run after a clone).
+	Req->SetActivityTimeout(TimeoutS);
 	Req->SetHeader(TEXT("Accept"), TEXT("application/json"));
 	if (!ApiKey.IsEmpty())
 	{
