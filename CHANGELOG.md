@@ -83,6 +83,10 @@ shipping pipeline, documentation.
   car characterisation drives the same cones on flat ground
   (`characterisation.csv`), since its turns need open space beside the
   start.
+- **Frame-time log.** Every 5 s the sim logs `FSDS Frame:` with the mean
+  and worst game-thread, render-thread, RHI and GPU time per frame (the
+  `stat unit` numbers), so a run below real time shows which one is the
+  limit (docs/rendering_presets.md). Needs a UE recompile.
 - **Montmeló surfaces and markings from the aerial photo.** Measured on the
   ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
   verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
