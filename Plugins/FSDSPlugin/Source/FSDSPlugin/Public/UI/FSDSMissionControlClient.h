@@ -37,6 +37,7 @@ public:
 
 	void Get(const FString& Path, FCallback Done, float TimeoutS = 3.f) const;
 	void Post(const FString& Path, const TSharedPtr<FJsonObject>& Body, FCallback Done, float TimeoutS = 20.f) const;
+	void Delete(const FString& Path, FCallback Done, float TimeoutS = 10.f) const;
 
 	const FString& GetBaseUrl() const { return BaseUrl; }
 

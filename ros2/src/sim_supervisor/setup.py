@@ -26,6 +26,7 @@ setup(
         "console_scripts": [
             "sim_supervisor_node = sim_supervisor.sim_supervisor_node:main",
             "supervisor_cli = sim_supervisor.supervisor_cli:main",
+            "viz_relay = sim_supervisor.viz_relay:main",
         ],
     },
 )

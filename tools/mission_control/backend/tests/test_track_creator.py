@@ -57,6 +57,15 @@ def test_create_refuses_overwrite_builtins_and_bad_names(tmp_path):
     assert tc.create("t", LOOP, str(tmp_path), BUILTINS)[0] == 409
     assert tc.create("t", LOOP, str(tmp_path), BUILTINS, overwrite=True)[0] == 200
     assert tc.create("acceleration", LOOP, str(tmp_path), BUILTINS)[0] == 400
+
+
+def test_the_stress_library_is_never_replaced(tmp_path):
+    # The editor opens a stress track to change it: saving must not overwrite it.
+    code, body = tc.create("stress_circle_r15", LOOP, str(tmp_path), BUILTINS, overwrite=True)
+    assert code == 400 and "stress-track library" in body["error"]
+    assert list(tmp_path.iterdir()) == []
+    assert tc.create("stress_circle_r15_mine", LOOP, str(tmp_path), BUILTINS)[0] == 400
+    assert tc.create("my_stress_circle", LOOP, str(tmp_path), BUILTINS)[0] == 200
     assert tc.create("../escape", LOOP, str(tmp_path), BUILTINS)[0] == 400
 
 
@@ -79,3 +88,47 @@ def test_spec_of_a_track_that_was_not_drawn(tmp_path):
     (tmp_path / "plain.csv").write_text("blue,0,0\n")
     assert tc.load_spec("plain.csv", str(tmp_path)) is None
     assert json.loads(json.dumps(LOOP))   # sanity: LOOP is plain JSON
+
+
+# --- venues (docs/venues.md): a `<venue>__` track stays on the lot and gets its props
+
+VENUE = {"format": "ifssim-venue/1", "name": "lot", "lot": [[-40, -30], [40, -30], [40, 30], [-40, 30]],
+         "props": [{"class": "tree", "x": 0, "y": 35}]}
+ON_LOT = {"format": "ifssim-trackspec/1", "closed": True,
+          "points": [[-25, -15], [25, -15], [28, 12], [-25, 15]]}
+
+
+@pytest.fixture
+def venue_dir(tmp_path):
+    pytest.importorskip("shapely")
+    (tmp_path / "venues").mkdir()
+    (tmp_path / "venues" / "lot.venue.json").write_text(json.dumps(VENUE))
+    return tmp_path
+
+
+def test_a_venue_track_gets_the_venues_props(venue_dir):
+    code, body = tc.create("lot__a", ON_LOT, str(venue_dir), BUILTINS)
+    assert code == 200, body
+    assert body["venue"] == "lot"
+    env = json.loads((venue_dir / "lot__a.env.json").read_text())
+    assert env["profile"] == "venue_lot" and env["props"][0]["class"] == "tree"
+    assert len(env["props"]) > 1   # and the track's own clutter after the venue's
+    tc.remove_venue_sidecar(str(venue_dir / "lot__a.csv"))
+    assert not (venue_dir / "lot__a.env.json").exists()
+
+
+def test_a_track_off_the_lot_is_an_error(venue_dir):
+    # LOOP is 80 m wide from x=-20: it runs off a lot that ends at x=40
+    code, body = tc.preview(LOOP, venue="lot", tracks_dir=str(venue_dir))
+    assert code == 200 and not body["ok"]
+    assert any(i["code"] == "off_lot" for i in body["issues"])
+    assert tc.preview(ON_LOT, venue="lot", tracks_dir=str(venue_dir))[1]["ok"]
+    code, body = tc.create("lot__b", LOOP, str(venue_dir), BUILTINS)
+    assert code == 422 and not (venue_dir / "lot__b.csv").exists()
+
+
+def test_other_tracks_are_left_alone(venue_dir):
+    # no venue `none`, so `none__a` is an ordinary track; and an unknown venue is refused
+    assert tc.create("none__a", LOOP, str(venue_dir), BUILTINS)[0] == 200
+    assert not (venue_dir / "none__a.env.json").exists()
+    assert tc.preview(LOOP, venue="none", tracks_dir=str(venue_dir))[0] == 400

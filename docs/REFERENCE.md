@@ -784,7 +784,8 @@ Coordinates are in ENU metres relative to track origin.
 
 | File | Description |
 |---|---|
-| `acceleration.csv` | Standard acceleration straight |
+| `acceleration.csv` | Standard acceleration straight, on the Montmeló straight world (`acceleration.env.json`, [worlds.md](worlds.md)) |
+| `characterisation.csv` | The acceleration cones on flat ground, for `tools/characterise` |
 | `skidpad.csv` | FSG skidpad figure-8 |
 | `random_track.csv` | Example random layout |
 

@@ -46,6 +46,30 @@ CLASSES: Dict[str, PropClass] = {c.name: c for c in (
               along_boundary=True),
     # Four small cones nested: 0.23 m wide, about 0.50 m tall.
     PropClass("cone_stack", radius_m=0.12, height_m=0.50, band_m=(2.0, 12.0)),
+
+    # Venues (docs/venues.md): what stands around a parking lot. They are placed
+    # by a venue file, not by a profile, so their bands are only defaults.
+    # A tree's footprint is its 3 m canopy, the widest part (5.3 m tall).
+    PropClass("tree", radius_m=1.5, height_m=5.3, band_m=(3.0, 15.0)),
+    # A 6 m street lamp; the footprint covers its 1.3 m arm.
+    PropClass("lamp_post", radius_m=1.35, height_m=6.0, band_m=(1.5, 6.0)),
+    PropClass("parked_car", length_m=4.4, width_m=1.8, height_m=1.5, band_m=(2.0, 10.0),
+              along_boundary=True),
+    PropClass("bench", length_m=1.8, width_m=0.5, height_m=0.9, band_m=(2.0, 10.0),
+              along_boundary=True),
+    # A 2 x 2 m slab of sidewalk, 0.20 m tall: LiDAR-only, a phantom to the car
+    # (roadmap rule 2: anything under 0.30 m a wheel could reach). A venue puts
+    # a solid barrier between it and the lot, so the car meets that first.
+    PropClass("sidewalk", length_m=2.0, width_m=2.0, height_m=0.20, band_m=(0.5, 3.0),
+              along_boundary=True),
+    # A crowd barrier panel: 2.5 m of steel bars, 1.1 m tall, on two 0.5 m feet.
+    # Partly see-through to the LiDAR, solid to the car.
+    PropClass("fence", length_m=2.5, width_m=0.5, height_m=1.1, band_m=(0.5, 3.0),
+              along_boundary=True),
+    # An earth bank 10 m long, about 2.9 m tall and 5.9 m wide at the ground:
+    # the hill until terrain (roadmap P3) exists.
+    PropClass("berm", length_m=10.0, width_m=5.9, height_m=2.9, band_m=(5.0, 20.0),
+              along_boundary=True),
 )}
 
 
@@ -62,5 +86,9 @@ PROFILES: Dict[str, Profile] = {p.name: p for p in (
     # No props: the flat baseline, with the environment switched on.
     Profile("flat_baseline", per_100m={}),
     Profile("stress", per_100m={"bollard": 3.0, "bin": 1.5, "tyre_wall": 1.5, "cone_stack": 1.0},
+            tripods_per_line=2),
+    # A venue track's own clutter, on the lot near its cones (envgen.venue):
+    # what an event sets up around a course drawn in a parking lot.
+    Profile("venue_clutter", per_100m={"tyre_wall": 2.0, "bollard": 2.0, "bin": 1.0, "cone_stack": 1.0},
             tripods_per_line=2),
 )}
