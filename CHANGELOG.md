@@ -12,6 +12,15 @@ shipping pipeline, documentation.
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/sim_benchmark/run_spec.py`: run a benchmark spec from IFSSIM itself.**
+  The spec format and runner from IFS-DV-BENCHWEB's `bench-run` now live in
+  `tools/sim_benchmark/launch/`, so the same command runs a spec on a laptop,
+  on the bench PC's runner and, later, from Mission Control. New preset
+  `missions-basic` (every mission once). `$BENCH_TRIGGER` records who started
+  a run in its `spec.json`.
+
 ### Changed
 
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is

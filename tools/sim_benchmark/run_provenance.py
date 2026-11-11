@@ -7,7 +7,7 @@ Every run dir made by ``common.make_run_dir`` gets a ``provenance.json``, plus
 * ``ifssim.unpushed.bundle`` / ``pipeline.unpushed.bundle`` when HEAD has
   commits that no remote has (as far as the last ``git fetch`` knows): a git
   bundle of exactly those commits, so someone else can check the code out;
-* ``spec.json`` when ``bench-run`` started the run (``$BENCH_SPEC``): the run
+* ``spec.json`` when ``run_spec.py`` started the run (``$BENCH_SPEC``): the run
   spec, with its ``spec_id`` (which settings and parameter overrides it used).
 
 Two runs of the same commit can then be told apart, and any run can be rebuilt
