@@ -11,7 +11,9 @@ Target *Runner* (the bench PC, through GitHub) is not built yet.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
+import os
 import time
 from pathlib import Path
 from types import ModuleType
@@ -60,8 +62,16 @@ def launch(
         raise LaunchError(f"target: one of {', '.join(TARGETS)}")
     if target == "runner":
         raise LaunchError("the Runner target (the bench PC through GitHub) isn't built yet", 501)
-    if not isinstance(spec, dict) or not spec.get("benchmarks"):
+    if not isinstance(spec, dict) or not isinstance(spec.get("benchmarks"), dict) or not spec["benchmarks"]:
         raise LaunchError("spec: a run spec with at least one benchmark")
+    spec = copy.deepcopy(spec)
+    missions = spec["benchmarks"].get("missions")
+    if isinstance(missions, dict):
+        # the mission benchmark drives this backend; its default is the web UI (:3000),
+        # which the in-sim panel doesn't need running
+        settings = missions.setdefault("settings", {}) or {}
+        missions["settings"] = settings
+        settings.setdefault("mc_url", os.environ.get("MC_SELF_URL", "http://127.0.0.1:8000"))
     lq = localq()
     jid = lq.enqueue(
         results_root(),

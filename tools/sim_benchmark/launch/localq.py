@@ -46,11 +46,39 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _adopt(path: Path) -> None:
+    """Mission Control's backend runs as root in its container: what it creates here
+    goes to whoever owns the folder above, so the host's worker can write it too."""
+    if os.geteuid() != 0:
+        return
+    for up in path.parents:
+        try:
+            st = up.stat()
+        except OSError:
+            continue
+        if st.st_uid != 0:
+            os.chown(path, st.st_uid, st.st_gid)
+            return
+
+
+def make_dirs(d: Path) -> None:
+    """``mkdir -p``, each new folder adopted (``_adopt``)."""
+    missing = []
+    for p in [d, *d.parents]:
+        if p.exists():
+            break
+        missing.append(p)
+    for p in reversed(missing):
+        p.mkdir(exist_ok=True)
+        _adopt(p)
+
+
 def write_json(path: Path, doc: dict[str, Any]) -> None:
     """Written whole, then renamed: a reader never sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(path.parent)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(doc, indent=2, default=str))
+    _adopt(tmp)
     tmp.replace(path)
 
 
@@ -73,9 +101,12 @@ def enqueue(
     """Add a spec to the queue; returns its id (sortable by time)."""
     if not isinstance(spec, dict):
         raise ValueError("a spec is a mapping")
-    jid = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
+    # microseconds, so two specs queued in the same second still run in order
+    jid = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S_%f}_{uuid.uuid4().hex[:4]}"
     d = queue_dir(results) / jid
-    d.mkdir(parents=True)
+    make_dirs(d.parent)
+    d.mkdir()
+    _adopt(d)
     write_json(
         d / "job.json",
         {
@@ -138,7 +169,9 @@ def cancel(results: Path | str, jid: str) -> str | None:
         set_state(results, jid, state="cancelled", ended=now())
         return "cancelled"
     if j["state"] == "running":
-        (queue_dir(results) / jid / "cancel").touch()
+        flag = queue_dir(results) / jid / "cancel"
+        flag.touch()
+        _adopt(flag)
     return j["state"]
 
 

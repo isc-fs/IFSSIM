@@ -225,3 +225,26 @@ def test_the_rig_descriptor_comes_from_the_environment(tmp_path, monkeypatch):
     f.write_text("id: desk\nlatte_panda: {host: 10.0.0.2}\n")
     monkeypatch.setenv(rg.ENV, str(f))
     assert rg.load() == {"id": "desk", "latte_panda": {"host": "10.0.0.2"}}
+
+
+def test_the_worker_from_the_command_line(m, monkeypatch):
+    monkeypatch.setattr(rg, "check", lambda *a, **k: READY_RIG)
+    jid = lq.enqueue(m.results, spec(), requested_by="alice")
+    assert run.main(["--repo", str(m.root), "--work", "--once"]) == 0
+    assert lq.job(m.results, jid)["state"] == "done"
+
+
+def test_what_root_creates_goes_to_the_results_folders_owner(m, monkeypatch):
+    # Mission Control's backend runs as root in its container
+    chowned = []
+    monkeypatch.setattr(lq.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(lq.os, "chown", lambda p, u, g: chowned.append((Path(p).name, u)))
+    m.results.mkdir()
+    jid = lq.enqueue(m.results, spec(), requested_by="mission_control")
+    lq.set_state(m.results, jid, state="running")
+    lq.cancel(m.results, jid)
+    me = m.results.stat().st_uid
+    names = {n for n, u in chowned if u == me}
+    assert {".bench", "queue", jid, "cancel"} <= names
+    assert any(n.startswith(".job.json") for n in names)
+    assert any(n.startswith(".state.json") for n in names)

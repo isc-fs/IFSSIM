@@ -453,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     batch = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
-    work = m.results / WORK / batch
+    batch_dir = m.results / WORK / batch
     print("--- spec (merged) ---")
     print(yaml.safe_dump(spec, sort_keys=False).rstrip())
     print(f"--- {len(jobs)} job(s) ---")
@@ -472,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
             **origin,
         }
         records.append(rec)
-        cmd = command(m, rec, work / str(i))
+        cmd = command(m, rec, batch_dir / str(i))
         print(f"[{i}] {job.label()}  (spec {job.spec_id})\n    {shlex.join(cmd)}")
     if a.dry_run:
         return 0
@@ -481,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
         print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
         t0 = time.time()
-        rc = execute(m, rec, work / str(i))
+        rc = execute(m, rec, batch_dir / str(i))
         results.append((job, rc, time.time() - t0))
         if rc != 0:
             print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)

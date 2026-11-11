@@ -24,7 +24,20 @@ def test_local_launch_queues_the_spec_and_says_when_no_worker_runs_it(results):
     (j,) = bq.queue()["jobs"]
     assert j["id"] == out["id"] and j["state"] == "queued"
     assert j["requested_by"] == "Alberto-cd" and j["trigger"] == "mission_control"
-    assert j["name"] == "accel" and j["spec"] == SPEC
+    assert j["name"] == "accel"
+    # the mission benchmark is pointed at this backend, not the web UI's :3000
+    assert j["spec"]["benchmarks"]["missions"]["settings"] == {
+        "missions": "acceleration",
+        "mc_url": "http://127.0.0.1:8000",
+    }
+    assert "mc_url" not in SPEC["benchmarks"]["missions"]["settings"]  # not changed in place
+
+
+def test_a_spec_that_names_mission_control_keeps_it(results):
+    spec = {"benchmarks": {"missions": {"settings": {"mc_url": "http://10.0.0.5:8000"}}}}
+    bq.launch(spec)
+    got = bq.queue()["jobs"][0]["spec"]["benchmarks"]["missions"]["settings"]
+    assert got["mc_url"] == "http://10.0.0.5:8000"
 
 
 def test_with_a_worker_running_there_is_no_hint(results):
