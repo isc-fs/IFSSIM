@@ -199,8 +199,8 @@ private:
 	//      runs the FSDSLidarDecode compute shader against the depth RT
 	//      to produce a structured buffer of float4 points, then issues
 	//      AddEnqueueCopyPass into a persistent FRHIGPUBufferReadback.
-	//   2. PollGPUReadback: game-thread checks IsReady, dispatches a
-	//      second render command to do Lock(NumBytes)/memcpy/Unlock and
+	//   2. PollGPUReadback: dispatches a render command that checks
+	//      IsReady there and, if ready, does Lock(NumBytes)/memcpy/Unlock and
 	//      AsyncTask the result back to the game thread.
 	//   3. ConsumeReadbackResult: unpacks the float4 array into the
 	//      flat-float [x,y,z, x,y,z, ...] PointCloudBuffer that
@@ -220,7 +220,7 @@ private:
 	struct FReadbackSlot
 	{
 		TUniquePtr<FRHIGPUBufferReadback> Readback;
-		bool   bInFlight       = false;  // EnqueueCopy issued; IsReady not yet observed
+		bool   bInFlight       = false;  // decode + EnqueueCopy dispatched; not yet consumed
 		bool   bLockDispatched = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
 		double EnqueueTimeSec  = 0.0;    // wallclock for latency telemetry
 		// Cycles64 stamp captured at dispatch (when the depth render fires);
@@ -253,6 +253,10 @@ private:
 	// recent slot's measured GPU→CPU round-trip.
 	double GPUReadbackLastLatencyMs  = 0.0;
 	int32  GPUReadbackCount          = 0;
+	// Polls that found the copy still running on the render thread. Before
+	// the readiness check moved there, these were read early and returned
+	// the previous scan in this slot.
+	int32  GPUReadbackNotReadyPolls  = 0;
 	bool   bGPULoggedFirstReadback   = false;
 
 	// Round-trip test for the spherical-ray ↔ planar-texel mapping.
