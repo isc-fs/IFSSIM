@@ -32,6 +32,12 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **START brings up the stack on Linux.** The menu's commands ran in the engine's
+  folder instead of the repository, so `docker compose` found no compose file
+  ("docker compose failed: exit status 14"); and Mission Control's backend couldn't
+  resolve `host.docker.internal`, so it never saw the sim and START waited until it
+  timed out.
+
 - **Mission benchmarks on a snap-installed Docker.** The benchmark copied the
   pipeline into `/tmp` and mounted the copy into its stack, but snap's Docker
   has a `/tmp` of its own and mounts such a folder as an empty one: the stack
