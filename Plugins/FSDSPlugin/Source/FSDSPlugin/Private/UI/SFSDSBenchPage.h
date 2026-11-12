@@ -130,8 +130,11 @@ private:
 	TSharedRef<SWidget> MakeBoardsChoices();
 	/** The version picker under the boxes: a repository's PRs and branches, or a typed ref. */
 	TSharedRef<SWidget> MakePicker();
-	void OpenPicker(const FString& Title, const FString& Repo, TFunction<void(const FString&)> OnPick);
+	/** Current: what is chosen now ("branch", "#88", "branch@commit"), to start from. */
+	void OpenPicker(const FString& Title, const FString& Repo, const FString& Current, TFunction<void(const FString&)> OnPick);
 	void FetchRefs(const FString& Repo);
+	/** The latest commits of the picker's branch or PR, for its commit field. */
+	void FetchCommits();
 	/** The draft's code.<Repo> (a branch, #PR or commit); empty: this checkout. */
 	FString CodeRef(const FString& Repo) const;
 	void SetCodeRef(const FString& Repo, const FString& Ref);
@@ -185,7 +188,12 @@ private:
 
 	// the version picker
 	struct FPull { int32 Number = 0; FString Title, Branch; };
-	FString PickerTitle, PickerRepo, PickerFilter, PickerError;
+	FString PickerTitle, PickerRepo, PickerError;
+	FString PickerBranch, PickerCommit;   // what the two fields hold
+	struct FCommit { FString Sha, Date, Message; };
+	TArray<FCommit> PickerCommits;
+	FString CommitsFor, CommitsError;   // the branch PickerCommits are of
+	bool bCommitsLoading = false;
 	TFunction<void(const FString&)> PickerSet;
 	TArray<FString> PickerBranches;
 	TArray<FPull> PickerPulls;

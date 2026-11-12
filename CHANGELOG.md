@@ -29,8 +29,11 @@ shipping pipeline, documentation.
 - **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
   checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
   for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that
-  pipeline instead of this checkout's `pipeline/`. The Benchmarks page's Setup tab picks
-  it from IFS09's open PRs and branches (`GET /api/bench/refs`, from GitHub).
+  pipeline instead of this checkout's `pipeline/`; `branch@commit` pins a commit and checks
+  it's on the branch. Your own `pipeline/` (its branch, uncommitted changes) is never
+  touched. The Benchmarks page's Setup tab picks it with two fields that suggest as you
+  type: the branch or PR, then one of its latest commits (`GET /api/bench/refs`, from
+  GitHub).
 - **Boards in a run spec (`boards:`)**: real (HIL, bench-01) or emulated (vHIL, with an
   IFS-vHIL system), with a firmware branch, PR or commit per board; `bench.yaml` lists the
   boards, their firmware repos and the vHIL systems. The Setup tab picks them. Runs with

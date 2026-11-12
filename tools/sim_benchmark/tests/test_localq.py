@@ -385,3 +385,31 @@ def test_vhil_follows_docker_once_car_in_the_loop_is_wired(monkeypatch):
     assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "ready"
     down = rg.check({"id": "d"}, run=fake_runner({"docker": (1, "", "Cannot connect\n")}))
     assert down["parts"]["vhil"] == {"status": "unavailable", "reason": "needs Docker"}
+
+
+def test_a_commit_pinned_on_a_branch_must_be_on_it(piped, tmp_path):
+    log = lambda ref: subprocess.run(["git", "-C", str(tmp_path / "origin"), "rev-parse", ref], capture_output=True, text=True).stdout.strip()
+    on_branch, dev = log("feat/x~1"), log("dev")  # feat/x's parent is dev's commit
+    pinned = log("feat/x")
+    assert run.pipeline_worktree(piped, f"feat/x@{pinned[:8]}", tmp_path / "p1") == pinned
+    assert run.pipeline_worktree(piped, f"feat/x@{on_branch[:8]}", tmp_path / "p2") == on_branch
+    pr = log("pr7")
+    assert run.pipeline_worktree(piped, f"#7@{pr[:8]}", tmp_path / "p3") == pr
+    with pytest.raises(run.sp.SpecError, match="isn't on branch dev"):
+        run.pipeline_worktree(piped, f"dev@{pinned[:8]}", tmp_path / "p4")
+    # the person's own clone keeps its branch and files
+    head = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert head == "dev" and (tmp_path / "pipeline" / "params.yaml").read_text() == "gate: 1\n"
+
+
+def test_a_run_on_another_commit_leaves_your_work_alone(piped, tmp_path):
+    mine = tmp_path / "pipeline" / "params.yaml"
+    mine.write_text("gate: my uncommitted change\n")
+    jid = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "feat/x"}}, requested_by="alice")
+    run.work(piped, once=True, check_rig=lambda: READY_RIG)
+    assert lq.job(piped.results, jid)["state"] == "done"
+    assert mine.read_text() == "gate: my uncommitted change\n"
+    head = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert head == "dev"
+    wts = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "worktree", "list"], capture_output=True, text=True).stdout
+    assert len(wts.strip().splitlines()) == 1  # the run's worktree is gone

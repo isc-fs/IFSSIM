@@ -210,7 +210,11 @@ def _pipeline_refspec(ref: str) -> tuple[str | None, str]:
 
 def pipeline_worktree(m: mf.Manifest, ref: str, where: Path) -> str:
     """Check the spec's code.pipeline out at ``where`` (a git worktree of the pipeline
-    submodule, so provenance reads it like any checkout); returns its commit."""
+    submodule, so provenance reads it like any checkout); returns its commit. A branch,
+    a PR (#88) or a commit; ``branch@commit`` pins a commit and checks it's on the branch.
+    The person's own pipeline/ checkout (its branch, its changes) is never touched."""
+    import re
+
     repo = m.repos.get("pipeline")
     if repo is None:
         raise sp.SpecError("code.pipeline: the manifest has no pipeline repository")
@@ -221,6 +225,26 @@ def pipeline_worktree(m: mf.Manifest, ref: str, where: Path) -> str:
     def first(r: subprocess.CompletedProcess) -> str:
         lines = (r.stderr or r.stdout or "").strip().splitlines()
         return lines[-1] if lines else f"exit {r.returncode}"
+
+    # "branch@commit" / "#88@commit": that commit, which must be on the branch or PR
+    base, _, pinned = ref.strip().rpartition("@")
+    if base and re.fullmatch(r"[0-9a-f]{7,40}", pinned):
+        refspec, what = _pipeline_refspec(base)
+        if refspec is None:
+            raise sp.SpecError(f"code.pipeline: {ref}: before the @ goes a branch or #PR")
+        r = git("fetch", "--quiet", "origin", refspec)
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: couldn't fetch {what}: {first(r)}")
+        tip = git("rev-parse", "FETCH_HEAD").stdout.strip()
+        r = git("rev-parse", "--verify", "--quiet", f"{pinned}^{{commit}}")
+        if r.returncode != 0 or git("merge-base", "--is-ancestor", r.stdout.strip(), tip).returncode != 0:
+            raise sp.SpecError(f"code.pipeline: commit {pinned} isn't on {what}")
+        sha = r.stdout.strip()
+        where.parent.mkdir(parents=True, exist_ok=True)
+        r = git("worktree", "add", "--detach", "--force", str(where), sha)
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: couldn't check out {pinned}: {first(r)}")
+        return sha
 
     refspec, what = _pipeline_refspec(ref)
     if refspec is None:

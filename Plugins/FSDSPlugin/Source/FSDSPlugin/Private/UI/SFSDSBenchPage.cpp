@@ -15,6 +15,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
+#include "Widgets/Input/SSuggestionTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -1184,7 +1185,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
 		[
 			BenchUi::Button(LOCTEXT("ChangeVersion", "Change version"), BenchUi::PlainBtn, [this]()
 			{
-				OpenPicker(TEXT("Pipeline (IFS09)"), PipelineRepo, [this](const FString& Ref) { SetCodeRef(TEXT("pipeline"), Ref); });
+				OpenPicker(TEXT("Pipeline (IFS09)"), PipelineRepo, CodeRef(TEXT("pipeline")), [this](const FString& Ref) { SetCodeRef(TEXT("pipeline"), Ref); });
 			}, TAttribute<bool>::CreateLambda([this]() { return !PipelineRepo.IsEmpty(); }))
 		]
 		+ SHorizontalBox::Slot().AutoWidth()
@@ -1634,9 +1635,10 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 			]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
-				BenchUi::Button(LOCTEXT("PickRef", "Pick"), BenchUi::PlainBtn, [this, Board, Repo, Set]()
+				BenchUi::Button(LOCTEXT("PickRef", "Pick"), BenchUi::PlainBtn, [this, Board, Repo, Set, Key]()
 				{
-					OpenPicker(FString::Printf(TEXT("%s firmware (%s)"), *Board.ToUpper(), *Repo), Repo,
+					const FString* Now = SetupText.Find(Key);
+					OpenPicker(FString::Printf(TEXT("%s firmware (%s)"), *Board.ToUpper(), *Repo), Repo, Now ? *Now : FString(),
 						[this, Set](const FString& R) { Set(R); RebuildSetup(); });
 				}, !Repo.IsEmpty())
 			]
@@ -1645,17 +1647,25 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 	return V;
 }
 
-void SFSDSBenchPage::OpenPicker(const FString& Title, const FString& Repo, TFunction<void(const FString&)> OnPick)
+void SFSDSBenchPage::OpenPicker(const FString& Title, const FString& Repo, const FString& Current, TFunction<void(const FString&)> OnPick)
 {
 	PickerTitle = Title;
 	PickerRepo = Repo;
 	PickerSet = MoveTemp(OnPick);
-	PickerFilter.Reset();
 	PickerBranches.Reset();
 	PickerPulls.Reset();
 	PickerError.Reset();
 	PickerDefault.Reset();
+	PickerCommits.Reset();
+	CommitsFor.Reset();
+	CommitsError.Reset();
+	// "branch@commit": the two fields; a bare commit goes in the commit field
+	PickerBranch = Current;
+	PickerCommit.Reset();
+	FString Base, Pinned;
+	if (Current.Split(TEXT("@"), &Base, &Pinned, ESearchCase::CaseSensitive, ESearchDir::FromEnd)) { PickerBranch = Base; PickerCommit = Pinned; }
 	FetchRefs(Repo);
+	FetchCommits();
 	RebuildSetup();
 }
 
@@ -1668,12 +1678,12 @@ void SFSDSBenchPage::FetchRefs(const FString& Repo)
 	{
 		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
 		if (!Self.IsValid() || Self->PickerRepo != Repo) return;
+		// no rebuild: the fields ask for their suggestions as you type, and a rebuild would take their focus
 		Self->bPickerLoading = false;
 		const TSharedPtr<FJsonObject> O = R.Object();
 		if (!R.Ok() || !O.IsValid())
 		{
 			Self->PickerError = Self->Unreachable(TEXT("Couldn't list the branches"), R) + TEXT(" Type a branch, #PR or commit.");
-			Self->RebuildSetup();
 			return;
 		}
 		O->TryGetStringField(TEXT("error"), Self->PickerError);
@@ -1693,37 +1703,133 @@ void SFSDSBenchPage::FetchRefs(const FString& Repo)
 				Self->PickerPulls.Add(P);
 			}
 		}
-		Self->RebuildSetup();
+		if (Self->PickerBranch.IsEmpty() && !Self->PickerDefault.IsEmpty() && Self->CommitsFor.IsEmpty())
+		{
+			// nothing chosen yet: offer the default branch's commits
+			Self->FetchCommits();
+		}
+	}, 12.f);
+}
+
+void SFSDSBenchPage::FetchCommits()
+{
+	const FString Branch = PickerBranch.TrimStartAndEnd().IsEmpty() ? PickerDefault : PickerBranch.TrimStartAndEnd();
+	if (!Client.IsValid() || PickerRepo.IsEmpty() || Branch.IsEmpty() || Branch == CommitsFor) return;
+	CommitsFor = Branch;
+	PickerCommits.Reset();
+	CommitsError.Reset();
+	bCommitsLoading = true;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	const FString Repo = PickerRepo;
+	Client->Get(FString::Printf(TEXT("/api/bench/refs?repo=%s&branch=%s"), *FGenericPlatformHttp::UrlEncode(Repo),
+		*FGenericPlatformHttp::UrlEncode(Branch)), [Weak, Repo, Branch](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid() || Self->PickerRepo != Repo || Self->CommitsFor != Branch) return;
+		Self->bCommitsLoading = false;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid()) { Self->CommitsError = Self->Unreachable(TEXT("Couldn't list its commits"), R); return; }
+		O->TryGetStringField(TEXT("error"), Self->CommitsError);
+		const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+		if (O->TryGetArrayField(TEXT("commits"), List))
+		{
+			for (const auto& V : *List)
+			{
+				const TSharedPtr<FJsonObject>* CO = nullptr;
+				if (!V.IsValid() || !V->TryGetObject(CO)) continue;
+				FCommit C;
+				(*CO)->TryGetStringField(TEXT("sha"), C.Sha);
+				(*CO)->TryGetStringField(TEXT("date"), C.Date);
+				(*CO)->TryGetStringField(TEXT("message"), C.Message);
+				Self->PickerCommits.Add(C);
+			}
+		}
 	}, 12.f);
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakePicker()
 {
-	auto Pick = [this](const FString& Ref)
+	// "#88 Loop closure (feat/a)" -> "#88"; "abc1234  2026-11-12  message" -> "abc1234"
+	auto FirstWord = [](const FString& S)
 	{
-		const TFunction<void(const FString&)> Set = PickerSet;
-		PickerRepo.Reset();
-		if (Set) Set(Ref);
-		RebuildSetup();
+		FString T = S.TrimStartAndEnd();
+		int32 Space = INDEX_NONE;
+		return T.FindChar(TEXT(' '), Space) ? T.Left(Space) : T;
 	};
-	const FString Filter = PickerFilter.ToLower();
-	auto Fits = [Filter](const FString& S) { return Filter.IsEmpty() || S.ToLower().Contains(Filter); };
+	auto Chosen = [this]()
+	{
+		const FString B = PickerBranch.TrimStartAndEnd(), C = PickerCommit.TrimStartAndEnd();
+		return B.IsEmpty() ? C : C.IsEmpty() ? B : B + TEXT("@") + C;
+	};
+	auto Row = [](const FText& Label, TSharedRef<SWidget> Field, TAttribute<FText> Help)
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0, 4, 10, 0)
+			[
+				SNew(SBox).WidthOverride(110.f) [ SNew(STextBlock).Text(Label).Font(BenchUi::Font(10, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink) ]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left) [ Field ]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 3, 0, 0) [ BenchUi::Small(Help) ]
+			];
+	};
 
-	TSharedRef<SWrapBox> Pulls = BenchUi::Wrap();
-	for (const FPull& P : PickerPulls)
-	{
-		const FString Label = FString::Printf(TEXT("#%d %s"), P.Number, *P.Title);
-		if (!Fits(Label) && !Fits(P.Branch)) continue;
-		Pulls->AddSlot() [ BenchUi::Choice(FText::FromString(Label), []() { return false; },
-			[Pick, N = P.Number]() { Pick(FString::Printf(TEXT("#%d"), N)); }, FText::FromString(P.Branch)) ];
-	}
-	TSharedRef<SWrapBox> Branches = BenchUi::Wrap();
-	for (const FString& B : PickerBranches)
-	{
-		if (!Fits(B)) continue;
-		Branches->AddSlot() [ BenchUi::Choice(FText::FromString(B == PickerDefault ? B + TEXT(" (default)") : B), []() { return false; },
-			[Pick, B]() { Pick(B); }) ];
-	}
+	TSharedRef<SWidget> BranchField = SNew(SSuggestionTextBox)
+		.MinDesiredWidth(380.f)
+		.ForegroundColor(FLinearColor::White)   // its default style draws dark text
+		.Font(BenchUi::Font(10))
+		.HintText_Lambda([this]() { return FText::FromString(PickerDefault.IsEmpty() ? FString(TEXT("a branch or #PR")) : PickerDefault + TEXT(" (default)")); })
+		.Text_Lambda([this]() { return FText::FromString(PickerBranch); })
+		.CommitOnSuggestionSelected(true)
+		.SuggestionListMaxHeight(260.f)
+		.OnShowingSuggestions_Lambda([this](const FString& Typed, TArray<FString>& Out)
+		{
+			const FString T = Typed.TrimStartAndEnd().ToLower();
+			for (const FPull& P : PickerPulls)
+			{
+				const FString S = FString::Printf(TEXT("#%d %s (%s)"), P.Number, *P.Title, *P.Branch);
+				if (T.IsEmpty() || S.ToLower().Contains(T)) Out.Add(S);
+			}
+			for (const FString& B : PickerBranches)
+			{
+				if (T.IsEmpty() || B.ToLower().Contains(T)) Out.Add(B);
+			}
+			if (Out.Num() > 25) Out.SetNum(25);
+		})
+		.OnTextChanged_Lambda([this](const FText& T) { PickerBranch = T.ToString(); })
+		.OnTextCommitted_Lambda([this, FirstWord](const FText& T, ETextCommit::Type)
+		{
+			PickerBranch = T.ToString().StartsWith(TEXT("#")) ? FirstWord(T.ToString()) : T.ToString().TrimStartAndEnd();
+			if (PickerBranch.IsEmpty() || !PickerCommits.ContainsByPredicate([this](const FCommit& C) { return C.Sha == PickerCommit; }))
+			{
+				PickerCommit.Reset();   // a commit of the old branch
+			}
+			FetchCommits();
+		});
+
+	TSharedRef<SWidget> CommitField = SNew(SSuggestionTextBox)
+		.MinDesiredWidth(380.f)
+		.ForegroundColor(FLinearColor::White)   // its default style draws dark text
+		.Font(BenchUi::Font(10))
+		.HintText(LOCTEXT("CommitHint", "its latest when the run starts"))
+		.Text_Lambda([this]() { return FText::FromString(PickerCommit); })
+		.CommitOnSuggestionSelected(true)
+		.SuggestionListMaxHeight(260.f)
+		.OnShowingSuggestions_Lambda([this](const FString& Typed, TArray<FString>& Out)
+		{
+			FetchCommits();   // the branch may have been typed without Enter
+			const FString T = Typed.TrimStartAndEnd().ToLower();
+			for (const FCommit& C : PickerCommits)
+			{
+				const FString S = FString::Printf(TEXT("%s  %s  %s"), *C.Sha, *C.Date, *C.Message);
+				if (T.IsEmpty() || S.ToLower().Contains(T)) Out.Add(S);
+			}
+		})
+		.OnTextChanged_Lambda([this](const FText& T) { PickerCommit = T.ToString(); })
+		.OnTextCommitted_Lambda([this, FirstWord](const FText& T, ETextCommit::Type) { PickerCommit = FirstWord(T.ToString()); });
+
 	return SNew(SBorder)
 		.BorderImage(BenchUi::White())
 		.BorderBackgroundColor(BenchUi::Card)
@@ -1743,38 +1849,51 @@ TSharedRef<SWidget> SFSDSBenchPage::MakePicker()
 					BenchUi::Button(LOCTEXT("ClosePicker", "Close"), BenchUi::PlainBtn, [this]() { PickerRepo.Reset(); RebuildSetup(); })
 				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+			[
+				Row(LOCTEXT("BranchLabel", "Branch or PR"), BranchField, TAttribute<FText>::CreateLambda([this]()
+				{
+					if (bPickerLoading) return LOCTEXT("AskingGitHub", "Asking GitHub...");
+					if (!PickerError.IsEmpty()) return FText::FromString(PickerError);
+					return FText::Format(LOCTEXT("BranchHelp", "Type to see the matching ones: {0} open {0}|plural(one=PR,other=PRs), {1} branches. Empty: the default branch."),
+						FText::AsNumber(PickerPulls.Num()), FText::AsNumber(PickerBranches.Num()));
+				}))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+			[
+				Row(LOCTEXT("CommitLabel", "Commit"), CommitField, TAttribute<FText>::CreateLambda([this]()
+				{
+					if (bCommitsLoading) return LOCTEXT("AskingCommits", "Asking GitHub for its commits...");
+					if (!CommitsError.IsEmpty()) return FText::FromString(CommitsError);
+					if (PickerCommits.Num() == 0) return LOCTEXT("CommitNone", "Empty: the branch's latest commit when the run starts.");
+					return FText::Format(LOCTEXT("CommitHelp", "Its latest: {0} {1}. Empty: whatever is latest when the run starts."),
+						FText::FromString(PickerCommits[0].Sha), FText::FromString(PickerCommits[0].Message));
+				}))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 12, 0, 0)
 			[
 				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
 				[
-					SNew(SEditableTextBox)
-					.MinDesiredWidth(320.f)
-					.HintText(LOCTEXT("PickerHint", "filter, or type a branch, #PR or commit"))
-					.Text_Lambda([this]() { return FText::FromString(PickerFilter); })
-					.OnTextChanged_Lambda([this](const FText& T) { PickerFilter = T.ToString(); })
-					.OnTextCommitted_Lambda([this, Pick](const FText& T, ETextCommit::Type How)
+					BenchUi::Button(LOCTEXT("UseIt", "Use it"), BenchUi::GoBtn, [this, Chosen]()
 					{
-						if (How == ETextCommit::OnEnter && !T.IsEmpty()) Pick(T.ToString());
-						else RebuildSetup();   // filter the lists
-					})
-					.Font(BenchUi::Font(10))
+						const FString Ref = Chosen();
+						const TFunction<void(const FString&)> Set = PickerSet;
+						PickerRepo.Reset();
+						if (Set) Set(Ref);
+						RebuildSetup();
+					}, TAttribute<bool>::CreateLambda([Chosen]() { return !Chosen().IsEmpty(); }))
 				]
-				+ SHorizontalBox::Slot().AutoWidth()
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 				[
-					BenchUi::Button(LOCTEXT("UseTyped", "Use what I typed"), BenchUi::PlainBtn, [this, Pick]() { Pick(PickerFilter); },
-						TAttribute<bool>::CreateLambda([this]() { return !PickerFilter.TrimStartAndEnd().IsEmpty(); }))
+					BenchUi::Small(TAttribute<FText>::CreateLambda([Chosen]()
+					{
+						const FString C = Chosen();
+						return C.IsEmpty() ? LOCTEXT("ChooseSomething", "Pick a branch or PR, a commit, or both.")
+							: FText::Format(LOCTEXT("WillUse", "The run uses {0}."), FText::FromString(C));
+					}))
 				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
-			[
-				BenchUi::Small(FText::FromString(bPickerLoading ? FString(TEXT("Asking GitHub...")) : PickerError),
-					PickerError.IsEmpty() ? BenchUi::Muted : BenchUi::Bad)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 4) [ BenchUi::Small(LOCTEXT("OpenPrs", "Open pull requests")) ]
-			+ SVerticalBox::Slot().AutoHeight() [ Pulls ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 4) [ BenchUi::Small(LOCTEXT("BranchesHead", "Branches (Enter in the box filters them)")) ]
-			+ SVerticalBox::Slot().AutoHeight() [ Branches ]
 		];
 }
 

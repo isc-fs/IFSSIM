@@ -251,6 +251,44 @@ def known_repos() -> set[str]:
     return {r for r in out if r}
 
 
+def commits(repo: str, branch: str) -> dict[str, Any]:
+    """The latest commits of a branch, or of a PR ("#88"), newest first: the picker's
+    second field."""
+    import re
+    import urllib.parse
+
+    if repo not in known_repos():
+        return {"repo": repo, "branch": branch, "error": f"{repo} isn't a repository bench.yaml names", "commits": []}
+    key = f"{repo}@{branch}"
+    hit = _refs_cache.get(key)
+    if hit and time.time() - hit[0] < REFS_TTL_S:
+        return hit[1]
+    pr = re.fullmatch(r"#(\d+)", branch.strip())
+    try:
+        if pr:
+            raw = _github_get(f"repos/{repo}/pulls/{pr.group(1)}/commits?per_page=100")[::-1][:30]
+        else:
+            raw = _github_get(f"repos/{repo}/commits?sha={urllib.parse.quote(branch.strip(), safe='')}&per_page=30")
+    except Exception as e:  # noqa: BLE001
+        return {"repo": repo, "branch": branch, "error": f"couldn't list its commits ({e})", "commits": []}
+    out = {
+        "repo": repo,
+        "branch": branch,
+        "error": None,
+        "commits": [
+            {
+                "sha": c["sha"][:7],
+                "message": (c["commit"]["message"] or "").splitlines()[0][:100],
+                "date": (c["commit"]["committer"] or {}).get("date", "")[:10],
+                "author": ((c.get("author") or {}).get("login") or (c["commit"]["author"] or {}).get("name") or ""),
+            }
+            for c in raw
+        ],
+    }
+    _refs_cache[key] = (time.time(), out)
+    return out
+
+
 def refs(repo: str) -> dict[str, Any]:
     """A repository's branches and open PRs, for the version pickers (cached a while)."""
     if repo not in known_repos():

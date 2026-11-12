@@ -1705,9 +1705,13 @@ def bench_manifest():
 
 
 @app.get("/api/bench/refs")
-def bench_refs(repo: str = Query(..., description="owner/name, one bench.yaml names")):
-    """A repository's branches and open PRs, for the Setup tab's version pickers."""
-    return _bench.refs(repo)
+def bench_refs(
+    repo: str = Query(..., description="owner/name, one bench.yaml names"),
+    branch: Optional[str] = Query(None, description="a branch or #PR: its latest commits instead"),
+):
+    """A repository's branches and open PRs, or a branch's latest commits, for the Setup
+    tab's version pickers."""
+    return _bench.commits(repo, branch) if branch else _bench.refs(repo)
 
 
 class BenchCheck(BaseModel):

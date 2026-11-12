@@ -217,3 +217,20 @@ def test_refs_says_so_when_github_doesnt_answer(results, monkeypatch):
     monkeypatch.setattr(bq, "_refs_cache", {})
     got = bq.refs("isc-fs/IFS08-CE-AMS")
     assert "type a branch" in got["error"] and got["branches"] == []
+
+
+def test_commits_of_a_branch_or_a_pr(results, monkeypatch):
+    seen = []
+
+    def fake(path):
+        seen.append(path)
+        c = lambda sha, msg: {"sha": sha * 40, "commit": {"message": msg, "committer": {"date": "2026-11-12T10:00:00Z"}, "author": {"name": "n"}}, "author": {"login": "x"}}
+        return [c("a", "newest\nbody"), c("b", "older")] if "commits?sha=" in path else [c("c", "first"), c("d", "last")]
+
+    monkeypatch.setattr(bq, "_github_get", fake)
+    monkeypatch.setattr(bq, "_refs_cache", {})
+    got = bq.commits("isc-fs/IFS09-DV-PIPELINE", "feat/a")
+    assert [c["sha"] for c in got["commits"]] == ["aaaaaaa", "bbbbbbb"] and got["commits"][0]["message"] == "newest"
+    assert "sha=feat%2Fa" in seen[-1]
+    pr = bq.commits("isc-fs/IFS09-DV-PIPELINE", "#88")
+    assert "pulls/88/commits" in seen[-1] and [c["sha"] for c in pr["commits"]] == ["ddddddd", "ccccccc"]  # newest first
