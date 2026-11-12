@@ -248,3 +248,25 @@ def test_what_root_creates_goes_to_the_results_folders_owner(m, monkeypatch):
     assert {".bench", "queue", jid, "cancel"} <= names
     assert any(n.startswith(".job.json") for n in names)
     assert any(n.startswith(".state.json") for n in names)
+
+
+def test_a_worker_asked_to_stop_leaves_the_queue_and_says_it_stopped(m):
+    jid = lq.enqueue(m.results, spec(), requested_by="alice")
+
+    def rig_then_stop():
+        lq.request_stop(m.results)  # Mission Control's Stop worker, while it waits
+        return READY_RIG
+
+    assert lq.worker(m.results)["stopping"] is False
+    # without once=True it would wait for more specs: the stop is what ends it
+    assert run.work(m, check_rig=rig_then_stop) == 0
+    assert lq.job(m.results, jid)["state"] == "queued"  # left for the next worker
+    w = lq.worker(m.results)
+    assert not w["alive"] and not w["stopping"]
+
+
+def test_a_stop_asked_before_the_worker_started_is_forgotten(m):
+    lq.request_stop(m.results)
+    jid = lq.enqueue(m.results, spec(), requested_by="alice")
+    assert run.work(m, once=True, check_rig=lambda: READY_RIG) == 0
+    assert lq.job(m.results, jid)["state"] == "done"

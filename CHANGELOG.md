@@ -14,6 +14,16 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **A Benchmarks page in the sim's menu.** Start from a preset and change it: which
+  benchmarks, bags, parts, missions, tracks and every setting `bench.yaml` declares (the
+  form is drawn from the manifest, so new settings show without a sim change), plus
+  parameter override files from `tools/sim_benchmark/specs/overrides/`. The backend runs
+  the worker's own validation as you edit (`POST /api/bench/check`) and refuses a spec
+  that fails it, so mistakes show before anything is queued. Component boxes show what
+  this machine can run (Sim, the pipeline here or on the LattePanda, HIL) and pick where
+  the pipeline runs. Start worker / Stop worker run the local queue's worker from the
+  page; the queue shows each spec's progress, with Cancel and its folder.
+
 - **A local benchmark queue for Mission Control's Benchmarks tab.** `POST /api/bench/launch`
   (target `local`) queues a run spec in `tools/sim_benchmark/results/.bench/queue/`;
   `run_spec.py --work` runs the queue on the host, one spec at a time. `GET /api/bench/queue`,

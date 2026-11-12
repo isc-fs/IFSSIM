@@ -13,6 +13,7 @@ Layout, under ``<results>/.bench/``::
     queue/<id>/cancel       present when someone asked to cancel it
     queue/<id>/worker.log   the run's output
     worker.json             the worker's heartbeat (pid, host, time, current job)
+    stop                    present when someone asked the worker to stop
     rig.json                this machine's checks (launch/rig.py), refreshed by the worker
 
 Only the standard library here: the backend imports this file as it is.
@@ -190,11 +191,29 @@ def heartbeat(results: Path | str, **fields: Any) -> None:
 
 
 def worker(results: Path | str, stale_s: float = HEARTBEAT_STALE_S) -> dict[str, Any]:
-    """The worker's last heartbeat, with ``alive``: whether it is recent."""
+    """The worker's last heartbeat, with ``alive``: whether it is recent, and
+    ``stopping``: whether it was asked to stop."""
     hb = read_json(bench_dir(results) / "worker.json") or {}
     at = hb.get("at")
     alive = isinstance(at, (int, float)) and time.time() - at < stale_s
-    return hb | {"alive": alive}
+    return hb | {"alive": alive, "stopping": stop_requested(results)}
+
+
+def request_stop(results: Path | str) -> None:
+    """Ask the worker to stop. It exits once no spec is running: a running one finishes
+    (or is cancelled) first."""
+    flag = bench_dir(results) / "stop"
+    make_dirs(flag.parent)
+    flag.touch()
+    _adopt(flag)
+
+
+def stop_requested(results: Path | str) -> bool:
+    return (bench_dir(results) / "stop").exists()
+
+
+def clear_stop(results: Path | str) -> None:
+    (bench_dir(results) / "stop").unlink(missing_ok=True)
 
 
 def summary(results: Path | str, limit: int = 50) -> dict[str, Any]:

@@ -1693,8 +1693,33 @@ def bench_launch(req: BenchLaunch):
 
 @app.get("/api/bench/presets")
 def bench_presets():
-    """The run spec presets (tools/sim_benchmark/specs) as JSON, with the rig parts each needs."""
+    """The run spec presets (tools/sim_benchmark/specs) and the override files
+    (specs/overrides), as JSON, each preset with the rig parts it needs."""
     return _bench.presets()
+
+
+@app.get("/api/bench/manifest")
+def bench_manifest():
+    """What a custom run can set: each benchmark's settings (bench.yaml), bags, missions, tracks."""
+    return _bench.manifest()
+
+
+class BenchCheck(BaseModel):
+    spec: dict
+
+
+@app.post("/api/bench/check")
+def bench_check(req: BenchCheck):
+    """The worker's validation of a spec, before it is queued: its problems, or its jobs."""
+    return _bench.check(req.spec)
+
+
+@app.post("/api/bench/worker/stop", dependencies=[Depends(require_api_key)])
+def bench_worker_stop():
+    """Ask the local worker to stop once no spec is running."""
+    out = _bench.stop_worker()
+    log_event("benchmark", "asked the worker to stop")
+    return out
 
 
 @app.get("/api/bench/queue")

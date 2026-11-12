@@ -283,9 +283,17 @@ def work(
             last_rig = time.monotonic()
         lq.heartbeat(m.results, job=current)
 
+    # A stop asked for before this worker started was for an earlier one.
+    lq.clear_stop(m.results)
     print(f"worker for {m.results}: waiting for queued specs", flush=True)
     while True:
         tick()
+        if lq.stop_requested(m.results):
+            # between specs: a running one has finished (Mission Control's Stop worker)
+            lq.clear_stop(m.results)
+            (bd / "worker.json").unlink(missing_ok=True)  # not running: at once, not in 30 s
+            print("asked to stop: stopping", flush=True)
+            return 0
         picked = None
         for j in reversed([j for j in lq.jobs(m.results) if j["state"] == "queued"]):
             probs = rg.problems(j["spec"], status)

@@ -99,3 +99,69 @@ def test_a_preset_that_isnt_yaml_says_so(tmp_path, monkeypatch):
     bad, good = bq.presets()["presets"]
     assert bad["name"] == "bad" and "bad.yaml" in bad["error"]
     assert good["about"] == "Fine." and good["needs"][:2] == ["sim", "docker"]
+
+
+def test_the_manifest_says_what_a_custom_run_can_set(results):
+    bag = results / "capture" / "trackdrive_x_20260101_000000"
+    bag.mkdir(parents=True)
+    (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {duration: {nanoseconds: 2000000000}}\n")
+    m = bq.manifest()
+    assert m["error"] is None
+    benches = {b["name"]: b for b in m["benchmarks"]}
+    missions = {s["name"]: s for s in benches["missions"]["settings"]}
+    assert missions["repeats"]["type"] == "integer" and missions["laps"]["help"]
+    assert "mc_url" not in missions  # launch points it at this backend
+    assert benches["sim_bag"]["bags"] == "simulator" and "slam" in benches["sim_bag"]["parts"]
+    assert "control_node" in benches["missions"]["components"]
+    # the bags are where this process sees the results, not bench.yaml's host path
+    assert m["bags"]["simulator"] == [
+        {"name": bag.name, "duration_s": 2.0, "size_bytes": bag.joinpath("metadata.yaml").stat().st_size}
+    ]
+    assert m["missions"] == ["acceleration", "skidpad", "autocross", "trackdrive"]
+    assert "characterisation.csv" in m["tracks"]
+
+
+def test_without_bench_yaml_the_manifest_says_why(results, tmp_path, monkeypatch):
+    monkeypatch.setenv("IFSSIM_BENCH_MANIFEST", str(tmp_path / "nope" / "bench.yaml"))
+    m = bq.manifest()
+    assert "no bench.yaml" in m["error"] and m["benchmarks"] == []
+    # and a launch is still queued: the worker checks it when it takes it
+    assert bq.launch({"benchmarks": {"drag_race": {}}})["id"]
+
+
+def test_check_runs_the_workers_validation(results):
+    ok = bq.check({"benchmarks": {"missions": {"repeats": 2, "settings": {"missions": "skidpad"}}}})
+    assert ok["ok"] and ok["errors"] == [] and ok["jobs"] >= 1
+    assert ok["needs"] == ["sim", "docker", "pipeline_bench_pc"]
+    bad = bq.check({"benchmarks": {"sim_bag": {"bags": []}, "missions": {"settings": {"laps": "two"}}}})
+    assert not bad["ok"] and bad["jobs"] == 0
+    assert any("sim_bag.bags" in e for e in bad["errors"])
+    assert any("laps" in e for e in bad["errors"])  # every problem at once
+
+
+def test_a_launch_the_worker_would_refuse_is_refused_now(results):
+    with pytest.raises(bq.LaunchError) as e:
+        bq.launch({"benchmarks": {"missions": {"settings": {"repeats_typo": 1}}}})
+    assert e.value.status_code == 400 and "repeats_typo" in str(e.value)
+    assert bq.queue()["jobs"] == []
+
+
+def test_override_files_come_with_the_presets(tmp_path, monkeypatch):
+    od = tmp_path / "specs" / "overrides"
+    od.mkdir(parents=True)
+    (od / "looser.yaml").write_text("# A looser gate.\npipeline: {cone_detection: {residual_gate_mse: 0.05}}\n")
+    (od / "empty.yaml").write_text("name: nothing to override\n")
+    monkeypatch.setattr(bq, "presets_dir", lambda: tmp_path / "specs")
+    got = {o["name"]: o for o in bq.presets()["overrides"]}
+    assert got["looser"] == {
+        "name": "looser",
+        "about": "A looser gate.",
+        "pipeline": {"cone_detection": {"residual_gate_mse": 0.05}},
+    }
+    assert "no pipeline" in got["empty"]["error"]
+
+
+def test_stop_worker_asks_the_worker_to_stop(results):
+    bq.localq().heartbeat(results)
+    out = bq.stop_worker()
+    assert out["stopping"] and out["worker"]["stopping"]
