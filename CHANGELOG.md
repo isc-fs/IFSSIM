@@ -32,6 +32,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **LiDAR range noise is applied in centimetres.** settings.json gives `RangeNoiseStd` in metres and the
+  sensor works in cm, but the ×100 was missing, so the 3 cm σ ran as 0.3 mm: sim clouds were
+  effectively noise-free.
 - **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
   read its readback slot before the render thread had queued the new copy, so it returned that slot's
   previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
@@ -50,6 +53,11 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **LiDAR noise follows the car's Hesai.** Range σ now grows with range and on dark surfaces
+  (1.2 cm + 0.0056 cm/m²·r², ×(0.2/ρ)^0.8), returns at depth edges sometimes land between the two
+  surfaces, and intensity jitters by 14 %, all fitted to a parked manual car bag. New settings:
+  `RangeNoiseRangeCoeff`, `RangeNoiseRefReflectance`, `RangeNoiseReflectanceExp`, `EdgeOutlierRate`,
+  `IntensityNoise` (0 = the old flat Gaussian).
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at

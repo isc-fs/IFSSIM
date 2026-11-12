@@ -75,6 +75,11 @@ struct FFSDSSensorSettings
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
+	float RangeNoiseRangeCoeff = 0.f;      // m per m² of range: σ grows by this · r² (LiDAR)
+	float RangeNoiseRefReflectance = 0.2f; // ρ where the reflectance factor is 1 (LiDAR)
+	float RangeNoiseReflectanceExp = 0.f;  // σ ∝ (ρ_ref/ρ)^exp, 0 = off (LiDAR)
+	float EdgeOutlierRate = 0.f;           // mixed-return probability at depth edges (LiDAR)
+	float IntensityNoise = 0.f;            // relative σ of intensity jitter (LiDAR)
 };
 
 struct FFSDSVehiclePhysics
