@@ -50,6 +50,10 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
+  car bag. The sim mounted it level, so a third of its beams saw sky and the ground started at ~5.3 m
+  (car: ~3 m). The LiDAR now reads `Roll`/`Pitch`/`Yaw` from settings.json (CPU and GPU paths); points
+  stay in the vehicle frame.
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
