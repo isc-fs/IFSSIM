@@ -126,6 +126,8 @@ def check(rig: dict[str, Any] | None = None, run: Runner = _run) -> dict[str, An
         if not hil
         else _part(ABSENT, "car-in-the-loop not wired yet", bench=hil.get("bench"))
     )
+    # emulated boards (IFS-vHIL) run in Docker, but nothing joins them to a sim run yet
+    parts["vhil"] = _part(ABSENT, "car-in-the-loop not wired yet")
 
     return {
         "id": rig["id"],
@@ -143,6 +145,9 @@ def needs(spec: dict[str, Any]) -> list[str]:
         settings = (b or {}).get("settings") or {}
         where = settings.get("pipeline_on", "bench_pc")
         out.append("latte_panda" if where == "latte_panda" else "pipeline_bench_pc")
+    mode = (spec.get("boards") or {}).get("mode") if isinstance(spec.get("boards"), dict) else None
+    if mode in ("hil", "vhil"):
+        out.append(mode)
     return list(dict.fromkeys(out))
 
 

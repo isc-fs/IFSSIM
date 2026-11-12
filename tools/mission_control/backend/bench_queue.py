@@ -195,8 +195,14 @@ def manifest() -> dict[str, Any]:
             )
     td = tracks_dir()
     tracks = sorted(p.name for p in td.glob("*.csv")) if td.is_dir() else []
+    pipeline_url = m.repo_urls.get("pipeline") or ""
     return {
         "error": None,
+        # the code a run can pin (spec code:): the pipeline's GitHub repository, for the picker
+        "repos": {k: {"github": _slug(v)} for k, v in m.repo_urls.items() if _slug(v)},
+        "pipeline_repo": _slug(pipeline_url),
+        # boards a run can add (spec boards:): firmware {board: {repo, default}}, hil, vhil
+        "boards": m.boards,
         "benchmarks": benches,
         "bags": bags,
         "missions": _missions(),
@@ -204,6 +210,77 @@ def manifest() -> dict[str, Any]:
         "mission_tracks": {k: list(v.get("tracks") or []) for k, v in _mission_defaults().items()},
         "tracks": tracks,
     }
+
+
+# ------------------------------------------------------------------ branches and PRs
+REFS_TTL_S = 120.0
+_refs_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _slug(url: str) -> str:
+    """owner/name from https://github.com/owner/name(.git); empty for anything else."""
+    import re
+
+    m = re.match(r"https://github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url or "")
+    return m.group(1) if m else ""
+
+
+def _github_get(path: str) -> Any:
+    """GET api.github.com/<path>, unauthenticated: the repositories here are public, and
+    a person picks rarely (60 requests an hour per address)."""
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(
+        f"https://api.github.com/{path}",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ifssim-mission-control"},
+    )
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.load(r)
+
+
+def known_repos() -> set[str]:
+    """The repositories the picker may ask about: bench.yaml's (the pipeline, the boards'
+    firmware). Nothing else, so this isn't a way to query GitHub at large."""
+    try:
+        m = load_manifest()
+    except SetupError:
+        return set()
+    out = {_slug(u) for u in m.repo_urls.values()}
+    out |= {b["repo"] for b in (m.boards.get("firmware") or {}).values()}
+    return {r for r in out if r}
+
+
+def refs(repo: str) -> dict[str, Any]:
+    """A repository's branches and open PRs, for the version pickers (cached a while)."""
+    if repo not in known_repos():
+        return {"repo": repo, "error": f"{repo} isn't a repository bench.yaml names", "branches": [], "pulls": []}
+    hit = _refs_cache.get(repo)
+    if hit and time.time() - hit[0] < REFS_TTL_S:
+        return hit[1]
+    try:
+        info = _github_get(f"repos/{repo}")
+        branches = _github_get(f"repos/{repo}/branches?per_page=100")
+        pulls = _github_get(f"repos/{repo}/pulls?state=open&per_page=50")
+    except Exception as e:  # noqa: BLE001: offline, rate-limited, or private
+        return {
+            "repo": repo,
+            "error": f"couldn't list them ({e}): type a branch, #PR or commit",
+            "branches": [],
+            "pulls": [],
+        }
+    out = {
+        "repo": repo,
+        "error": None,
+        "default": info.get("default_branch"),
+        "branches": sorted(b["name"] for b in branches),
+        "pulls": [
+            {"number": p["number"], "title": p["title"], "branch": p["head"]["ref"], "author": p["user"]["login"]}
+            for p in pulls
+        ],
+    }
+    _refs_cache[repo] = (time.time(), out)
+    return out
 
 
 # ------------------------------------------------------------------ presets and overrides

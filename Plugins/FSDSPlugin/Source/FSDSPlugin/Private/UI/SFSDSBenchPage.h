@@ -125,7 +125,21 @@ private:
 	 *  version a run would use and whether this machine can run it now. */
 	TSharedRef<SWidget> MakeComponents();
 	TSharedRef<SWidget> MakeComponent(const FText& Title, TFunction<FString()> Part, TFunction<FString()> Version,
-		TSharedPtr<SWidget> Extra, bool bVersioned);
+		TSharedPtr<SWidget> Extra, const FText& Note, float Width = 270.f);
+	/** The boards box's choices: none, real (HIL) or emulated (vHIL), the system, each board's firmware. */
+	TSharedRef<SWidget> MakeBoardsChoices();
+	/** The version picker under the boxes: a repository's PRs and branches, or a typed ref. */
+	TSharedRef<SWidget> MakePicker();
+	void OpenPicker(const FString& Title, const FString& Repo, TFunction<void(const FString&)> OnPick);
+	void FetchRefs(const FString& Repo);
+	/** The draft's code.<Repo> (a branch, #PR or commit); empty: this checkout. */
+	FString CodeRef(const FString& Repo) const;
+	void SetCodeRef(const FString& Repo, const FString& Ref);
+	/** The draft's boards: (mode: hil or vhil, system, firmware), null when none. */
+	TSharedPtr<FJsonObject> BoardsObj(bool bCreate = false) const;
+	FString BoardsMode() const;
+	void SetBoardsMode(const FString& Mode);
+	TArray<FString> BoardsInRun() const;
 	/** run_spec.py --rig on the host: checks this machine (and its code) for the boxes. */
 	void CheckMachine();
 	TSharedRef<SWidget> MakeOverridesRow();
@@ -163,6 +177,21 @@ private:
 	TMap<FString, TArray<FString>> BagsByKind;
 	TArray<FString> Missions, TrackNames;
 	TMap<FString, TArray<FString>> MissionTracks;   // each mission's own tracks (missions.yaml)
+	FString PipelineRepo;   // owner/name on GitHub
+	struct FFirmware { FString Repo, Default; };
+	TMap<FString, FFirmware> Firmware;   // per board (bench.yaml boards.firmware)
+	TArray<FString> HilBoards;
+	TArray<TPair<FString, TArray<FString>>> VhilSystems;   // id, its boards
+
+	// the version picker
+	struct FPull { int32 Number = 0; FString Title, Branch; };
+	FString PickerTitle, PickerRepo, PickerFilter, PickerError;
+	TFunction<void(const FString&)> PickerSet;
+	TArray<FString> PickerBranches;
+	TArray<FPull> PickerPulls;
+	FString PickerDefault;
+	bool bPickerLoading = false;
+	TMap<FString, FString> SetupText;   // the Setup tab's typed fields
 
 	TSharedPtr<FJsonObject> Draft;
 	FString DraftName;          // what the name box says, once typed in

@@ -3,6 +3,7 @@ checks (launch/rig.py), against a small manifest and a fake benchmark."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -304,3 +305,74 @@ def test_code_versions_reads_each_repository(tmp_path):
     assert set(got) == {"ifssim"} and got["ifssim"]["branch"] == "dev" and not got["ifssim"]["dirty"]
     (repo / "f").write_text("y")
     assert run.code_versions(fake)["ifssim"]["dirty"]
+
+
+# ------------------------------------------------------------------ code.pipeline and boards
+def _git(*args, cwd):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True,
+                   capture_output=True)
+
+
+@pytest.fixture
+def piped(m, tmp_path):
+    """The manifest with a pipeline clone whose origin has dev, a branch and PR #7."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git("init", "-q", "-b", "dev", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 1\n")
+    _git("add", ".", cwd=origin)
+    _git("commit", "-qm", "dev", cwd=origin)
+    _git("checkout", "-qb", "feat/x", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 2\n")
+    _git("commit", "-qam", "branch", cwd=origin)
+    _git("checkout", "-q", "dev", cwd=origin)
+    _git("checkout", "-qb", "pr7", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 7\n")
+    _git("commit", "-qam", "pr", cwd=origin)
+    _git("update-ref", "refs/pull/7/head", "pr7", cwd=origin)
+    _git("checkout", "-q", "dev", cwd=origin)
+    _git("clone", "-q", str(origin), str(tmp_path / "pipeline"), cwd=tmp_path)
+    return dataclasses.replace(m, repos={**m.repos, "pipeline": tmp_path / "pipeline"})
+
+
+def test_code_pipeline_checks_out_a_branch_a_pr_or_a_commit(piped, tmp_path):
+    for ref, gate in (("feat/x", "2"), ("#7", "7"), ("pr/7", "7")):
+        where = tmp_path / "wt" / ref.replace("/", "_").replace("#", "")
+        sha = run.pipeline_worktree(piped, ref, where)
+        assert (where / "params.yaml").read_text() == f"gate: {gate}\n" and len(sha) == 40
+        run.remove_pipeline_worktree(piped, where)
+        assert not where.exists()
+    dev = subprocess.run(["git", "-C", str(tmp_path / "origin"), "rev-parse", "dev"], capture_output=True, text=True).stdout.strip()
+    assert run.pipeline_worktree(piped, dev[:9], tmp_path / "wt" / "c") == dev
+    with pytest.raises(run.sp.SpecError, match="couldn't fetch branch nope"):
+        run.pipeline_worktree(piped, "nope", tmp_path / "wt" / "n")
+
+
+def test_a_queued_spec_runs_on_its_code_pipeline_and_cleans_up(piped):
+    jid = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "feat/x"}}, requested_by="alice")
+    run.work(piped, once=True, check_rig=lambda: READY_RIG)
+    st = lq.job(piped.results, jid)["status"]
+    assert st["state"] == "done" and st["pipeline"]["ref"] == "feat/x"
+    assert not (lq.queue_dir(piped.results) / jid / "pipeline").exists()  # the worktree is gone
+    bad = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "nope"}}, requested_by="alice")
+    run.work(piped, once=True, check_rig=lambda: READY_RIG)
+    st = lq.job(piped.results, bad)["status"]
+    assert st["state"] == "failed" and "nope" in st["error"]
+
+
+def test_boards_are_checked_against_the_manifest_and_need_car_in_the_loop(m):
+    boards = {"firmware": {"ecu": {"repo": "isc-fs/ecu", "default": "dev"}, "ams": {"repo": "isc-fs/ams", "default": "dev"}},
+              "hil": ["ecu"], "vhil": {"ecu-ams": ["ecu", "ams"]}}
+    mb = dataclasses.replace(m, boards=boards)
+    ok = spec() | {"boards": {"mode": "vhil", "system": "ecu-ams", "firmware": {"ams": "feat/y"}}}
+    assert run.sp.validate(ok, mb)["boards"]["system"] == "ecu-ams"
+    for bad, want in (
+        ({"mode": "can"}, "boards.mode"),
+        ({"mode": "vhil", "system": "udv"}, "boards.system"),
+        ({"mode": "hil", "firmware": {"ams": "dev"}}, "boards.firmware.ams"),
+    ):
+        with pytest.raises(run.sp.SpecError, match=want):
+            run.sp.validate(spec() | {"boards": bad}, mb)
+    assert rg.needs(ok)[-1] == "vhil"
+    probs = rg.problems(ok, rg.check({"id": "desk"}, run=fake_runner({})))
+    assert {"part": "vhil", "status": "absent", "reason": "car-in-the-loop not wired yet"} in probs

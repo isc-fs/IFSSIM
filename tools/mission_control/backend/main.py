@@ -1704,6 +1704,12 @@ def bench_manifest():
     return _bench.manifest()
 
 
+@app.get("/api/bench/refs")
+def bench_refs(repo: str = Query(..., description="owner/name, one bench.yaml names")):
+    """A repository's branches and open PRs, for the Setup tab's version pickers."""
+    return _bench.refs(repo)
+
+
 class BenchCheck(BaseModel):
     spec: dict
 

@@ -189,6 +189,66 @@ def where_and_who() -> dict[str, Any]:
 
 
 ENV_PROGRESS = "BENCH_PROGRESS_FILE"
+# where the benchmarks take the pipeline from (run_provenance.ENV_PIPELINE): a worktree of
+# the spec's code.pipeline, or this checkout's pipeline/ when it's unset
+ENV_PIPELINE = "BENCH_PIPELINE_DIR"
+
+
+def _pipeline_refspec(ref: str) -> tuple[str | None, str]:
+    """(what to fetch, what was asked) for a code.pipeline value: a PR ("#88", "pr/88"),
+    a commit (7-40 hex: fetched only if it isn't here), or a branch."""
+    import re
+
+    r = ref.strip()
+    pr = re.fullmatch(r"(?:#|pr/|pull/)(\d+)", r)
+    if pr:
+        return f"pull/{pr.group(1)}/head", f"PR #{pr.group(1)}"
+    if re.fullmatch(r"[0-9a-f]{7,40}", r):
+        return None, f"commit {r}"
+    return r, f"branch {r}"
+
+
+def pipeline_worktree(m: mf.Manifest, ref: str, where: Path) -> str:
+    """Check the spec's code.pipeline out at ``where`` (a git worktree of the pipeline
+    submodule, so provenance reads it like any checkout); returns its commit."""
+    repo = m.repos.get("pipeline")
+    if repo is None:
+        raise sp.SpecError("code.pipeline: the manifest has no pipeline repository")
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+
+    def first(r: subprocess.CompletedProcess) -> str:
+        lines = (r.stderr or r.stdout or "").strip().splitlines()
+        return lines[-1] if lines else f"exit {r.returncode}"
+
+    refspec, what = _pipeline_refspec(ref)
+    if refspec is None:
+        r = git("rev-parse", "--verify", "--quiet", f"{ref.strip()}^{{commit}}")
+        if r.returncode != 0:
+            git("fetch", "--quiet", "origin")
+            r = git("rev-parse", "--verify", "--quiet", f"{ref.strip()}^{{commit}}")
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: no {what} in the pipeline repository")
+    else:
+        r = git("fetch", "--quiet", "origin", refspec)
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: couldn't fetch {what}: {first(r)}")
+        r = git("rev-parse", "FETCH_HEAD")
+    sha = r.stdout.strip()
+    where.parent.mkdir(parents=True, exist_ok=True)
+    r = git("worktree", "add", "--detach", "--force", str(where), sha)
+    if r.returncode != 0:
+        raise sp.SpecError(f"code.pipeline: couldn't check out {what}: {first(r)}")
+    return sha
+
+
+def remove_pipeline_worktree(m: mf.Manifest, where: Path) -> None:
+    repo = m.repos.get("pipeline")
+    if repo is None:
+        return
+    subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(where)], capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True)
 
 
 def run_queued(
@@ -205,6 +265,32 @@ def run_queued(
     except sp.SpecError as e:
         lq.set_state(m.results, jid, state="failed", ended=lq.now(), error=str(e))
         return "failed"
+    env: dict[str, str] = {}
+    ref = (spec.get("code") or {}).get("pipeline")
+    tree = d / "pipeline" if ref else None
+    if tree is not None:
+        lq.set_state(m.results, jid, current=f"getting pipeline {ref}")
+        try:
+            sha = pipeline_worktree(m, str(ref), tree)
+        except sp.SpecError as e:
+            lq.set_state(m.results, jid, state="failed", ended=lq.now(), error=str(e), current=None)
+            return "failed"
+        env[ENV_PIPELINE] = str(tree)
+        lq.set_state(m.results, jid, pipeline={"ref": ref, "sha": sha})
+    try:
+        return _run_jobs(m, j, spec, jobs, d, env, on_tick)
+    finally:
+        if tree is not None:
+            remove_pipeline_worktree(m, tree)
+
+
+def _run_jobs(
+    m: mf.Manifest, j: dict[str, Any], spec: dict[str, Any], jobs: list[Any], d: Path,
+    env: dict[str, str], on_tick: Callable[[], None],
+) -> str:
+    from . import localq as lq
+
+    jid = j["id"]
     lq.set_state(
         m.results, jid, state="running", started=lq.now(), total=len(jobs), done=0,
         waiting=None,
@@ -231,7 +317,7 @@ def run_queued(
 
         rc = execute(
             m, rec, d / str(i), log=d / "worker.log", should_stop=stop,
-            env={ENV_PROGRESS: str(progress)},
+            env={**env, ENV_PROGRESS: str(progress)},
         )
         last = lq.read_json(progress)  # a job may end before its first check
         if rc == 130 and lq.cancel_requested(m.results, jid):
@@ -317,6 +403,24 @@ def work(
         print(f"=== {picked['id']} {picked.get('name') or ''}", flush=True)
         state = run_queued(m, picked, on_tick=lambda: tick(picked["id"]))
         print(f"    {state}", flush=True)
+
+
+def _run_direct(
+    m: mf.Manifest, jobs: list[Any], records: list[dict[str, Any]], batch_dir: Path,
+    env: dict[str, str], stop_on_error: bool,
+) -> list[tuple[Any, int, float]]:
+    """Run the jobs one by one, here (run_spec.py <spec>): (job, exit, seconds) each."""
+    results = []
+    for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
+        print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
+        t0 = time.time()
+        rc = execute(m, rec, batch_dir / str(i), env=env)
+        results.append((job, rc, time.time() - t0))
+        if rc != 0:
+            print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)
+            if stop_on_error:
+                break
+    return results
 
 
 def code_versions(m: mf.Manifest) -> dict[str, dict[str, Any]]:
@@ -499,11 +603,14 @@ def main(argv: list[str] | None = None) -> int:
     print("--- spec (merged) ---")
     print(yaml.safe_dump(spec, sort_keys=False).rstrip())
     print(f"--- {len(jobs)} job(s) ---")
-    if spec.get("code"):
+    others = {k: v for k, v in (spec.get("code") or {}).items() if k != "pipeline"}
+    if others:
         print(
-            f"note: code {spec['code']} is checked out by whoever launches the spec; "
+            f"note: code {others} is checked out by whoever launches the spec; "
             f"this runs the checkout in {m.root} as it is"
         )
+    if (spec.get("code") or {}).get("pipeline"):
+        print(f"pipeline: {spec['code']['pipeline']}, checked out for this run (not this checkout's pipeline/)")
     records = []
     origin = where_and_who()
     for i, job in enumerate(jobs, 1):
@@ -519,16 +626,22 @@ def main(argv: list[str] | None = None) -> int:
     if a.dry_run:
         return 0
 
-    results = []
-    for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
-        print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
-        t0 = time.time()
-        rc = execute(m, rec, batch_dir / str(i))
-        results.append((job, rc, time.time() - t0))
-        if rc != 0:
-            print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)
-            if a.stop_on_error:
-                break
+    env: dict[str, str] = {}
+    tree = None
+    if (spec.get("code") or {}).get("pipeline"):
+        tree = batch_dir / "pipeline"
+        try:
+            sha = pipeline_worktree(m, str(spec["code"]["pipeline"]), tree)
+        except sp.SpecError as e:
+            print(e, file=sys.stderr)
+            return 2
+        print(f"pipeline at {sha[:7]} in {tree}")
+        env[ENV_PIPELINE] = str(tree)
+    try:
+        results = _run_direct(m, jobs, records, batch_dir, env, a.stop_on_error)
+    finally:
+        if tree is not None:
+            remove_pipeline_worktree(m, tree)
 
     print("\nDone:")
     for job, rc, dt in results:

@@ -26,6 +26,16 @@ shipping pipeline, documentation.
   Start worker / Stop worker run the local queue's worker; the queue shows each spec's
   progress, with Cancel and its folder.
 
+- **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
+  checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
+  for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that
+  pipeline instead of this checkout's `pipeline/`. The Benchmarks page's Setup tab picks
+  it from IFS09's open PRs and branches (`GET /api/bench/refs`, from GitHub).
+- **Boards in a run spec (`boards:`)**: real (HIL, bench-01) or emulated (vHIL, with an
+  IFS-vHIL system), with a firmware branch, PR or commit per board; `bench.yaml` lists the
+  boards, their firmware repos and the vHIL systems. The Setup tab picks them. Runs with
+  boards wait for car-in-the-loop: until then the rig refuses them.
+
 - **A local benchmark queue for Mission Control's Benchmarks tab.** `POST /api/bench/launch`
   (target `local`) queues a run spec in `tools/sim_benchmark/results/.bench/queue/`;
   `run_spec.py --work` runs the queue on the host, one spec at a time. `GET /api/bench/queue`,

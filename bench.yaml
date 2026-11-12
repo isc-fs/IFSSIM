@@ -12,7 +12,27 @@ repos: # what a spec's `code:` can pin; `default` is where the web form starts
   ifssim:
     path: .
     default: dev
-  pipeline: pipeline # a submodule: by default, the commit IFSSIM pins
+  pipeline: # a submodule: by default, the commit IFSSIM pins
+    path: pipeline
+    url: https://github.com/isc-fs/IFS09-DV-PIPELINE # its branches and PRs, for Mission Control's picker
+
+# The boards a run can add, real (HIL) or emulated (vHIL): a spec's `boards:` picks
+# the mode, the firmware commit of each board and, for vHIL, the system. Runs with
+# boards wait for car-in-the-loop (the roadmap's Phase 3); until then a spec with
+# boards is refused as one this rig can't run. Repos and default commits as in
+# IFS-vHIL's catalog/firmware and IFS_HIL's configs/firmware.
+boards:
+  firmware:
+    ecu: {repo: isc-fs/IFS08-CE-ECU, default: dev}
+    ams: {repo: isc-fs/IFS08-CE-AMS, default: dev}
+    udv: {repo: isc-fs/IFS09-DV-uDV, default: dev}
+  hil: [ecu, ams] # the boards IFS_HIL's bench-01 carries
+  vhil: # IFS-vHIL's systems/<id>.yaml and the boards each emulates
+    ecu: [ecu]
+    ams: [ams]
+    udv: [udv]
+    ecu-ams: [ecu, ams]
+    ecu-ams-udv: [ecu, ams, udv]
 
 # The image the benchmarks run in (they read it from IFSSIM_DV_IMAGE). With
 # `code.image: auto` the worker uses the published image of the newest `dev`

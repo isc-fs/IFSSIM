@@ -3,6 +3,7 @@
 #include "UI/FSDSMissionControlClient.h"
 #include "UI/FSDSStackStarter.h"
 
+#include "GenericPlatform/GenericPlatformHttp.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
@@ -784,7 +785,9 @@ void SFSDSBenchPage::RebuildSetup()
 		BenchUi::Small(LOCTEXT("SetupHint", "What a run uses, apart from what it tests: the version of each component, where the "
 			"pipeline runs, and whether this machine can run it now. It applies to the run on the Run tab."))
 	];
+	SetupText.Reset();
 	SetupBox->AddSlot().AutoHeight() [ MakeComponents() ];
+	if (!PickerRepo.IsEmpty()) SetupBox->AddSlot().AutoHeight().Padding(0, 12, 0, 0) [ MakePicker() ];
 }
 
 void SFSDSBenchPage::RebuildForm()
@@ -1167,20 +1170,65 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
 	TSharedRef<SWrapBox> Boxes = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 8.f));
 	Boxes->AddSlot()
 	[
-		MakeComponent(LOCTEXT("CompSim", "Sim"), []() { return FString(TEXT("sim")); }, VersionOf(TEXT("ifssim"), TEXT("IFSSIM")), nullptr, true)
+		MakeComponent(LOCTEXT("CompSim", "Sim"), []() { return FString(TEXT("sim")); }, VersionOf(TEXT("ifssim"), TEXT("IFSSIM")), nullptr,
+			LOCTEXT("SimVersionNote", "A local run uses this sim, as it is. Other versions come with the bench PC runner."))
 	];
-	TSharedPtr<SWidget> Where;
-	if (CanPickPipeline()) Where = MakePipelineChoice();
+
+	// The pipeline: where it runs, and which commit.
+	TSharedRef<SVerticalBox> PipeExtra = SNew(SVerticalBox);
+	if (CanPickPipeline()) PipeExtra->AddSlot().AutoHeight() [ MakePipelineChoice() ];
+	PipeExtra->AddSlot().AutoHeight().Padding(0, 8, 0, 0)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+		[
+			BenchUi::Button(LOCTEXT("ChangeVersion", "Change version"), BenchUi::PlainBtn, [this]()
+			{
+				OpenPicker(TEXT("Pipeline (IFS09)"), PipelineRepo, [this](const FString& Ref) { SetCodeRef(TEXT("pipeline"), Ref); });
+			}, TAttribute<bool>::CreateLambda([this]() { return !PipelineRepo.IsEmpty(); }))
+		]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[
+			SNew(SBox).Visibility_Lambda([this]() { return CodeRef(TEXT("pipeline")).IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			[
+				BenchUi::Button(LOCTEXT("UseCheckout", "Use this checkout's"), BenchUi::PlainBtn, [this]() { SetCodeRef(TEXT("pipeline"), FString()); })
+			]
+		]
+	];
+	auto PipeVersion = [this, Own = VersionOf(TEXT("pipeline"), TEXT("IFS09"))]()
+	{
+		const FString Ref = CodeRef(TEXT("pipeline"));
+		return Ref.IsEmpty() ? Own() : FString::Printf(TEXT("IFS09 %s, fetched when the run starts (not this checkout's pipeline/)"), *Ref);
+	};
 	Boxes->AddSlot()
 	[
 		MakeComponent(LOCTEXT("CompPipeline", "Pipeline"),
 			[this]() { return PipelineOn() == BenchUi::OnPanda ? FString(TEXT("latte_panda")) : FString(TEXT("pipeline_bench_pc")); },
-			VersionOf(TEXT("pipeline"), TEXT("IFS09")), Where, true)
+			PipeVersion, PipeExtra, FText::GetEmpty())
 	];
+
+	// The boards: none, real or emulated.
+	auto BoardsVersion = [this]()
+	{
+		const FString Mode = BoardsMode();
+		if (Mode.IsEmpty()) return FString(TEXT("Not in this run."));
+		TArray<FString> Bits;
+		const TSharedPtr<FJsonObject> B = BoardsObj();
+		const TSharedPtr<FJsonObject>* Fw = nullptr;
+		for (const FString& Board : BoardsInRun())
+		{
+			FString Ref;
+			if (B.IsValid() && B->TryGetObjectField(TEXT("firmware"), Fw)) (*Fw)->TryGetStringField(Board, Ref);
+			const FFirmware* F = Firmware.Find(Board);
+			Bits.Add(FString::Printf(TEXT("%s %s"), *Board.ToUpper(), Ref.IsEmpty() ? (F ? *F->Default : TEXT("?")) : *Ref));
+		}
+		return FString::Printf(TEXT("%s: %s"), Mode == TEXT("hil") ? TEXT("Real boards (bench-01)") : TEXT("Emulated (vHIL)"),
+			*FString::Join(Bits, TEXT(", ")));
+	};
 	Boxes->AddSlot()
 	[
-		MakeComponent(LOCTEXT("CompBoards", "ECU, AMS, uDV"), []() { return FString(TEXT("hil")); },
-			[]() { return FString(TEXT("Real or emulated boards: with car-in-the-loop")); }, nullptr, false)
+		MakeComponent(LOCTEXT("CompBoards", "ECU, AMS, uDV"), [this]() { return BoardsMode(); }, BoardsVersion, MakeBoardsChoices(),
+			LOCTEXT("BoardsNote", "Runs with boards wait for car-in-the-loop: until then a spec with boards can't be queued."), 420.f)
 	];
 
 	return SNew(SVerticalBox)
@@ -1209,7 +1257,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakeComponent(const FText& Title, TFunction<FString()> Part, TFunction<FString()> Version,
-	TSharedPtr<SWidget> Extra, bool bVersioned)
+	TSharedPtr<SWidget> Extra, const FText& BoxNote, float Width)
 {
 	auto Color = [this, Part]()
 	{
@@ -1243,6 +1291,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponent(const FText& Title, TFunction<
 				.Text_Lambda([this, Part]()
 				{
 					FString Why;
+					if (Part().IsEmpty()) return LOCTEXT("NotInRun", "Not in this run");
 					const EBox State = BoxState(Part(), &Why);
 					const TCHAR* Word = State == EBox::Ready ? TEXT("Ready") : State == EBox::NotNow ? TEXT("Not now")
 						: State == EBox::Never ? TEXT("Not on this machine") : TEXT("Not known");
@@ -1261,13 +1310,11 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponent(const FText& Title, TFunction<
 	{
 		Body->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ Extra.ToSharedRef() ];
 	}
-	if (bVersioned)
+	if (!BoxNote.IsEmpty())
 	{
 		Body->AddSlot().AutoHeight().Padding(0, 8, 0, 0)
 		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("VersionLater", "Other versions: with the bench PC runner. A local run uses this checkout."))
-			.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
+			SNew(STextBlock).Text(BoxNote).Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
 		];
 	}
 	// A coloured edge marks what the run needs.
@@ -1276,7 +1323,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponent(const FText& Title, TFunction<
 		.BorderBackgroundColor_Lambda([Color, Needed]() { return FSlateColor(Needed() ? Color() : BenchUi::Edge); })
 		.Padding(2.f)
 		[
-			SNew(SBox).WidthOverride(270.f).MinDesiredHeight(150.f)
+			SNew(SBox).WidthOverride(Width).MinDesiredHeight(150.f)
 			[
 				SNew(SBorder)
 				.BorderImage(BenchUi::White())
@@ -1403,6 +1450,298 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeSettingRow(const FBench& B, const FSetti
 			})
 			.Font(BenchUi::Font(10))
 		]);
+}
+
+FString SFSDSBenchPage::CodeRef(const FString& Repo) const
+{
+	const TSharedPtr<FJsonObject>* CodeObj = nullptr;
+	FString Ref;
+	if (Draft->TryGetObjectField(TEXT("code"), CodeObj)) (*CodeObj)->TryGetStringField(Repo, Ref);
+	return Ref;
+}
+
+void SFSDSBenchPage::SetCodeRef(const FString& Repo, const FString& Ref)
+{
+	const TSharedPtr<FJsonObject>* Have = nullptr;
+	const TSharedPtr<FJsonObject> CodeObj = Draft->TryGetObjectField(TEXT("code"), Have) ? *Have : MakeShared<FJsonObject>();
+	if (Ref.TrimStartAndEnd().IsEmpty()) CodeObj->RemoveField(Repo); else CodeObj->SetStringField(Repo, Ref.TrimStartAndEnd());
+	if (CodeObj->Values.Num() == 0) Draft->RemoveField(TEXT("code")); else Draft->SetObjectField(TEXT("code"), CodeObj);
+	Edited();
+	RebuildSetup();
+}
+
+TSharedPtr<FJsonObject> SFSDSBenchPage::BoardsObj(bool bCreate) const
+{
+	const TSharedPtr<FJsonObject>* B = nullptr;
+	if (Draft->TryGetObjectField(TEXT("boards"), B)) return *B;
+	if (!bCreate) return nullptr;
+	const TSharedPtr<FJsonObject> New = MakeShared<FJsonObject>();
+	Draft->SetObjectField(TEXT("boards"), New);
+	return New;
+}
+
+FString SFSDSBenchPage::BoardsMode() const
+{
+	const TSharedPtr<FJsonObject> B = BoardsObj();
+	FString Mode;
+	if (B.IsValid()) B->TryGetStringField(TEXT("mode"), Mode);
+	return Mode;
+}
+
+void SFSDSBenchPage::SetBoardsMode(const FString& Mode)
+{
+	if (Mode.IsEmpty())
+	{
+		Draft->RemoveField(TEXT("boards"));
+	}
+	else
+	{
+		const TSharedPtr<FJsonObject> B = BoardsObj(true);
+		B->SetStringField(TEXT("mode"), Mode);
+		if (Mode == TEXT("vhil") && !B->HasField(TEXT("system")) && VhilSystems.Num() > 0)
+		{
+			B->SetStringField(TEXT("system"), VhilSystems.Last().Key);   // all the boards: the fullest system
+		}
+		if (Mode == TEXT("hil")) B->RemoveField(TEXT("system"));
+		// firmware for boards no longer in the run would be refused
+		const TSharedPtr<FJsonObject>* Fw = nullptr;
+		if (B->TryGetObjectField(TEXT("firmware"), Fw))
+		{
+			const TArray<FString> In = BoardsInRun();
+			TArray<FString> Drop;
+			for (const auto& KV : (*Fw)->Values) if (!In.Contains(FString(*KV.Key))) Drop.Add(FString(*KV.Key));
+			for (const FString& D : Drop) (*Fw)->RemoveField(D);
+		}
+	}
+	Edited();
+	RebuildSetup();
+}
+
+TArray<FString> SFSDSBenchPage::BoardsInRun() const
+{
+	const FString Mode = BoardsMode();
+	if (Mode == TEXT("hil")) return HilBoards;
+	if (Mode != TEXT("vhil")) return {};
+	const TSharedPtr<FJsonObject> B = BoardsObj();
+	FString System;
+	if (B.IsValid()) B->TryGetStringField(TEXT("system"), System);
+	for (const auto& Sys : VhilSystems) if (Sys.Key == System) return Sys.Value;
+	return {};
+}
+
+TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
+{
+	TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
+	auto Mode = [this](const FString& M, const FText& Label)
+	{
+		return BenchUi::Choice(Label, [this, M]() { return BoardsMode() == M; }, [this, M]() { SetBoardsMode(M); });
+	};
+	V->AddSlot().AutoHeight()
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(FString(), LOCTEXT("BoardsNone", "None")) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(TEXT("hil"), LOCTEXT("BoardsHil", "Real (HIL)")) ]
+		+ SHorizontalBox::Slot().AutoWidth() [ Mode(TEXT("vhil"), LOCTEXT("BoardsVhil", "Emulated (vHIL)")) ]
+	];
+	if (BoardsMode() == TEXT("vhil"))
+	{
+		TSharedRef<SWrapBox> Systems = BenchUi::Wrap();
+		for (const auto& Sys : VhilSystems)
+		{
+			Systems->AddSlot()
+			[
+				BenchUi::Choice(FText::FromString(Sys.Key),
+					[this, Id = Sys.Key]() { FString S; const auto B = BoardsObj(); return B.IsValid() && B->TryGetStringField(TEXT("system"), S) && S == Id; },
+					[this, Id = Sys.Key]() { BoardsObj(true)->SetStringField(TEXT("system"), Id); SetBoardsMode(TEXT("vhil")); },
+					FText::FromString(FString::Printf(TEXT("IFS-vHIL systems/%s.yaml"), *Sys.Key)))
+			];
+		}
+		V->AddSlot().AutoHeight().Padding(0, 8, 0, 2) [ BenchUi::Small(LOCTEXT("VhilSystem", "System")) ];
+		V->AddSlot().AutoHeight() [ Systems ];
+	}
+	for (const FString& Board : BoardsInRun())
+	{
+		const FFirmware* F = Firmware.Find(Board);
+		const FString Repo = F ? F->Repo : FString();
+		const FString Key = TEXT("fw.") + Board;
+		FString Ref;
+		const TSharedPtr<FJsonObject> B = BoardsObj();
+		const TSharedPtr<FJsonObject>* Fw = nullptr;
+		if (B.IsValid() && B->TryGetObjectField(TEXT("firmware"), Fw)) (*Fw)->TryGetStringField(Board, Ref);
+		SetupText.Add(Key, Ref);
+		auto Set = [this, Board, Key](const FString& R)
+		{
+			const TSharedPtr<FJsonObject> Obj = BoardsObj(true);
+			const TSharedPtr<FJsonObject>* Have = nullptr;
+			const TSharedPtr<FJsonObject> FwObj = Obj->TryGetObjectField(TEXT("firmware"), Have) ? *Have : MakeShared<FJsonObject>();
+			if (R.TrimStartAndEnd().IsEmpty()) FwObj->RemoveField(Board); else FwObj->SetStringField(Board, R.TrimStartAndEnd());
+			Obj->SetObjectField(TEXT("firmware"), FwObj);
+			SetupText.Add(Key, R);
+			Edited();
+		};
+		V->AddSlot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+			[
+				SNew(SBox).WidthOverride(46.f)
+				[
+					SNew(STextBlock).Text(FText::FromString(Board.ToUpper())).Font(BenchUi::Font(10, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
+					.ToolTipText(FText::FromString(Repo))
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0, 0, 6, 0)
+			[
+				SNew(SEditableTextBox)
+				.HintText(FText::FromString(F && !F->Default.IsEmpty() ? F->Default : TEXT("branch, #PR or commit")))
+				.Text_Lambda([this, Key]() { const FString* T = SetupText.Find(Key); return FText::FromString(T ? *T : FString()); })
+				.OnTextChanged_Lambda([Set](const FText& T) { Set(T.ToString()); })
+				.Font(BenchUi::Font(10))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				BenchUi::Button(LOCTEXT("PickRef", "Pick"), BenchUi::PlainBtn, [this, Board, Repo, Set]()
+				{
+					OpenPicker(FString::Printf(TEXT("%s firmware (%s)"), *Board.ToUpper(), *Repo), Repo,
+						[this, Set](const FString& R) { Set(R); RebuildSetup(); });
+				}, !Repo.IsEmpty())
+			]
+		];
+	}
+	return V;
+}
+
+void SFSDSBenchPage::OpenPicker(const FString& Title, const FString& Repo, TFunction<void(const FString&)> OnPick)
+{
+	PickerTitle = Title;
+	PickerRepo = Repo;
+	PickerSet = MoveTemp(OnPick);
+	PickerFilter.Reset();
+	PickerBranches.Reset();
+	PickerPulls.Reset();
+	PickerError.Reset();
+	PickerDefault.Reset();
+	FetchRefs(Repo);
+	RebuildSetup();
+}
+
+void SFSDSBenchPage::FetchRefs(const FString& Repo)
+{
+	if (!Client.IsValid() || Repo.IsEmpty()) return;
+	bPickerLoading = true;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Get(FString::Printf(TEXT("/api/bench/refs?repo=%s"), *FGenericPlatformHttp::UrlEncode(Repo)), [Weak, Repo](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid() || Self->PickerRepo != Repo) return;
+		Self->bPickerLoading = false;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid())
+		{
+			Self->PickerError = Self->Unreachable(TEXT("Couldn't list the branches"), R) + TEXT(" Type a branch, #PR or commit.");
+			Self->RebuildSetup();
+			return;
+		}
+		O->TryGetStringField(TEXT("error"), Self->PickerError);
+		O->TryGetStringField(TEXT("default"), Self->PickerDefault);
+		O->TryGetStringArrayField(TEXT("branches"), Self->PickerBranches);
+		const TArray<TSharedPtr<FJsonValue>>* Pulls = nullptr;
+		if (O->TryGetArrayField(TEXT("pulls"), Pulls))
+		{
+			for (const auto& V : *Pulls)
+			{
+				const TSharedPtr<FJsonObject>* PO = nullptr;
+				if (!V.IsValid() || !V->TryGetObject(PO)) continue;
+				FPull P;
+				(*PO)->TryGetNumberField(TEXT("number"), P.Number);
+				(*PO)->TryGetStringField(TEXT("title"), P.Title);
+				(*PO)->TryGetStringField(TEXT("branch"), P.Branch);
+				Self->PickerPulls.Add(P);
+			}
+		}
+		Self->RebuildSetup();
+	}, 12.f);
+}
+
+TSharedRef<SWidget> SFSDSBenchPage::MakePicker()
+{
+	auto Pick = [this](const FString& Ref)
+	{
+		const TFunction<void(const FString&)> Set = PickerSet;
+		PickerRepo.Reset();
+		if (Set) Set(Ref);
+		RebuildSetup();
+	};
+	const FString Filter = PickerFilter.ToLower();
+	auto Fits = [Filter](const FString& S) { return Filter.IsEmpty() || S.ToLower().Contains(Filter); };
+
+	TSharedRef<SWrapBox> Pulls = BenchUi::Wrap();
+	for (const FPull& P : PickerPulls)
+	{
+		const FString Label = FString::Printf(TEXT("#%d %s"), P.Number, *P.Title);
+		if (!Fits(Label) && !Fits(P.Branch)) continue;
+		Pulls->AddSlot() [ BenchUi::Choice(FText::FromString(Label), []() { return false; },
+			[Pick, N = P.Number]() { Pick(FString::Printf(TEXT("#%d"), N)); }, FText::FromString(P.Branch)) ];
+	}
+	TSharedRef<SWrapBox> Branches = BenchUi::Wrap();
+	for (const FString& B : PickerBranches)
+	{
+		if (!Fits(B)) continue;
+		Branches->AddSlot() [ BenchUi::Choice(FText::FromString(B == PickerDefault ? B + TEXT(" (default)") : B), []() { return false; },
+			[Pick, B]() { Pick(B); }) ];
+	}
+	return SNew(SBorder)
+		.BorderImage(BenchUi::White())
+		.BorderBackgroundColor(BenchUi::Card)
+		.Padding(FMargin(14.f, 10.f))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Text(FText::FromString(FString::Printf(TEXT("Version of %s"), *PickerTitle)))
+					.Font(BenchUi::Font(12, TEXT("Bold"))).ColorAndOpacity(FLinearColor::White)
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					BenchUi::Button(LOCTEXT("ClosePicker", "Close"), BenchUi::PlainBtn, [this]() { PickerRepo.Reset(); RebuildSetup(); })
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+				[
+					SNew(SEditableTextBox)
+					.MinDesiredWidth(320.f)
+					.HintText(LOCTEXT("PickerHint", "filter, or type a branch, #PR or commit"))
+					.Text_Lambda([this]() { return FText::FromString(PickerFilter); })
+					.OnTextChanged_Lambda([this](const FText& T) { PickerFilter = T.ToString(); })
+					.OnTextCommitted_Lambda([this, Pick](const FText& T, ETextCommit::Type How)
+					{
+						if (How == ETextCommit::OnEnter && !T.IsEmpty()) Pick(T.ToString());
+						else RebuildSetup();   // filter the lists
+					})
+					.Font(BenchUi::Font(10))
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					BenchUi::Button(LOCTEXT("UseTyped", "Use what I typed"), BenchUi::PlainBtn, [this, Pick]() { Pick(PickerFilter); },
+						TAttribute<bool>::CreateLambda([this]() { return !PickerFilter.TrimStartAndEnd().IsEmpty(); }))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+			[
+				BenchUi::Small(FText::FromString(bPickerLoading ? FString(TEXT("Asking GitHub...")) : PickerError),
+					PickerError.IsEmpty() ? BenchUi::Muted : BenchUi::Bad)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 4) [ BenchUi::Small(LOCTEXT("OpenPrs", "Open pull requests")) ]
+			+ SVerticalBox::Slot().AutoHeight() [ Pulls ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 4) [ BenchUi::Small(LOCTEXT("BranchesHead", "Branches (Enter in the box filters them)")) ]
+			+ SVerticalBox::Slot().AutoHeight() [ Branches ]
+		];
 }
 
 // ---------------------------------------------------------------------------
@@ -1631,6 +1970,40 @@ void SFSDSBenchPage::FetchManifest()
 		Self->TrackNames.Reset();
 		O->TryGetStringArrayField(TEXT("missions"), Self->Missions);
 		O->TryGetStringArrayField(TEXT("tracks"), Self->TrackNames);
+		Self->PipelineRepo.Reset();
+		O->TryGetStringField(TEXT("pipeline_repo"), Self->PipelineRepo);
+		Self->Firmware.Reset();
+		Self->HilBoards.Reset();
+		Self->VhilSystems.Reset();
+		const TSharedPtr<FJsonObject>* BoardsDoc = nullptr;
+		if (O->TryGetObjectField(TEXT("boards"), BoardsDoc))
+		{
+			const TSharedPtr<FJsonObject>* Fw = nullptr;
+			if ((*BoardsDoc)->TryGetObjectField(TEXT("firmware"), Fw))
+			{
+				for (const auto& KV : (*Fw)->Values)
+				{
+					const TSharedPtr<FJsonObject>* FO = nullptr;
+					if (!KV.Value.IsValid() || !KV.Value->TryGetObject(FO)) continue;
+					FFirmware F;
+					(*FO)->TryGetStringField(TEXT("repo"), F.Repo);
+					(*FO)->TryGetStringField(TEXT("default"), F.Default);
+					Self->Firmware.Add(FString(*KV.Key), F);
+				}
+			}
+			(*BoardsDoc)->TryGetStringArrayField(TEXT("hil"), Self->HilBoards);
+			const TSharedPtr<FJsonObject>* Vhil = nullptr;
+			if ((*BoardsDoc)->TryGetObjectField(TEXT("vhil"), Vhil))
+			{
+				for (const auto& KV : (*Vhil)->Values)
+				{
+					TArray<FString> L;
+					const TArray<TSharedPtr<FJsonValue>>* A = nullptr;
+					if (KV.Value.IsValid() && KV.Value->TryGetArray(A)) for (const auto& V : *A) L.Add(V->AsString());
+					Self->VhilSystems.Emplace(FString(*KV.Key), MoveTemp(L));
+				}
+			}
+		}
 		Self->MissionTracks.Reset();
 		const TSharedPtr<FJsonObject>* Own = nullptr;
 		if (O->TryGetObjectField(TEXT("mission_tracks"), Own))

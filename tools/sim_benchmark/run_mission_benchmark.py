@@ -527,7 +527,7 @@ class Stack:
             )
         if self.overrides:  # before anything starts: a typo fails the job here
             _, self.changed = merged_params(
-                self.checkout / "pipeline" / PARAMS, self.overrides
+                pipeline_dir(self.checkout) / PARAMS, self.overrides
             )
 
     def up(self, log, wait_s: float = STACK_UP_TIMEOUT_S, poll_s: float = 5.0) -> None:
@@ -594,7 +594,7 @@ class Stack:
             )
             src = self.tmp / "pipeline"
             shutil.copytree(
-                self.checkout / "pipeline", src, ignore=shutil.ignore_patterns(".git")
+                pipeline_dir(self.checkout), src, ignore=shutil.ignore_patterns(".git")
             )
             if self.overrides:
                 text, self.changed = merged_params(src / PARAMS, self.overrides)
@@ -961,6 +961,13 @@ def _write_csv(path: Path, rows: list[dict], cols: list[str]) -> None:
         w.writerows(rows)
 
 
+def pipeline_dir(checkout: Path) -> Path:
+    """The pipeline this run uses: run_spec.py's worktree of the spec's code.pipeline
+    ($BENCH_PIPELINE_DIR), else the checkout's pipeline/ submodule."""
+    p = os.environ.get("BENCH_PIPELINE_DIR", "").strip()
+    return Path(p) if p else checkout / "pipeline"
+
+
 def code_state(
     host: PipelineHost, stack: Stack | None = None, repo: Path = REPO
 ) -> dict[str, Any]:
@@ -970,11 +977,9 @@ def code_state(
         )
         return r.stdout.strip() if r.returncode == 0 else None
 
-    sub = (
-        git("-C", "pipeline", "rev-parse", "--short", "HEAD")
-        if (repo / "pipeline").exists()
-        else None
-    )
+    pdir = pipeline_dir(repo)
+    chosen = pdir != repo / "pipeline"  # the spec's code.pipeline (run_spec.py's worktree)
+    sub = git("-C", str(pdir), "rev-parse", "--short", "HEAD") if pdir.exists() else None
     own = stack is not None and stack.mode == "own" and host.where == "bench_pc"
     if host.where == "latte_panda":
         pipe_sha = host.sha[:7] if host.sha else "unknown"
@@ -984,7 +989,9 @@ def code_state(
     elif own:
         pipe_sha, source = (
             sub or "unknown",
-            "this checkout, run in the benchmark's own stack",
+            "the spec's code.pipeline, run in the benchmark's own stack"
+            if chosen
+            else "this checkout, run in the benchmark's own stack",
         )
     else:
         pipe_sha = sub or "unknown"
@@ -998,7 +1005,7 @@ def code_state(
         "pipeline": {
             "sha": pipe_sha,
             "branch": "",
-            "dirty": bool(git("-C", "pipeline", "status", "--porcelain"))
+            "dirty": bool(git("-C", str(pdir), "status", "--porcelain"))
             if own
             else False,
             # where it ran, and how sure the sha is (see the module docstring)

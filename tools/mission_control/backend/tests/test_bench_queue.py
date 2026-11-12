@@ -178,3 +178,42 @@ def test_check_counts_the_runs_a_person_would(results):
     # chosen tracks replace each mission's; no missions chosen is all of them
     got = bq.check({"benchmarks": {"missions": {"settings": {"tracks": "a.csv,b.csv"}}}})
     assert got["runs"] == 2 * sum(int(d.get("repeats") or 1) for d in defaults.values())
+
+
+def test_the_manifest_offers_the_pipeline_repo_and_the_boards(results):
+    m = bq.manifest()
+    assert m["pipeline_repo"] == "isc-fs/IFS09-DV-PIPELINE"
+    assert m["boards"]["firmware"]["ecu"]["repo"] == "isc-fs/IFS08-CE-ECU"
+    assert m["boards"]["vhil"]["ecu-ams-udv"] == ["ecu", "ams", "udv"] and "ams" in m["boards"]["hil"]
+
+
+def test_refs_lists_branches_and_prs_of_known_repos_only(results, monkeypatch):
+    calls = []
+
+    def fake(path):
+        calls.append(path)
+        if path.endswith("/branches?per_page=100"):
+            return [{"name": "main"}, {"name": "feat/a"}]
+        if "/pulls" in path:
+            return [{"number": 88, "title": "Loop closure", "head": {"ref": "feat/a"}, "user": {"login": "x"}}]
+        return {"default_branch": "main"}
+
+    monkeypatch.setattr(bq, "_github_get", fake)
+    monkeypatch.setattr(bq, "_refs_cache", {})
+    got = bq.refs("isc-fs/IFS09-DV-PIPELINE")
+    assert got["branches"] == ["feat/a", "main"] and got["default"] == "main"
+    assert got["pulls"] == [{"number": 88, "title": "Loop closure", "branch": "feat/a", "author": "x"}]
+    n = len(calls)
+    bq.refs("isc-fs/IFS09-DV-PIPELINE")
+    assert len(calls) == n  # cached
+    assert "isn't a repository" in bq.refs("someone/else")["error"] and len(calls) == n
+
+
+def test_refs_says_so_when_github_doesnt_answer(results, monkeypatch):
+    def down(path):
+        raise OSError("no network")
+
+    monkeypatch.setattr(bq, "_github_get", down)
+    monkeypatch.setattr(bq, "_refs_cache", {})
+    got = bq.refs("isc-fs/IFS08-CE-AMS")
+    assert "type a branch" in got["error"] and got["branches"] == []
