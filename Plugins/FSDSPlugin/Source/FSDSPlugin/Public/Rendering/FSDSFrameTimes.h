@@ -17,4 +17,9 @@ namespace FSDSFrameTimes
 {
 	void Start();
 	void Stop();
+
+	/** Called by the LiDAR on each frame it renders a scan. The 5 s line then
+	 *  splits render and GPU time by frames since the last scan, so the scan's
+	 *  cost shows apart from the main view's. Game thread only. */
+	void NoteLidarScan();
 }

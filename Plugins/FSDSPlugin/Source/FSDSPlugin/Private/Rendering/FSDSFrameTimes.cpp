@@ -19,8 +19,22 @@ namespace FSDSFrameTimesPrivate
 		double FrameMax = 0.0, GameMax = 0.0, RenderMax = 0.0, GpuMax = 0.0;
 	};
 
+	// Frames since the LiDAR's last scan: 0, 1, ..., LidarBins-1 (and later).
+	// Render and GPU times lag the game thread by a frame or two, so binning
+	// by distance from the scan shows the cost whatever the lag is.
+	constexpr int32 LidarBins = 6;
+	struct FLidarBin
+	{
+		int32 Frames = 0;
+		double Render = 0.0, Gpu = 0.0;
+	};
+
 	FTSTicker::FDelegateHandle Handle;
 	FTotals Totals;
+	FLidarBin LidarBin[LidarBins];
+	bool bLidarScanPending = false;
+	bool bLidarSeen = false;
+	int32 FramesSinceLidarScan = LidarBins;
 	double WindowStart = 0.0;
 	double LastTick = 0.0;
 
@@ -51,6 +65,20 @@ namespace FSDSFrameTimesPrivate
 		T.Rhi += RhiMs;
 		T.Gpu += GpuMs;       T.GpuMax = FMath::Max(T.GpuMax, GpuMs);
 
+		if (bLidarScanPending)
+		{
+			FramesSinceLidarScan = 0;
+			bLidarScanPending = false;
+		}
+		else if (FramesSinceLidarScan < LidarBins - 1)
+		{
+			++FramesSinceLidarScan;
+		}
+		FLidarBin& B = LidarBin[FMath::Min(FramesSinceLidarScan, LidarBins - 1)];
+		++B.Frames;
+		B.Render += RenderMs;
+		B.Gpu += GpuMs;
+
 		const double WindowS = Now - WindowStart;
 		if (WindowS >= ReportEveryS)
 		{
@@ -60,6 +88,22 @@ namespace FSDSFrameTimesPrivate
 				T.Frames, WindowS, N / WindowS,
 				T.Frame / N, T.Game / N, T.Render / N, T.Rhi / N, T.Gpu / N,
 				T.FrameMax, T.GameMax, T.RenderMax, T.GpuMax);
+			if (bLidarSeen)
+			{
+				// Frames k after the scan frame: "k:render/gpu (frames)".
+				FString Bins;
+				for (int32 K = 0; K < LidarBins; ++K)
+				{
+					const FLidarBin& Bk = LidarBin[K];
+					const double Nk = FMath::Max(1.0, double(Bk.Frames));
+					Bins += FString::Printf(TEXT(" %d%s:%.2f/%.2f(%d)"),
+						K, K == LidarBins - 1 ? TEXT("+") : TEXT(""),
+						Bk.Render / Nk, Bk.Gpu / Nk, Bk.Frames);
+				}
+				UE_LOG(LogTemp, Log,
+					TEXT("FSDS Frame LiDAR: render/gpu ms by frames since scan:%s"), *Bins);
+			}
+			for (FLidarBin& Bk : LidarBin) Bk = FLidarBin();
 			Totals = FTotals();
 			WindowStart = Now;
 		}
@@ -77,6 +121,12 @@ namespace FSDSFrameTimes
 		P::Totals = P::FTotals();
 		P::WindowStart = P::LastTick = 0.0;
 		P::Handle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateStatic(&P::Tick));
+	}
+
+	void NoteLidarScan()
+	{
+		P::bLidarScanPending = true;
+		P::bLidarSeen = true;
 	}
 
 	void Stop()
