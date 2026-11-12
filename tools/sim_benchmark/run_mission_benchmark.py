@@ -617,6 +617,11 @@ class Stack:
         else:  # the latte panda runs the pipeline: here only the sim bridge
             launch = (
                 f"source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && "
+                # the image's entrypoint adds these ament_cmake packages, and
+                # --entrypoint bash skips it: without them ros2 launch can't
+                # find ifssim_bridge
+                f"export AMENT_PREFIX_PATH={WS}/install/fs_msgs:{WS}/install/ifssim_bridge:"
+                f"{WS}/install/dv_msgs:$AMENT_PREFIX_PATH && "
                 f"exec ros2 launch {WS}/bridge.launch.py host:={SIM_HOST} port:={self.sim_port}"
             )
             run += ["--entrypoint", "bash", self.image, "-c", launch]

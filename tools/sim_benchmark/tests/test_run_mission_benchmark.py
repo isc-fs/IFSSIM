@@ -363,6 +363,8 @@ def test_the_latte_panda_needs_its_commands_and_runs_them(tmp_path, world, docke
     # here only the bridge: the latte panda runs the pipeline
     run = " ".join(docker.run_args())
     assert "--entrypoint bash" in run and "bridge.launch.py" in run
+    # the entrypoint is skipped, so the launch adds what it would to the path
+    assert "/dv_pipeline_stack_ws/install/ifssim_bridge:" in run
     assert "host:=host.docker.internal" in run
     assert "DV_REBUILD_ON_STARTUP" not in run and "/src/slam" not in run
     [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
