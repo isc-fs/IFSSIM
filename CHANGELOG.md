@@ -32,6 +32,12 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Loading a built-in track no longer rewrites it.** Mission Control centred every
+  track on the origin as it loaded it, rewriting the file in place, so loading
+  `characterisation`, `acceleration` (and its world sidecar) or `skidpad` changed files
+  under version control. Built-in tracks now load as they are: they fit the floor, and
+  acceleration's start line stays on the Montmeló world's origin.
+
 - **Mission benchmarks on a snap-installed Docker.** The benchmark copied the
   pipeline into `/tmp` and mounted the copy into its stack, but snap's Docker
   has a `/tmp` of its own and mounts such a folder as an empty one: the stack
