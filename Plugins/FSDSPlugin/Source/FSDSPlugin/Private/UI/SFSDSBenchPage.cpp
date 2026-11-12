@@ -1228,7 +1228,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
 	Boxes->AddSlot()
 	[
 		MakeComponent(LOCTEXT("CompBoards", "ECU, AMS, uDV"), [this]() { return BoardsMode(); }, BoardsVersion, MakeBoardsChoices(),
-			LOCTEXT("BoardsNote", "Runs with boards wait for car-in-the-loop: until then a spec with boards can't be queued."), 420.f)
+			FText::GetEmpty(), 420.f)
 	];
 
 	return SNew(SVerticalBox)
@@ -1532,9 +1532,25 @@ TArray<FString> SFSDSBenchPage::BoardsInRun() const
 TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 {
 	TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
+	// Like the pipeline's LattePanda: a mode this machine can't have isn't selectable
+	// (the rig check's hil and vhil parts), unless the spec already has it.
 	auto Mode = [this](const FString& M, const FText& Label)
 	{
-		return BenchUi::Choice(Label, [this, M]() { return BoardsMode() == M; }, [this, M]() { SetBoardsMode(M); });
+		return BenchUi::Choice(
+			TAttribute<FText>::CreateLambda([this, M, Label]()
+			{
+				if (M.IsEmpty()) return Label;
+				switch (BoxState(M))
+				{
+				case EBox::NotNow: return FText::Format(LOCTEXT("ModeNotNow", "{0} (not now)"), Label);
+				case EBox::Never: return FText::Format(LOCTEXT("ModeNever", "{0} (not here)"), Label);
+				default: return Label;
+				}
+			}),
+			[this, M]() { return BoardsMode() == M; }, [this, M]() { SetBoardsMode(M); },
+			M == TEXT("hil") ? LOCTEXT("HilTip", "The real boards on IFS_HIL's bench-01.")
+				: M == TEXT("vhil") ? LOCTEXT("VhilTip", "Emulated boards (IFS-vHIL), in Docker on this machine.") : FText::GetEmpty(),
+			TAttribute<bool>::CreateLambda([this, M]() { return M.IsEmpty() || BoardsMode() == M || BoxState(M) != EBox::Never; }));
 	};
 	V->AddSlot().AutoHeight()
 	[
@@ -1542,6 +1558,24 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(FString(), LOCTEXT("BoardsNone", "None")) ]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(TEXT("hil"), LOCTEXT("BoardsHil", "Real (HIL)")) ]
 		+ SHorizontalBox::Slot().AutoWidth() [ Mode(TEXT("vhil"), LOCTEXT("BoardsVhil", "Emulated (vHIL)")) ]
+	];
+	// Why a mode can't be picked, as the check says (the same reason for both today).
+	V->AddSlot().AutoHeight().Padding(0, 4, 0, 0)
+	[
+		BenchUi::Small(TAttribute<FText>::CreateLambda([this]()
+		{
+			TArray<FString> Out;
+			for (const TCHAR* M : { TEXT("hil"), TEXT("vhil") })
+			{
+				FString Why;
+				if (BoxState(M, &Why) == EBox::Never && !Why.IsEmpty())
+				{
+					Out.AddUnique(FString::Printf(TEXT("%s"), *Why));
+				}
+			}
+			return Out.Num() ? FText::FromString(TEXT("Not on this machine: ") + FString::Join(Out, TEXT("; ")) + TEXT("."))
+				: FText::GetEmpty();
+		}))
 	];
 	if (BoardsMode() == TEXT("vhil"))
 	{

@@ -32,6 +32,9 @@ import yaml
 ENV = "IFSSIM_RIG"
 USER_FILE = Path("~/.config/ifssim/rig.yaml")
 READY, UNAVAILABLE, ABSENT = "ready", "unavailable", "absent"
+# Whether a sim run can include boards (the roadmap's Phase 3). Turns vHIL on for any
+# rig with Docker; real boards also need a rig whose descriptor declares a HIL bench.
+CAR_IN_THE_LOOP = False
 
 Runner = Callable[[list[str], float], subprocess.CompletedProcess]
 
@@ -126,8 +129,14 @@ def check(rig: dict[str, Any] | None = None, run: Runner = _run) -> dict[str, An
         if not hil
         else _part(ABSENT, "car-in-the-loop not wired yet", bench=hil.get("bench"))
     )
-    # emulated boards (IFS-vHIL) run in Docker, but nothing joins them to a sim run yet
-    parts["vhil"] = _part(ABSENT, "car-in-the-loop not wired yet")
+    # Emulated boards (IFS-vHIL) run in Docker, so once car-in-the-loop joins them to a
+    # sim run, any rig with Docker can have them; until then no rig can.
+    if not CAR_IN_THE_LOOP:
+        parts["vhil"] = _part(ABSENT, "car-in-the-loop not wired yet")
+    elif parts["docker"]["status"] == READY:
+        parts["vhil"] = _part(READY)
+    else:
+        parts["vhil"] = _part(UNAVAILABLE, "needs Docker")
 
     return {
         "id": rig["id"],

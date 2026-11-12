@@ -376,3 +376,12 @@ def test_boards_are_checked_against_the_manifest_and_need_car_in_the_loop(m):
     assert rg.needs(ok)[-1] == "vhil"
     probs = rg.problems(ok, rg.check({"id": "desk"}, run=fake_runner({})))
     assert {"part": "vhil", "status": "absent", "reason": "car-in-the-loop not wired yet"} in probs
+
+
+def test_vhil_follows_docker_once_car_in_the_loop_is_wired(monkeypatch):
+    docker_up = {"nvidia-smi": (0, "GPU 0: x\n", ""), "docker": (0, "27.0\n", "")}
+    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "absent"
+    monkeypatch.setattr(rg, "CAR_IN_THE_LOOP", True)
+    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "ready"
+    down = rg.check({"id": "d"}, run=fake_runner({"docker": (1, "", "Cannot connect\n")}))
+    assert down["parts"]["vhil"] == {"status": "unavailable", "reason": "needs Docker"}
