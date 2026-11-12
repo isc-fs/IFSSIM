@@ -32,6 +32,11 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The pipeline stack image clusters cones the way the car does.** It was
+  missing the `dbscan` package, so cone detection's default cluster backend
+  (`pypi`) fell back to grid/sklearn in every sim run, sim check and
+  benchmark. The image now installs it, as the pipeline's own CI does.
+
 - **Mission benchmarks on a snap-installed Docker.** The benchmark copied the
   pipeline into `/tmp` and mounted the copy into its stack, but snap's Docker
   has a `/tmp` of its own and mounts such a folder as an empty one: the stack
