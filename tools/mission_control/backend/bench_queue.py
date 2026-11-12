@@ -6,7 +6,8 @@ tools/sim_benchmark). ``run_spec.py --work`` runs it on the host: a benchmark ne
 the host's Docker and paths, which this container doesn't have. The worker also
 writes the rig's checks (``rig.json``) there, which ``rig`` returns.
 
-Target *Runner* (the bench PC, through GitHub) is not built yet.
+Target *Runner* (the bench PC, through GitHub) is not built yet. ``presets`` hands the
+sim's menu the spec presets as JSON.
 """
 
 from __future__ import annotations
@@ -29,22 +30,73 @@ def results_root() -> Path:
     return Path(_bcr._results_root())
 
 
-_localq: ModuleType | None = None
+_loaded: dict[str, ModuleType] = {}
+
+
+def _launch_module(name: str) -> ModuleType:
+    """tools/sim_benchmark/launch/<name>.py, loaded as a file: this container has tools/
+    (read-only) but not its packages. Only for the modules that need nothing else of
+    launch/ (localq: the standard library; rig: that and PyYAML)."""
+    if name not in _loaded:
+        path = _bcr._tools_dir() / "sim_benchmark" / "launch" / f"{name}.py"
+        spec = importlib.util.spec_from_file_location(f"ifssim_{name}", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"no {name} code at {path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _loaded[name] = mod
+    return _loaded[name]
 
 
 def localq() -> ModuleType:
-    """tools/sim_benchmark/launch/localq.py, loaded as a file: it needs only the standard
-    library, and this container has tools/ (read-only) but not its packages."""
-    global _localq
-    if _localq is None:
-        path = _bcr._tools_dir() / "sim_benchmark" / "launch" / "localq.py"
-        spec = importlib.util.spec_from_file_location("ifssim_localq", path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"no local queue code at {path}")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _localq = mod
-    return _localq
+    return _launch_module("localq")
+
+
+def presets_dir() -> Path:
+    # bench.yaml's `presets:`; bench.yaml itself isn't in this container
+    return _bcr._tools_dir() / "sim_benchmark" / "specs"
+
+
+def _about(text: str) -> str:
+    """A preset's leading comment, up to its first example or command."""
+    lines = []
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        line = line[1:].strip()
+        if not line or line.endswith(":") or line.startswith(("python3 ", "--")):
+            break
+        lines.append(line)
+    return " ".join(lines)
+
+
+def presets() -> dict[str, Any]:
+    """The starting points for a spec (tools/sim_benchmark/specs/*.yaml), as JSON for the
+    sim's menu, which has no YAML reader; each with the rig parts it needs (launch/rig.py)."""
+    import yaml
+
+    rig = _launch_module("rig")
+    out = []
+    for path in sorted(presets_dir().glob("*.yaml")):
+        text = path.read_text()
+        try:
+            spec = yaml.safe_load(text)
+        except yaml.YAMLError as e:
+            out.append({"name": path.stem, "error": f"{path.name}: {e}"})
+            continue
+        if not isinstance(spec, dict):
+            out.append({"name": path.stem, "error": f"{path.name}: a spec is a mapping"})
+            continue
+        out.append(
+            {
+                "name": path.stem,
+                "title": spec.get("name") or path.stem,
+                "about": _about(text),
+                "spec": spec,
+                "needs": rig.needs(spec),
+            }
+        )
+    return {"presets": out}
 
 
 class LaunchError(ValueError):

@@ -1691,6 +1691,12 @@ def bench_launch(req: BenchLaunch):
     return out
 
 
+@app.get("/api/bench/presets")
+def bench_presets():
+    """The run spec presets (tools/sim_benchmark/specs) as JSON, with the rig parts each needs."""
+    return _bench.presets()
+
+
 @app.get("/api/bench/queue")
 def bench_queue(limit: int = Query(50, ge=1, le=500)):
     """The local worker and the queued, running and finished specs, newest first."""

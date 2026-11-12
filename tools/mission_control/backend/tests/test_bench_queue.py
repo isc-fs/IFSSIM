@@ -77,3 +77,25 @@ def test_the_rig_is_unknown_until_a_worker_checks_it_and_stale_without_one(resul
     lq.heartbeat(results)
     r = bq.rig()
     assert r["known"] and not r["stale"] and r["parts"]["sim"]["status"] == "ready"
+
+
+def test_presets_are_the_spec_files_as_json_with_what_they_need():
+    got = {p["name"]: p for p in bq.presets()["presets"]}
+    names = {p.stem for p in bq.presets_dir().glob("*.yaml")}
+    assert set(got) == names and "missions-basic" in names
+    basic = got["missions-basic"]
+    assert basic["title"] == "missions, basic"
+    assert basic["spec"]["benchmarks"]["missions"]["settings"]["missions"] == "all"
+    assert basic["needs"] == ["sim", "docker", "pipeline_bench_pc"]
+    # the leading comment, without the command lines after it
+    assert basic["about"].startswith("The basic complete benchmark")
+    assert "run_spec.py" not in basic["about"]
+
+
+def test_a_preset_that_isnt_yaml_says_so(tmp_path, monkeypatch):
+    (tmp_path / "good.yaml").write_text("# Fine.\nname: good\nbenchmarks: {missions: {}}\n")
+    (tmp_path / "bad.yaml").write_text("name: [\n")
+    monkeypatch.setattr(bq, "presets_dir", lambda: tmp_path)
+    bad, good = bq.presets()["presets"]
+    assert bad["name"] == "bad" and "bad.yaml" in bad["error"]
+    assert good["about"] == "Fine." and good["needs"][:2] == ["sim", "docker"]
