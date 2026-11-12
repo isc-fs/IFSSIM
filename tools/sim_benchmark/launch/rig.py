@@ -90,10 +90,13 @@ def check(rig: dict[str, Any] | None = None, run: Runner = _run) -> dict[str, An
     )
 
     r = run(["docker", "info", "--format", "{{.ServerVersion}}"], 15)
+    version = r.stdout.strip() if r.returncode == 0 else ""
+    # `docker info --format` exits 0 even when it can't reach the daemon (no access to
+    # its socket): only a server version means Docker answered.
     parts["docker"] = (
-        _part(READY, version=r.stdout.strip())
-        if r.returncode == 0
-        else _part(UNAVAILABLE, f"Docker: {_first_line(r)}")
+        _part(READY, version=version)
+        if version
+        else _part(UNAVAILABLE, f"Docker: {_first_line(r) if (r.stderr or r.returncode) else 'no answer from the daemon'}")
     )
     # the pipeline on this machine runs in the stack's container
     parts["pipeline_bench_pc"] = (

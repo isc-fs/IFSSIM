@@ -270,3 +270,37 @@ def test_a_stop_asked_before_the_worker_started_is_forgotten(m):
     jid = lq.enqueue(m.results, spec(), requested_by="alice")
     assert run.work(m, once=True, check_rig=lambda: READY_RIG) == 0
     assert lq.job(m.results, jid)["state"] == "done"
+
+
+def test_docker_that_cant_reach_its_daemon_is_not_ready():
+    # `docker info --format` exits 0 without a server version when the socket refuses
+    status = rg.check({"id": "desk"}, run=fake_runner({
+        "nvidia-smi": (0, "GPU 0: x\n", ""),
+        "docker": (0, "\n", "permission denied while trying to connect to the Docker daemon socket\n"),
+    }))
+    assert status["parts"]["docker"]["status"] == "unavailable"
+    assert "permission denied" in status["parts"]["docker"]["reason"]
+    assert status["parts"]["pipeline_bench_pc"]["status"] == "unavailable"
+
+
+def test_the_rig_check_is_saved_for_mission_control_with_the_code(m, monkeypatch):
+    monkeypatch.setattr(rg, "check", lambda: READY_RIG)
+    monkeypatch.setattr(run, "code_versions", lambda _m: {"ifssim": {"commit": "abc1234", "branch": "dev", "dirty": False}})
+    assert run.main(["--repo", str(m.root), "--rig", "--json"]) == 0
+    saved = lq.read_json(lq.bench_dir(m.results) / "rig.json")
+    assert saved["id"] == "test" and saved["code"]["ifssim"]["branch"] == "dev"
+
+
+def test_code_versions_reads_each_repository(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "dev", str(repo)], check=True)
+    (repo / "f").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], check=True)
+    fake = mf.Manifest(root=repo, results=repo / "r", presets=None, repos={"ifssim": repo, "pipeline": tmp_path / "none"},
+                       bag_dirs={}, benchmarks={})
+    got = run.code_versions(fake)
+    assert set(got) == {"ifssim"} and got["ifssim"]["branch"] == "dev" and not got["ifssim"]["dirty"]
+    (repo / "f").write_text("y")
+    assert run.code_versions(fake)["ifssim"]["dirty"]

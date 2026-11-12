@@ -22,14 +22,17 @@ struct FFSDSMcReply;
  *   POST /api/bench/worker/stop  the worker stops once no spec is running
  *   GET  /api/bench/rig          this machine's checks, for the component boxes
  *
- * A preset fills the form; the form edits a copy of its spec (the draft), so what
- * the form doesn't show (notes, a sweep) rides along. The form is drawn from the
- * manifest, so a setting added to bench.yaml appears without touching the sim.
+ * The form asks for decisions, not the spec format: what to test (drive the
+ * missions, or replay recorded bags), the few choices that matter for it in
+ * plain words, and everything else bench.yaml declares under More settings
+ * (drawn from the manifest, so a new setting appears without touching the sim).
+ * A preset fills it in; the form edits a copy of its spec (the draft), so what it
+ * doesn't show (notes, a sweep) rides along. A bar under the form says what will
+ * run, or what's wrong, next to Queue.
  *
- * A Local spec runs once a worker on this machine takes it
- * (tools/sim_benchmark/run_spec.py --work), which Start worker launches. The
- * boxes: green ready, yellow not now (a queued spec waits), grey not on this
- * machine or not known; Pipeline and LattePanda pick where the pipeline runs.
+ * The right column shows this machine (green ready, yellow not now, grey not here
+ * or not known) and the queue with its worker
+ * (tools/sim_benchmark/run_spec.py --work), which Start worker launches.
  */
 class SFSDSBenchPage : public SCompoundWidget
 {
@@ -89,6 +92,8 @@ private:
 	/** Whether the draft runs any benchmark. */
 	bool HasBenchmarks() const;
 	void SetBench(const FString& Bench, bool bOn);
+	/** What to test: this benchmark alone. The others' settings are kept for switching back. */
+	void PickBench(const FString& Bench);
 	/** A list-valued choice stored as "a,b" (settings.missions, .tracks) or "all". */
 	TArray<FString> CsvSetting(const FString& Bench, const FString& Setting) const;
 	void SetCsvSetting(const FString& Bench, const FString& Setting, const TArray<FString>& Values);
@@ -105,10 +110,28 @@ private:
 	// --- drawing -------------------------------------------------------------
 	void RebuildPresets();
 	void RebuildForm();
+	/** The Setup tab: the components and this machine. */
+	void RebuildSetup();
 	void RebuildQueue();
-	TSharedRef<SWidget> MakeBenchCard(const FBench& B);
+	/** The choices that matter for a benchmark, then its other settings under More settings. */
+	void AddBenchRows(const FBench& B);
 	TSharedRef<SWidget> MakeSettingRow(const FBench& B, const FSetting& S);
-	TSharedRef<SWidget> MakeBox(const FString& Part, const FText& Label, const FString& PipelineChoice = FString());
+	TSharedRef<SWidget> MakeMissionsRow(const FBench& B);
+	TSharedRef<SWidget> MakeTracksRow(const FBench& B);
+	TSharedRef<SWidget> MakeBagsRow(const FBench& B);
+	TSharedRef<SWidget> MakePartsRow(const FBench& B);
+	TSharedRef<SWidget> MakePipelineChoice();
+	/** The components a run uses: Sim, Pipeline (and where it runs), boards; each with the
+	 *  version a run would use and whether this machine can run it now. */
+	TSharedRef<SWidget> MakeComponents();
+	TSharedRef<SWidget> MakeComponent(const FText& Title, TFunction<FString()> Part, TFunction<FString()> Version,
+		TSharedPtr<SWidget> Extra, bool bVersioned);
+	/** run_spec.py --rig on the host: checks this machine (and its code) for the boxes. */
+	void CheckMachine();
+	TSharedRef<SWidget> MakeOverridesRow();
+	/** A count: settings.<Setting>, or the spec's repeats when Setting is empty. */
+	TSharedRef<SWidget> MakeCountRow(const FBench& B, const FString& Setting, const FString& Label, const FString& Help);
+
 
 	const FPreset* Chosen() const;
 	/** A box's state and why, for the chosen target. */
@@ -139,6 +162,7 @@ private:
 	TArray<FBench> Benches;
 	TMap<FString, TArray<FString>> BagsByKind;
 	TArray<FString> Missions, TrackNames;
+	TMap<FString, TArray<FString>> MissionTracks;   // each mission's own tracks (missions.yaml)
 
 	TSharedPtr<FJsonObject> Draft;
 	FString DraftName;          // what the name box says, once typed in
@@ -146,13 +170,19 @@ private:
 	bool bEdited = false;       // the draft differs from the preset
 	TArray<FString> ChosenOverrides;
 	TMap<FString, FString> FieldText;   // what each number/text field shows, as typed
+	TMap<FString, TSharedPtr<FJsonObject>> Stash;   // a benchmark's settings while another is picked
+	TSet<FString> MoreOpen;     // benchmarks whose More settings are open
+	bool bTracksOpen = false, bOverridesOpen = false;
 	TSharedPtr<SVerticalBox> FormBox;
+	TSharedPtr<SVerticalBox> SetupBox;
+	int32 Tab = 0;   // 0 Run, 1 Setup
 
 	double CheckDueAt = 0.0;    // 0: nothing to check
 	int32 CheckSerial = 0;
 	bool bChecked = false, bCheckOk = false;
 	int32 CheckJobs = 0;
-	TArray<FString> CheckErrors, CheckLabels, CheckNeeds;
+	int32 CheckRuns = 0;
+	TArray<FString> CheckErrors, CheckLabels, CheckNeeds, CheckLines;
 
 	bool bRunner = false;
 	bool bLaunching = false;
@@ -160,6 +190,10 @@ private:
 	bool bRigKnown = false, bRigStale = true;
 	FString RigReason, RigId;
 	TMap<FString, FPart> Parts;
+	struct FCode { FString Commit, Branch; bool bDirty = false; };
+	TMap<FString, FCode> Code;   // the code a local run uses (rig.json's code)
+	double RigAge = 0.0;
+	double NextMachineCheck = 0.0, MachineCheckUntil = 0.0;
 
 	bool bQueueKnown = false;
 	bool bWorkerAlive = false, bWorkerStopping = false;

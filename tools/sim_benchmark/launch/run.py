@@ -278,7 +278,7 @@ def work(
     def tick(current: str | None = None) -> None:
         nonlocal status, last_rig
         if time.monotonic() - last_rig > rig_every_s:
-            status = check_rig()
+            status = rig_status(m, check_rig)
             lq.write_json(bd / "rig.json", status)
             last_rig = time.monotonic()
         lq.heartbeat(m.results, job=current)
@@ -317,6 +317,37 @@ def work(
         print(f"=== {picked['id']} {picked.get('name') or ''}", flush=True)
         state = run_queued(m, picked, on_tick=lambda: tick(picked["id"]))
         print(f"    {state}", flush=True)
+
+
+def code_versions(m: mf.Manifest) -> dict[str, dict[str, Any]]:
+    """What code a local run uses: each repository in the manifest as it is checked out
+    (a local run runs the checkout as it is). Mission Control shows it on its boxes."""
+    out: dict[str, dict[str, Any]] = {}
+    for name, path in m.repos.items():
+        def git(*args: str) -> str | None:
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(path), *args], capture_output=True, text=True, timeout=10
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return r.stdout.strip() if r.returncode == 0 else None
+
+        commit = git("rev-parse", "--short", "HEAD")
+        if not commit:
+            continue
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        out[name] = {
+            "commit": commit,
+            "branch": None if branch in (None, "HEAD") else branch,  # HEAD: a pinned submodule
+            "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+        }
+    return out
+
+
+def rig_status(m: mf.Manifest, check_rig: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """The rig's checks and the code a run would use, as rig.json holds them."""
+    return check_rig() | {"code": code_versions(m)}
 
 
 def print_status(summary: dict[str, Any]) -> None:
@@ -424,7 +455,10 @@ def main(argv: list[str] | None = None) -> int:
     from . import rig as rg
 
     if a.rig:
-        status = rg.check()
+        # saved for Mission Control too: its page runs this to check the machine
+        # when no worker is running
+        status = rig_status(m, rg.check)
+        lq.write_json(lq.bench_dir(m.results) / "rig.json", status)
         print(json.dumps(status, indent=2)) if a.json else print_rig(status)
         return 0
     if a.status:

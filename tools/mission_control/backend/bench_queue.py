@@ -103,15 +103,55 @@ def load_manifest() -> Any:
     return m.with_paths(results=res, bag_dirs={k: here(v) for k, v in m.bag_dirs.items()})
 
 
-def _missions() -> list[str]:
+def _mission_defaults() -> dict[str, dict]:
+    """tools/sim_benchmark/missions.yaml: each mission's tracks, repeats, laps..."""
     import yaml
 
     path = _bcr._tools_dir() / "sim_benchmark" / "missions.yaml"
     try:
         doc = yaml.safe_load(path.read_text()) or {}
     except (OSError, yaml.YAMLError):
-        return []
-    return [k for k, v in doc.items() if isinstance(v, dict)]
+        return {}
+    return {k: v for k, v in doc.items() if isinstance(v, dict)}
+
+
+def _missions() -> list[str]:
+    return list(_mission_defaults())
+
+
+def _csv(v: Any) -> list[str]:
+    return [x.strip() for x in str(v).split(",") if x.strip()] if v not in (None, "") else []
+
+
+def plan(spec: dict[str, Any], jobs: list[Any]) -> dict[str, Any]:
+    """What a checked spec will run, in runs a person counts: the mission benchmark's runs
+    (each mission's tracks x its repeats, as run_mission_benchmark.mission_settings works
+    them out), and one run per job of the others. ``lines``: one per mission or benchmark."""
+    lines: list[str] = []
+    runs = 0
+    for name, b in (spec.get("benchmarks") or {}).items():
+        times = int((b or {}).get("repeats") or 1)
+        if name == "missions":
+            settings = (b or {}).get("settings") or {}
+            defaults = _mission_defaults()
+            chosen = _csv(settings.get("missions"))
+            names = list(defaults) if not chosen or "all" in chosen else chosen
+            tracks = _csv(settings.get("tracks"))
+            for mission in names:
+                d = defaults.get(mission) or {}
+                n_tracks = len(tracks or d.get("tracks") or [])
+                reps = int(settings.get("repeats") or d.get("repeats") or 1)
+                n = n_tracks * reps * times
+                runs += n
+                track_word = "track" if n_tracks == 1 else "tracks"
+                lines.append(
+                    f"{mission}: {n_tracks} {track_word} x {reps}" + (f" x {times}" if times > 1 else "")
+                )
+        else:
+            n = sum(1 for j in jobs if j.benchmark == name)
+            runs += n
+            lines.append(f"{name}: {n} run{'' if n == 1 else 's'}")
+    return {"runs": runs, "lines": lines}
 
 
 def manifest() -> dict[str, Any]:
@@ -160,6 +200,8 @@ def manifest() -> dict[str, Any]:
         "benchmarks": benches,
         "bags": bags,
         "missions": _missions(),
+        # each mission's own tracks, for the form's "Each mission's own"
+        "mission_tracks": {k: list(v.get("tracks") or []) for k, v in _mission_defaults().items()},
         "tracks": tracks,
     }
 
@@ -264,25 +306,25 @@ def check(spec: Any) -> dict[str, Any]:
     problem at once, or how many jobs it makes. ``needs``: the rig parts it needs."""
     rig = _launch_module("rig")
     if not isinstance(spec, dict):
-        return {"ok": False, "errors": ["spec: a mapping"], "jobs": 0, "labels": [], "needs": []}
+        return {"ok": False, "errors": ["spec: a mapping"], "jobs": 0, "labels": [], "needs": [], "runs": 0, "lines": []}
     needs = rig.needs(spec)
     try:
         m = load_manifest()
     except SetupError as e:
-        return {"ok": False, "errors": [f"can't check it: {e}"], "jobs": 0, "labels": [], "needs": needs}
+        return {"ok": False, "errors": [f"can't check it: {e}"], "jobs": 0, "labels": [], "needs": needs, "runs": 0, "lines": []}
     sp = _launch_module("spec")
     try:
         s = sp.validate(_for_this_backend(spec), m)
         jobs = sp.expand(s, m)
     except sp.SpecError as e:
-        return {"ok": False, "errors": str(e).splitlines(), "jobs": 0, "labels": [], "needs": needs}
+        return {"ok": False, "errors": str(e).splitlines(), "jobs": 0, "labels": [], "needs": needs, "runs": 0, "lines": []}
     return {
         "ok": True,
         "errors": [],
         "jobs": len(jobs),
         "labels": [j.label() for j in jobs[:8]],
         "needs": needs,
-    }
+    } | plan(s, jobs)
 
 
 def launch(
@@ -344,18 +386,18 @@ def stop_worker() -> dict[str, Any]:
 
 
 def rig() -> dict[str, Any]:
-    """The rig's last checks, as the worker wrote them, with how old they are. Stale
-    (no worker, or old checks) means the boxes can't be trusted: show them grey."""
+    """The rig's last checks with how old they are: written by the worker every minute,
+    or by ``run_spec.py --rig`` (the sim's page runs it on the host). Stale (old checks)
+    means the boxes can't be trusted: show them grey."""
     lq = localq()
     status = lq.read_json(lq.bench_dir(results_root()) / "rig.json")
     if status is None:
-        return {"known": False, "stale": True, "reason": "no worker has checked this rig yet"}
+        return {"known": False, "stale": True, "reason": "this machine hasn't been checked yet"}
     age = time.time() - float(status.get("checked_at") or 0)
-    alive = lq.worker(results_root())["alive"]
-    stale = age > RIG_STALE_S or not alive
+    stale = age > RIG_STALE_S
     return status | {
         "known": True,
         "age_s": round(age, 1),
         "stale": stale,
-        "reason": None if not stale else ("the worker isn't running" if not alive else "old checks"),
+        "reason": f"the last check is {age / 60:.0f} min old" if stale else None,
     }

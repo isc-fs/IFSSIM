@@ -66,17 +66,16 @@ def test_cancel(results):
     assert bq.cancel("../../etc") is None
 
 
-def test_the_rig_is_unknown_until_a_worker_checks_it_and_stale_without_one(results):
+def test_the_rig_is_unknown_until_checked_and_stale_once_old(results):
     assert bq.rig() == bq.rig() | {"known": False, "stale": True}
     lq = bq.localq()
-    lq.write_json(
-        lq.bench_dir(results) / "rig.json",
-        {"id": "bench-pc", "checked_at": time.time(), "parts": {"sim": {"status": "ready"}}},
-    )
-    assert bq.rig() | {} == bq.rig() and bq.rig()["stale"]  # no worker heartbeat
-    lq.heartbeat(results)
+    path = lq.bench_dir(results) / "rig.json"
+    lq.write_json(path, {"id": "bench-pc", "checked_at": time.time(), "parts": {"sim": {"status": "ready"}}})
+    # fresh checks count with or without a worker (run_spec.py --rig writes them too)
     r = bq.rig()
     assert r["known"] and not r["stale"] and r["parts"]["sim"]["status"] == "ready"
+    lq.write_json(path, {"id": "bench-pc", "checked_at": time.time() - 600, "parts": {}})
+    assert bq.rig()["stale"] and "10 min old" in bq.rig()["reason"]
 
 
 def test_presets_are_the_spec_files_as_json_with_what_they_need():
@@ -118,6 +117,8 @@ def test_the_manifest_says_what_a_custom_run_can_set(results):
         {"name": bag.name, "duration_s": 2.0, "size_bytes": bag.joinpath("metadata.yaml").stat().st_size}
     ]
     assert m["missions"] == ["acceleration", "skidpad", "autocross", "trackdrive"]
+    assert m["mission_tracks"]["acceleration"] == ["acceleration.csv"]
+    assert len(m["mission_tracks"]["autocross"]) >= 1
     assert "characterisation.csv" in m["tracks"]
 
 
@@ -165,3 +166,15 @@ def test_stop_worker_asks_the_worker_to_stop(results):
     bq.localq().heartbeat(results)
     out = bq.stop_worker()
     assert out["stopping"] and out["worker"]["stopping"]
+
+
+def test_check_counts_the_runs_a_person_would(results):
+    # skidpad and autocross from missions.yaml, 3 runs per track, the whole thing twice
+    defaults = bq._mission_defaults()
+    got = bq.check({"benchmarks": {"missions": {"repeats": 2, "settings": {"missions": "skidpad,autocross", "repeats": 3}}}})
+    want = sum(len(defaults[m]["tracks"]) * 3 * 2 for m in ("skidpad", "autocross"))
+    assert got["ok"] and got["runs"] == want
+    assert got["lines"][0] == f"skidpad: {len(defaults['skidpad']['tracks'])} track{'' if len(defaults['skidpad']['tracks']) == 1 else 's'} x 3 x 2"
+    # chosen tracks replace each mission's; no missions chosen is all of them
+    got = bq.check({"benchmarks": {"missions": {"settings": {"tracks": "a.csv,b.csv"}}}})
+    assert got["runs"] == 2 * sum(int(d.get("repeats") or 1) for d in defaults.values())

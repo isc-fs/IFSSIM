@@ -17,6 +17,7 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -28,24 +29,53 @@ namespace BenchUi
 {
 	const FLinearColor Accent = FLinearColor::FromSRGBColor(FColor(255, 184, 28));
 	const FLinearColor Ink = FLinearColor::FromSRGBColor(FColor(232, 232, 236));
-	const FLinearColor Muted = FLinearColor::FromSRGBColor(FColor(150, 150, 160));
+	const FLinearColor Muted = FLinearColor::FromSRGBColor(FColor(182, 182, 192));
 	const FLinearColor Good = FLinearColor::FromSRGBColor(FColor(74, 222, 128));
 	const FLinearColor Bad = FLinearColor::FromSRGBColor(FColor(248, 113, 113));
 	const FLinearColor Yellow = FLinearColor::FromSRGBColor(FColor(250, 204, 21));
 	const FLinearColor Grey = FLinearColor::FromSRGBColor(FColor(110, 110, 120));
 	const FLinearColor PlainBtn = FLinearColor::FromSRGBColor(FColor(64, 64, 72));
 	const FLinearColor GoBtn = FLinearColor::FromSRGBColor(FColor(34, 197, 94));
-	const FLinearColor Card(1.f, 1.f, 1.f, 0.04f);
+	const FLinearColor Card = FLinearColor::FromSRGBColor(FColor(34, 34, 40));
+	// Solid colours: the page is opaque, so the world behind doesn't show through.
+	const FLinearColor Page = FLinearColor::FromSRGBColor(FColor(20, 20, 24));
+	const FLinearColor Field = FLinearColor::FromSRGBColor(FColor(30, 30, 36));
+	const FLinearColor Edge = FLinearColor::FromSRGBColor(FColor(62, 62, 72));
+	const FLinearColor ChoiceOff = FLinearColor::FromSRGBColor(FColor(54, 54, 62));
+	const FLinearColor ChoiceOffHover = FLinearColor::FromSRGBColor(FColor(72, 72, 82));
+	const FLinearColor ChoiceOnText = FLinearColor::FromSRGBColor(FColor(24, 20, 10));
 
 	constexpr double QueueEveryS = 3.0;
 	constexpr double RigEveryS = 15.0;     // the worker checks the rig once a minute
 	constexpr double CheckAfterS = 0.5;    // after the last edit
 	constexpr double WorkerStartS = 20.0;  // for its first heartbeat
-	constexpr float LabelW = 190.f;
+	constexpr float LabelW = 170.f;
+	constexpr float SideW = 400.f;
 
+	const TCHAR* const Missions = TEXT("missions");
 	const TCHAR* const PipelineOnSetting = TEXT("pipeline_on");
 	const TCHAR* const OnThisPc = TEXT("bench_pc");
 	const TCHAR* const OnPanda = TEXT("latte_panda");
+
+	/** The settings a person picks, in words; the rest keep bench.yaml's help. */
+	struct FNice { const TCHAR* Name; const TCHAR* Label; const TCHAR* Help; };
+	const FNice Nice[] = {
+		{ TEXT("laps"), TEXT("Laps"), TEXT("For every mission. Empty: each mission's own.") },
+		{ TEXT("timeout_s"), TEXT("Time limit (s)"), TEXT("Per run, for every mission. Empty: each mission's own.") },
+		{ TEXT("stack"), TEXT("Pipeline stack"), TEXT("Its own: started from the code being tested. The running one: the stack that's already up.") },
+		{ TEXT("replace_stack"), TEXT("Stop the running stack"), TEXT("Stop a running pipeline stack for the benchmark, and start it again after.") },
+		{ TEXT("panda_start"), TEXT("LattePanda: start"), TEXT("The command that starts the pipeline on the LattePanda.") },
+		{ TEXT("panda_stop"), TEXT("LattePanda: stop"), TEXT("The command that stops it.") },
+		{ TEXT("panda_sha"), TEXT("LattePanda: commit"), TEXT("The command that prints the pipeline commit there.") },
+		{ TEXT("gt_range_m"), TEXT("Ground truth range (m)"), TEXT("Cones within this distance count.") },
+		{ TEXT("gt_hfov_deg"), TEXT("Ground truth view (deg)"), TEXT("Half the horizontal field of view.") },
+		{ TEXT("gt_min_range_m"), TEXT("Ground truth from (m)"), TEXT("Cones closer than this are left out.") },
+		{ TEXT("gt_scan_period_ms"), TEXT("LiDAR period (ms)"), TEXT("Used to time the ground-truth cones.") },
+		{ TEXT("max_frames"), TEXT("First frames only"), TEXT("Perception on the first N LiDAR frames only.") },
+		{ TEXT("profile"), TEXT("Time each stage"), TEXT("Perception's per-stage timings.") },
+		{ TEXT("strategy"), TEXT("SLAM strategy"), TEXT("Empty: trackdrive.") },
+		{ TEXT("resynth_odom"), TEXT("Rebuild odometry"), TEXT("SLAM rebuilds /odom from the bag's sensors.") },
+	};
 
 	FSlateFontInfo Font(int32 Size, const TCHAR* Weight = TEXT("Regular"))
 	{
@@ -71,20 +101,42 @@ namespace BenchUi
 			];
 	}
 
-	/** A choice button: on is the accent text on a lighter button, as the menu's. */
-	TSharedRef<SWidget> Choice(TAttribute<FText> Label, TFunction<bool()> IsOn, TFunction<void()> OnPick, const FText& Tip = FText::GetEmpty())
+	/** A choice button in flat colours: on is filled amber with dark text, off is grey
+	 *  with white text, a little lighter under the mouse. */
+	TSharedRef<SWidget> Choice(TAttribute<FText> Label, TFunction<bool()> IsOn, TFunction<void()> OnPick,
+		const FText& Tip = FText::GetEmpty(), TAttribute<bool> Enabled = true, int32 Size = 10)
 	{
-		return SNew(SButton)
+		// The fill needs the button's hover, and the button is made after its content.
+		const TSharedRef<TWeakPtr<SButton>> Self = MakeShared<TWeakPtr<SButton>>();
+		const TSharedRef<SButton> Btn = SNew(SButton)
 			.IsFocusable(false)
-			.ContentPadding(FMargin(9.f, 5.f))
-			.HAlign(HAlign_Center)
+			.ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder"))
+			.ContentPadding(FMargin(0.f))
 			.ToolTipText(Tip)
-			.ButtonColorAndOpacity_Lambda([IsOn]() { return FSlateColor(IsOn() ? PlainBtn : FLinearColor(1.f, 1.f, 1.f, 0.06f)); })
+			.IsEnabled(Enabled)
 			.OnClicked_Lambda([OnPick]() { OnPick(); return FReply::Handled(); })
 			[
-				SNew(STextBlock).Text(Label).Font(Font(10, TEXT("Bold")))
-				.ColorAndOpacity_Lambda([IsOn]() { return FSlateColor(IsOn() ? Accent : Muted); })
+				SNew(SBorder)
+				.BorderImage(White())
+				.Padding(FMargin(10.f, 5.f))
+				.BorderBackgroundColor_Lambda([IsOn, Self, Enabled]()
+				{
+					const TSharedPtr<SButton> B = Self->Pin();
+					const bool bOn = Enabled.Get(true);
+					FLinearColor C = IsOn() ? Accent : (B.IsValid() && B->IsHovered() && bOn) ? ChoiceOffHover : ChoiceOff;
+					if (!bOn) C.A = 0.45f;
+					return FSlateColor(C);
+				})
+				[
+					SNew(STextBlock).Text(Label).Font(Font(Size, TEXT("Bold")))
+					.ColorAndOpacity_Lambda([IsOn, Enabled]()
+					{
+						return FSlateColor(IsOn() ? ChoiceOnText : Enabled.Get(true) ? FLinearColor::White : Muted);
+					})
+				]
 			];
+		*Self = Btn;
+		return Btn;
 	}
 
 	TSharedRef<SWidget> Heading(const FText& Title)
@@ -92,21 +144,25 @@ namespace BenchUi
 		return SNew(STextBlock).Text(Title).Font(Font(10, TEXT("Bold"))).ColorAndOpacity(Accent);
 	}
 
-	TSharedRef<SWidget> Small(const FText& Text, FLinearColor Color = Muted)
+	TSharedRef<SWidget> Small(const TAttribute<FText>& Text, FLinearColor Color = Muted)
 	{
-		return SNew(STextBlock).Text(Text).Font(Font(9)).ColorAndOpacity(Color).AutoWrapText(true);
+		return SNew(STextBlock).Text(Text).Font(Font(10)).ColorAndOpacity(Color).AutoWrapText(true);
 	}
 
-	/** A form row: the label, then the control with the setting's help under it. */
+	TSharedRef<SWrapBox> Wrap()
+	{
+		return SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
+	}
+
+	/** A form row: the label, then the control with its help under it. */
 	TSharedRef<SWidget> Row(const FString& Label, const FString& Help, TSharedRef<SWidget> Control)
 	{
 		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0, 4, 8, 0)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0, 5, 8, 0)
 			[
 				SNew(SBox).WidthOverride(LabelW)
 				[
-					SNew(STextBlock).Text(FText::FromString(Label)).Font(Font(10, TEXT("Bold"))).ColorAndOpacity(Ink)
-					.ToolTipText(FText::FromString(Help))
+					SNew(STextBlock).Text(FText::FromString(Label)).Font(Font(10, TEXT("Bold"))).ColorAndOpacity(Ink).AutoWrapText(true)
 				]
 			]
 			+ SHorizontalBox::Slot().FillWidth(1.f)
@@ -115,7 +171,7 @@ namespace BenchUi
 				+ SVerticalBox::Slot().AutoHeight() [ Control ]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 				[
-					SNew(STextBlock).Text(FText::FromString(Help)).Font(Font(9)).ColorAndOpacity(Muted).AutoWrapText(true)
+					SNew(STextBlock).Text(FText::FromString(Help)).Font(Font(10)).ColorAndOpacity(Muted).AutoWrapText(true)
 					.Visibility(Help.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
 				]
 			];
@@ -126,6 +182,53 @@ namespace BenchUi
 		FString S = Name.Replace(TEXT("_"), TEXT(" "));
 		if (S.Len() > 0) S[0] = FChar::ToUpper(S[0]);
 		return S;
+	}
+
+	/** A setting's label and help: in words when Nice knows it, else bench.yaml's. */
+	void Words(const FString& Name, const FString& ManifestHelp, FString& Label, FString& Help)
+	{
+		for (const FNice& N : Nice)
+		{
+			if (Name == N.Name) { Label = N.Label; Help = N.Help; return; }
+		}
+		Label = Human(Name);
+		Help = ManifestHelp;
+	}
+
+	/** The benchmark as a choice of what to test. */
+	void BenchWords(const FString& Name, FString& Title, FString& About)
+	{
+		if (Name == TEXT("missions"))
+		{
+			Title = TEXT("Drive the missions");
+			About = TEXT("The pipeline drives the sim through the missions, scored by the referee. The sim and Mission Control must be running.");
+		}
+		else if (Name == TEXT("sim_bag"))
+		{
+			Title = TEXT("Replay recorded bags");
+			About = TEXT("Perception and SLAM run offline on recorded simulator bags, scored against the sim's ground truth.");
+		}
+	}
+
+	/** "benchmarks.sim_bag.settings.max_frames: expected integer" as "max frames: expected integer". */
+	FString Pretty(const FString& Error)
+	{
+		FString E = Error;
+		if (E.StartsWith(TEXT("benchmarks.")))
+		{
+			int32 Dot = INDEX_NONE;
+			E.RightChop(11).FindChar(TEXT('.'), Dot);
+			if (Dot != INDEX_NONE) E = E.RightChop(11 + Dot + 1);
+			E.RemoveFromStart(TEXT("settings."));
+		}
+		int32 Colon = INDEX_NONE;
+		if (E.FindChar(TEXT(':'), Colon) && Colon > 0)
+		{
+			FString Label, Help;
+			Words(E.Left(Colon), FString(), Label, Help);
+			E = Label + E.RightChop(Colon);
+		}
+		return E;
 	}
 
 	FLinearColor StateColor(const FString& State)
@@ -192,6 +295,23 @@ namespace BenchUi
 		}
 		O->SetStringField(Key, T);
 	}
+
+	TArray<FString> Strings(const TSharedPtr<FJsonObject>& O, const FString& Key)
+	{
+		TArray<FString> Out;
+		const TArray<TSharedPtr<FJsonValue>>* L = nullptr;
+		FString One;
+		if (O.IsValid() && O->TryGetArrayField(Key, L)) for (const auto& V : *L) Out.Add(V->AsString());
+		else if (O.IsValid() && O->TryGetStringField(Key, One)) Out.Add(One);
+		return Out;
+	}
+
+	void SetStrings(const TSharedPtr<FJsonObject>& O, const FString& Key, const TArray<FString>& Values)
+	{
+		TArray<TSharedPtr<FJsonValue>> J;
+		for (const FString& X : Values) J.Add(MakeShared<FJsonValueString>(X));
+		O->SetArrayField(Key, J);
+	}
 }
 
 void SFSDSBenchPage::Construct(const FArguments& InArgs)
@@ -202,15 +322,37 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 
 	ChildSlot
 	[
+		SNew(SBorder)
+		.BorderImage(BenchUi::White())
+		.BorderBackgroundColor(BenchUi::Page)
+		.Padding(FMargin(16.f, 12.f))
+		[
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.f)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
 				SNew(STextBlock).Text(LOCTEXT("Title", "Benchmarks"))
 				.Font(BenchUi::Font(20, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
 			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(24, 0, 4, 0)
+			[
+				BenchUi::Choice(LOCTEXT("TabRun", "Run"), [this]() { return Tab == 0; }, [this]() { Tab = 0; },
+					LOCTEXT("TabRunTip", "What to test, and the queue."), true, 12)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				BenchUi::Choice(TAttribute<FText>::CreateLambda([this]()
+					{
+						// a part this run needs that isn't ready: say so on the tab
+						for (const FString& P : Needs()) if (BoxState(P) == EBox::NotNow || BoxState(P) == EBox::Never) return LOCTEXT("TabSetupWarn", "Setup  (!)");
+						return LOCTEXT("TabSetup", "Setup");
+					}),
+					[this]() { return Tab == 1; }, [this]() { Tab = 1; },
+					LOCTEXT("TabSetupTip", "The components a run uses: their versions, where the pipeline runs, and what this machine can run."), true, 12)
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
 				BenchUi::Button(LOCTEXT("Refresh", "Refresh"), BenchUi::PlainBtn, [this]()
@@ -219,181 +361,214 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 					FetchManifest();
 					FetchRig();
 					FetchQueue();
+					CheckMachine();
 				})
 			]
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 6)
+		+ SVerticalBox::Slot().FillHeight(1.f).Padding(0, 10, 0, 0)
 		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("Hint", "Start from a preset and change what you need, then queue it. Local runs it on this "
-				"machine, one spec at a time, once the worker takes it. The same specs run from a shell with "
-				"tools/sim_benchmark/run_spec.py."))
-			.Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
-		]
-		+ SVerticalBox::Slot().FillHeight(1.f)
-		[
-			SNew(SScrollBox)
-			+ SScrollBox::Slot()
+			SNew(SWidgetSwitcher)
+			.WidgetIndex_Lambda([this]() { return Tab; })
+			+ SWidgetSwitcher::Slot()
+			[
+			SNew(SHorizontalBox)
+			// ---- the run: what, how, then what will run next to Queue ----------
+			+ SHorizontalBox::Slot().FillWidth(1.f)
 			[
 				SNew(SVerticalBox)
-				// --- where to start from -----------------------------------------
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 6) [ BenchUi::Heading(LOCTEXT("Preset", "START FROM")) ]
-				+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(PresetBox, SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f)) ]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+				+ SVerticalBox::Slot().FillHeight(1.f)
 				[
-					SNew(STextBlock)
-					.Text_Lambda([this]()
-					{
-						if (!PresetsNote.IsEmpty()) return FText::FromString(PresetsNote);
-						const FPreset* P = Chosen();
-						return FText::FromString(!P ? FString() : !P->Error.IsEmpty() ? P->Error : P->About);
-					})
-					.ColorAndOpacity_Lambda([this]()
-					{
-						const FPreset* P = Chosen();
-						return FSlateColor(!PresetsNote.IsEmpty() || (P && !P->Error.IsEmpty()) ? BenchUi::Bad : BenchUi::Muted);
-					})
-					.Font(BenchUi::Font(10)).AutoWrapText(true)
-				]
-				// --- what to run: drawn from the manifest -------------------------
-				+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(FormBox, SVerticalBox) ]
-				// --- where --------------------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 16, 0, 6) [ BenchUi::Heading(LOCTEXT("Target", "TARGET")) ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+					SNew(SScrollBox)
+					+ SScrollBox::Slot()
 					[
-						BenchUi::Choice(LOCTEXT("Local", "Local: this machine"), [this]() { return !bRunner; },
-							[this]() { if (bRunner) { bRunner = false; FetchRig(); } })
-					]
-					+ SHorizontalBox::Slot().AutoWidth()
-					[
-						BenchUi::Choice(LOCTEXT("Runner", "Runner: the bench PC"), [this]() { return bRunner; },
-							[this]() { bRunner = true; })
-					]
-				]
-				// --- on what ------------------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 16, 0, 6)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth() [ BenchUi::Heading(LOCTEXT("Parts", "COMPONENTS")) ]
-					+ SHorizontalBox::Slot().FillWidth(1.f).Padding(10, 0, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this]()
-						{
-							if (bRunner) return FText::GetEmpty();
-							const FText Pick = CanPickPipeline()
-								? LOCTEXT("PickHint", " Click a pipeline box to run the pipeline there.") : FText::GetEmpty();
-							if (!bRigKnown || bRigStale)
-							{
-								return FText::Format(LOCTEXT("RigUnknown", "Not known: {0}.{1}"), FText::FromString(RigReason), Pick);
-							}
-							return FText::Format(LOCTEXT("RigKnown", "Checked on {0}. Outlined: what this run needs.{1}"),
-								FText::FromString(RigId), Pick);
-						})
-						.Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
-					]
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.f, 6.f))
-					+ SWrapBox::Slot() [ MakeBox(TEXT("sim"), LOCTEXT("BoxSim", "Sim")) ]
-					+ SWrapBox::Slot() [ MakeBox(TEXT("pipeline_bench_pc"), LOCTEXT("BoxPipeline", "Pipeline on this PC"), BenchUi::OnThisPc) ]
-					+ SWrapBox::Slot() [ MakeBox(TEXT("latte_panda"), LOCTEXT("BoxPanda", "Pipeline on the LattePanda"), BenchUi::OnPanda) ]
-					+ SWrapBox::Slot() [ MakeBox(TEXT("hil"), LOCTEXT("BoxHil", "ECU, AMS, uDV (HIL)")) ]
-				]
-				// --- go -----------------------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 16, 0, 0)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth()
-					[
-						SNew(SButton)
-						.IsFocusable(false)
-						.ButtonColorAndOpacity(BenchUi::GoBtn)
-						.ContentPadding(FMargin(16.f, 10.f))
-						.IsEnabled_Lambda([this]() { return CanQueue(); })
-						.OnClicked_Lambda([this]() { Launch(); return FReply::Handled(); })
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+							[
+								SNew(STextBlock).Text(LOCTEXT("QuickStart", "Start from")).Font(BenchUi::Font(10, TEXT("Bold"))).ColorAndOpacity(BenchUi::Muted)
+							]
+							+ SHorizontalBox::Slot().FillWidth(1.f) [ SAssignNew(PresetBox, SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f)) ]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
 						[
 							SNew(STextBlock)
 							.Text_Lambda([this]()
 							{
-								return bLaunching ? LOCTEXT("Queueing", "Queueing...")
-									: bRunner ? LOCTEXT("QueueRunner", "QUEUE ON THE RUNNER") : LOCTEXT("QueueLocal", "QUEUE ON THIS MACHINE");
+								if (!PresetsNote.IsEmpty()) return FText::FromString(PresetsNote);
+								const FPreset* P = Chosen();
+								return FText::FromString(!P ? FString() : !P->Error.IsEmpty() ? P->Error : P->About);
 							})
-							.Font(BenchUi::Font(13, TEXT("Bold"))).ColorAndOpacity(FLinearColor::White)
+							.ColorAndOpacity_Lambda([this]()
+							{
+								const FPreset* P = Chosen();
+								return FSlateColor(!PresetsNote.IsEmpty() || (P && !P->Error.IsEmpty()) ? BenchUi::Bad : BenchUi::Muted);
+							})
+							.Font(BenchUi::Font(9)).AutoWrapText(true)
+						]
+						+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(FormBox, SVerticalBox) ]
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10, 0, 0)
+				[
+					SNew(SBorder)
+					.BorderImage(BenchUi::White())
+					.BorderBackgroundColor(BenchUi::Card)
+					.Padding(FMargin(14.f, 10.f))
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+							[
+								SNew(STextBlock)
+								.Text_Lambda([this]()
+								{
+									if (!HasBenchmarks()) return LOCTEXT("PickWhat", "Pick what to test.");
+									if (!bManifestKnown || !ManifestError.IsEmpty()) return LOCTEXT("AsIs", "The preset, as it is.");
+									if (CheckDueAt > 0.0 || !bChecked) return LOCTEXT("Checking", "Checking...");
+									if (!bCheckOk) return LOCTEXT("NotReady", "Not ready to queue:");
+									const FText On = bRunner ? LOCTEXT("OnRunner", "the bench PC") : LOCTEXT("OnLocal", "this machine");
+									if (!CanPickPipeline())
+									{
+										return FText::Format(LOCTEXT("Runs", "{0} {0}|plural(one=run,other=runs) on {1}"), FText::AsNumber(CheckRuns), On);
+									}
+									return FText::Format(LOCTEXT("RunsWhere", "{0} {0}|plural(one=run,other=runs) on {1}, pipeline on {2}"),
+										FText::AsNumber(CheckRuns), On,
+										PipelineOn() == BenchUi::OnPanda ? LOCTEXT("WherePanda", "the LattePanda") : LOCTEXT("WherePc", "this PC"));
+								})
+								.ColorAndOpacity_Lambda([this]()
+								{
+									const bool bBad = HasBenchmarks() && bManifestKnown && ManifestError.IsEmpty() && CheckDueAt <= 0.0 && bChecked && !bCheckOk;
+									return FSlateColor(bBad ? BenchUi::Bad : BenchUi::Ink);
+								})
+								.Font(BenchUi::Font(14, TEXT("Bold")))
+							]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 4, 0)
+							[
+								BenchUi::Choice(LOCTEXT("Local", "This machine"), [this]() { return !bRunner; },
+									[this]() { if (bRunner) { bRunner = false; FetchRig(); } })
+							]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+							[
+								BenchUi::Choice(LOCTEXT("Runner", "Bench PC"), [this]() { return bRunner; }, [this]() { bRunner = true; },
+									LOCTEXT("RunnerTip", "Runs on the bench PC through GitHub: not built yet."))
+							]
+							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+							[
+								SNew(SButton)
+								.IsFocusable(false)
+								.ButtonColorAndOpacity(BenchUi::GoBtn)
+								.ContentPadding(FMargin(18.f, 9.f))
+								.IsEnabled_Lambda([this]() { return CanQueue(); })
+								.OnClicked_Lambda([this]() { Launch(); return FReply::Handled(); })
+								[
+									SNew(STextBlock)
+									.Text_Lambda([this]() { return bLaunching ? LOCTEXT("Queueing", "QUEUEING...") : LOCTEXT("QueueIt", "QUEUE"); })
+									.Font(BenchUi::Font(13, TEXT("Bold"))).ColorAndOpacity(FLinearColor::White)
+								]
+							]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+						[
+							SNew(STextBlock)
+							.Text_Lambda([this]()
+							{
+								TArray<FString> Out;
+								const FString Never = NeverHere();
+								if (!Never.IsEmpty()) Out.Add(FString::Printf(TEXT("This machine can't run it: %s."), *Never));
+								if (bChecked && CheckDueAt <= 0.0 && HasBenchmarks())
+								{
+									if (bCheckOk) Out.Add(FString::Join(CheckLines, TEXT("   ·   ")));
+									else for (const FString& E : CheckErrors) Out.Add(BenchUi::Pretty(E));
+								}
+								return FText::FromString(FString::Join(Out, TEXT("\n")));
+							})
+							.ColorAndOpacity_Lambda([this]() { return FSlateColor(bCheckOk && NeverHere().IsEmpty() ? BenchUi::Muted : BenchUi::Bad); })
+							.Font(BenchUi::Font(10)).AutoWrapText(true)
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+						[
+							SNew(STextBlock)
+							.Text_Lambda([this]() { return FText::FromString(Note); })
+							.Visibility_Lambda([this]() { return Note.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+							.ColorAndOpacity_Lambda([this]() { return FSlateColor(bNoteError ? BenchUi::Bad : BenchUi::Accent); })
+							.Font(BenchUi::Font(10, TEXT("Bold"))).AutoWrapText(true)
 						]
 					]
-					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(12, 0, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this]()
-						{
-							const FString Never = NeverHere();
-							return FText::FromString(Never.IsEmpty() ? Note
-								: FString::Printf(TEXT("This machine can't run it: %s."), *Never));
-						})
-						.ColorAndOpacity_Lambda([this]() { return FSlateColor(bNoteError || !NeverHere().IsEmpty() ? BenchUi::Bad : BenchUi::Accent); })
-						.Font(BenchUi::Font(11, TEXT("Bold"))).AutoWrapText(true)
-					]
 				]
-				// --- the queue and its worker -------------------------------------
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 20, 0, 6) [ BenchUi::Heading(LOCTEXT("Queue", "QUEUE ON THIS MACHINE")) ]
-				+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this]()
-						{
-							if (!bQueueKnown) return LOCTEXT("QueueUnknown", "Asking the backend...");
-							if (bWorkerAlive && bWorkerStopping)
-							{
-								return LOCTEXT("WorkerStopping", "The worker stops once no spec is running (cancel one to stop sooner).");
-							}
-							if (bWorkerAlive)
-							{
-								return FText::Format(LOCTEXT("Worker", "The worker is running on {0} (pid {1}): it runs the queued specs one at a time."),
-									FText::FromString(WorkerHost), FText::AsNumber(WorkerPid, &FNumberFormattingOptions::DefaultNoGrouping()));
-							}
-							if (FPlatformTime::Seconds() < WorkerStartingUntil) return LOCTEXT("WorkerStarting", "Starting the worker...");
-#if PLATFORM_WINDOWS
-							return LOCTEXT("NoWorkerWin", "No worker is running, so queued specs wait. Start one in a terminal (WSL), "
-								"in the IFSSIM folder: python3 tools/sim_benchmark/run_spec.py --work");
-#else
-							return LOCTEXT("NoWorker", "No worker is running, so queued specs wait. Start worker runs one "
-								"(python3 tools/sim_benchmark/run_spec.py --work in the IFSSIM folder).");
-#endif
-						})
-						.ColorAndOpacity_Lambda([this]() { return FSlateColor(!bQueueKnown ? BenchUi::Muted : bWorkerAlive ? BenchUi::Good : BenchUi::Accent); })
-						.Font(BenchUi::Font(10, TEXT("Bold"))).AutoWrapText(true)
-					]
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
-					[
-						BenchUi::Button(TAttribute<FText>::CreateLambda([this]()
-							{
-								return bWorkerAlive ? (bWorkerStopping ? LOCTEXT("Stopping", "Stopping...") : LOCTEXT("StopWorker", "Stop worker"))
-									: LOCTEXT("StartWorker", "Start worker");
-							}),
-							BenchUi::PlainBtn,
-							[this]() { if (bWorkerAlive) StopWorker(); else StartWorker(); },
-							TAttribute<bool>::CreateLambda([this]()
-							{
-								if (!bQueueKnown || !Client.IsValid()) return false;
-								if (bWorkerAlive) return !bWorkerStopping;
-#if PLATFORM_WINDOWS
-								return false;
-#else
-								return FPlatformTime::Seconds() >= WorkerStartingUntil && !RepoDir().IsEmpty();
-#endif
-							}))
-					]
-				]
-				+ SVerticalBox::Slot().AutoHeight() [ SAssignNew(QueueList, SVerticalBox) ]
 			]
+			// ---- this machine and the queue -------------------------------------
+			+ SHorizontalBox::Slot().AutoWidth().Padding(18, 0, 0, 0)
+			[
+				SNew(SBox).WidthOverride(BenchUi::SideW)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6) [ BenchUi::Heading(LOCTEXT("Queue", "QUEUE")) ]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock)
+							.Text_Lambda([this]()
+							{
+								if (!bQueueKnown) return LOCTEXT("QueueUnknown", "Asking the backend...");
+								if (bWorkerAlive && bWorkerStopping) return LOCTEXT("WorkerStopping", "Stopping once no spec is running.");
+								if (bWorkerAlive) return LOCTEXT("Worker", "Worker running: queued specs run one at a time.");
+								if (FPlatformTime::Seconds() < WorkerStartingUntil) return LOCTEXT("WorkerStarting", "Starting the worker...");
+#if PLATFORM_WINDOWS
+								return LOCTEXT("NoWorkerWin", "No worker: queued specs wait. Start one from WSL: python3 tools/sim_benchmark/run_spec.py --work");
+#else
+								return LOCTEXT("NoWorker", "No worker: queued specs wait until you start it.");
+#endif
+							})
+							.ToolTipText_Lambda([this]()
+							{
+								return bWorkerAlive ? FText::Format(LOCTEXT("WorkerTip", "On {0}, pid {1}"), FText::FromString(WorkerHost),
+									FText::AsNumber(WorkerPid, &FNumberFormattingOptions::DefaultNoGrouping())) : FText::GetEmpty();
+							})
+							.ColorAndOpacity_Lambda([this]() { return FSlateColor(!bQueueKnown ? BenchUi::Muted : bWorkerAlive ? BenchUi::Good : BenchUi::Accent); })
+							.Font(BenchUi::Font(10, TEXT("Bold"))).AutoWrapText(true)
+						]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
+						[
+							BenchUi::Button(TAttribute<FText>::CreateLambda([this]()
+								{
+									return bWorkerAlive ? (bWorkerStopping ? LOCTEXT("Stopping", "Stopping...") : LOCTEXT("StopWorker", "Stop worker"))
+										: LOCTEXT("StartWorker", "Start worker");
+								}),
+								BenchUi::PlainBtn,
+								[this]() { if (bWorkerAlive) StopWorker(); else StartWorker(); },
+								TAttribute<bool>::CreateLambda([this]()
+								{
+									if (!bQueueKnown || !Client.IsValid()) return false;
+									if (bWorkerAlive) return !bWorkerStopping;
+#if PLATFORM_WINDOWS
+									return false;
+#else
+									return FPlatformTime::Seconds() >= WorkerStartingUntil && !RepoDir().IsEmpty();
+#endif
+								}))
+						]
+					]
+					+ SVerticalBox::Slot().FillHeight(1.f)
+					[
+						SNew(SScrollBox)
+						+ SScrollBox::Slot() [ SAssignNew(QueueList, SVerticalBox) ]
+					]
+				]
+			]
+			]
+			// ---- the setup: components and this machine ------------------------
+			+ SWidgetSwitcher::Slot()
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot() [ SAssignNew(SetupBox, SVerticalBox) ]
+			]
+		]
 		]
 	];
 
@@ -452,6 +627,36 @@ void SFSDSBenchPage::SetBench(const FString& Bench, bool bOn)
 	{
 		const TSharedPtr<FJsonObject>* All = nullptr;
 		if (Draft->TryGetObjectField(TEXT("benchmarks"), All)) (*All)->RemoveField(Bench);
+	}
+	Edited();
+	RebuildForm();
+}
+
+void SFSDSBenchPage::PickBench(const FString& Bench)
+{
+	const TSharedPtr<FJsonObject>* All = nullptr;
+	if (Draft->TryGetObjectField(TEXT("benchmarks"), All))
+	{
+		for (const auto& KV : (*All)->Values)
+		{
+			const FString Name(*KV.Key);
+			const TSharedPtr<FJsonObject>* O = nullptr;
+			if (Name != Bench && KV.Value.IsValid() && KV.Value->TryGetObject(O)) Stash.Add(Name, *O);
+		}
+		TArray<FString> Others;
+		for (const auto& KV : (*All)->Values) if (FString(*KV.Key) != Bench) Others.Add(FString(*KV.Key));
+		for (const FString& O : Others) (*All)->RemoveField(O);
+	}
+	if (!HasBench(Bench))
+	{
+		const TSharedPtr<FJsonObject>* Kept = Stash.Find(Bench);
+		BenchObj(Bench, true);
+		if (Kept && Kept->IsValid())
+		{
+			const TSharedPtr<FJsonObject>* BenchesObj = nullptr;
+			Draft->TryGetObjectField(TEXT("benchmarks"), BenchesObj);
+			(*BenchesObj)->SetObjectField(Bench, *Kept);
+		}
 	}
 	Edited();
 	RebuildForm();
@@ -557,9 +762,11 @@ void SFSDSBenchPage::PickPreset(const FString& Name)
 	const FPreset* P = Chosen();
 	Draft = BenchUi::Copy(P ? P->Spec : nullptr);
 	Draft->RemoveField(TEXT("name"));   // SpecName() names it
+	Stash.Reset();
 	bEdited = false;
 	bNameTouched = false;
 	DraftName.Reset();
+	bTracksOpen = false;
 	CheckDueAt = FPlatformTime::Seconds();   // check the preset as it is
 	bChecked = false;
 	RebuildForm();
@@ -568,343 +775,568 @@ void SFSDSBenchPage::PickPreset(const FString& Name)
 // ---------------------------------------------------------------------------
 // The form
 
+void SFSDSBenchPage::RebuildSetup()
+{
+	if (!SetupBox.IsValid()) return;
+	SetupBox->ClearChildren();
+	SetupBox->AddSlot().AutoHeight().Padding(0, 0, 0, 10)
+	[
+		BenchUi::Small(LOCTEXT("SetupHint", "What a run uses, apart from what it tests: the version of each component, where the "
+			"pipeline runs, and whether this machine can run it now. It applies to the run on the Run tab."))
+	];
+	SetupBox->AddSlot().AutoHeight() [ MakeComponents() ];
+}
+
 void SFSDSBenchPage::RebuildForm()
 {
+	RebuildSetup();
 	if (!FormBox.IsValid()) return;
 	FormBox->ClearChildren();
 	FieldText.Reset();
 
 	if (!bManifestKnown || !ManifestError.IsEmpty())
 	{
-		FormBox->AddSlot().AutoHeight().Padding(0, 12, 0, 0)
+		FormBox->AddSlot().AutoHeight().Padding(0, 14, 0, 0)
 		[
 			BenchUi::Small(ManifestError.IsEmpty() ? LOCTEXT("ManifestWait", "Asking the backend what a run can set...")
-				: FText::Format(LOCTEXT("ManifestErr", "The preset runs as it is; changing it needs the backend's "
-					"benchmark list: {0}"), FText::FromString(ManifestError)),
+				: FText::Format(LOCTEXT("ManifestErr", "The preset runs as it is: changing it needs the backend's "
+					"benchmark list, and {0}"), FText::FromString(ManifestError)),
 				ManifestError.IsEmpty() ? BenchUi::Muted : BenchUi::Bad)
 		];
 		return;
 	}
 
-	// Which benchmarks.
-	TSharedRef<SWrapBox> Which = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
-	for (const FBench& B : Benches)
+	// What to test: one benchmark, in words.
+	TArray<const FBench*> Order;
+	for (const FBench& B : Benches) if (B.Name == BenchUi::Missions) Order.Add(&B);
+	for (const FBench& B : Benches) if (B.Name != BenchUi::Missions) Order.Add(&B);
+	TSharedRef<SWrapBox> What = BenchUi::Wrap();
+	for (const FBench* B : Order)
 	{
-		Which->AddSlot()
+		FString Title = B->Title, About = B->Description;
+		BenchUi::BenchWords(B->Name, Title, About);
+		What->AddSlot()
 		[
-			BenchUi::Choice(FText::FromString(B.Title), [this, N = B.Name]() { return HasBench(N); },
-				[this, N = B.Name]() { SetBench(N, !HasBench(N)); }, FText::FromString(B.Description))
+			BenchUi::Choice(FText::FromString(Title), [this, N = B->Name]() { return HasBench(N); },
+				[this, N = B->Name]() { PickBench(N); }, FText::FromString(About), true, 12)
 		];
 	}
-	FormBox->AddSlot().AutoHeight().Padding(0, 16, 0, 6) [ BenchUi::Heading(LOCTEXT("Benchmarks", "BENCHMARKS")) ];
-	FormBox->AddSlot().AutoHeight() [ Which ];
+	FormBox->AddSlot().AutoHeight().Padding(0, 16, 0, 6) [ BenchUi::Heading(LOCTEXT("What", "WHAT TO TEST")) ];
+	FormBox->AddSlot().AutoHeight() [ What ];
 
-	for (const FBench& B : Benches)
+	const FBench* Shown = nullptr;
+	for (const FBench* B : Order) if (HasBench(B->Name)) { Shown = B; break; }
+	if (!Shown)
 	{
-		if (HasBench(B.Name)) FormBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ MakeBenchCard(B) ];
+		FormBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ BenchUi::Small(LOCTEXT("PickOne", "Pick one, or start from a preset above.")) ];
+		return;
 	}
-
-	// Parameter overrides: files in specs/overrides.
-	FormBox->AddSlot().AutoHeight().Padding(0, 16, 0, 6)
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center) [ BenchUi::Heading(LOCTEXT("Overrides", "PARAMETER OVERRIDES")) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(10, 0, 0, 0)
-		[
-			BenchUi::Button(LOCTEXT("OpenOverrides", "Open the folder"), BenchUi::PlainBtn, []()
-			{
-				const FString Repo = RepoDir();
-				if (Repo.IsEmpty()) return;
-				const FString Dir = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/specs/overrides"));
-				IFileManager::Get().MakeDirectory(*Dir, true);
-				FPlatformProcess::ExploreFolder(*Dir);
-			}, TAttribute<bool>::CreateLambda([]() { return !RepoDir().IsEmpty(); }))
-		]
-	];
-	if (Overrides.Num() == 0)
 	{
-		FormBox->AddSlot().AutoHeight()
-		[
-			BenchUi::Small(LOCTEXT("NoOverrides", "None yet: a YAML file in tools/sim_benchmark/specs/overrides with a pipeline: "
-				"section (component, parameter, value) shows here, and Refresh picks it up."))
-		];
+		FString Title = Shown->Title, About = Shown->Description;
+		BenchUi::BenchWords(Shown->Name, Title, About);
+		FormBox->AddSlot().AutoHeight().Padding(0, 4, 0, 4) [ BenchUi::Small(FText::FromString(About)) ];
+	}
+	AddBenchRows(*Shown);
+}
+
+void SFSDSBenchPage::AddBenchRows(const FBench& B)
+{
+	auto Add = [this](TSharedRef<SWidget> W) { FormBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ W ]; };
+	TSet<FString> Done;   // settings shown above More settings
+
+	if (B.Name == BenchUi::Missions)
+	{
+		if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == BenchUi::Missions; }))
+		{
+			Add(MakeMissionsRow(B));
+			Done.Add(BenchUi::Missions);
+		}
+		if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == TEXT("tracks"); }))
+		{
+			Add(MakeTracksRow(B));
+			Done.Add(TEXT("tracks"));
+		}
+		if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == TEXT("repeats"); }))
+		{
+			Add(MakeCountRow(B, TEXT("repeats"), TEXT("Runs per track"), TEXT("Each run is scored on its own; run i uses seed i.")));
+			Done.Add(TEXT("repeats"));
+		}
+		if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == TEXT("start_noise"); }))
+		{
+			const FString N = B.Name;
+			Add(BenchUi::Row(TEXT("Vary the start"), TEXT("Start each run from a slightly different, seeded position."),
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+				[
+					BenchUi::Choice(LOCTEXT("No", "No"), [this, N]() { bool V = false; const auto O = SettingsObj(N); return !(O.IsValid() && O->TryGetBoolField(TEXT("start_noise"), V) && V); },
+						[this, N]() { SettingsObj(N, true)->RemoveField(TEXT("start_noise")); Edited(); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					BenchUi::Choice(LOCTEXT("Yes", "Yes"), [this, N]() { bool V = false; const auto O = SettingsObj(N); return O.IsValid() && O->TryGetBoolField(TEXT("start_noise"), V) && V; },
+						[this, N]() { SettingsObj(N, true)->SetBoolField(TEXT("start_noise"), true); Edited(); })
+				]));
+			Done.Add(TEXT("start_noise"));
+		}
 	}
 	else
 	{
-		TSharedRef<SWrapBox> Files = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
-		for (const FOverride& O : Overrides)
-		{
-			if (!O.Error.IsEmpty())
-			{
-				Files->AddSlot() [ BenchUi::Small(FText::FromString(O.Error), BenchUi::Bad) ];
-				continue;
-			}
-			Files->AddSlot()
-			[
-				BenchUi::Choice(FText::FromString(O.Name), [this, N = O.Name]() { return ChosenOverrides.Contains(N); },
-					[this, N = O.Name]()
-					{
-						if (ChosenOverrides.Remove(N) == 0) ChosenOverrides.Add(N);
-						Edited();
-					}, FText::FromString(O.About))
-			];
-		}
-		FormBox->AddSlot().AutoHeight() [ Files ];
-		FormBox->AddSlot().AutoHeight().Padding(0, 2, 0, 0)
-		[
-			BenchUi::Small(LOCTEXT("OverridesHint", "Merged over the preset's own, in the order you pick them: a later file wins."))
-		];
+		if (!B.Bags.IsEmpty()) Add(MakeBagsRow(B));
+		if (B.Parts.Num() > 0) Add(MakePartsRow(B));
+		Add(MakeCountRow(B, FString(), TEXT("Runs per bag"), TEXT("Each run is a job of its own.")));
 	}
+	if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == BenchUi::PipelineOnSetting; }))
+	{
+		Done.Add(BenchUi::PipelineOnSetting);   // in the Pipeline box
+	}
+	Add(MakeOverridesRow());
 
-	// Name and the check's verdict.
-	FormBox->AddSlot().AutoHeight().Padding(0, 16, 0, 0)
+	Add(BenchUi::Row(TEXT("Name"), TEXT("How it shows in the queue."),
+		SNew(SBox).HAlign(HAlign_Left)
+		[
+			SNew(SEditableTextBox)
+			.MinDesiredWidth(320.f)
+			.Text_Lambda([this]() { return FText::FromString(SpecName()); })
+			.OnTextChanged_Lambda([this](const FText& T) { DraftName = T.ToString(); bNameTouched = true; })
+			.Font(BenchUi::Font(10))
+		]));
+
+	// More settings: the rest of bench.yaml's, closed until asked for.
+	TArray<const FSetting*> Rest;
+	for (const FSetting& S : B.Settings) if (!Done.Contains(S.Name)) Rest.Add(&S);
+	const bool bOpen = MoreOpen.Contains(B.Name);
+	FormBox->AddSlot().AutoHeight().Padding(0, 14, 0, 0)
 	[
-		BenchUi::Row(TEXT("Name"), FString(),
-			SNew(SBox).WidthOverride(360.f).HAlign(HAlign_Left)
-			[
-				SNew(SEditableTextBox)
-				.Text_Lambda([this]() { return FText::FromString(SpecName()); })
-				.OnTextChanged_Lambda([this](const FText& T) { DraftName = T.ToString(); bNameTouched = true; })
-				.MinDesiredWidth(360.f)
-				.Font(BenchUi::Font(10))
-			])
-	];
-	FormBox->AddSlot().AutoHeight().Padding(0, 10, 0, 0)
-	[
-		SNew(STextBlock)
-		.Text_Lambda([this]()
-		{
-			if (CheckDueAt > 0.0 || !bChecked) return LOCTEXT("Checking", "Checking...");
-			if (bCheckOk)
+		BenchUi::Choice(FText::Format(bOpen ? LOCTEXT("Fewer", "Hide the other settings") : LOCTEXT("More", "More settings ({0})"),
+				FText::AsNumber(Rest.Num() + (B.Name == BenchUi::Missions ? 1 : 0))),
+			[]() { return false; },
+			[this, N = B.Name]()
 			{
-				FString S = FString::Printf(TEXT("%d job%s: %s"), CheckJobs, CheckJobs == 1 ? TEXT("") : TEXT("s"),
-					*FString::Join(CheckLabels, TEXT(", ")));
-				if (CheckJobs > CheckLabels.Num()) S += TEXT(", ...");
-				return FText::FromString(S);
-			}
-			return FText::FromString(FString::Join(CheckErrors, TEXT("\n")));
-		})
-		.ColorAndOpacity_Lambda([this]() { return FSlateColor(CheckDueAt > 0.0 || !bChecked ? BenchUi::Muted : bCheckOk ? BenchUi::Good : BenchUi::Bad); })
-		.Font(BenchUi::Font(10)).AutoWrapText(true)
+				if (MoreOpen.Remove(N) == 0) MoreOpen.Add(N);
+				RebuildForm();
+			})
 	];
+	if (!bOpen) return;
+	for (const FSetting* S : Rest)
+	{
+		// The LattePanda's commands matter only when the pipeline runs there.
+		if (S->Name.StartsWith(TEXT("panda_")))
+		{
+			Add(SNew(SBox)
+				.Visibility_Lambda([this]() { return PipelineOn() == BenchUi::OnPanda ? EVisibility::Visible : EVisibility::Collapsed; })
+				[ MakeSettingRow(B, *S) ]);
+			continue;
+		}
+		Add(MakeSettingRow(B, *S));
+	}
+	if (B.Name == BenchUi::Missions)
+	{
+		Add(MakeCountRow(B, FString(), TEXT("Repeat everything"), TEXT("The whole benchmark again, each time a job of its own.")));
+	}
 }
 
-TSharedRef<SWidget> SFSDSBenchPage::MakeBenchCard(const FBench& B)
+TSharedRef<SWidget> SFSDSBenchPage::MakeMissionsRow(const FBench& B)
 {
-	TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
-	auto Add = [&Rows](TSharedRef<SWidget> W) { Rows->AddSlot().AutoHeight().Padding(0, 6, 0, 0) [ W ]; };
+	// All lit: every mission (the setting unset).
 	const FString N = B.Name;
-
-	// Bags: the ones there are, or all.
-	if (!B.Bags.IsEmpty())
+	auto Lit = [this, N]()
 	{
-		const TArray<FString>* Have = BagsByKind.Find(B.Bags);
-		if (!Have || Have->Num() == 0)
-		{
-			Add(BenchUi::Row(TEXT("Bags"), FString(), BenchUi::Small(FText::Format(
-				LOCTEXT("NoBags", "No {0} bags in the results yet: record one with tools/sim_benchmark/capture_benchmark_bag.py."),
-				FText::FromString(B.Bags)), BenchUi::Bad)));
-		}
-		else
-		{
-			auto IsAll = [this, N]()
-			{
-				const TSharedPtr<FJsonObject> O = BenchObj(N);
-				FString S;
-				return O.IsValid() && O->TryGetStringField(TEXT("bags"), S) && S == TEXT("all");
-			};
-			auto Picked = [this, N]()
-			{
-				TArray<FString> Out;
-				const TSharedPtr<FJsonObject> O = BenchObj(N);
-				const TArray<TSharedPtr<FJsonValue>>* L = nullptr;
-				if (O.IsValid() && O->TryGetArrayField(TEXT("bags"), L)) for (const auto& V : *L) Out.Add(V->AsString());
-				return Out;
-			};
-			TSharedRef<SWrapBox> W = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
-			W->AddSlot()
-			[
-				BenchUi::Choice(LOCTEXT("AllBags", "All"), IsAll, [this, N]()
+		TArray<FString> L = CsvSetting(N, BenchUi::Missions);
+		return L.Num() == 0 || L.Contains(TEXT("all")) ? Missions : L;
+	};
+	TSharedRef<SWrapBox> W = BenchUi::Wrap();
+	for (const FString& M : Missions)
+	{
+		W->AddSlot()
+		[
+			BenchUi::Choice(FText::FromString(M), [Lit, M]() { return Lit().Contains(M); },
+				[this, Lit, N, M]()
 				{
-					BenchObj(N, true)->SetStringField(TEXT("bags"), TEXT("all"));
+					TArray<FString> L = Lit();
+					if (L.Remove(M) == 0) L.Add(M);
+					if (L.Num() == 0) return;   // at least one
+					SetCsvSetting(N, BenchUi::Missions, L.Num() == Missions.Num() ? TArray<FString>() : L);
+				})
+		];
+	}
+	return BenchUi::Row(TEXT("Missions"), TEXT("All lit: every mission."), W);
+}
+
+TSharedRef<SWidget> SFSDSBenchPage::MakeTracksRow(const FBench& B)
+{
+	const FString N = B.Name;
+	// Which tracks "each mission's own" are, for the missions that are lit.
+	auto OwnText = [this, N]()
+	{
+		TArray<FString> Lit = CsvSetting(N, BenchUi::Missions);
+		if (Lit.Num() == 0 || Lit.Contains(TEXT("all"))) Lit = Missions;
+		TArray<FString> Lines;
+		for (const FString& M : Lit)
+		{
+			const TArray<FString>* Own = MissionTracks.Find(M);
+			TArray<FString> Names;
+			for (const FString& T : Own ? *Own : TArray<FString>()) Names.Add(T.EndsWith(TEXT(".csv")) ? T.LeftChop(4) : T);
+			Lines.Add(FString::Printf(TEXT("%s: %s"), *M, Names.Num() ? *FString::Join(Names, TEXT(", ")) : TEXT("?")));
+		}
+		return FText::FromString(FString::Join(Lines, TEXT("\n")));
+	};
+	const bool bChosen = CsvSetting(N, TEXT("tracks")).Num() > 0;
+	if (!bChosen && !bTracksOpen)
+	{
+		return BenchUi::Row(TEXT("Tracks"), FString(),
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock).Text(LOCTEXT("OwnTracksText", "Each mission on its own tracks:")).Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Ink)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(10, 2, 0, 6)
+			[
+				SNew(STextBlock).Text_Lambda(OwnText).Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
+			[
+				BenchUi::Button(LOCTEXT("ChooseTracks", "Use other tracks"), BenchUi::PlainBtn, [this]() { bTracksOpen = true; RebuildForm(); })
+			]);
+	}
+	TSharedRef<SWrapBox> W = BenchUi::Wrap();
+	W->AddSlot()
+	[
+		BenchUi::Choice(LOCTEXT("OwnTracks", "Back to each mission's own"), [this, N]() { return CsvSetting(N, TEXT("tracks")).Num() == 0; },
+			[this, N]() { SetCsvSetting(N, TEXT("tracks"), {}); bTracksOpen = false; RebuildForm(); })
+	];
+	for (const FString& T : TrackNames)
+	{
+		W->AddSlot()
+		[
+			BenchUi::Choice(FText::FromString(T.EndsWith(TEXT(".csv")) ? T.LeftChop(4) : T),
+				[this, N, T]() { return CsvSetting(N, TEXT("tracks")).Contains(T); },
+				[this, N, T]()
+				{
+					TArray<FString> L = CsvSetting(N, TEXT("tracks"));
+					if (L.Remove(T) == 0) L.Add(T);
+					SetCsvSetting(N, TEXT("tracks"), L);
+				})
+		];
+	}
+	return BenchUi::Row(TEXT("Tracks"), TEXT("The tracks picked here replace every mission's own: each picked mission runs on all of them."),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight() [ W ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			BenchUi::Small(TAttribute<FText>::CreateLambda([OwnText]()
+			{
+				return FText::Format(LOCTEXT("OwnWere", "Their own would be:\n{0}"), OwnText());
+			}))
+		]);
+}
+
+TSharedRef<SWidget> SFSDSBenchPage::MakeBagsRow(const FBench& B)
+{
+	const FString N = B.Name;
+	const TArray<FString>* Have = BagsByKind.Find(B.Bags);
+	if (!Have || Have->Num() == 0)
+	{
+		return BenchUi::Row(TEXT("Bags"), FString(), BenchUi::Small(
+			LOCTEXT("NoBags", "No recorded bags yet: record a run with Record a bag (Drive, Autonomous), or tools/sim_benchmark/capture_benchmark_bag.py."),
+			BenchUi::Bad));
+	}
+	auto IsAll = [this, N]()
+	{
+		const TSharedPtr<FJsonObject> O = BenchObj(N);
+		FString S;
+		return O.IsValid() && O->TryGetStringField(TEXT("bags"), S) && S == TEXT("all");
+	};
+	TSharedRef<SWrapBox> W = BenchUi::Wrap();
+	W->AddSlot()
+	[
+		BenchUi::Choice(LOCTEXT("AllBags", "All"), IsAll, [this, N]() { BenchObj(N, true)->SetStringField(TEXT("bags"), TEXT("all")); Edited(); })
+	];
+	for (const FString& Bag : *Have)
+	{
+		W->AddSlot()
+		[
+			BenchUi::Choice(FText::FromString(Bag), [this, IsAll, N, Bag]() { return !IsAll() && BenchUi::Strings(BenchObj(N), TEXT("bags")).Contains(Bag); },
+				[this, IsAll, N, Bag]()
+				{
+					TArray<FString> L = IsAll() ? TArray<FString>() : BenchUi::Strings(BenchObj(N), TEXT("bags"));
+					if (L.Remove(Bag) == 0) L.Add(Bag);
+					BenchUi::SetStrings(BenchObj(N, true), TEXT("bags"), L);
 					Edited();
 				})
-			];
-			for (const FString& Bag : *Have)
-			{
-				W->AddSlot()
-				[
-					BenchUi::Choice(FText::FromString(Bag), [IsAll, Picked, Bag]() { return !IsAll() && Picked().Contains(Bag); },
-						[this, IsAll, Picked, N, Bag]()
-						{
-							TArray<FString> L = IsAll() ? TArray<FString>() : Picked();
-							if (L.Remove(Bag) == 0) L.Add(Bag);
-							TArray<TSharedPtr<FJsonValue>> J;
-							for (const FString& X : L) J.Add(MakeShared<FJsonValueString>(X));
-							BenchObj(N, true)->SetArrayField(TEXT("bags"), J);
-							Edited();
-						})
-				];
-			}
-			Add(BenchUi::Row(TEXT("Bags"), TEXT("Each picked bag is a job (times the repeats)."), W));
-		}
+		];
 	}
+	return BenchUi::Row(TEXT("Bags"), TEXT("Pick one or more, or all."), W);
+}
 
-	// Parts: all lit means all of them (no "only").
-	if (B.Parts.Num() > 0)
+TSharedRef<SWidget> SFSDSBenchPage::MakePartsRow(const FBench& B)
+{
+	// All lit: every part (no "only").
+	const FString N = B.Name;
+	const TArray<FString> All = B.Parts;
+	auto Lit = [this, N, All]() { TArray<FString> L = BenchUi::Strings(BenchObj(N), TEXT("only")); return L.Num() == 0 ? All : L; };
+	TSharedRef<SWrapBox> W = BenchUi::Wrap();
+	for (const FString& Part : All)
 	{
-		auto Only = [this, N]()
-		{
-			TArray<FString> Out;
-			const TSharedPtr<FJsonObject> O = BenchObj(N);
-			const TArray<TSharedPtr<FJsonValue>>* L = nullptr;
-			FString One;
-			if (O.IsValid() && O->TryGetArrayField(TEXT("only"), L)) for (const auto& V : *L) Out.Add(V->AsString());
-			else if (O.IsValid() && O->TryGetStringField(TEXT("only"), One)) Out.Add(One);
-			return Out;
-		};
-		TSharedRef<SWrapBox> W = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
-		for (const FString& Part : B.Parts)
-		{
-			W->AddSlot()
-			[
-				BenchUi::Choice(FText::FromString(Part), [Only, Part]() { const TArray<FString> L = Only(); return L.Num() == 0 || L.Contains(Part); },
-					[this, Only, N, Part, All = B.Parts]()
-					{
-						TArray<FString> L = Only();
-						if (L.Num() == 0) L = All;
-						if (L.Remove(Part) == 0) L.Add(Part);
-						const TSharedPtr<FJsonObject> O = BenchObj(N, true);
-						if (L.Num() == 0 || L.Num() == All.Num()) O->RemoveField(TEXT("only"));
-						else
-						{
-							TArray<TSharedPtr<FJsonValue>> J;
-							for (const FString& X : L) J.Add(MakeShared<FJsonValueString>(X));
-							O->SetArrayField(TEXT("only"), J);
-						}
-						Edited();
-					})
-			];
-		}
-		Add(BenchUi::Row(TEXT("Parts"), TEXT("What this benchmark measures; all lit runs them all."), W));
+		W->AddSlot()
+		[
+			BenchUi::Choice(FText::FromString(BenchUi::Human(Part)), [Lit, Part]() { return Lit().Contains(Part); },
+				[this, Lit, N, Part, All]()
+				{
+					TArray<FString> L = Lit();
+					if (L.Remove(Part) == 0) L.Add(Part);
+					if (L.Num() == 0) return;   // at least one
+					const TSharedPtr<FJsonObject> O = BenchObj(N, true);
+					if (L.Num() == All.Num()) O->RemoveField(TEXT("only")); else BenchUi::SetStrings(O, TEXT("only"), L);
+					Edited();
+				})
+		];
 	}
+	return BenchUi::Row(TEXT("Measure"), TEXT("All lit: all of them."), W);
+}
 
-	// Repeats.
-	// The spec's repeats: the whole benchmark again, each time a job of its own. (The
-	// mission benchmark's own "repeats" setting, runs per track, is its settings row.)
-	Add(BenchUi::Row(TEXT("Times"), TEXT("Run the whole benchmark this many times, each a separate job."),
-		SNew(SBox).WidthOverride(90.f).HAlign(HAlign_Left)
+TSharedRef<SWidget> SFSDSBenchPage::MakeCountRow(const FBench& B, const FString& Setting, const FString& Label, const FString& Help)
+{
+	const FString N = B.Name;
+	auto Holder = [this, N, Setting](bool bCreate) { return Setting.IsEmpty() ? BenchObj(N, bCreate) : SettingsObj(N, bCreate); };
+	const FString Key = Setting.IsEmpty() ? FString(TEXT("repeats")) : Setting;
+	return BenchUi::Row(Label, Help,
+		SNew(SBox).HAlign(HAlign_Left)
 		[
 			SNew(SSpinBox<int32>)
 			.MinValue(1).MaxValue(100).MinSliderValue(1).MaxSliderValue(20)
 			.MinDesiredWidth(90.f)
-			.Value_Lambda([this, N]()
+			.Value_Lambda([Holder, Key]()
 			{
-				const TSharedPtr<FJsonObject> O = BenchObj(N);
+				const TSharedPtr<FJsonObject> O = Holder(false);
 				double R = 1.0;
-				if (O.IsValid()) O->TryGetNumberField(TEXT("repeats"), R);
+				if (O.IsValid()) O->TryGetNumberField(Key, R);
 				return FMath::Max(1, (int32)R);
 			})
-			.OnValueChanged_Lambda([this, N](int32 V)
+			.OnValueChanged_Lambda([this, Holder, Key](int32 V)
 			{
-				const TSharedPtr<FJsonObject> O = BenchObj(N, true);
+				const TSharedPtr<FJsonObject> O = Holder(true);
 				double Was = 1.0;
-				O->TryGetNumberField(TEXT("repeats"), Was);
+				O->TryGetNumberField(Key, Was);
 				if ((int32)Was == V) return;
-				if (V <= 1) O->RemoveField(TEXT("repeats")); else O->SetNumberField(TEXT("repeats"), V);
+				if (V <= 1) O->RemoveField(Key); else O->SetNumberField(Key, V);
 				Edited();
 			})
 			.Font(BenchUi::Font(10))
-		]));
+		]);
+}
 
-	for (const FSetting& S : B.Settings)
+TSharedRef<SWidget> SFSDSBenchPage::MakePipelineChoice()
+{
+	auto Where = [this](const FString& Choice, const FString& Part, const FText& Label)
 	{
-		// The LattePanda's commands matter only when the pipeline runs there.
-		if (S.Name.StartsWith(TEXT("panda_")))
-		{
-			Add(SNew(SBox)
-				.Visibility_Lambda([this]() { return PipelineOn() == BenchUi::OnPanda ? EVisibility::Visible : EVisibility::Collapsed; })
-				[ MakeSettingRow(B, S) ]);
-			continue;
-		}
-		Add(MakeSettingRow(B, S));
-	}
+		return BenchUi::Choice(
+			TAttribute<FText>::CreateLambda([this, Part, Label]()
+			{
+				switch (BoxState(Part))
+				{
+				case EBox::NotNow: return FText::Format(LOCTEXT("NotNowSuffix", "{0} (not now)"), Label);
+				case EBox::Never: return FText::Format(LOCTEXT("NeverSuffix", "{0} (not here)"), Label);
+				default: return Label;
+				}
+			}),
+			[this, Choice]() { return PipelineOn() == Choice; },
+			[this, Choice]() { SetPipelineOn(Choice); },
+			LOCTEXT("WhereTip", "Where the pipeline runs. Not now: the run waits in the queue until it's free."),
+			TAttribute<bool>::CreateLambda([this, Part, Choice]() { return PipelineOn() == Choice || BoxState(Part) != EBox::Never; }));
+	};
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Where(BenchUi::OnThisPc, TEXT("pipeline_bench_pc"), LOCTEXT("OnPc", "This PC")) ]
+		+ SHorizontalBox::Slot().AutoWidth() [ Where(BenchUi::OnPanda, TEXT("latte_panda"), LOCTEXT("OnPanda", "LattePanda")) ];
+}
 
+TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
+{
+	auto VersionOf = [this](const TCHAR* Repo, const TCHAR* Prefix)
+	{
+		return [this, Repo = FString(Repo), Prefix = FString(Prefix)]()
+		{
+			const FCode* C = Code.Find(Repo);
+			if (!C) return FPlatformTime::Seconds() < MachineCheckUntil ? FString(TEXT("Checking...")) : FString(TEXT("Version not known yet"));
+			FString S = C->Branch.IsEmpty()
+				? FString::Printf(TEXT("%s @ %s, the commit IFSSIM pins"), *Prefix, *C->Commit)
+				: FString::Printf(TEXT("%s %s @ %s"), *Prefix, *C->Branch, *C->Commit);
+			if (C->bDirty) S += TEXT(", with local changes");
+			return S;
+		};
+	};
+	TSharedRef<SWrapBox> Boxes = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 8.f));
+	Boxes->AddSlot()
+	[
+		MakeComponent(LOCTEXT("CompSim", "Sim"), []() { return FString(TEXT("sim")); }, VersionOf(TEXT("ifssim"), TEXT("IFSSIM")), nullptr, true)
+	];
+	TSharedPtr<SWidget> Where;
+	if (CanPickPipeline()) Where = MakePipelineChoice();
+	Boxes->AddSlot()
+	[
+		MakeComponent(LOCTEXT("CompPipeline", "Pipeline"),
+			[this]() { return PipelineOn() == BenchUi::OnPanda ? FString(TEXT("latte_panda")) : FString(TEXT("pipeline_bench_pc")); },
+			VersionOf(TEXT("pipeline"), TEXT("IFS09")), Where, true)
+	];
+	Boxes->AddSlot()
+	[
+		MakeComponent(LOCTEXT("CompBoards", "ECU, AMS, uDV"), []() { return FString(TEXT("hil")); },
+			[]() { return FString(TEXT("Real or emulated boards: with car-in-the-loop")); }, nullptr, false)
+	];
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 6)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center) [ BenchUi::Heading(LOCTEXT("Components", "COMPONENTS")) ]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(10, 0, 0, 0)
+			[
+				BenchUi::Small(TAttribute<FText>::CreateLambda([this]()
+				{
+					if (bRunner) return LOCTEXT("RunnerUnknown", "The bench PC doesn't publish its checks yet.");
+					if (FPlatformTime::Seconds() < MachineCheckUntil && (!bRigKnown || bRigStale)) return LOCTEXT("CheckingMachine", "Checking this machine...");
+					if (!bRigKnown || bRigStale) return FText::Format(LOCTEXT("RigUnknown", "Not known: {0}."), FText::FromString(RigReason));
+					return FText::Format(LOCTEXT("RigKnown", "This machine ({0}), checked {1} s ago. Outlined: what this run needs."),
+						FText::FromString(RigId), FText::AsNumber(FMath::RoundToInt(RigAge)));
+				}))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				BenchUi::Button(LOCTEXT("CheckAgain", "Check again"), BenchUi::PlainBtn, [this]() { CheckMachine(); },
+					TAttribute<bool>::CreateLambda([this]() { return FPlatformTime::Seconds() >= MachineCheckUntil && !RepoDir().IsEmpty(); }))
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight() [ Boxes ];
+}
+
+TSharedRef<SWidget> SFSDSBenchPage::MakeComponent(const FText& Title, TFunction<FString()> Part, TFunction<FString()> Version,
+	TSharedPtr<SWidget> Extra, bool bVersioned)
+{
+	auto Color = [this, Part]()
+	{
+		switch (BoxState(Part()))
+		{
+		case EBox::Ready: return BenchUi::Good;
+		case EBox::NotNow: return BenchUi::Yellow;
+		default: return BenchUi::Grey;
+		}
+	};
+	auto Needed = [this, Part]() { return Needs().Contains(Part()); };
+	TSharedRef<SVerticalBox> Body = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(STextBlock).Text(Title).Font(BenchUi::Font(12, TEXT("Bold"))).ColorAndOpacity(FLinearColor::White)
+		]
+		// the state: a coloured dot, the words in white
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0, 3, 6, 0)
+			[
+				SNew(SBox).WidthOverride(10.f).HeightOverride(10.f)
+				[
+					SNew(SBorder).BorderImage(BenchUi::White()).BorderBackgroundColor_Lambda([Color]() { return FSlateColor(Color()); })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this, Part]()
+				{
+					FString Why;
+					const EBox State = BoxState(Part(), &Why);
+					const TCHAR* Word = State == EBox::Ready ? TEXT("Ready") : State == EBox::NotNow ? TEXT("Not now")
+						: State == EBox::Never ? TEXT("Not on this machine") : TEXT("Not known");
+					return FText::FromString(Why.IsEmpty() ? FString(Word) : FString::Printf(TEXT("%s: %s"), Word, *Why));
+				})
+				.ColorAndOpacity(BenchUi::Ink)
+				.Font(BenchUi::Font(10, TEXT("Bold"))).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(STextBlock).Text_Lambda([Version]() { return FText::FromString(Version()); })
+			.Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Ink).AutoWrapText(true)
+		];
+	if (Extra.IsValid())
+	{
+		Body->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ Extra.ToSharedRef() ];
+	}
+	if (bVersioned)
+	{
+		Body->AddSlot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("VersionLater", "Other versions: with the bench PC runner. A local run uses this checkout."))
+			.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
+		];
+	}
+	// A coloured edge marks what the run needs.
 	return SNew(SBorder)
 		.BorderImage(BenchUi::White())
-		.BorderBackgroundColor(BenchUi::Card)
-		.Padding(FMargin(12.f, 8.f, 12.f, 10.f))
+		.BorderBackgroundColor_Lambda([Color, Needed]() { return FSlateColor(Needed() ? Color() : BenchUi::Edge); })
+		.Padding(2.f)
 		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight()
+			SNew(SBox).WidthOverride(270.f).MinDesiredHeight(150.f)
 			[
-				SNew(STextBlock).Text(FText::FromString(B.Title)).Font(BenchUi::Font(12, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
+				SNew(SBorder)
+				.BorderImage(BenchUi::White())
+				.BorderBackgroundColor(BenchUi::Field)
+				.Padding(FMargin(12.f, 10.f))
+				[
+					Body
+				]
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 2) [ BenchUi::Small(FText::FromString(B.Description)) ]
-			+ SVerticalBox::Slot().AutoHeight() [ Rows ]
 		];
+}
+
+TSharedRef<SWidget> SFSDSBenchPage::MakeOverridesRow()
+{
+	auto Open = BenchUi::Button(LOCTEXT("OpenOverrides", "Open the folder"), BenchUi::PlainBtn, []()
+	{
+		const FString Repo = RepoDir();
+		if (Repo.IsEmpty()) return;
+		const FString Dir = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/specs/overrides"));
+		IFileManager::Get().MakeDirectory(*Dir, true);
+		FPlatformProcess::ExploreFolder(*Dir);
+	}, TAttribute<bool>::CreateLambda([]() { return !RepoDir().IsEmpty(); }));
+
+	TSharedRef<SWrapBox> W = BenchUi::Wrap();
+	W->AddSlot()
+	[
+		BenchUi::Choice(LOCTEXT("NoOverride", "None"), [this]() { return ChosenOverrides.Num() == 0; },
+			[this]() { ChosenOverrides.Reset(); Edited(); })
+	];
+	for (const FOverride& O : Overrides)
+	{
+		if (!O.Error.IsEmpty())
+		{
+			W->AddSlot() [ BenchUi::Small(FText::FromString(O.Error), BenchUi::Bad) ];
+			continue;
+		}
+		W->AddSlot()
+		[
+			BenchUi::Choice(FText::FromString(O.Name), [this, N = O.Name]() { return ChosenOverrides.Contains(N); },
+				[this, N = O.Name]() { if (ChosenOverrides.Remove(N) == 0) ChosenOverrides.Add(N); Edited(); },
+				FText::FromString(O.About))
+		];
+	}
+	W->AddSlot() [ Open ];
+	return BenchUi::Row(TEXT("Parameter changes"),
+		Overrides.Num() == 0 ? TEXT("Files of pipeline parameter changes (YAML, a pipeline: section) go in the overrides folder; Refresh shows them.")
+			: TEXT("Files of pipeline parameter changes, over the preset's own; a file picked later wins."),
+		W);
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakeSettingRow(const FBench& B, const FSetting& S)
 {
-	const FString Label = BenchUi::Human(S.Name);
+	FString Label, Help;
+	BenchUi::Words(S.Name, S.Help, Label, Help);
 	const FString N = B.Name, Key = S.Name;
 
-	// A list of known values, stored as "a,b": missions, tracks.
-	const TArray<FString>* Known = S.Name == TEXT("missions") ? &Missions : S.Name == TEXT("tracks") ? &TrackNames : nullptr;
-	if (Known && Known->Num() > 0 && S.Type == TEXT("string"))
-	{
-		const bool bAllowAll = S.Name == TEXT("missions");
-		TSharedRef<SWrapBox> W = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
-		W->AddSlot()
-		[
-			BenchUi::Choice(bAllowAll ? LOCTEXT("AllMissions", "All") : LOCTEXT("OwnTracks", "Each mission's own"),
-				[this, N, Key, bAllowAll]()
-				{
-					const TArray<FString> L = CsvSetting(N, Key);
-					return L.Num() == 0 || (bAllowAll && L.Contains(TEXT("all")));
-				},
-				[this, N, Key]() { SetCsvSetting(N, Key, {}); })
-		];
-		for (const FString& V : *Known)
-		{
-			const FString Shown = V.EndsWith(TEXT(".csv")) ? V.LeftChop(4) : V;
-			W->AddSlot()
-			[
-				BenchUi::Choice(FText::FromString(Shown), [this, N, Key, V]() { return CsvSetting(N, Key).Contains(V); },
-					[this, N, Key, V]()
-					{
-						TArray<FString> L = CsvSetting(N, Key);
-						L.Remove(TEXT("all"));
-						if (L.Remove(V) == 0) L.Add(V);
-						SetCsvSetting(N, Key, L);
-					})
-			];
-		}
-		return BenchUi::Row(Label, S.Help, W);
-	}
-
-	// Where the pipeline runs: also the component boxes.
-	if (S.Name == BenchUi::PipelineOnSetting)
-	{
-		return BenchUi::Row(Label, S.Help,
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
-			[
-				BenchUi::Choice(LOCTEXT("OnPc", "This PC"), [this]() { return PipelineOn() == BenchUi::OnThisPc; },
-					[this]() { SetPipelineOn(BenchUi::OnThisPc); })
-			]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				BenchUi::Choice(LOCTEXT("OnPanda", "LattePanda"), [this]() { return PipelineOn() == BenchUi::OnPanda; },
-					[this]() { SetPipelineOn(BenchUi::OnPanda); })
-			]);
-	}
-
-	// On, off, or the benchmark's default.
+	// Yes, no, or the benchmark's default.
 	if (S.Type == TEXT("boolean"))
 	{
-		auto Is = [this, N, Key](int32 Want)   // 0 default, 1 on, 2 off
+		auto Is = [this, N, Key](int32 Want)   // 0 default, 1 yes, 2 no
 		{
 			const TSharedPtr<FJsonObject> O = SettingsObj(N);
 			bool V = false;
@@ -918,43 +1350,50 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeSettingRow(const FBench& B, const FSetti
 			Edited();
 		};
 		TSharedRef<SHorizontalBox> H = SNew(SHorizontalBox);
-		const FText Names[] = { LOCTEXT("Default", "Default"), LOCTEXT("On", "On"), LOCTEXT("Off", "Off") };
+		const FText Names[] = { LOCTEXT("Default", "Default"), LOCTEXT("On", "Yes"), LOCTEXT("Off", "No") };
 		for (int32 I = 0; I < 3; ++I)
 		{
 			H->AddSlot().AutoWidth().Padding(0, 0, 4, 0) [ BenchUi::Choice(Names[I], [Is, I]() { return Is(I); }, [Set, I]() { Set(I); }) ];
 		}
-		return BenchUi::Row(Label, S.Help, H);
+		return BenchUi::Row(Label, Help, H);
 	}
 
-	// One of the manifest's choices.
-	if (S.Choices.Num() > 0)
+	// One of a few values: the manifest's choices, or the stack's.
+	TArray<TPair<FString, FText>> Choices;
+	for (const FString& C : S.Choices) Choices.Emplace(C, FText::FromString(C));
+	if (S.Name == TEXT("stack") && Choices.Num() == 0)
 	{
-		TSharedRef<SWrapBox> W = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.f, 4.f));
+		Choices.Emplace(TEXT("own"), LOCTEXT("StackOwn", "Its own"));
+		Choices.Emplace(TEXT("running"), LOCTEXT("StackRunning", "The running one"));
+	}
+	if (Choices.Num() > 0)
+	{
+		TSharedRef<SWrapBox> W = BenchUi::Wrap();
 		W->AddSlot()
 		[
 			BenchUi::Choice(LOCTEXT("Default", "Default"), [this, N, Key]() { return BenchUi::FieldValue(SettingsObj(N), Key).IsEmpty(); },
 				[this, N, Key]() { SettingsObj(N, true)->RemoveField(Key); Edited(); })
 		];
-		for (const FString& C : S.Choices)
+		for (const TPair<FString, FText>& C : Choices)
 		{
 			W->AddSlot()
 			[
-				BenchUi::Choice(FText::FromString(C), [this, N, Key, C]() { return BenchUi::FieldValue(SettingsObj(N), Key) == C; },
-					[this, N, Key, C, Type = S.Type]() { BenchUi::SetTyped(SettingsObj(N, true), Key, C, Type); Edited(); })
+				BenchUi::Choice(C.Value, [this, N, Key, V = C.Key]() { return BenchUi::FieldValue(SettingsObj(N), Key) == V; },
+					[this, N, Key, V = C.Key, Type = S.Type]() { BenchUi::SetTyped(SettingsObj(N, true), Key, V, Type); Edited(); })
 			];
 		}
-		return BenchUi::Row(Label, S.Help, W);
+		return BenchUi::Row(Label, Help, W);
 	}
 
 	// Typed: a number or text; empty is the default.
 	const FString FieldKey = N + TEXT(".") + Key;
 	FieldText.Add(FieldKey, BenchUi::FieldValue(SettingsObj(N), Key));
-	return BenchUi::Row(Label, S.Help,
-		SNew(SBox).WidthOverride(S.Type == TEXT("string") ? 360.f : 120.f).HAlign(HAlign_Left)
+	return BenchUi::Row(Label, Help,
+		SNew(SBox).HAlign(HAlign_Left)
 		[
 			SNew(SEditableTextBox)
 			.HintText(LOCTEXT("DefaultHint", "default"))
-			.MinDesiredWidth(S.Type == TEXT("string") ? 360.f : 120.f)
+			.MinDesiredWidth(S.Type == TEXT("string") ? 320.f : 110.f)
 			.Text_Lambda([this, FieldKey]() { const FString* T = FieldText.Find(FieldKey); return FText::FromString(T ? *T : FString()); })
 			.OnTextChanged_Lambda([this, N, Key, FieldKey, Type = S.Type](const FText& T)
 			{
@@ -967,104 +1406,14 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeSettingRow(const FBench& B, const FSetti
 }
 
 // ---------------------------------------------------------------------------
-// The component boxes
-
-TSharedRef<SWidget> SFSDSBenchPage::MakeBox(const FString& Part, const FText& Label, const FString& PipelineChoice)
-{
-	auto Color = [this, Part]()
-	{
-		switch (BoxState(Part))
-		{
-		case EBox::Ready: return BenchUi::Good;
-		case EBox::NotNow: return BenchUi::Yellow;
-		default: return BenchUi::Grey;
-		}
-	};
-	auto Needed = [this, Part]() { return Needs().Contains(Part); };
-	// A pipeline box picks where the pipeline runs; a box this machine never has can't be picked.
-	auto Pickable = [this, Part, PipelineChoice]()
-	{
-		return !PipelineChoice.IsEmpty() && !bRunner && CanPickPipeline() && BoxState(Part) != EBox::Never;
-	};
-	// The outline marks what the run needs; the fill, the state.
-	return SNew(SBorder)
-		.BorderImage(BenchUi::White())
-		.BorderBackgroundColor_Lambda([Color, Needed]() { return FSlateColor(Needed() ? Color() : FLinearColor(1, 1, 1, 0.05f)); })
-		.Padding(2.f)
-		.Cursor_Lambda([Pickable]() { return TOptional<EMouseCursor::Type>(Pickable() ? EMouseCursor::Hand : EMouseCursor::Default); })
-		.OnMouseButtonDown_Lambda([this, Pickable, PipelineChoice](const FGeometry&, const FPointerEvent&)
-		{
-			if (!Pickable()) return FReply::Unhandled();
-			SetPipelineOn(PipelineChoice);
-			return FReply::Handled();
-		})
-		[
-			SNew(SBox).WidthOverride(200.f).MinDesiredHeight(76.f)
-			[
-				SNew(SBorder)
-				.BorderImage(BenchUi::White())
-				.BorderBackgroundColor_Lambda([Color]() { return FSlateColor(Color() * FLinearColor(1, 1, 1, 0.16f)); })
-				.Padding(FMargin(10.f, 8.f))
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(STextBlock).Text(Label).Font(BenchUi::Font(11, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this, Part]()
-						{
-							switch (BoxState(Part))
-							{
-							case EBox::Ready: return LOCTEXT("Ready", "Ready");
-							case EBox::NotNow: return LOCTEXT("NotNow", "Not now");
-							case EBox::Never: return LOCTEXT("Never", "Not on this machine");
-							default: return LOCTEXT("Unknown", "Not known");
-							}
-						})
-						.ColorAndOpacity_Lambda([Color]() { return FSlateColor(Color()); })
-						.Font(BenchUi::Font(10, TEXT("Bold")))
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this, Part]()
-						{
-							FString Why;
-							BoxState(Part, &Why);
-							return FText::FromString(Why);
-						})
-						.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted).AutoWrapText(true)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this, PipelineChoice, Pickable]()
-						{
-							if (PipelineChoice.IsEmpty() || !CanPickPipeline()) return FText::GetEmpty();
-							if (PipelineOn() == PipelineChoice) return LOCTEXT("PipelineHere", "The pipeline runs here");
-							return Pickable() ? LOCTEXT("PipelinePick", "Click to run the pipeline here") : FText::GetEmpty();
-						})
-						.ColorAndOpacity_Lambda([this, PipelineChoice]() { return FSlateColor(PipelineOn() == PipelineChoice ? BenchUi::Accent : BenchUi::Muted); })
-						.Font(BenchUi::Font(9, TEXT("Bold")))
-					]
-				]
-			]
-		];
-}
+// This machine
 
 SFSDSBenchPage::EBox SFSDSBenchPage::BoxState(const FString& Part, FString* Why) const
 {
 	auto Say = [Why](EBox State, const FString& Text) { if (Why) *Why = Text; return State; };
-	if (bRunner)
+	if (bRunner || !bRigKnown || bRigStale)
 	{
-		return Say(EBox::Unknown, TEXT("The bench PC doesn't publish its checks yet."));
-	}
-	if (!bRigKnown || bRigStale)
-	{
-		// Old or missing checks can't be trusted (bench_queue.rig).
+		// Old or missing checks can't be trusted (bench_queue.rig); the why is above the list.
 		return Say(EBox::Unknown, FString());
 	}
 	const FPart* P = Parts.Find(Part);
@@ -1118,10 +1467,12 @@ EActiveTimerReturnType SFSDSBenchPage::Poll(double Now, float Dt)
 	{
 		FetchPresets();
 		FetchManifest();
-		NextQueue = NextRig = 0.0;
+		NextQueue = NextRig = NextMachineCheck = 0.0;
 	}
 	bWasActive = bActive;
 	if (!bActive) return EActiveTimerReturnType::Continue;
+	// The worker checks the machine every minute; without one, the page does.
+	if (bQueueKnown && !bWorkerAlive && !bRunner && T >= NextMachineCheck) CheckMachine();
 	if (T >= NextQueue) FetchQueue();
 	if (T >= NextRig && !bRunner) FetchRig();
 	if (CheckDueAt > 0.0 && T >= CheckDueAt) Check();
@@ -1142,15 +1493,16 @@ void SFSDSBenchPage::FetchPresets()
 	{
 		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
 		if (!Self.IsValid()) return;
+		SFSDSBenchPage* Page = Self.Get();
 		const TSharedPtr<FJsonObject> O = R.Object();
 		const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
 		if (!R.Ok() || !O.IsValid() || !O->TryGetArrayField(TEXT("presets"), List))
 		{
-			Self->PresetsNote = Self->Unreachable(TEXT("Couldn't read the presets"), R);
+			Page->PresetsNote = Page->Unreachable(TEXT("Couldn't read the presets"), R);
 			return;
 		}
-		Self->PresetsNote.Reset();
-		Self->Presets.Reset();
+		Page->PresetsNote.Reset();
+		Page->Presets.Reset();
 		for (const TSharedPtr<FJsonValue>& V : *List)
 		{
 			const TSharedPtr<FJsonObject>* PO = nullptr;
@@ -1164,9 +1516,9 @@ void SFSDSBenchPage::FetchPresets()
 			if ((*PO)->TryGetObjectField(TEXT("spec"), Spec)) P.Spec = *Spec;
 			(*PO)->TryGetStringArrayField(TEXT("needs"), P.Needs);
 			if (P.Title.IsEmpty()) P.Title = P.Name;
-			Self->Presets.Add(MoveTemp(P));
+			Page->Presets.Add(MoveTemp(P));
 		}
-		Self->Overrides.Reset();
+		Page->Overrides.Reset();
 		const TArray<TSharedPtr<FJsonValue>>* OList = nullptr;
 		if (O->TryGetArrayField(TEXT("overrides"), OList))
 		{
@@ -1180,10 +1532,9 @@ void SFSDSBenchPage::FetchPresets()
 				(*OO)->TryGetStringField(TEXT("error"), Ov.Error);
 				const TSharedPtr<FJsonObject>* Pl = nullptr;
 				if ((*OO)->TryGetObjectField(TEXT("pipeline"), Pl)) Ov.Pipeline = *Pl;
-				Self->Overrides.Add(MoveTemp(Ov));
+				Page->Overrides.Add(MoveTemp(Ov));
 			}
 		}
-		SFSDSBenchPage* Page = Self.Get();
 		Page->ChosenOverrides.RemoveAll([Page](const FString& Name)
 		{
 			return !Page->Overrides.ContainsByPredicate([&Name](const FOverride& X) { return X.Name == Name && X.Error.IsEmpty(); });
@@ -1216,7 +1567,7 @@ void SFSDSBenchPage::FetchManifest()
 		if (!R.Ok() || !O.IsValid())
 		{
 			// An older backend has no /api/bench/manifest: 404.
-			Self->ManifestError = R.Code == 404 ? TEXT("this backend is older than the page: START again to update it")
+			Self->ManifestError = R.Code == 404 ? TEXT("this backend is older than the page: START again to update it.")
 				: Self->Unreachable(TEXT("couldn't read it"), R);
 			Self->RebuildForm();
 			return;
@@ -1280,6 +1631,18 @@ void SFSDSBenchPage::FetchManifest()
 		Self->TrackNames.Reset();
 		O->TryGetStringArrayField(TEXT("missions"), Self->Missions);
 		O->TryGetStringArrayField(TEXT("tracks"), Self->TrackNames);
+		Self->MissionTracks.Reset();
+		const TSharedPtr<FJsonObject>* Own = nullptr;
+		if (O->TryGetObjectField(TEXT("mission_tracks"), Own))
+		{
+			for (const auto& KV : (*Own)->Values)
+			{
+				TArray<FString> L;
+				const TArray<TSharedPtr<FJsonValue>>* A = nullptr;
+				if (KV.Value.IsValid() && KV.Value->TryGetArray(A)) for (const auto& V : *A) L.Add(V->AsString());
+				Self->MissionTracks.Add(FString(*KV.Key), MoveTemp(L));
+			}
+		}
 		Self->RebuildForm();
 	});
 }
@@ -1291,7 +1654,7 @@ void SFSDSBenchPage::Check()
 	{
 		bChecked = true;
 		bCheckOk = false;
-		CheckErrors = { TEXT("Choose at least one benchmark.") };
+		CheckErrors = { TEXT("Pick what to test.") };
 		CheckNeeds.Reset();
 		return;
 	}
@@ -1305,9 +1668,11 @@ void SFSDSBenchPage::Check()
 		if (!Self.IsValid() || Serial != Self->CheckSerial) return;   // an older check: the draft changed since
 		const TSharedPtr<FJsonObject> O = R.Object();
 		Self->bChecked = true;
+		Self->bCheckOk = false;
+		Self->CheckRuns = 0;
 		Self->CheckErrors.Reset();
 		Self->CheckLabels.Reset();
-		Self->bCheckOk = false;
+		Self->CheckLines.Reset();
 		if (!R.Ok() || !O.IsValid())
 		{
 			Self->CheckErrors.Add(Self->Unreachable(TEXT("Couldn't check it"), R));
@@ -1317,7 +1682,9 @@ void SFSDSBenchPage::Check()
 		O->TryGetStringArrayField(TEXT("errors"), Self->CheckErrors);
 		O->TryGetStringArrayField(TEXT("labels"), Self->CheckLabels);
 		O->TryGetStringArrayField(TEXT("needs"), Self->CheckNeeds);
+		O->TryGetStringArrayField(TEXT("lines"), Self->CheckLines);
 		O->TryGetNumberField(TEXT("jobs"), Self->CheckJobs);
+		if (!O->TryGetNumberField(TEXT("runs"), Self->CheckRuns)) Self->CheckRuns = Self->CheckJobs;   // an older backend
 	});
 }
 
@@ -1329,8 +1696,8 @@ void SFSDSBenchPage::RebuildPresets()
 	{
 		PresetBox->AddSlot()
 		[
-			BenchUi::Choice(FText::FromString(P.Title), [this, Name = P.Name]() { return PresetName == Name; },
-				[this, Name = P.Name]() { PickPreset(Name); })
+			BenchUi::Choice(FText::FromString(P.Title), [this, Name = P.Name]() { return PresetName == Name && !bEdited; },
+				[this, Name = P.Name]() { PickPreset(Name); }, FText::FromString(P.About))
 		];
 	}
 }
@@ -1359,6 +1726,23 @@ void SFSDSBenchPage::FetchRig()
 		O->TryGetStringField(TEXT("reason"), Self->RigReason);
 		Self->RigId.Reset();
 		O->TryGetStringField(TEXT("id"), Self->RigId);
+		Self->RigAge = 0.0;
+		O->TryGetNumberField(TEXT("age_s"), Self->RigAge);
+		Self->Code.Reset();
+		const TSharedPtr<FJsonObject>* CodeObj = nullptr;
+		if (O->TryGetObjectField(TEXT("code"), CodeObj))
+		{
+			for (const auto& KV : (*CodeObj)->Values)
+			{
+				const TSharedPtr<FJsonObject>* CO = nullptr;
+				if (!KV.Value.IsValid() || !KV.Value->TryGetObject(CO)) continue;
+				FCode C;
+				(*CO)->TryGetStringField(TEXT("commit"), C.Commit);
+				(*CO)->TryGetStringField(TEXT("branch"), C.Branch);   // null: a pinned submodule
+				(*CO)->TryGetBoolField(TEXT("dirty"), C.bDirty);
+				Self->Code.Add(FString(*KV.Key), C);
+			}
+		}
 		Self->Parts.Reset();
 		const TSharedPtr<FJsonObject>* PartsObj = nullptr;
 		if (O->TryGetObjectField(TEXT("parts"), PartsObj))
@@ -1403,7 +1787,7 @@ void SFSDSBenchPage::FetchQueue()
 		if (Self->bWorkerAlive)
 		{
 			Self->WorkerStartingUntil = 0.0;
-			if (!bWasAlive) Self->FetchRig();   // its first checks: the boxes
+			if (!bWasAlive) Self->FetchRig();   // its first checks
 		}
 		TArray<FJob> Jobs;
 		for (const TSharedPtr<FJsonValue>& V : *List)
@@ -1471,7 +1855,7 @@ void SFSDSBenchPage::Launch()
 		bool bWorker = false;
 		O->TryGetBoolField(TEXT("worker_running"), bWorker);
 		Self->SetNote(bWorker ? FString::Printf(TEXT("Queued %s."), *Name)
-			: FString::Printf(TEXT("Queued %s. It waits for the worker: Start worker below."), *Name), false);
+			: FString::Printf(TEXT("Queued %s. It waits for the worker: Start worker, on the right."), *Name), false);
 		Self->FetchQueue();
 	});
 }
@@ -1496,6 +1880,41 @@ void SFSDSBenchPage::Cancel(const FString& Id)
 FString SFSDSBenchPage::RepoDir()
 {
 	return FFSDSStackStarter::FindComposeDir();
+}
+
+void SFSDSBenchPage::CheckMachine()
+{
+	const double T = FPlatformTime::Seconds();
+	NextMachineCheck = T + 60.0;
+#if PLATFORM_WINDOWS
+	return;   // run_spec.py's checks need a Linux host (the worker runs in WSL there)
+#else
+	const FString Repo = RepoDir();
+	if (Repo.IsEmpty() || T < MachineCheckUntil) return;
+	// run_spec.py --rig saves its checks where the backend reads them (results/.bench/rig.json).
+	const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
+	IFileManager::Get().MakeDirectory(*Bench, true);
+	auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
+	const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-rig-"), TEXT(".sh"));
+	const FString Body = FString::Printf(TEXT("cd %s || exit 1\nexec python3 tools/sim_benchmark/run_spec.py --rig --json > /dev/null 2>> %s\n"),
+		*Quote(Repo), *Quote(FPaths::Combine(Bench, TEXT("rig-check.out"))));
+	if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)) return;
+	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/bin/bash"), *FString::Printf(TEXT("-l \"%s\""), *Script),
+		/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
+	if (!H.IsValid()) return;
+	FPlatformProcess::CloseProc(H);
+	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds; read it back then.
+	MachineCheckUntil = T + 12.0;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	for (const float After : { 4.f, 8.f, 13.f })
+	{
+		RegisterActiveTimer(After, FWidgetActiveTimerDelegate::CreateLambda([Weak](double, float)
+		{
+			if (TSharedPtr<SFSDSBenchPage> Self = Weak.Pin()) Self->FetchRig();
+			return EActiveTimerReturnType::Stop;
+		}));
+	}
+#endif
 }
 
 void SFSDSBenchPage::StartWorker()
@@ -1594,7 +2013,6 @@ void SFSDSBenchPage::RebuildQueue()
 		TArray<FString> Meta;
 		if (!J.Created.IsEmpty()) Meta.Add(BenchUi::When(J.Created));
 		if (!J.RequestedBy.IsEmpty()) Meta.Add(J.RequestedBy);
-		Meta.Add(J.Id);
 		TArray<FString> Detail;
 		if (J.Total > 0) Detail.Add(FString::Printf(TEXT("%d of %d jobs"), J.Done, J.Total));
 		if (!J.Current.IsEmpty() && J.State == TEXT("running")) Detail.Add(J.Current);
@@ -1607,73 +2025,75 @@ void SFSDSBenchPage::RebuildQueue()
 			SNew(SBorder)
 			.BorderImage(BenchUi::White())
 			.BorderBackgroundColor(BenchUi::Card)
-			.Padding(FMargin(12.f, 8.f))
+			.Padding(FMargin(10.f, 7.f))
+			.ToolTipText(FText::FromString(J.Id))
 			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 12, 0)
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
 				[
-					SNew(SBox).WidthOverride(76.f)
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
 					[
 						SNew(STextBlock)
 						.Text(FText::FromString(J.bCancelRequested && J.State == TEXT("running") ? TEXT("cancelling") : J.State))
-						.Font(BenchUi::Font(11, TEXT("Bold"))).ColorAndOpacity(BenchUi::StateColor(J.State))
+						.Font(BenchUi::Font(10, TEXT("Bold"))).ColorAndOpacity(BenchUi::StateColor(J.State))
 					]
-				]
-				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
 					[
 						SNew(STextBlock).Text(FText::FromString(J.Name.IsEmpty() ? J.Id : J.Name))
-						.Font(BenchUi::Font(12, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock).Text(FText::FromString(FString::Join(Meta, TEXT("  ·  "))))
-						.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock).Text(FText::FromString(FString::Join(Detail, TEXT("  ·  "))))
-						.Visibility(Detail.Num() ? EVisibility::Visible : EVisibility::Collapsed)
-						.Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Ink).AutoWrapText(true)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
-					[
-						SNew(STextBlock).Text(FText::FromString(J.Error))
-						.Visibility(J.Error.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
-						.Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Bad).AutoWrapText(true)
+						.Font(BenchUi::Font(11, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
 					]
 				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 				[
-					SNew(SBox).Visibility(Dir.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
-					[
-						// worker.log and each job's folder
-						BenchUi::Button(LOCTEXT("Folder", "Folder"), BenchUi::PlainBtn, [Dir]() { FPlatformProcess::ExploreFolder(*Dir); })
-					]
+					SNew(STextBlock).Text(FText::FromString(FString::Join(Meta, TEXT("  ·  "))))
+					.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted)
 				]
-				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6, 0, 0, 0)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 				[
-					SNew(SBox).Visibility(bCancellable && !J.bCancelRequested ? EVisibility::Visible : EVisibility::Collapsed)
+					SNew(STextBlock).Text(FText::FromString(FString::Join(Detail, TEXT("  ·  "))))
+					.Visibility(Detail.Num() ? EVisibility::Visible : EVisibility::Collapsed)
+					.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Ink).AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock).Text(FText::FromString(J.Error))
+					.Visibility(J.Error.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+					.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Bad).AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
 					[
-						// A running spec stops mid-benchmark: a second click within 4 s.
-						BenchUi::Button(TAttribute<FText>::CreateLambda([this, Id = J.Id]()
-							{
-								return FPlatformTime::Seconds() < CancelArmedUntil && CancelArmedFor == Id
-									? LOCTEXT("CancelSure", "Click again to cancel") : LOCTEXT("Cancel", "Cancel");
-							}),
-							BenchUi::PlainBtn, [this, Id = J.Id]()
-							{
-								if (FPlatformTime::Seconds() >= CancelArmedUntil || CancelArmedFor != Id)
+						SNew(SBox).Visibility(Dir.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+						[
+							// worker.log and each job's folder
+							BenchUi::Button(LOCTEXT("Folder", "Folder"), BenchUi::PlainBtn, [Dir]() { FPlatformProcess::ExploreFolder(*Dir); })
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SBox).Visibility(bCancellable && !J.bCancelRequested ? EVisibility::Visible : EVisibility::Collapsed)
+						[
+							// A running spec stops mid-benchmark: a second click within 4 s.
+							BenchUi::Button(TAttribute<FText>::CreateLambda([this, Id = J.Id]()
 								{
-									CancelArmedFor = Id;
-									CancelArmedUntil = FPlatformTime::Seconds() + 4.0;
-									return;
-								}
-								CancelArmedUntil = 0.0;
-								Cancel(Id);
-							})
+									return FPlatformTime::Seconds() < CancelArmedUntil && CancelArmedFor == Id
+										? LOCTEXT("CancelSure", "Click again to cancel") : LOCTEXT("Cancel", "Cancel");
+								}),
+								BenchUi::PlainBtn, [this, Id = J.Id]()
+								{
+									if (FPlatformTime::Seconds() >= CancelArmedUntil || CancelArmedFor != Id)
+									{
+										CancelArmedFor = Id;
+										CancelArmedUntil = FPlatformTime::Seconds() + 4.0;
+										return;
+									}
+									CancelArmedUntil = 0.0;
+									Cancel(Id);
+								})
+						]
 					]
 				]
 			]
