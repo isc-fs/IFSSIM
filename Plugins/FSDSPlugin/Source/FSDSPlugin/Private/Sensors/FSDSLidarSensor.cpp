@@ -1377,19 +1377,35 @@ void UFSDSLidarSensor::PollGPUReadback()
 		FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
 		if (!Slot.bInFlight || Slot.bLockDispatched) continue;
 		if (!Slot.Readback.IsValid()) continue;
-		if (!Slot.Readback->IsReady()) continue;
 
-		// FRHIGPUBufferReadback::Lock asserts IsInRenderingThread(), so
-		// the lock+memcpy lives in a render command and the result
-		// bounces back via AsyncTask(GameThread) to
-		// ConsumeReadbackResult, tagged with SlotIdx so we know which
-		// slot to clear.
+		// Readiness is checked on the render thread, not here. EnqueueCopy
+		// (inside this slot's decode command) is what clears the fence, and
+		// the render thread can still be a frame behind: checked from the
+		// game thread, IsReady() then sees the slot's *previous* copy,
+		// long finished, and says yes. Vulkan's staging-buffer lock doesn't
+		// wait on the fence, so the read returned that previous copy, the
+		// points from two scans (200 ms) earlier, stamped with this scan's
+		// capture time. In the render command, which runs after the decode
+		// command, the fence belongs to this scan's copy.
 		FRHIGPUBufferReadback* Readback = Slot.Readback.Get();
 		Slot.bLockDispatched = true;
 
 		ENQUEUE_RENDER_COMMAND(FSDSLidarReadbackLock)(
 			[Readback, NumPoints, WeakSelf, SlotIdx](FRHICommandListImmediate& /*RHICmdList*/)
 			{
+				if (!Readback->IsReady())
+				{
+					AsyncTask(ENamedThreads::GameThread, [WeakSelf, SlotIdx]()
+					{
+						if (UFSDSLidarSensor* Self = WeakSelf.Get())
+						{
+							Self->ReadbackSlots[SlotIdx].bLockDispatched = false;  // poll again next tick
+							Self->GPUReadbackNotReadyPolls++;
+						}
+					});
+					return;
+				}
+
 				const uint32 NumBytes = NumPoints * sizeof(FVector4f);
 				const FVector4f* Src = (const FVector4f*)Readback->Lock(NumBytes);
 
@@ -1470,8 +1486,8 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 	if (GPUReadbackCount > 0 && (GPUReadbackCount % 50) == 0)
 	{
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS LiDAR GPU: readback #%d, %d hits, latency=%.2f ms"),
-			GPUReadbackCount, HitCount, GPUReadbackLastLatencyMs);
+			TEXT("FSDS LiDAR GPU: readback #%d, %d hits, latency=%.2f ms, not-ready polls=%d"),
+			GPUReadbackCount, HitCount, GPUReadbackLastLatencyMs, GPUReadbackNotReadyPolls);
 	}
 }
 

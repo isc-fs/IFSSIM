@@ -17,6 +17,9 @@ interface ScoringData {
   t_best_reference: number | null;
   max_points: number;
   score: number;
+  // False for an unscorable run (disqualified, incomplete skidpad, no time).
+  scored?: boolean;
+  disqualified?: boolean;
 }
 
 // Debounce window for the t_best text input. Pre-#326 the useEffect
@@ -37,6 +40,8 @@ function isScoringData(p: unknown): p is ScoringData {
 export default function Scoring() {
   const [scoring, setScoring] = useState<ScoringData | null>(null)
   const [tBest, setTBest] = useState('')
+  // Only a number greater than 0 is a usable reference time.
+  const tBestInvalid = tBest !== '' && !(Number.isFinite(Number(tBest)) && Number(tBest) > 0)
   // `appliedTBest` is the debounced reflection of `tBest`; the polling
   // effect depends on this, not the raw text input, so typing doesn't
   // immediately re-fire fetches (finding F5 follow-up).
@@ -46,9 +51,9 @@ export default function Scoring() {
 
   // Debounce tBest → appliedTBest.
   useEffect(() => {
-    const id = setTimeout(() => setAppliedTBest(tBest), T_BEST_DEBOUNCE_MS)
+    const id = setTimeout(() => setAppliedTBest(tBestInvalid ? '' : tBest), T_BEST_DEBOUNCE_MS)
     return () => clearTimeout(id)
-  }, [tBest])
+  }, [tBest, tBestInvalid])
 
   // Polling effect — keyed on the debounced value.
   useEffect(() => {
@@ -116,7 +121,13 @@ export default function Scoring() {
       {/* Score Header */}
       <div className="bg-[#1a1a1a] border border-[#333] rounded-xl p-6 text-center">
         <div className="text-gray-500 text-xs uppercase tracking-wider mb-2">Event Score</div>
-        <div className="text-6xl font-bold text-[#ffb81c]">{scoring.score.toFixed(1)}</div>
+        <div className="text-6xl font-bold text-[#ffb81c]">
+          {/* With no reference the backend compares the run with itself: always full points. */}
+          {/* A disqualified run scores 0; an incomplete run has no score yet. */}
+          {scoring.disqualified
+            ? '0.0'
+            : scoring.t_best_reference != null && scoring.scored !== false ? scoring.score.toFixed(1) : '--'}
+        </div>
         <div className="text-gray-500 text-sm">/ {scoring.max_points} points</div>
         <div className="text-lg text-white capitalize mt-2">{scoring.event}</div>
       </div>
@@ -148,16 +159,18 @@ export default function Scoring() {
         <h2 className="text-[#ffb81c] text-sm uppercase tracking-wider font-semibold mb-4">Reference Time (T_best)</h2>
         <div className="flex items-center gap-3">
           <input
-            type="number" step="0.1" placeholder="Auto (best lap)"
+            type="number" min="0" step="0.1" placeholder="seconds"
             value={tBest} onChange={e => setTBest(e.target.value)}
             className="w-40 px-3 py-1.5 bg-[#111] border border-[#444] rounded text-white text-sm"
           />
           <span className="text-xs text-gray-500">
-            {tBest
+            {tBestInvalid
+              ? 'T_best must be a number greater than 0.'
+              : tBest
               ? `Using ${tBest}s`
               : scoring.t_best_reference != null
-                ? `Auto: ${scoring.t_best_reference.toFixed(3)}s (best lap)`
-                : 'Auto: (waiting for first lap)'}
+                ? `Scoring against ${scoring.t_best_reference.toFixed(3)}s`
+                : 'None set. Without one the run is compared with itself and always gets full points, so no score is shown.'}
           </span>
         </div>
       </div>

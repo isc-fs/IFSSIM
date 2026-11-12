@@ -23,6 +23,7 @@
 
 #include "lws_steering_sensor.h"
 #include "sim_clock_gate.h"
+#include "sim_rate_gate.h"
 #include "stamp_guard.h"
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
@@ -193,6 +194,14 @@ private:
     // Which sim stamps go out on /clock (#611). Touched only by the sensor
     // thread, in onSensorFrame.
     ifssim_bridge::SimClockGate clock_gate_;
+    // The latest sim stamp, for the wall-timer topics' rate gates (the
+    // stream thread writes it, the executor reads it; clock_gate_ is the
+    // stream thread's own). 0 until the first sensor frame.
+    std::atomic<int64_t> sim_now_ns_{0};
+    // The LWS steering topics (100 Hz) and tyre loads (20 Hz) at their rate in sim
+    // time, so slow motion doesn't repeat them (sim_rate_gate.h).
+    ifssim_bridge::SimRateGate lws_rate_gate_{10'000'000};
+    ifssim_bridge::SimRateGate tire_loads_rate_gate_{50'000'000};
     // Set by triggerReconnect when the sensor stream is reopened, consumed
     // by the first frame on the new stream.
     std::atomic<bool> sensor_stream_reconnected_{false};
