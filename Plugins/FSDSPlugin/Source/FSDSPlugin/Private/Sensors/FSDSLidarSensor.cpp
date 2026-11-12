@@ -75,7 +75,7 @@ static TAutoConsoleVariable<int32> CVarLidarDebugColorChannel(
 
 static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
 	TEXT("fsds.LidarGPU.StencilEncoder"),
-	1,
+	0,  // experiment: colour capture off
 	TEXT("Read once, at startup (-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0). ")
 	TEXT("1 (default) = per-material 905 nm reflectance: the colour capture ")
 	TEXT("renders each scan and M_LiDARStencilEncoder feeds the LUT. ")
