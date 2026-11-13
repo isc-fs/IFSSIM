@@ -57,6 +57,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Benchmark runs queued on Windows now reach the sim.** The worker runs in WSL, where
+  127.0.0.1 isn't Windows in WSL's default NAT mode. Without `--sim`, a mission benchmark
+  run from WSL now uses WSL's gateway (Windows) when only it answers on port 41451.
 - **LiDAR range noise is applied in centimetres.** settings.json gives `RangeNoiseStd` in metres and the
   sensor works in cm, but the ×100 was missing, so the 3 cm σ ran as 0.3 mm: sim clouds were
   effectively noise-free.
