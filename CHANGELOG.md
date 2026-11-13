@@ -57,6 +57,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Benchmark runs queued on Windows now reach the sim.** The worker runs in WSL, where
+  127.0.0.1 isn't Windows in WSL's default NAT mode. Without `--sim`, a mission benchmark
+  run from WSL now uses WSL's gateway (Windows) when only it answers on port 41451.
 - **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
   --format` exits 0 then, with no server version. Only a version counts as ready now.
 
