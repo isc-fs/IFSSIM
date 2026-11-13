@@ -726,6 +726,53 @@ def test_a_finish_beats_the_emergency_brake_that_follows_it(tmp_path):
     assert rc == 0 and _result(tmp_path)["race/finished"] == 1
 
 
+# ------------------------------------------------------------------ where the sim is
+def test_a_given_sim_address_is_used_as_is(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: pytest.fail("no lookup"))
+    assert rmb.sim_address("10.0.0.5:4000") == ("10.0.0.5", 4000)
+
+
+def test_outside_wsl_the_sim_is_on_this_machine(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: None)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_from_wsl_in_nat_mode_the_sim_is_on_windows(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: host == "172.18.240.1")
+    assert rmb.sim_address(None) == ("172.18.240.1", 41451)
+
+
+def test_from_wsl_in_mirrored_mode_the_sim_stays_on_localhost(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: True)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_with_the_sim_down_the_error_names_localhost(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: False)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_windows_host_is_read_from_wsls_default_route(monkeypatch, tmp_path):
+    files = {
+        "/proc/sys/kernel/osrelease": "5.15.167.4-microsoft-standard-WSL2\n",
+        "/proc/net/route": "Iface\tDestination\tGateway\tFlags\n"
+        "eth0\t0000F0AC\t00000000\t0001\n"
+        "eth0\t00000000\t01F012AC\t0003\n",
+    }
+    real = rmb.Path.read_text
+    monkeypatch.setattr(
+        rmb.Path,
+        "read_text",
+        lambda self, *a, **k: files[self.as_posix()] if self.as_posix() in files else real(self, *a, **k),
+    )
+    assert rmb.wsl_windows_host() == "172.18.240.1"
+    files["/proc/sys/kernel/osrelease"] = "6.8.0-generic\n"
+    assert rmb.wsl_windows_host() is None
+
+
 def test_the_stack_takes_its_cpu_weight_and_viz_switch_from_the_environment(
     tmp_path, world, docker, monkeypatch
 ):

@@ -43,7 +43,8 @@ before anything runs), merged into it, and loaded by every launch of the benchma
 calls ``cone_detection``). Needs ``--stack own`` on the bench PC, and a pipeline commit that has
 ``params.yaml``; each run records what was overridden.
 
-The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451),
+The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451;
+from WSL in its default NAT mode, where 127.0.0.1 isn't Windows, WSL's gateway, which is),
 Mission Control on ``--mc-url`` (default http://127.0.0.1:3000, ``--mc-key`` if it has an API key):
 the UI's address, whose ``/api`` reaches the backend on every OS (its own port 8000 is not
 published on Docker Desktop for Windows). This script itself needs no ROS: it's HTTP, the sim's
@@ -216,11 +217,52 @@ def plan(missions: dict[str, dict]) -> list[PlannedRun]:
 
 
 # ------------------------------------------------------------------ the sim and Mission Control
+SIM_PORT = 41451
+
+
+def wsl_windows_host() -> str | None:
+    """Windows' address from WSL (WSL's default gateway), or None when this isn't WSL."""
+    try:
+        if "microsoft" not in Path("/proc/sys/kernel/osrelease").read_text().lower():
+            return None
+        for line in Path("/proc/net/route").read_text().splitlines()[1:]:
+            f = line.split()
+            if len(f) > 2 and f[1] == "00000000":
+                return socket.inet_ntoa(int(f[2], 16).to_bytes(4, "little"))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _reachable(host: str, port: int, timeout: float = 2.0) -> bool:
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def sim_address(given: str | None) -> tuple[str, int]:
+    """``--sim`` as (host, port); without it 127.0.0.1, or Windows when run from WSL in NAT mode.
+
+    A worker in WSL drives the sim running on Windows: in WSL's mirrored networking mode
+    127.0.0.1 reaches it, in the default NAT mode only WSL's gateway does.
+    """
+    if given:
+        host, port = given.rsplit(":", 1)
+        return host, int(port)
+    host = "127.0.0.1"
+    windows = wsl_windows_host()
+    if windows and not _reachable(host, SIM_PORT) and _reachable(windows, SIM_PORT):
+        host = windows
+    return host, SIM_PORT
+
+
 class Sim:
     """The sim's RPC: one command per line, one JSON (or text) answer per line."""
 
     def __init__(
-        self, host: str = "127.0.0.1", port: int = 41451, timeout: float = 30.0
+        self, host: str = "127.0.0.1", port: int = SIM_PORT, timeout: float = 30.0
     ) -> None:
         self.host, self.port, self.timeout = host, port, timeout
 
@@ -1227,18 +1269,19 @@ def run(
         if args.pipeline_overrides
         else {}
     )
+    sim_host, sim_port = sim_address(args.sim)
     stack = Stack(
         args.stack,
         args.pipeline_on,
         args.image or os.environ.get("IFSSIM_DV_IMAGE") or DEFAULT_IMAGE,
         Path(getattr(args, "checkout", None) or REPO),
-        int(args.sim.rsplit(":", 1)[1]),
+        sim_port,
         pipeline_overrides,
         args.replace_stack,
         work_dir=Path(args.results_root).resolve(),
     )
     stack.check()
-    sim = sim or Sim(*(args.sim.rsplit(":", 1)[0], int(args.sim.rsplit(":", 1)[1])))
+    sim = sim or Sim(sim_host, sim_port)
     mc = mc or MissionControl(args.mc_url, args.mc_key or os.environ.get("MC_API_KEY"))
     status = mc.get("/api/sim/status") or {}
     if not status.get("connected"):
@@ -1330,7 +1373,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--panda-sha", help="command that prints the pipeline commit on the latte panda"
     )
-    ap.add_argument("--sim", default="127.0.0.1:41451", help="the sim's RPC host:port")
+    ap.add_argument(
+        "--sim",
+        help="the sim's RPC host:port (default 127.0.0.1:41451; from WSL in NAT mode, Windows)",
+    )
     ap.add_argument(
         "--speed-factor",
         type=float,
