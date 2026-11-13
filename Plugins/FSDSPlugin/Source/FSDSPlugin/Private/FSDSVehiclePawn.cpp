@@ -681,7 +681,14 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->MaxRange = SensorPair.Value.MaxRange * 100.f;     // meters → cm
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
 				LidarSensor->MountRotation = SensorPair.Value.Rotation;
-				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
+				// settings.json gives metres; the sensor works in cm. The ×100 was
+				// missing, so the 0.03 m σ ran as 0.03 cm (0.3 mm).
+				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd * 100.f;
+				LidarSensor->RangeNoiseRangeCoeffCm = SensorPair.Value.RangeNoiseRangeCoeff * 100.f;
+				LidarSensor->RangeNoiseRefReflectance = SensorPair.Value.RangeNoiseRefReflectance;
+				LidarSensor->RangeNoiseReflectanceExp = SensorPair.Value.RangeNoiseReflectanceExp;
+				LidarSensor->EdgeOutlierRate = SensorPair.Value.EdgeOutlierRate;
+				LidarSensor->IntensityNoise = SensorPair.Value.IntensityNoise;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 
 				// Per-channel max-range (#223 tune): convert metres → cm

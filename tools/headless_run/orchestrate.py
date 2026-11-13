@@ -106,6 +106,29 @@ def bring_up_backend(cfg: RunConfig, log) -> None:
     subprocess.run(cmd, cwd=cfg.compose_dir, env=env, check=True)
 
 
+def raise_sim_cpu_weight(env=os.environ, run=subprocess.run) -> Optional[str]:
+    """``docker update --cpu-shares`` on the sim's container, when the environment asks.
+
+    ``IFSSIM_SIM_CPU_SHARES`` is the weight (Docker's default is 1024, the same as every other
+    service on the box); ``IFSSIM_SIM_CONTAINER`` names the container (the GPU box's wrapper
+    starts ``ifssim-sim``). The GPU box's CI sets it so the sim keeps its CPU while other
+    jobs share the machine. Returns what happened, for the run record; None when not asked.
+    """
+    shares = (env.get("IFSSIM_SIM_CPU_SHARES") or "").strip()
+    if not shares:
+        return None
+    name = (env.get("IFSSIM_SIM_CONTAINER") or "ifssim-sim").strip()
+    if not shares.isdigit() or int(shares) < 2:
+        return f"not applied: IFSSIM_SIM_CPU_SHARES must be a whole number >= 2, not {shares!r}"
+    try:
+        r = run(["docker", "update", "--cpu-shares", shares, name], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"not applied: {e}"
+    if r.returncode != 0:
+        return f"not applied: {(r.stderr or r.stdout).strip()[:200]}"
+    return f"{name} cpu-shares {shares}"
+
+
 def wait_backend_sees_sim(cfg: RunConfig, should_stop: Callable[[], bool]) -> float:
     t0 = time.monotonic()
     while time.monotonic() - t0 < cfg.mc_timeout_s:
@@ -216,6 +239,11 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
         except (OSError, ValueError):
             pass
         log(f"[{label or 'run'}] sim ready in {rec.get('sim_ready_s', 0)} s")
+        if not sim.attached:
+            weight = raise_sim_cpu_weight()
+            if weight:
+                rec["sim_cpu_weight"] = weight
+                log(f"[{label or 'run'}] sim CPU weight: {weight}")
 
         try:
             if cfg.mc_up:

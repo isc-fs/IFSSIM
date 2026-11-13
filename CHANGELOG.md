@@ -60,6 +60,9 @@ shipping pipeline, documentation.
 - **Benchmark runs queued on Windows now reach the sim.** The worker runs in WSL, where
   127.0.0.1 isn't Windows in WSL's default NAT mode. Without `--sim`, a mission benchmark
   run from WSL now uses WSL's gateway (Windows) when only it answers on port 41451.
+- **LiDAR range noise is applied in centimetres.** settings.json gives `RangeNoiseStd` in metres and the
+  sensor works in cm, but the ×100 was missing, so the 3 cm σ ran as 0.3 mm: sim clouds were
+  effectively noise-free.
 - **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
   --format` exits 0 then, with no server version. Only a version counts as ready now.
 
@@ -89,6 +92,7 @@ shipping pipeline, documentation.
   resolve `host.docker.internal`, so it never saw the sim and START waited until it
   timed out.
 
+- **Trackdrive's mission timeout is 1300 s instead of 2400 s** (`tools/sim_benchmark/missions.yaml`): the slowest measured 10-lap finish was 1054.7 s, so a run that never finishes no longer holds the GPU box for 40 minutes.
 - **The mission benchmark ends a run as soon as the car goes to AS Emergency** instead of waiting out `timeout_s` (2400 s for trackdrive). The run's outcome is `emergency`, with `emergency_at_s` in the manifest, `race/emergency` and `race/emergency_at_s` in the results, and the usual laps, telemetry and events. Mission Control's `/api/event/state` now reports `as_state` (`/assi/state`) and `dv_status` (`/dv/status`). An AS Emergency only ends the run after the car was seen driving in it, so a state latched from the previous run does not.
 - **`run_mission_benchmark --pipeline-on latte_panda` starts the bridge again.** The bridge-only
   container skips the image's entrypoint, so `ros2 launch` couldn't find `ifssim_bridge`. The launch
@@ -111,6 +115,18 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The GPU box's sim check keeps its CPU, and its report says when the box was busy.**
+  - The box has 8 cores, and the sim (~4 threads) plus the pipeline (~5) already fill them.
+  - Every other service there (other CI runners, renders) had the same CPU weight as the sim, so a compile job took CPU from it. The sim fell to 0.6–0.8× real time on the same commit that ran at 0.99× on a quiet box.
+  - The check now gives the sim's and the pipeline's containers 8× Docker's default CPU shares (`IFSSIM_SIM_CPU_SHARES`, `BENCH_CPU_SHARES`), about 3× the weight of the other services.
+  - It skips viz_relay (`DV_VIZ_RELAY=false`), which only draws in the sim's window.
+  - Each mission run records `box/cpu_wait` (Linux CPU pressure) and `box/load1`, and the report shows the CPU wait next to the sim speed.
+  - Off the GPU box nothing changes.
+- **LiDAR noise follows the car's Hesai.** Range σ now grows with range and on dark surfaces
+  (1.2 cm + 0.0056 cm/m²·r², ×(0.2/ρ)^0.8), returns at depth edges sometimes land between the two
+  surfaces, and intensity jitters by 14 %, all fitted to a parked manual car bag. New settings:
+  `RangeNoiseRangeCoeff`, `RangeNoiseRefReflectance`, `RangeNoiseReflectanceExp`, `EdgeOutlierRate`,
+  `IntensityNoise` (0 = the old flat Gaussian).
 - **The sim IMU now publishes like the car's.** `/imu` carries 400 distinct samples per sim second, each stamped with its own sim time, instead of one sample per ~60 Hz tick repeated about 7 times with +1 ns stamps. The accelerometer refreshes at 100 Hz and holds in between (uDV's ACC_CONF), readings are quantised and clamped to uDV's ±6 g / ±2000 °/s settings, white noise is per axis from raw BMI088 logs, and each session draws a turn-on gyro/accel offset that is not removed, as on the car. The sensor frame gains `imu_timestamp` (188 bytes): the plugin and the bridge must be updated together. `tools/scenario_runner/verify_determinism.py` pairs `/imu` with ground truth on the ticks where the two grids meet.
 
 - **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
