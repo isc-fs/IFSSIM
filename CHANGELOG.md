@@ -32,6 +32,11 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **On Windows, tracks load from the repository after START.** START runs `docker compose`
+  through cmd.exe, which doesn't set `PWD`, so the backend's `UE5_TRACKS_DIR` came out as
+  `/Content/tracks`: the sim fell back to its own copy of a track, and couldn't load one that
+  only the repository has. START now sets `PWD` to the compose folder.
+
 - **The local benchmark queue works with Docker Desktop.** What Mission Control queued was root's
   with no write access for others, as Docker Desktop shows every folder of the mount as root's,
   so a worker started in WSL failed writing the job's state (`Permission denied`). With no

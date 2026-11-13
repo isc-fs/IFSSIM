@@ -306,6 +306,14 @@ bool FFSDSStackStarter::Run(const FString& WorkDir, const FString& Command, FStr
 	}
 
 #if PLATFORM_WINDOWS
+	// docker-compose.yml builds paths from ${PWD} (the backend's UE5_TRACKS_DIR). A
+	// shell sets it, cmd.exe doesn't: compose left it blank, the backend asked the sim
+	// for /Content/tracks/<name>, and the sim loaded its own copy of the track instead
+	// of the repository's (or none, for a track only the repository has).
+	if (!WorkDir.IsEmpty())
+	{
+		FPlatformMisc::SetEnvironmentVar(TEXT("PWD"), *FPaths::ConvertRelativePathToFull(WorkDir));
+	}
 	// /s: cmd strips just the outer quotes, so quoted paths inside (spaces,
 	// accents) reach the command as they are.
 	const FString Exe = TEXT("cmd.exe");
