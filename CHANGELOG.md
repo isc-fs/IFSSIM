@@ -108,6 +108,14 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The GPU box's sim check keeps its CPU, and its report says when the box was busy.**
+  - The box has 8 cores, and the sim (~4 threads) plus the pipeline (~5) already fill them.
+  - Every other service there (other CI runners, renders) had the same CPU weight as the sim, so a compile job took CPU from it. The sim fell to 0.6–0.8× real time on the same commit that ran at 0.99× on a quiet box.
+  - The check now gives the sim's and the pipeline's containers 8× Docker's default CPU shares (`IFSSIM_SIM_CPU_SHARES`, `BENCH_CPU_SHARES`), about 3× the weight of the other services.
+  - It skips viz_relay (`DV_VIZ_RELAY=false`), which only draws in the sim's window.
+  - Each mission run records `box/cpu_wait` (Linux CPU pressure) and `box/load1`, and the report shows the CPU wait next to the sim speed.
+  - Off the GPU box nothing changes.
+
 - **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
   car bag. The sim mounted it level, so a third of its beams saw sky and the ground started at ~5.3 m
   (car: ~3 m). The LiDAR now reads `Roll`/`Pitch`/`Yaw` from settings.json (CPU and GPU paths); points

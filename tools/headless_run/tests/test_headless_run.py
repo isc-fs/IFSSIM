@@ -249,3 +249,31 @@ def test_no_characterisation_unless_asked(tmp_path, backend):
     rec = run_once(cfg(tmp_path, free_port(), backend), log=quiet)
     assert "characterisation" not in rec
     assert not (Path(rec["run_dir"]) / "characterisation").exists()
+
+
+def test_the_sims_cpu_weight_is_raised_only_when_asked():
+    from headless_run.orchestrate import raise_sim_cpu_weight
+
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+
+        class R:
+            returncode, stdout, stderr = 0, "ifssim-sim\n", ""
+        return R()
+
+    assert raise_sim_cpu_weight({}, run) is None and calls == []
+    assert raise_sim_cpu_weight({"IFSSIM_SIM_CPU_SHARES": "8192"}, run) == "ifssim-sim cpu-shares 8192"
+    assert calls[-1] == ["docker", "update", "--cpu-shares", "8192", "ifssim-sim"]
+    assert raise_sim_cpu_weight({"IFSSIM_SIM_CPU_SHARES": "8192", "IFSSIM_SIM_CONTAINER": "other"},
+                                run).startswith("other")
+    assert raise_sim_cpu_weight({"IFSSIM_SIM_CPU_SHARES": "x"}, run).startswith("not applied")
+
+    def fails(argv, **kw):
+        class R:
+            returncode, stdout, stderr = 1, "", "Error: No such container: ifssim-sim"
+        return R()
+
+    # a failed update never fails the run: it is recorded
+    assert "No such container" in raise_sim_cpu_weight({"IFSSIM_SIM_CPU_SHARES": "8192"}, fails)
