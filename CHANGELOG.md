@@ -32,6 +32,11 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The local benchmark queue works with Docker Desktop.** What Mission Control queued was root's
+  with no write access for others, as Docker Desktop shows every folder of the mount as root's,
+  so a worker started in WSL failed writing the job's state (`Permission denied`). With no
+  owner to give them to, the queue's folders and files now get the permissions of the folder above.
+
 - **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
   read its readback slot before the render thread had queued the new copy, so it returned that slot's
   previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
