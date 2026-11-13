@@ -329,7 +329,12 @@ bool FFSDSStackStarter::Run(const FString& WorkDir, const FString& Command, FStr
 	const FString Exe = TEXT("/bin/bash");
 #endif
 	ScriptPath = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-run-"), TEXT(".sh"));
-	if (!FFileHelper::SaveStringToFile(TEXT("exec 2>&1\n") + Command + TEXT("\n"), *ScriptPath,
+	// The script goes to WorkDir itself: CreateProc on Linux leaves the child in
+	// the engine's Binaries folder, where `docker compose` finds no compose file
+	// (exit 14, "no configuration file provided").
+	const FString Cd = WorkDir.IsEmpty() ? FString()
+		: FString::Printf(TEXT("cd '%s' || exit 1\n"), *WorkDir.Replace(TEXT("'"), TEXT("'\\''")));
+	if (!FFileHelper::SaveStringToFile(TEXT("exec 2>&1\n") + Cd + Command + TEXT("\n"), *ScriptPath,
 		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 	{
 		Close();

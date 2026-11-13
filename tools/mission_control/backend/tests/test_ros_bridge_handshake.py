@@ -182,3 +182,13 @@ def test_full_cycle_sends_off_ready_go_in_order(bridge):
         min(i for i, x in enumerate(sent) if x == READY)
     assert max(i for i, x in enumerate(sent) if x == READY) < \
         min(i for i, x in enumerate(sent) if x == GO)
+
+
+def test_as_snapshot_reports_fresh_heartbeats_and_drops_stale_ones():
+    b = ros_bridge.RosBridge()
+    assert b.as_snapshot() == {"dv_status": None, "as_state": None}
+    b._on_dv_status(Msg(5))
+    b._on_as_state(Msg(1))
+    assert b.as_snapshot() == {"dv_status": 5, "as_state": 1}
+    b._as_state_stamp -= ros_bridge.DV_STATUS_STALE_S + 1.0
+    assert b.as_snapshot() == {"dv_status": 5, "as_state": None}
