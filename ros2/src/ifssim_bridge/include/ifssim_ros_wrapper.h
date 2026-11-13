@@ -23,6 +23,7 @@
 
 #include "lws_steering_sensor.h"
 #include "sim_clock_gate.h"
+#include "sensor_stream_sync.h"
 #include "sim_rate_gate.h"
 #include "stamp_guard.h"
 #include "tcp_client.h"
@@ -88,6 +89,11 @@ private:
     // env-var-gated fallback (IFSSIM_LIDAR_TRANSPORT=udp) — see
     // startStreaming() for the switch.
     void sensorStreamThread();
+    // Checks that the sim writes this bridge's SensorFrame size and leaves `fd` on a
+    // frame boundary (sensor_stream_sync.h). `already_read` is a frame the caller read
+    // that turned out out of step. Sets `mismatched` when the sizes differ. False when
+    // the stream closed.
+    bool syncSensorStream(int fd, bool& mismatched, const SensorFrame* already_read = nullptr);
     void sensorPublishThread();  // Drains the single-slot buffer, calls onSensorFrame
     void lidarStreamThread();    // PR-#482: TCP recv loop, reads stream-header + payload
     void lidarPublishThread();   // Drains the single-slot buffer, calls onLidarFrame

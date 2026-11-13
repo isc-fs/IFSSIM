@@ -57,6 +57,13 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The bridge refuses a sim whose sensor frame isn't its own.** The sensor stream has no
+  length prefix, so a bridge and a sim plugin from commits with different frame sizes (as
+  across #875) read every frame after the first out of step, dropped them on the bad magic
+  and published about 1 in 47: the car drove badly and nothing said why. The bridge now
+  measures the sim's frame size from the stream when it connects and when a frame is out of
+  step. On a mismatch it logs both sizes and how to fix it, every 10 s, and publishes
+  nothing from that sim; on a glitch it finds the next frame instead of staying out of step.
 - **On Windows, the Benchmarks page starts the worker itself.** Start worker and the
   machine check (Setup) now run `run_spec.py` in WSL through `wsl.exe`, instead of asking
   you to start the worker from a WSL terminal.
