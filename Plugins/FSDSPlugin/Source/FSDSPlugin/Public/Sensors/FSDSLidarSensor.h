@@ -109,6 +109,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	FVector SensorOffset = FVector(140.f, 0.f, 60.f);
 
+	/** Mount rotation relative to the vehicle (settings.json Lidar Roll/Pitch/Yaw,
+	 *  degrees; UE convention, negative Pitch = tilted down). The scan pattern
+	 *  (V-FOV, channels) is in the sensor's own frame; points stay in the vehicle
+	 *  frame, so consumers see the same frame with the beams where the car has them. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	FRotator MountRotation = FRotator::ZeroRotator;
+
 	/** Draw debug points in editor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;
