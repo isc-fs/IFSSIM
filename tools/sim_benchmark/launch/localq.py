@@ -13,6 +13,7 @@ Layout, under ``<results>/.bench/``::
     queue/<id>/cancel       present when someone asked to cancel it
     queue/<id>/worker.log   the run's output
     worker.json             the worker's heartbeat (pid, host, time, current job)
+    stop                    present when someone asked the worker to stop
     rig.json                this machine's checks (launch/rig.py), refreshed by the worker
 
 Only the standard library here: the backend imports this file as it is.
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 import uuid
 from datetime import datetime, timezone
@@ -48,17 +50,28 @@ def now() -> str:
 
 def _adopt(path: Path) -> None:
     """Mission Control's backend runs as root in its container: what it creates here
-    goes to whoever owns the folder above, so the host's worker can write it too."""
+    goes to whoever owns the folder above, so the host's worker can write it too.
+
+    Docker Desktop (Windows, Mac) shows every folder of a bind mount as root's, so
+    there is no owner to give it to; it gets the permissions of the folder above
+    instead. Without that the queue's folders were root's and 755 to WSL, and a
+    worker started there couldn't write a job's state."""
     if os.geteuid() != 0:
         return
+    above = None
     for up in path.parents:
         try:
             st = up.stat()
         except OSError:
             continue
+        if above is None:
+            above = st
         if st.st_uid != 0:
             os.chown(path, st.st_uid, st.st_gid)
             return
+    if above is not None:
+        mode = stat.S_IMODE(above.st_mode)
+        os.chmod(path, mode if path.is_dir() else mode & 0o666)
 
 
 def make_dirs(d: Path) -> None:
@@ -190,11 +203,29 @@ def heartbeat(results: Path | str, **fields: Any) -> None:
 
 
 def worker(results: Path | str, stale_s: float = HEARTBEAT_STALE_S) -> dict[str, Any]:
-    """The worker's last heartbeat, with ``alive``: whether it is recent."""
+    """The worker's last heartbeat, with ``alive``: whether it is recent, and
+    ``stopping``: whether it was asked to stop."""
     hb = read_json(bench_dir(results) / "worker.json") or {}
     at = hb.get("at")
     alive = isinstance(at, (int, float)) and time.time() - at < stale_s
-    return hb | {"alive": alive}
+    return hb | {"alive": alive, "stopping": stop_requested(results)}
+
+
+def request_stop(results: Path | str) -> None:
+    """Ask the worker to stop. It exits once no spec is running: a running one finishes
+    (or is cancelled) first."""
+    flag = bench_dir(results) / "stop"
+    make_dirs(flag.parent)
+    flag.touch()
+    _adopt(flag)
+
+
+def stop_requested(results: Path | str) -> bool:
+    return (bench_dir(results) / "stop").exists()
+
+
+def clear_stop(results: Path | str) -> None:
+    (bench_dir(results) / "stop").unlink(missing_ok=True)
 
 
 def summary(results: Path | str, limit: int = 50) -> dict[str, Any]:

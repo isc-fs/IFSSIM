@@ -145,6 +145,9 @@ class Manifest:
     default_refs: dict[str, str] = field(default_factory=dict)
     repo_urls: dict[str, str] = field(default_factory=dict)
     image: Image | None = None
+    # bench.yaml's `boards:`: firmware {board: {repo, default}}, hil [boards],
+    # vhil {system: [boards]}
+    boards: dict[str, Any] = field(default_factory=dict)
 
     def with_paths(
         self, results: Path | None = None, bag_dirs: dict[str, Path] | None = None
@@ -354,4 +357,25 @@ def load(root: Path | str) -> Manifest:
         default_refs=default_refs,
         repo_urls=repo_urls,
         image=image,
+        boards=_boards(doc.get("boards"), path),
     )
+
+
+def _boards(doc: Any, path: Path) -> dict[str, Any]:
+    if not doc:
+        return {}
+    if not isinstance(doc, dict):
+        raise ManifestError(f"{path}: boards is a mapping")
+    fw = doc.get("firmware") or {}
+    if not isinstance(fw, dict) or not all(isinstance(v, dict) and v.get("repo") for v in fw.values()):
+        raise ManifestError(f"{path}: boards.firmware maps each board to {{repo, default}}")
+    hil = list(doc.get("hil") or [])
+    vhil = {str(k): list(v or []) for k, v in (doc.get("vhil") or {}).items()}
+    unknown = sorted({b for b in hil + [b for v in vhil.values() for b in v] if b not in fw})
+    if unknown:
+        raise ManifestError(f"{path}: boards with no firmware entry: {', '.join(unknown)}")
+    return {
+        "firmware": {k: {"repo": v["repo"], "default": str(v.get("default") or "")} for k, v in fw.items()},
+        "hil": hil,
+        "vhil": vhil,
+    }

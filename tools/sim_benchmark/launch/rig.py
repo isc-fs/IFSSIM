@@ -32,6 +32,9 @@ import yaml
 ENV = "IFSSIM_RIG"
 USER_FILE = Path("~/.config/ifssim/rig.yaml")
 READY, UNAVAILABLE, ABSENT = "ready", "unavailable", "absent"
+# Whether a sim run can include boards (the roadmap's Phase 3). Turns vHIL on for any
+# rig with Docker; real boards also need a rig whose descriptor declares a HIL bench.
+CAR_IN_THE_LOOP = False
 
 Runner = Callable[[list[str], float], subprocess.CompletedProcess]
 
@@ -90,10 +93,13 @@ def check(rig: dict[str, Any] | None = None, run: Runner = _run) -> dict[str, An
     )
 
     r = run(["docker", "info", "--format", "{{.ServerVersion}}"], 15)
+    version = r.stdout.strip() if r.returncode == 0 else ""
+    # `docker info --format` exits 0 even when it can't reach the daemon (no access to
+    # its socket): only a server version means Docker answered.
     parts["docker"] = (
-        _part(READY, version=r.stdout.strip())
-        if r.returncode == 0
-        else _part(UNAVAILABLE, f"Docker: {_first_line(r)}")
+        _part(READY, version=version)
+        if version
+        else _part(UNAVAILABLE, f"Docker: {_first_line(r) if (r.stderr or r.returncode) else 'no answer from the daemon'}")
     )
     # the pipeline on this machine runs in the stack's container
     parts["pipeline_bench_pc"] = (
@@ -123,6 +129,14 @@ def check(rig: dict[str, Any] | None = None, run: Runner = _run) -> dict[str, An
         if not hil
         else _part(ABSENT, "car-in-the-loop not wired yet", bench=hil.get("bench"))
     )
+    # Emulated boards (IFS-vHIL) run in Docker, so once car-in-the-loop joins them to a
+    # sim run, any rig with Docker can have them; until then no rig can.
+    if not CAR_IN_THE_LOOP:
+        parts["vhil"] = _part(ABSENT, "car-in-the-loop not wired yet")
+    elif parts["docker"]["status"] == READY:
+        parts["vhil"] = _part(READY)
+    else:
+        parts["vhil"] = _part(UNAVAILABLE, "needs Docker")
 
     return {
         "id": rig["id"],
@@ -140,6 +154,9 @@ def needs(spec: dict[str, Any]) -> list[str]:
         settings = (b or {}).get("settings") or {}
         where = settings.get("pipeline_on", "bench_pc")
         out.append("latte_panda" if where == "latte_panda" else "pipeline_bench_pc")
+    mode = (spec.get("boards") or {}).get("mode") if isinstance(spec.get("boards"), dict) else None
+    if mode in ("hil", "vhil"):
+        out.append(mode)
     return list(dict.fromkeys(out))
 
 
