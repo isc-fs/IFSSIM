@@ -32,6 +32,8 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The mission benchmark ends a run as soon as the car goes to AS Emergency** instead of waiting out `timeout_s` (2400 s for trackdrive). The run's outcome is `emergency`, with `emergency_at_s` in the manifest, `race/emergency` and `race/emergency_at_s` in the results, and the usual laps, telemetry and events. Mission Control's `/api/event/state` now reports `as_state` (`/assi/state`) and `dv_status` (`/dv/status`). An AS Emergency only ends the run after the car was seen driving in it, so a state latched from the previous run does not.
+
 - **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
   read its readback slot before the render thread had queued the new copy, so it returned that slot's
   previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
