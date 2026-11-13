@@ -32,6 +32,10 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The sim builds on Windows again.** MSVC refused `FSDSDaylight.cpp` (#810): it put the
+  sun's `uint32` bitfield `bAtmosphereSunLight` into a `bool` in a brace initialiser, a
+  narrowing conversion (C2397) the Linux build accepts.
+
 - **Loading a built-in track no longer rewrites it.** Mission Control centred every
   track on the origin as it loaded it, rewriting the file in place, so loading
   `characterisation`, `acceleration` (and its world sidecar) or `skidpad` changed files
