@@ -57,6 +57,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **LiDAR range noise is applied in centimetres.** settings.json gives `RangeNoiseStd` in metres and the
+  sensor works in cm, but the ×100 was missing, so the 3 cm σ ran as 0.3 mm: sim clouds were
+  effectively noise-free.
 - **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
   --format` exits 0 then, with no server version. Only a version counts as ready now.
 
@@ -109,6 +112,17 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **LiDAR noise follows the car's Hesai.** Range σ now grows with range and on dark surfaces
+  (1.2 cm + 0.0056 cm/m²·r², ×(0.2/ρ)^0.8), returns at depth edges sometimes land between the two
+  surfaces, and intensity jitters by 14 %, all fitted to a parked manual car bag. New settings:
+  `RangeNoiseRangeCoeff`, `RangeNoiseRefReflectance`, `RangeNoiseReflectanceExp`, `EdgeOutlierRate`,
+  `IntensityNoise` (0 = the old flat Gaussian).
+- **The sim IMU now publishes like the car's.** `/imu` carries 400 distinct samples per sim second, each stamped with its own sim time, instead of one sample per ~60 Hz tick repeated about 7 times with +1 ns stamps. The accelerometer refreshes at 100 Hz and holds in between (uDV's ACC_CONF), readings are quantised and clamped to uDV's ±6 g / ±2000 °/s settings, white noise is per axis from raw BMI088 logs, and each session draws a turn-on gyro/accel offset that is not removed, as on the car. The sensor frame gains `imu_timestamp` (188 bytes): the plugin and the bridge must be updated together. `tools/scenario_runner/verify_determinism.py` pairs `/imu` with ground truth on the ticks where the two grids meet.
+
+- **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
+  car bag. The sim mounted it level, so a third of its beams saw sky and the ground started at ~5.3 m
+  (car: ~3 m). The LiDAR now reads `Roll`/`Pitch`/`Yaw` from settings.json (CPU and GPU paths); points
+  stay in the vehicle frame.
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
@@ -404,6 +418,10 @@ shipping pipeline, documentation.
   car characterisation drives the same cones on flat ground
   (`characterisation.csv`), since its turns need open space beside the
   start.
+- **Frame-time log.** Every 5 s the sim logs `FSDS Frame:` with the mean
+  and worst game-thread, render-thread, RHI and GPU time per frame (the
+  `stat unit` numbers), so a run below real time shows which one is the
+  limit (docs/rendering_presets.md). Needs a UE recompile.
 - **Montmeló surfaces and markings from the aerial photo.** Measured on the
   ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
   verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,

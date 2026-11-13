@@ -339,7 +339,7 @@ private:
     Vec3 querySensorOffset(const std::string& name);
 
     // Per-sensor publish rates (divisors of the 400Hz sensor stream):
-    //   IMU  → publish every frame    (400 Hz)
+    //   IMU  → every frame that carries a sample (imu_timestamp != 0, 400 Hz)
     //   GSS / TF / Odom → every 4    (100 Hz)
     //   GPS  → every 40              ( 10 Hz)
     uint64_t sensor_frame_count_ = 0;

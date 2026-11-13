@@ -61,6 +61,11 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 
 		SHADER_PARAMETER(float, RangeNoiseStdCm)
 		SHADER_PARAMETER(float, DropoutRate)
+		SHADER_PARAMETER(float, RangeNoiseRangeCoeffCm)
+		SHADER_PARAMETER(float, RangeNoiseRefReflectance)
+		SHADER_PARAMETER(float, RangeNoiseReflectanceExp)
+		SHADER_PARAMETER(float, EdgeOutlierRate)
+		SHADER_PARAMETER(float, IntensityNoiseRel)
 
 		SHADER_PARAMETER(uint32, RNGSeed)
 
@@ -77,6 +82,10 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(FVector3f, SensorRotRowX)
 		SHADER_PARAMETER(FVector3f, SensorRotRowY)
 		SHADER_PARAMETER(FVector3f, SensorRotRowZ)
+		// Mount rotation rows, sensor frame -> vehicle frame (pitched mount).
+		SHADER_PARAMETER(FVector3f, MountRotRowX)
+		SHADER_PARAMETER(FVector3f, MountRotRowY)
+		SHADER_PARAMETER(FVector3f, MountRotRowZ)
 
 		// Intensity model (#255). RReferenceM gives the inverse-square
 		// reference range; perpendicular surfaces at this range return

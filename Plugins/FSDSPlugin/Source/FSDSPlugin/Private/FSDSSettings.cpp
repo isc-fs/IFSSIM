@@ -365,9 +365,40 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("GyroBiasStd"), DblVal)) Sensor.GyroBiasStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("AccelBiasTau"), DblVal)) Sensor.AccelBiasTau = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("GyroBiasTau"), DblVal)) Sensor.GyroBiasTau = DblVal;
+	// IMU sample stream and digitisation (SensorType 2 only reads these)
+	if (SensorObj->TryGetNumberField(TEXT("SampleRateHz"), DblVal)) Sensor.ImuSampleRateHz = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelOdrHz"), DblVal)) Sensor.AccelOdrHz = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelTurnOnBiasStd"), DblVal)) Sensor.AccelTurnOnBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroTurnOnBiasStd"), DblVal)) Sensor.GyroTurnOnBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelLsb"), DblVal)) Sensor.AccelLsb = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroLsb"), DblVal)) Sensor.GyroLsb = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelRange"), DblVal)) Sensor.AccelRange = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroRange"), DblVal)) Sensor.GyroRange = DblVal;
+	{
+		// [x, y, z] arrays; anything but three numbers is ignored with a warning.
+		auto ReadXYZ = [&SensorObj, &Name](const TCHAR* Key, FVector& OutXYZ)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* XYZArr = nullptr;
+			if (!SensorObj->TryGetArrayField(Key, XYZArr) || !XYZArr) return;
+			if (XYZArr->Num() != 3)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FSDS Settings: %s.%s needs 3 numbers, got %d — ignored"),
+					*Name, Key, XYZArr->Num());
+				return;
+			}
+			OutXYZ = FVector((*XYZArr)[0]->AsNumber(), (*XYZArr)[1]->AsNumber(), (*XYZArr)[2]->AsNumber());
+		};
+		ReadXYZ(TEXT("AccelNoiseStdXYZ"), Sensor.AccelNoiseStdXYZ);
+		ReadXYZ(TEXT("GyroNoiseStdXYZ"), Sensor.GyroNoiseStdXYZ);
+	}
 	if (SensorObj->TryGetNumberField(TEXT("VelocityNoiseStd"), DblVal)) Sensor.VelocityNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseStd"), DblVal)) Sensor.RangeNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRangeCoeff"), DblVal)) Sensor.RangeNoiseRangeCoeff = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRefReflectance"), DblVal)) Sensor.RangeNoiseRefReflectance = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseReflectanceExp"), DblVal)) Sensor.RangeNoiseReflectanceExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("EdgeOutlierRate"), DblVal)) Sensor.EdgeOutlierRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityNoise"), DblVal)) Sensor.IntensityNoise = DblVal;
 
 	Vehicle.Sensors.Add(Name, Sensor);
 }

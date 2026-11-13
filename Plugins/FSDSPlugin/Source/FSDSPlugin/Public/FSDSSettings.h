@@ -72,9 +72,27 @@ struct FFSDSSensorSettings
 	float GyroBiasStd = 0.f;          // rad/s steady-state σ
 	float AccelBiasTau = 100.f;       // s
 	float GyroBiasTau = 100.f;        // s
+	// IMU sample stream and digitisation (uDV parity, see FSDSImuSensor.h).
+	// XYZ noise overrides the scalar per axis (REP-103 axes) when non-zero;
+	// the scalars stay what the bridge publishes as /imu covariance.
+	float ImuSampleRateHz = 400.f;    // Hz of sim time; 0 = one sample per tick
+	float AccelOdrHz = 0.f;           // Hz; accel held between updates; 0 = every sample
+	FVector AccelNoiseStdXYZ = FVector::ZeroVector;  // m/s² per accel update
+	FVector GyroNoiseStdXYZ = FVector::ZeroVector;   // rad/s per sample
+	float AccelTurnOnBiasStd = 0.f;   // m/s², constant per session
+	float GyroTurnOnBiasStd = 0.f;    // rad/s, constant per session
+	float AccelLsb = 0.f;             // m/s²; 0 = no quantisation
+	float GyroLsb = 0.f;              // rad/s; 0 = no quantisation
+	float AccelRange = 0.f;           // m/s² full scale; 0 = unlimited
+	float GyroRange = 0.f;            // rad/s full scale; 0 = unlimited
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
+	float RangeNoiseRangeCoeff = 0.f;      // m per m² of range: σ grows by this · r² (LiDAR)
+	float RangeNoiseRefReflectance = 0.2f; // ρ where the reflectance factor is 1 (LiDAR)
+	float RangeNoiseReflectanceExp = 0.f;  // σ ∝ (ρ_ref/ρ)^exp, 0 = off (LiDAR)
+	float EdgeOutlierRate = 0.f;           // mixed-return probability at depth edges (LiDAR)
+	float IntensityNoise = 0.f;            // relative σ of intensity jitter (LiDAR)
 };
 
 struct FFSDSVehiclePhysics

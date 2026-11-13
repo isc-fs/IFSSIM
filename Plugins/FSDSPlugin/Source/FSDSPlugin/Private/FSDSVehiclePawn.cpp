@@ -680,7 +680,15 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
 				LidarSensor->MaxRange = SensorPair.Value.MaxRange * 100.f;     // meters → cm
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
-				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
+				LidarSensor->MountRotation = SensorPair.Value.Rotation;
+				// settings.json gives metres; the sensor works in cm. The ×100 was
+				// missing, so the 0.03 m σ ran as 0.03 cm (0.3 mm).
+				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd * 100.f;
+				LidarSensor->RangeNoiseRangeCoeffCm = SensorPair.Value.RangeNoiseRangeCoeff * 100.f;
+				LidarSensor->RangeNoiseRefReflectance = SensorPair.Value.RangeNoiseRefReflectance;
+				LidarSensor->RangeNoiseReflectanceExp = SensorPair.Value.RangeNoiseReflectanceExp;
+				LidarSensor->EdgeOutlierRate = SensorPair.Value.EdgeOutlierRate;
+				LidarSensor->IntensityNoise = SensorPair.Value.IntensityNoise;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 
 				// Per-channel max-range (#223 tune): convert metres → cm
@@ -749,6 +757,21 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
 				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd;
 				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
+				ImuSensor->AccelBiasTau = SensorPair.Value.AccelBiasTau;
+				ImuSensor->GyroBiasTau = SensorPair.Value.GyroBiasTau;
+				// Sample stream and digitisation. The sensor works in cm/s² for
+				// accel (see FSDSImuSensor.cpp), so the m/s² values scale by 100
+				// here; the noise σ are scaled inside the sensor instead.
+				ImuSensor->SampleRateHz = SensorPair.Value.ImuSampleRateHz;
+				ImuSensor->AccelOdrHz = SensorPair.Value.AccelOdrHz;
+				ImuSensor->AccelNoiseStdXYZ = SensorPair.Value.AccelNoiseStdXYZ;
+				ImuSensor->GyroNoiseStdXYZ = SensorPair.Value.GyroNoiseStdXYZ;
+				ImuSensor->AccelTurnOnBiasStd = SensorPair.Value.AccelTurnOnBiasStd * 100.f;
+				ImuSensor->GyroTurnOnBiasStd = SensorPair.Value.GyroTurnOnBiasStd;
+				ImuSensor->AccelLsb = SensorPair.Value.AccelLsb * 100.f;
+				ImuSensor->GyroLsb = SensorPair.Value.GyroLsb;
+				ImuSensor->AccelRange = SensorPair.Value.AccelRange * 100.f;
+				ImuSensor->GyroRange = SensorPair.Value.GyroRange;
 				break;
 			}
 		}

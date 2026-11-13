@@ -109,6 +109,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	FVector SensorOffset = FVector(140.f, 0.f, 60.f);
 
+	/** Mount rotation relative to the vehicle (settings.json Lidar Roll/Pitch/Yaw,
+	 *  degrees; UE convention, negative Pitch = tilted down). The scan pattern
+	 *  (V-FOV, channels) is in the sensor's own frame; points stay in the vehicle
+	 *  frame, so consumers see the same frame with the beams where the car has them. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	FRotator MountRotation = FRotator::ZeroRotator;
+
 	/** Draw debug points in editor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;
@@ -122,6 +129,25 @@ public:
 	/** Random point dropout probability [0,1] (0 = no dropout). Typical ~0.01 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
+
+	/** Range-dependent noise: σ grows by this · range_m², in cm per m² (0 = flat σ). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseRangeCoeffCm = 0.0f;
+
+	/** Reflectance-dependent noise: σ ∝ (RefReflectance / ρ)^Exp, clamped to ×0.3..×4 (Exp 0 = off). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseRefReflectance = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseReflectanceExp = 0.0f;
+
+	/** Probability of a mixed return (between the hit and the background) at a >30 cm depth edge. GPU path only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float EdgeOutlierRate = 0.0f;
+
+	/** Relative σ of scan-to-scan intensity jitter (0 = none). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float IntensityNoise = 0.0f;
 
 	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
 	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
