@@ -14,6 +14,31 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
+  replay recorded bags), the missions, tracks (each mission's own are listed), runs per
+  track, parameter override files from `tools/sim_benchmark/specs/overrides/`, and the
+  rest of `bench.yaml`'s settings under More settings (drawn from the manifest, so new
+  settings show without a sim change). The backend runs the worker's own validation as
+  you edit (`POST /api/bench/check`) and refuses a spec that fails it; the bar next to
+  Queue says how many runs it makes, or what's wrong. Setup: the Sim, Pipeline and
+  boards boxes, with the code a run uses, where the pipeline runs, and what this machine
+  can run now (the page checks it itself with `run_spec.py --rig`, no worker needed).
+  Start worker / Stop worker run the local queue's worker; the queue shows each spec's
+  progress, with Cancel and its folder.
+
+- **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
+  checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
+  for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that
+  pipeline instead of this checkout's `pipeline/`; `branch@commit` pins a commit and checks
+  it's on the branch. Your own `pipeline/` (its branch, uncommitted changes) is never
+  touched. The Benchmarks page's Setup tab picks it with two fields that suggest as you
+  type: the branch or PR, then one of its latest commits (`GET /api/bench/refs`, from
+  GitHub).
+- **Boards in a run spec (`boards:`)**: real (HIL, bench-01) or emulated (vHIL, with an
+  IFS-vHIL system), with a firmware branch, PR or commit per board; `bench.yaml` lists the
+  boards, their firmware repos and the vHIL systems. The Setup tab picks them. Runs with
+  boards wait for car-in-the-loop: until then the rig refuses them.
+
 - **A local benchmark queue for Mission Control's Benchmarks tab.** `POST /api/bench/launch`
   (target `local`) queues a run spec in `tools/sim_benchmark/results/.bench/queue/`;
   `run_spec.py --work` runs the queue on the host, one spec at a time. `GET /api/bench/queue`,
@@ -35,6 +60,35 @@ shipping pipeline, documentation.
 - **LiDAR range noise is applied in centimetres.** settings.json gives `RangeNoiseStd` in metres and the
   sensor works in cm, but the ×100 was missing, so the 3 cm σ ran as 0.3 mm: sim clouds were
   effectively noise-free.
+- **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
+  --format` exits 0 then, with no server version. Only a version counts as ready now.
+
+- **On Windows, tracks load from the repository after START.** START runs `docker compose`
+  through cmd.exe, which doesn't set `PWD`, so the backend's `UE5_TRACKS_DIR` came out as
+  `/Content/tracks`: the sim fell back to its own copy of a track, and couldn't load one that
+  only the repository has. START now sets `PWD` to the compose folder.
+
+- **The local benchmark queue works with Docker Desktop.** What Mission Control queued was root's
+  with no write access for others, as Docker Desktop shows every folder of the mount as root's,
+  so a worker started in WSL failed writing the job's state (`Permission denied`). With no
+  owner to give them to, the queue's folders and files now get the permissions of the folder above.
+
+- **The sim builds on Windows again.** MSVC refused `FSDSDaylight.cpp` (#810): it put the
+  sun's `uint32` bitfield `bAtmosphereSunLight` into a `bool` in a brace initialiser, a
+  narrowing conversion (C2397) the Linux build accepts.
+
+- **Loading a built-in track no longer rewrites it.** Mission Control centred every
+  track on the origin as it loaded it, rewriting the file in place, so loading
+  `characterisation`, `acceleration` (and its world sidecar) or `skidpad` changed files
+  under version control. Built-in tracks now load as they are: they fit the floor, and
+  acceleration's start line stays on the Montmeló world's origin.
+
+- **START brings up the stack on Linux.** The menu's commands ran in the engine's
+  folder instead of the repository, so `docker compose` found no compose file
+  ("docker compose failed: exit status 14"); and Mission Control's backend couldn't
+  resolve `host.docker.internal`, so it never saw the sim and START waited until it
+  timed out.
+
 - **The mission benchmark ends a run as soon as the car goes to AS Emergency** instead of waiting out `timeout_s` (2400 s for trackdrive). The run's outcome is `emergency`, with `emergency_at_s` in the manifest, `race/emergency` and `race/emergency_at_s` in the results, and the usual laps, telemetry and events. Mission Control's `/api/event/state` now reports `as_state` (`/assi/state`) and `dv_status` (`/dv/status`). An AS Emergency only ends the run after the car was seen driving in it, so a state latched from the previous run does not.
 - **`run_mission_benchmark --pipeline-on latte_panda` starts the bridge again.** The bridge-only
   container skips the image's entrypoint, so `ros2 launch` couldn't find `ifssim_bridge`. The launch
@@ -62,6 +116,12 @@ shipping pipeline, documentation.
   surfaces, and intensity jitters by 14 %, all fitted to a parked manual car bag. New settings:
   `RangeNoiseRangeCoeff`, `RangeNoiseRefReflectance`, `RangeNoiseReflectanceExp`, `EdgeOutlierRate`,
   `IntensityNoise` (0 = the old flat Gaussian).
+- **The sim IMU now publishes like the car's.** `/imu` carries 400 distinct samples per sim second, each stamped with its own sim time, instead of one sample per ~60 Hz tick repeated about 7 times with +1 ns stamps. The accelerometer refreshes at 100 Hz and holds in between (uDV's ACC_CONF), readings are quantised and clamped to uDV's ±6 g / ±2000 °/s settings, white noise is per axis from raw BMI088 logs, and each session draws a turn-on gyro/accel offset that is not removed, as on the car. The sensor frame gains `imu_timestamp` (188 bytes): the plugin and the bridge must be updated together. `tools/scenario_runner/verify_determinism.py` pairs `/imu` with ground truth on the ticks where the two grids meet.
+
+- **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
+  car bag. The sim mounted it level, so a third of its beams saw sky and the ground started at ~5.3 m
+  (car: ~3 m). The LiDAR now reads `Roll`/`Pitch`/`Yaw` from settings.json (CPU and GPU paths); points
+  stay in the vehicle frame.
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at

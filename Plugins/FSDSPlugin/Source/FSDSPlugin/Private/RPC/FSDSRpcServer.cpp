@@ -2231,9 +2231,45 @@ void FFSDSRpcServer::CaptureSensorFrame(UWorld* InWorld)
 	FFSDSSensorFrame Frame;
 	PackSensorFrame(Frame);
 
+	// This tick's IMU samples (400 Hz of sim time), drained from the sensor
+	// here on the game thread so the stream thread never touches the pawn.
+	TArray<UFSDSImuSensor::FImuOutput> NewImuSamples;
+	if (VehiclePawn->ImuSensor)
+	{
+		VehiclePawn->ImuSensor->ConsumeSamples(NewImuSamples);
+	}
+
 	FScopeLock Lock(&LatestSensorFrameLock);
 	LatestSensorFrame = Frame;
 	bHasLatestSensorFrame = true;
+	PendingImuSamples.Append(NewImuSamples);
+	// Bounded to 0.25 s: with no stream client connected nobody drains it,
+	// and a client that connects later must not get a burst of stale samples.
+	constexpr int32 MaxPendingImuSamples = 100;
+	if (PendingImuSamples.Num() > MaxPendingImuSamples)
+	{
+		PendingImuSamples.RemoveAt(0, PendingImuSamples.Num() - MaxPendingImuSamples, EAllowShrinking::No);
+	}
+}
+
+namespace FSDSRpcServerPrivate
+{
+	/** Write one IMU sample into a sensor frame's IMU fields (m/s², rad/s, ENU quat, sim-time stamp). */
+	static void WriteImuSample(FFSDSSensorFrame& Frame, const UFSDSImuSensor::FImuOutput& Imu)
+	{
+		Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
+		Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
+		Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
+		Frame.GyroX = Imu.AngularVelocity.X;
+		Frame.GyroY = Imu.AngularVelocity.Y;
+		Frame.GyroZ = Imu.AngularVelocity.Z;
+		const FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
+		Frame.OrientX = EnuQuat.X;
+		Frame.OrientY = EnuQuat.Y;
+		Frame.OrientZ = EnuQuat.Z;
+		Frame.OrientW = EnuQuat.W;
+		Frame.ImuTimestamp = Imu.SimTimeSec > 0.0 ? (uint64)(Imu.SimTimeSec * 1e9) : 0;
+	}
 }
 
 void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
@@ -2259,21 +2295,11 @@ void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
 		Frame.Altitude = Gps.Altitude;
 	}
 
-	// IMU
+	// IMU: the latest sample. StreamSensors overwrites these fields with each
+	// queued sample in turn (and sends ImuTimestamp 0 when it has none).
 	if (VehiclePawn->ImuSensor)
 	{
-		auto Imu = VehiclePawn->ImuSensor->GetOutput();
-		Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
-		Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
-		Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
-		Frame.GyroX = Imu.AngularVelocity.X;
-		Frame.GyroY = Imu.AngularVelocity.Y;
-		Frame.GyroZ = Imu.AngularVelocity.Z;
-		FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
-		Frame.OrientX = EnuQuat.X;
-		Frame.OrientY = EnuQuat.Y;
-		Frame.OrientZ = EnuQuat.Z;
-		Frame.OrientW = EnuQuat.W;
+		FSDSRpcServerPrivate::WriteImuSample(Frame, VehiclePawn->ImuSensor->GetOutput());
 	}
 
 	// GSS — body frame, X=forward (longitudinal), Y=lateral
@@ -2404,17 +2430,22 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	int32 Sent = 0;
 	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
 
-	// 400 frames per second of SIM time. The latest tick's frame is resent
-	// until the next tick replaces it, so at 60 fps each tick goes out about
-	// 6.7 times. Paced on the wall clock alone, slow motion (FFSDSRealTime)
-	// would send far more per sim second (27 per tick at 0.25x): 1600 IMU
-	// samples per sim second and a GPS, GSS and odometry the bridge counts
-	// off this stream at four times their rate. So each new tick earns sends
-	// for the sim time it advanced, one per StreamPeriodNs, and each send
-	// spends one: the same frames as before at real time, the same rate in
-	// sim time in slow motion.
+	// 400 frames per second of SIM time. Each tick earns sends for the sim
+	// time it advanced, one per StreamPeriodNs, and each send spends one, so
+	// slow motion (FFSDSRealTime) keeps 400 frames per SIM second rather than
+	// per wall second; the bridge counts GPS, GSS and odometry off this
+	// stream (every 40th / 4th frame).
+	//
+	// Each send carries the latest tick's frame and the next queued IMU
+	// sample (FSDSImuSensor emits the 400 Hz grid of sim time, ~6.7 samples
+	// per 60 Hz tick). Before, the tick's single IMU sample was resent ~6.7
+	// times, so /imu was 60 Hz of information at 400 Hz with +1 ns stamps.
+	// A send with no queued sample gets ImuTimestamp 0 and the bridge skips
+	// /imu for it; the credit and the sample grid both run at 400 Hz of sim
+	// time, so that is rare and the queue stays within a sample or two.
 	constexpr int64 StreamPeriodNs = 2'500'000;   // 400 Hz
 	constexpr double MaxStreamCredit = 40.0;      // 0.1 s of sim time: no burst after a pause
+	constexpr int32 ImuBacklogDrain = 8;          // queued samples above which a send needs no credit
 	uint64 LastStampNs = 0;
 	double StreamCredit = 0.0;
 
@@ -2422,19 +2453,20 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	{
 		if (!IsValid(VehiclePawn)) { FPlatformProcess::Sleep(0.1f); continue; }
 
-		// Resend the latest tick's frame (CaptureSensorFrame). This loop used to
-		// pack the frame itself, off the game thread, reading sim time, the IMU,
-		// the pose and ground truth at different moments while the game thread
-		// was updating them. A frame could then carry one tick's time with the
-		// previous tick's IMU sample, and which tick each 400 Hz frame landed on
-		// changed from run to run, so two runs with the same seed could never be
-		// compared sample by sample (#643).
+		// Copy the latest tick's frame (CaptureSensorFrame) and take the next
+		// IMU sample. This loop used to pack the frame itself, off the game
+		// thread, reading sim time, the IMU, the pose and ground truth at
+		// different moments while the game thread was updating them (#643).
 		FFSDSSensorFrame Frame;
 		bool bHaveFrame = false;
+		bool bHaveImu = false;
+		int32 ImuBacklog = 0;
+		UFSDSImuSensor::FImuOutput ImuSample;
 		{
 			FScopeLock Lock(&LatestSensorFrameLock);
 			bHaveFrame = bHasLatestSensorFrame;
 			if (bHaveFrame) Frame = LatestSensorFrame;
+			ImuBacklog = PendingImuSamples.Num();
 		}
 		if (!bHaveFrame) { FPlatformProcess::Sleep(0.0025f); continue; }
 
@@ -2446,8 +2478,27 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 				: FMath::Min(StreamCredit + double(Frame.Timestamp - LastStampNs) / StreamPeriodNs, MaxStreamCredit);
 			LastStampNs = Frame.Timestamp;
 		}
-		if (StreamCredit < 1.0) { FPlatformProcess::Sleep(0.0025f); continue; }
-		StreamCredit -= 1.0;
+		const bool bDrain = ImuBacklog > ImuBacklogDrain;
+		if (StreamCredit < 1.0 && !bDrain) { FPlatformProcess::Sleep(0.0025f); continue; }
+		StreamCredit = FMath::Max(StreamCredit - 1.0, 0.0);
+
+		{
+			FScopeLock Lock(&LatestSensorFrameLock);
+			if (PendingImuSamples.Num() > 0)
+			{
+				ImuSample = PendingImuSamples[0];
+				PendingImuSamples.RemoveAt(0, 1, EAllowShrinking::No);
+				bHaveImu = true;
+			}
+		}
+		if (bHaveImu)
+		{
+			FSDSRpcServerPrivate::WriteImuSample(Frame, ImuSample);
+		}
+		else
+		{
+			Frame.ImuTimestamp = 0;
+		}
 
 		Frame.FrameID = StreamFrameCounter++;
 		// Wall clock at send time (latency/health only, never integrated).
@@ -2463,8 +2514,10 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		}
 
 		// Pace at ~400Hz of wall time between sends (the BMI088's rate); the
-		// credit above holds it to 400 Hz of sim time.
-		FPlatformProcess::Sleep(0.0025f);
+		// credit above holds it to 400 Hz of sim time. Catching up on a
+		// backlog goes faster, but not back to back: the bridge keeps only
+		// the newest frame between its receive and publish threads.
+		FPlatformProcess::Sleep(bDrain ? 0.0005f : 0.0025f);
 	}
 }
 
