@@ -928,15 +928,21 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
         gps_pub_->publish(msg);
     }
 
-    // IMU
+    // IMU — one sample per frame on the 400 Hz stream, stamped with the
+    // sample's own sim time (imu_timestamp). The plugin's IMU emits the 400 Hz
+    // grid of sim time inside each ~60 Hz tick; before, it sent one sample per
+    // tick and this topic repeated it ~6.7 times with +1 ns stamps. A frame
+    // with imu_timestamp 0 carries no new sample, so /imu is not published.
+    if (f.imu_timestamp != 0)
     {
         // Monotonic guard — see imu_stamp_guard_ in the header. GLIM rejects
-        // any IMU sample whose stamp ≤ the previously-accepted one, so a
-        // repeated tick stamp is bumped by 1 ns. A new sim session restarts
-        // the sequence instead of staying pinned to the old one.
+        // any IMU sample whose stamp ≤ the previously-accepted one; with one
+        // stamp per sample this should no longer fire, but a repeat is still
+        // bumped by 1 ns rather than dropped. A new sim session restarts the
+        // sequence instead of staying pinned to the old one.
         const rclcpp::Time imu_stamp(
             imu_stamp_guard_.next(
-                now.nanoseconds(),
+                static_cast<int64_t>(f.imu_timestamp),
                 clock_step == ifssim_bridge::SimClockGate::Step::kNewSession),
             RCL_ROS_TIME);
 

@@ -50,6 +50,8 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The sim IMU now publishes like the car's.** `/imu` carries 400 distinct samples per sim second, each stamped with its own sim time, instead of one sample per ~60 Hz tick repeated about 7 times with +1 ns stamps. The accelerometer refreshes at 100 Hz and holds in between (uDV's ACC_CONF), readings are quantised and clamped to uDV's ±6 g / ±2000 °/s settings, white noise is per axis from raw BMI088 logs, and each session draws a turn-on gyro/accel offset that is not removed, as on the car. The sensor frame gains `imu_timestamp` (188 bytes): the plugin and the bridge must be updated together. `tools/scenario_runner/verify_determinism.py` pairs `/imu` with ground truth on the ticks where the two grids meet.
+
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
