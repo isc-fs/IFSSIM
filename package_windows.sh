@@ -166,6 +166,26 @@ else
     echo "    WARNING: \$LOCALAPPDATA not set — skipping UserSettingsDir copy"
 fi
 
+# 3c. build.json: what this build is, for the sim's updater (Settings,
+#     Updates): a newer published build is one published after this commit.
+#     commit_time in UTC; dirty when the tree had uncommitted changes.
+# git runs inside the repo: with path conversion off (above), -C "/c/..."
+# would reach the native git.exe as a path it can't read.
+BUILD_COMMIT="$(cd "$SCRIPT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_COMMIT_TIME="$(cd "$SCRIPT_DIR" && TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null || echo "")"
+BUILD_DIRTY=false
+if [ -n "$(cd "$SCRIPT_DIR" && git status --porcelain --untracked-files=no 2>/dev/null)" ]; then BUILD_DIRTY=true; fi
+cat > "$STAGED_DIR/build.json" <<EOF
+{
+  "version": "$PROJECT_VERSION",
+  "commit": "$BUILD_COMMIT",
+  "commit_time": "$BUILD_COMMIT_TIME",
+  "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "dirty": $BUILD_DIRTY
+}
+EOF
+echo "    build.json: $PROJECT_VERSION $BUILD_COMMIT ($BUILD_COMMIT_TIME, dirty=$BUILD_DIRTY)"
+
 # 4. Force absolute -project path + windowed + FPS cap in UECommandLine.txt.
 #    Same root cause as the macOS comment: UE's BuildCookRun composes a
 #    relative path that breaks the first time the engine and project

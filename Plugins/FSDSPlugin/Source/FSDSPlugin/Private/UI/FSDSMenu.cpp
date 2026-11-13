@@ -12,6 +12,7 @@
 #include "UI/FSDSTrackSpec.h"
 #include "UI/FSDSVenue.h"
 #include "UI/FSDSGraphics.h"
+#include "UI/FSDSUpdater.h"
 
 #include "Camera/CameraActor.h"
 #include "Dom/JsonObject.h"
@@ -141,6 +142,9 @@ void FFSDSMenu::Init(UWorld* InWorld, AFSDSReferee* InReferee, AFSDSVehiclePawn*
 	bShowOnFirstTick = true;
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &FFSDSMenu::Tick));
 	UE_LOG(LogTemp, Log, TEXT("FSDS Menu: on, %d tracks"), Tracks.Num());
+
+	// Settings, Updates, Bring the stack in step: rebuilds once the code moved.
+	FFSDSUpdater::Get().SetOnStackMoved([this]() { RebuildPipeline(); });
 }
 
 void FFSDSMenu::Shutdown()
@@ -154,6 +158,7 @@ void FFSDSMenu::Shutdown()
 	StopOrbit();
 	UpdateFrameCap();   // closed: back to the sim's own rate
 	Alive.Reset();      // replies still in flight find nothing to update
+	FFSDSUpdater::Get().SetOnStackMoved(nullptr);
 	bEnabled = false;
 }
 

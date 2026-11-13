@@ -163,26 +163,23 @@ the push-time CI still catches it. After a rebase:
 
 ## Release pipelines (per-platform)
 
-Three workflows produce shipping builds when a version tag is pushed.
-All run on **self-hosted runners** because UE 5.7 must be installed
-on the host.
+Builds reach the GitHub Release, where the sim's updater finds them, through
+one script, `tools/publish_build.sh stable|latest`. A person runs it by hand
+(docs/TEAM_SETUP.md, "Publishing a build"), and `package.yml` runs it on a
+runner that offered to build: on `v*` tags (Stable) and merges to `dev`
+(Latest). Linux runs first, on the bench PC, and creates the release, so
+every release has Linux; Windows and macOS are added after it.
 
-| Workflow | Runner label | Requirements | Local-dev script |
+| OS | Runner label | Requirements | Packaging script |
 |---|---|---|---|
-| `package-mac.yml` | `[self-hosted, macOS]` | UE 5.7 + Mac codesigning identity | `./package_mac.sh` |
-| `package-windows.yml` | `[self-hosted, Windows]` | UE 5.7 + Visual Studio 2022 | `bash package_windows.sh` |
-| `package-linux.yml` | `[self-hosted, Linux]` | UE 5.7 (built from source) | `./package_linux.sh` |
+| Windows | `ifssim-package-windows` | UE 5.8 + Visual Studio 2022, Git Bash | `bash package_windows.sh` |
+| macOS | `ifssim-package-mac` | UE 5.8 + Mac codesigning identity | `./package_mac.sh` |
+| Linux | `ifssim-package-linux` | UE 5.8 (built from source) | `./package_linux.sh` |
 
-Each runner needs `UE_ROOT` exported (e.g.
-`/Users/Shared/Epic Games/UE_5.7` on Mac,
-`C:\Program Files\Epic Games\UE_5.7` on Windows). Register at
-**Settings → Actions → Runners → New self-hosted runner**.
-
-**No self-hosted runners registered yet?** That's OK. The CI gate
-above runs on free GitHub-hosted runners and protects every PR. The
-release workflows just sit idle until a tag is pushed AND a runner
-is online; without runners, tag pushes won't produce release
-artefacts but won't break anything else.
+Register a runner with only its label: `--labels ifssim-package-<os>
+--no-default-labels` (docs/TEAM_SETUP.md). Set `UE_ROOT` (`UE5_ROOT` for
+Linux) in its env if the engine isn't in the default place. With no runner
+online, an OS's job waits and anyone can publish it by hand.
 
 ---
 
