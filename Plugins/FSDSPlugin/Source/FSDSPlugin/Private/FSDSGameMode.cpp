@@ -1,4 +1,8 @@
 #include "FSDSGameMode.h"
+#include "Rendering/FSDSQualityPreset.h"
+#include "FSDSRealTime.h"
+#include "UI/FSDSGraphics.h"
+#include "UI/FSDSPipelineView.h"
 #include "FSDSVehiclePawn.h"
 #include "FSDSSettings.h"
 #include "FSDSConeSpawner.h"
@@ -73,6 +77,9 @@ void AFSDSGameMode::StartPlay()
 			ConeSpawnerActor->SpawnedCones.Num());
 	}
 
+	// Rendering preset: -showcase on the command line (docs/rendering_presets.md).
+	FSDSQuality::ApplyCommandLine(GetWorld());
+
 	// Start RPC server (commands + sensor queries)
 	RpcServer.SetVehiclePawn(VehiclePawn);
 	RpcServer.SetReferee(RefereeActor);
@@ -117,15 +124,30 @@ void AFSDSGameMode::StartPlay()
 
 	// In-game Mission Control panel (toggle key, Tab by default). Drives the
 	// same backend as the web UI; off when there is no viewport.
-	Launcher.Init(GetWorld(), RefereeActor);
+	Launcher.Init(GetWorld(), RefereeActor, VehiclePawn);
+
+	// How fast the simulation runs against the real clock (the HUD, getSimStatus).
+	FFSDSRealTime::Get().Start(GetWorld(), VehiclePawn);
+
+	// How the view is drawn (Settings, Graphics): the saved choice.
+	FFSDSGraphics::Get().Init(GetWorld());
+	// What the pipeline sees, drawn over the track (the stack's viz_relay feeds it).
+	FFSDSPipelineView::Get().Init(GetWorld(), VehiclePawn);
 
 	// The HUD: the car's and the mission's state in a corner (H by default).
 	Hud.Init(GetWorld(), VehiclePawn, RefereeActor);
+
+	// The front-end menu the sim opens on; steps aside for RPC sessions.
+	Menu.Init(GetWorld(), RefereeActor, VehiclePawn, &RpcServer, &Launcher);
 }
 
 void AFSDSGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	Hud.Shutdown();
+	Menu.Shutdown();
+	FFSDSRealTime::Get().Stop();
+	FFSDSGraphics::Get().Shutdown();
+	FFSDSPipelineView::Get().Shutdown();
 	Launcher.Shutdown();
 
 	// Null pawn pointers before stopping threads to prevent dangling access

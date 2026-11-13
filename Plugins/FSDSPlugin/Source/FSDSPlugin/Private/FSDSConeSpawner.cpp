@@ -3,6 +3,7 @@
 #include "FSDSRandom.h"
 #include "FSDSSettings.h"
 #include "Environment/FSDSEnvironmentBuilder.h"
+#include "Environment/FSDSWorldActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -363,15 +364,47 @@ void AFSDSConeSpawner::LoadEnvironmentSidecar()
 {
 	Environment = FFSDSEnvironment();
 	EnvironmentError.Reset();
+	TrackWorld = FFSDSWorld();
+	TrackWorldOrigin = FVector2D::ZeroVector;
+	WorldStatus = TEXT("none");
+	WorldError.Reset();
 
 	const FString Sidecar = FSDSEnvironment::SidecarPathFor(CSVFilePath);
 	const bool bExists = FPaths::FileExists(Sidecar);
 	if (!FFSDSSettings::Get().bEnvironmentEnabled)
 	{
+		// A venue's track loads its surroundings anyway: the place is why it
+		// was picked (docs/venues.md). envgen.venue writes them with the
+		// profile "venue_<venue>", which nothing else uses. Every other
+		// sidecar waits for Environment.Enabled, so the flat world stays the
+		// regression baseline.
+		if (bExists && FSDSEnvironment::Load(Sidecar, Environment, EnvironmentError)
+			&& Environment.Profile.StartsWith(TEXT("venue_")))
+		{
+			EnvironmentStatus = TEXT("loaded");
+			UE_LOG(LogTemp, Log, TEXT("FSDS Environment: loaded %s (a venue, %s: %d props) with Environment.Enabled false"),
+				*Sidecar, *Environment.Profile, Environment.Props.Num());
+			return;
+		}
+		Environment = FFSDSEnvironment();
+		EnvironmentError.Reset();
 		EnvironmentStatus = TEXT("off");
 		if (bExists)
 		{
-			UE_LOG(LogTemp, Log, TEXT("FSDS Environment: ignoring %s (Environment.Enabled is false)"), *Sidecar);
+			// The props stay off, but the place the track is in still loads.
+			FFSDSEnvironment ForWorld;
+			FString Err;
+			if (!FSDSEnvironment::Load(Sidecar, ForWorld, Err))
+			{
+				WorldStatus = TEXT("invalid");
+				WorldError = Err;
+				UE_LOG(LogTemp, Error, TEXT("FSDS World: %s is invalid: %s. Running without a world."), *Sidecar, *Err);
+			}
+			else if (ForWorld.bHasWorld)
+			{
+				LoadWorld(ForWorld);
+			}
+			UE_LOG(LogTemp, Log, TEXT("FSDS Environment: ignoring the props in %s (Environment.Enabled is false)"), *Sidecar);
 		}
 		return;
 	}
@@ -387,6 +420,7 @@ void AFSDSConeSpawner::LoadEnvironmentSidecar()
 		UE_LOG(LogTemp, Log, TEXT("FSDS Environment: loaded %s (profile %s, seed %lld, %d props, ground %s)"),
 			*Sidecar, *Environment.Profile, Environment.Seed, Environment.Props.Num(),
 			Environment.bHasGroundExtent ? TEXT("set") : TEXT("not set"));
+		if (Environment.bHasWorld) LoadWorld(Environment);
 	}
 	else
 	{
@@ -398,12 +432,48 @@ void AFSDSConeSpawner::LoadEnvironmentSidecar()
 	}
 }
 
+void AFSDSConeSpawner::LoadWorld(const FFSDSEnvironment& Env)
+{
+	const FString Dir = FSDSWorld::DirFor(CSVFilePath, Env.WorldName);
+	if (FSDSWorld::Load(Dir, TrackWorld, WorldError))
+	{
+		WorldStatus = TEXT("loaded");
+		TrackWorldOrigin = FVector2D(Env.WorldX, Env.WorldY);
+		UE_LOG(LogTemp, Log, TEXT("FSDS World: loaded %s (%s), %dx%d terrain, origin at (%.2f, %.2f)"),
+			*Dir, *TrackWorld.Title, TrackWorld.Nx, TrackWorld.Ny, Env.WorldX, Env.WorldY);
+	}
+	else
+	{
+		WorldStatus = TEXT("invalid");
+		TrackWorld = FFSDSWorld();
+		UE_LOG(LogTemp, Error, TEXT("FSDS World: %s did not load: %s. Running without a world."), *Dir, *WorldError);
+	}
+}
+
 void AFSDSConeSpawner::BuildEnvironment()
 {
+	// The world first: it is the ground the props and cones are placed on.
+	if (WorldStatus == TEXT("loaded"))
+	{
+		if (!WorldActor)
+		{
+			FActorSpawnParameters SpawnParams;
+			SpawnParams.Name = TEXT("FSDSWorld");
+			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			WorldActor = GetWorld()->SpawnActor<AFSDSWorldActor>(
+				AFSDSWorldActor::StaticClass(), FTransform::Identity, SpawnParams);
+		}
+		if (WorldActor) WorldActor->Build(TrackWorld, TrackWorldOrigin);
+	}
+	else if (WorldActor)
+	{
+		WorldActor->Clear();
+	}
+
 	if (EnvironmentStatus != TEXT("loaded"))
 	{
 		// Off, no sidecar, or an invalid one: no props, including the last
-		// track's. With Environment.Enabled off nothing is ever created.
+		// track's. With Environment.Enabled off only a venue's track builds any.
 		if (EnvironmentActor) EnvironmentActor->Clear();
 		return;
 	}

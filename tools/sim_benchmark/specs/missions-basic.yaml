@@ -1,0 +1,11 @@
+# The basic complete benchmark: every mission once, from the nominal start pose
+# (acceleration, skidpad, and autocross and trackdrive on their tracks).
+# The sim and Mission Control must be running.
+#   python3 tools/sim_benchmark/run_spec.py missions-basic
+schema: 1
+name: missions, basic
+benchmarks:
+  missions:
+    repeats: 1
+    settings:
+      missions: all

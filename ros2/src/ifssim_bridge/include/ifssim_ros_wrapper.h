@@ -17,11 +17,13 @@
 #include <fs_msgs/msg/extra_info.hpp>
 #include <fs_msgs/srv/reset.hpp>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 
 #include "lws_steering_sensor.h"
 #include "sim_clock_gate.h"
+#include "sim_rate_gate.h"
 #include "stamp_guard.h"
 #include "tcp_client.h"
 #include "udp_receiver.h"  // For frame struct definitions
@@ -105,6 +107,7 @@ private:
     void controlCommandCb(const fs_msgs::msg::ControlCommand::SharedPtr msg);
     void ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg);
     void ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg);
+    void assiStateCb(const std_msgs::msg::UInt8::SharedPtr msg);
     void resetSrvCb(
         const std::shared_ptr<fs_msgs::srv::Reset::Request> request,
         std::shared_ptr<fs_msgs::srv::Reset::Response> response);
@@ -191,6 +194,14 @@ private:
     // Which sim stamps go out on /clock (#611). Touched only by the sensor
     // thread, in onSensorFrame.
     ifssim_bridge::SimClockGate clock_gate_;
+    // The latest sim stamp, for the wall-timer topics' rate gates (the
+    // stream thread writes it, the executor reads it; clock_gate_ is the
+    // stream thread's own). 0 until the first sensor frame.
+    std::atomic<int64_t> sim_now_ns_{0};
+    // The LWS steering topics (100 Hz) and tyre loads (20 Hz) at their rate in sim
+    // time, so slow motion doesn't repeat them (sim_rate_gate.h).
+    ifssim_bridge::SimRateGate lws_rate_gate_{10'000'000};
+    ifssim_bridge::SimRateGate tire_loads_rate_gate_{50'000'000};
     // Set by triggerReconnect when the sensor stream is reopened, consumed
     // by the first frame on the new stream.
     std::atomic<bool> sensor_stream_reconnected_{false};
@@ -278,6 +289,14 @@ private:
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_request_sub_;
     rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr ebs_reset_sub_;
     bool ebs_triggered_ = false;
+
+    // /assi/state (sim_supervisor) drives the start lights of a world's
+    // start gantry (docs/worlds.md): on at AS_READY, out at GO (AS_DRIVING)
+    // and in every other state. Sent on change, and again every few seconds
+    // so a restarted sim picks the state up; the plugin ignores repeats.
+    rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr assi_state_sub_;
+    int start_lights_sent_ = -1;   // -1: never sent
+    rclcpp::Time start_lights_sent_at_{0, 0, RCL_ROS_TIME};
     rclcpp::Service<fs_msgs::srv::Reset>::SharedPtr reset_srv_;
 
     // TF
@@ -320,7 +339,7 @@ private:
     Vec3 querySensorOffset(const std::string& name);
 
     // Per-sensor publish rates (divisors of the 400Hz sensor stream):
-    //   IMU  → publish every frame    (400 Hz)
+    //   IMU  → every frame that carries a sample (imu_timestamp != 0, 400 Hz)
     //   GSS / TF / Odom → every 4    (100 Hz)
     //   GPS  → every 40              ( 10 Hz)
     uint64_t sensor_frame_count_ = 0;

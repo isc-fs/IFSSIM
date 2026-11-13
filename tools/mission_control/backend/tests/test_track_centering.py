@@ -42,3 +42,46 @@ def test_no_sidecar_or_a_broken_one(tmp_path):
     bad.write_text("{not json")
     assert not shift_sidecar(str(bad), 1.0, 1.0)
     assert bad.read_text() == "{not json"
+
+
+def test_recentring_moves_the_world_origin(tmp_path):
+    csv = tmp_path / "t.csv"
+    csv.write_text(CSV)
+    (tmp_path / "t.env.json").write_text(json.dumps(
+        {"format": "ifssim-env/1", "seed": 0, "profile": "world_m", "world": {"name": "m", "x": 0.0, "y": 0.0}}))
+    assert ensure_centered(str(csv))
+    env = json.loads((tmp_path / "t.env.json").read_text())
+    assert env["world"] == {"name": "m", "x": -20.0, "y": -2.0}
+
+
+# customMap's floor reaches about 100 m from the origin each way (the track editors'
+# safe square, envgen's floor rule).
+FLOOR_HALF_M = 100.0
+
+
+def _builtin_tracks():
+    """main.BUILTIN_TRACKS, read from the source: main imports ROS."""
+    import ast
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parents[1]
+    for node in ast.parse((here / "main.py").read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", None) == "BUILTIN_TRACKS" for t in node.targets
+        ):
+            return list(ast.literal_eval(node.value))
+    raise AssertionError("main.py has no BUILTIN_TRACKS")
+
+
+def test_builtin_tracks_fit_the_floor_as_they_are():
+    """Loading leaves built-in tracks uncentred (they're under version control), so
+    each must fit the floor where it stands."""
+    from pathlib import Path
+
+    tracks = Path(__file__).resolve().parents[4] / "Content" / "tracks"
+    names = _builtin_tracks()
+    assert "characterisation.csv" in names
+    for name in names:
+        rows = [line.split(",") for line in (tracks / name).read_text().splitlines() if line.strip()]
+        far = max(max(abs(float(r[1])), abs(float(r[2]))) for r in rows if len(r) >= 3)
+        assert far <= FLOOR_HALF_M, f"{name}: a cone {far:.0f} m from the origin, off the floor"

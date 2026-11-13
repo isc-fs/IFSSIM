@@ -86,6 +86,24 @@ class SidecarTest(unittest.TestCase):
                 errors = self.check(doc)
                 self.assertTrue(any(expected in e for e in errors), f"{what}: {errors}")
 
+    def test_world_reference(self):
+        base = {"format": "ifssim-env/1", "seed": 0, "profile": "world_x"}
+        shipped = REPO / "Content" / "tracks" / "worlds" / "montmelo_straight"
+        if shipped.is_dir():
+            import shutil
+            shutil.copytree(shipped, self.root / "worlds" / "montmelo_straight")
+            self.assertEqual(self.check({**base, "world": {"name": "montmelo_straight", "x": -41.0, "y": 0.0}}), [])
+        cases = [
+            ("missing world", {"name": "nowhere", "x": 0, "y": 0}, "no world at"),
+            ("bad name", {"name": "../x", "x": 0, "y": 0}, "'name'"),
+            ("misspelt key", {"name": "nowhere", "x": 0, "y": 0, "yaw": 1}, "unknown key 'yaw'"),
+            ("coordinate in cm", {"name": "nowhere", "x": 5000, "y": 0}, "cm instead of m"),
+        ]
+        for what, ref, expected in cases:
+            with self.subTest(what):
+                errors = self.check({**base, "world": ref})
+                self.assertTrue(any(expected in e for e in errors), f"{what}: {errors}")
+
     def test_sidecar_needs_its_track(self):
         errors = self.check(VALID, name="orphan.env.json")
         self.assertTrue(any("no track next to it (orphan.csv)" in e for e in errors), errors)

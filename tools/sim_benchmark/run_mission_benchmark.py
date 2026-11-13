@@ -9,7 +9,7 @@ For each mission, track and repeat (in that order), one run:
   3. optionally move the car off the start gate by a seeded random offset (``start_pose.noise``);
   4. start the mission the way the operator panel does (``/api/event/start``: arm, wait for the
      pipeline to be ready, the EKF's calibration window with the brake held, go);
-  5. follow the referee (``/api/event/state``) until it says finished, or the timeout;
+  5. follow the referee (``/api/event/state``) until it says finished, the car goes to AS Emergency, or the timeout;
   6. write the run: ``<results>/mission/<mission>_<track>/<code>/seed<k>/`` with ``manifest.json``
      (code, scenario, referee state), ``results.json`` (race metrics), ``laps.csv``,
      ``events.csv``, a coarse ``telemetry.csv`` (the layout bench-view's Sim pages read) and
@@ -91,12 +91,28 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+# FS-Rules T14.9 AS state bytes on /assi/state, and the pipeline's /dv/status
+# DV_EMERGENCY (mission_control.interface_contract). Mission Control reports
+# both in /api/event/state as as_state / dv_status.
+AS_EMERGENCY, AS_DRIVING = 1, 3
+DV_EMERGENCY = 5
 MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
 # finish. This many times timeout_s of real time still ends the run, in case the sim
 # stalls and its clock stops.
 WALL_BACKSTOP = 6.0
+# A run's real-time factor (sim seconds per real second) below this marks its
+# timing results as not holding: every frame is a fixed 1/60 s of sim time, so a
+# slower sim gives the pipeline more time per sim second than it has on the car.
+# The sim's HUD shows the same threshold (FFSDSRealTime::GoodFactor).
+REAL_TIME_OK = 0.95
+# --speed-factor runs the pipeline's sessions in slow motion (the sim's
+# setSpeedFactor, docs/sim_timing.md): 1 is real time, 0.25 gives the
+# pipeline four times its real time per sim second, for comparing algorithms
+# without the PC's speed in the result. real_time_ok is then judged against
+# that speed.
+MIN_SPEED_FACTOR = 0.05
 
 
 class BenchmarkError(Exception):
@@ -216,6 +232,21 @@ class Sim:
         except ValueError:
             return {}
         return out if isinstance(out, dict) else {}
+
+    def speed_factor(self) -> float | None:
+        """The speed set for while the pipeline drives (1 real time), or None (an older build)."""
+        try:
+            f = self.json("getSimStatus").get("speed_factor")
+        except BenchmarkError:
+            return None
+        return float(f) if isinstance(f, (int, float)) and not isinstance(f, bool) else None
+
+    def set_speed_factor(self, speed: float) -> None:
+        reply = self.json(f"setSpeedFactor {speed:g}")
+        if not reply.get("ok"):
+            raise BenchmarkError(
+                f"the sim refused setSpeedFactor {speed:g} ({reply.get('error') or 'an older build?'})"
+            )
 
     def sim_time(self) -> float | None:
         """The sim's game clock in seconds, or None (a build that doesn't report it, or no answer)."""
@@ -484,6 +515,7 @@ class Stack:
     started: bool = False
     tmp: Path | None = None
     log_file: Path | None = None
+    work_dir: Path | None = None  # where the pipeline copy goes (the results root; None: /tmp)
 
     def check(self) -> None:
         if self.mode not in ("own", "running"):
@@ -500,7 +532,7 @@ class Stack:
             )
         if self.overrides:  # before anything starts: a typo fails the job here
             _, self.changed = merged_params(
-                self.checkout / "pipeline" / PARAMS, self.overrides
+                pipeline_dir(self.checkout) / PARAMS, self.overrides
             )
 
     def up(self, log, wait_s: float = STACK_UP_TIMEOUT_S, poll_s: float = 5.0) -> None:
@@ -557,11 +589,17 @@ class Stack:
                 f"{var}={os.environ.get(var, '2')}",
             ]  # as docker-compose.yml (#247)
         if self.where == "bench_pc":
-            # a copy of this checkout's pipeline: the container builds into it, never into the checkout
-            self.tmp = Path(tempfile.mkdtemp(prefix="bench-dv-stack-"))
+            # a copy of this checkout's pipeline: the container builds into it, never into the checkout.
+            # It sits next to the results, not in /tmp: snap's Docker has a /tmp of its own and
+            # mounts a host /tmp folder as an empty one, so the stack built nothing (#837).
+            if self.work_dir is not None:
+                self.work_dir.mkdir(parents=True, exist_ok=True)
+            self.tmp = Path(
+                tempfile.mkdtemp(prefix="bench-dv-stack-", dir=self.work_dir)
+            )
             src = self.tmp / "pipeline"
             shutil.copytree(
-                self.checkout / "pipeline", src, ignore=shutil.ignore_patterns(".git")
+                pipeline_dir(self.checkout), src, ignore=shutil.ignore_patterns(".git")
             )
             if self.overrides:
                 text, self.changed = merged_params(src / PARAMS, self.overrides)
@@ -584,6 +622,11 @@ class Stack:
         else:  # the latte panda runs the pipeline: here only the sim bridge
             launch = (
                 f"source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && "
+                # the image's entrypoint adds these ament_cmake packages, and
+                # --entrypoint bash skips it: without them ros2 launch can't
+                # find ifssim_bridge
+                f"export AMENT_PREFIX_PATH={WS}/install/fs_msgs:{WS}/install/ifssim_bridge:"
+                f"{WS}/install/dv_msgs:$AMENT_PREFIX_PATH && "
                 f"exec ros2 launch {WS}/bridge.launch.py host:={SIM_HOST} port:={self.sim_port}"
             )
             run += ["--entrypoint", "bash", self.image, "-c", launch]
@@ -701,7 +744,7 @@ def offset_pose(gate: dict, pose: dict, seed: int) -> tuple[dict, dict]:
 @dataclass
 class RunResult:
     run: PlannedRun
-    outcome: str  # finished | timeout | error
+    outcome: str  # finished | emergency | timeout | error
     started: datetime
     seconds: float
     referee: dict = field(default_factory=dict)
@@ -710,6 +753,8 @@ class RunResult:
     telemetry: list[dict] = field(default_factory=list)
     sim_seconds: float | None = None  # the run's length in sim time, when the sim reports it
     sim_start: float | None = None  # the sim clock when the run began (doo events are stamped on it)
+    speed_factor: float | None = None  # the sim's speed while the pipeline drove, when it reports it
+    emergency_at: float | None = None  # seconds into the run (sim time when reported) the car went to AS Emergency
 
 
 class Progress:
@@ -790,6 +835,11 @@ def run_one(
     ref: dict = {}
     telemetry: list[dict] = []
     outcome = "timeout"
+    emergency_at: float | None = None
+    # AS Emergency only counts once this run has been seen driving: the AS
+    # state latches, so a value left over from the previous run must not end
+    # this one. DV_EMERGENCY comes from the running pipeline's own heartbeat.
+    seen_driving = False
     limit = float(m["timeout_s"])
     sim_now = sim0
 
@@ -821,6 +871,18 @@ def run_one(
         if ref.get("finished"):
             outcome = "finished"
             break
+        as_state, dv_status = ref.get("as_state"), ref.get("dv_status")
+        seen_driving = seen_driving or as_state == AS_DRIVING
+        if dv_status == DV_EMERGENCY or (seen_driving and as_state == AS_EMERGENCY):
+            # EBS fired: the car stays stopped, so waiting out timeout_s
+            # (2400 s for trackdrive) only burns the bench's time.
+            outcome = "emergency"
+            emergency_at = round(elapsed(), 2)
+            log(
+                f"{where}: AS Emergency {emergency_at:.1f} s in "
+                f"(/assi/state {as_state}, /dv/status {dv_status}), ending the run"
+            )
+            break
         time.sleep(poll_s)
         if sim0 is not None:
             sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
@@ -835,6 +897,7 @@ def run_one(
         telemetry=telemetry,
         sim_seconds=None if sim0 is None else sim_now - sim0,
         sim_start=sim0,
+        emergency_at=emergency_at,
     )
 
 
@@ -888,9 +951,19 @@ def race_metrics(res: RunResult) -> dict[str, float]:
         "race/n_off_track": oc,
         "race/penalty_s": doo * DOO_PENALTY_S + oc * OC_PENALTY_S,
         "race/run_time_s": res.seconds,
+        "race/emergency": 1 if res.outcome == "emergency" else 0,
     }
+    if res.emergency_at is not None:
+        out["race/emergency_at_s"] = res.emergency_at
     if res.sim_seconds is not None:
         out["race/run_sim_time_s"] = res.sim_seconds
+        if res.seconds > 0:
+            factor = res.sim_seconds / res.seconds
+            target = res.speed_factor or 1.0
+            out["race/real_time_factor"] = round(factor, 3)
+            out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
+    if res.speed_factor is not None:
+        out["race/speed_factor"] = res.speed_factor
     if laps:
         out |= {
             "race/lap_time_best_s": min(laps),
@@ -920,6 +993,13 @@ def _write_csv(path: Path, rows: list[dict], cols: list[str]) -> None:
         w.writerows(rows)
 
 
+def pipeline_dir(checkout: Path) -> Path:
+    """The pipeline this run uses: run_spec.py's worktree of the spec's code.pipeline
+    ($BENCH_PIPELINE_DIR), else the checkout's pipeline/ submodule."""
+    p = os.environ.get("BENCH_PIPELINE_DIR", "").strip()
+    return Path(p) if p else checkout / "pipeline"
+
+
 def code_state(
     host: PipelineHost, stack: Stack | None = None, repo: Path = REPO
 ) -> dict[str, Any]:
@@ -929,11 +1009,9 @@ def code_state(
         )
         return r.stdout.strip() if r.returncode == 0 else None
 
-    sub = (
-        git("-C", "pipeline", "rev-parse", "--short", "HEAD")
-        if (repo / "pipeline").exists()
-        else None
-    )
+    pdir = pipeline_dir(repo)
+    chosen = pdir != repo / "pipeline"  # the spec's code.pipeline (run_spec.py's worktree)
+    sub = git("-C", str(pdir), "rev-parse", "--short", "HEAD") if pdir.exists() else None
     own = stack is not None and stack.mode == "own" and host.where == "bench_pc"
     if host.where == "latte_panda":
         pipe_sha = host.sha[:7] if host.sha else "unknown"
@@ -943,7 +1021,9 @@ def code_state(
     elif own:
         pipe_sha, source = (
             sub or "unknown",
-            "this checkout, run in the benchmark's own stack",
+            "the spec's code.pipeline, run in the benchmark's own stack"
+            if chosen
+            else "this checkout, run in the benchmark's own stack",
         )
     else:
         pipe_sha = sub or "unknown"
@@ -957,7 +1037,7 @@ def code_state(
         "pipeline": {
             "sha": pipe_sha,
             "branch": "",
-            "dirty": bool(git("-C", "pipeline", "status", "--porcelain"))
+            "dirty": bool(git("-C", str(pdir), "status", "--porcelain"))
             if own
             else False,
             # where it ran, and how sure the sha is (see the module docstring)
@@ -1013,6 +1093,7 @@ def write_run(
             "EventType": ref.get("event") or r.mission,
         },
         "outcome": res.outcome,
+        "emergency_at_s": res.emergency_at,
         "error": res.error,
         "settings": m,
     }
@@ -1029,7 +1110,12 @@ def write_run(
             {
                 "kind": "dnf",
                 "t": round(res.seconds, 1),
-                "detail": res.error or res.outcome,
+                "detail": res.error
+                or (
+                    f"emergency at {res.emergency_at:.1f} s"
+                    if res.emergency_at is not None
+                    else res.outcome
+                ),
             }
         ]
         if res.outcome != "finished"
@@ -1100,6 +1186,7 @@ def run(
         int(args.sim.rsplit(":", 1)[1]),
         pipeline_overrides,
         args.replace_stack,
+        work_dir=Path(args.results_root).resolve(),
     )
     stack.check()
     sim = sim or Sim(*(args.sim.rsplit(":", 1)[0], int(args.sim.rsplit(":", 1)[1])))
@@ -1111,6 +1198,14 @@ def run(
         )
     runs = plan(missions)
     log(f"{len(runs)} run(s); pipeline on {host.where}")
+    speed_was = sim.speed_factor()
+    speed_req = getattr(args, "speed_factor", None)
+    if speed_req is not None:
+        if not MIN_SPEED_FACTOR <= speed_req <= 1.0:
+            raise BenchmarkError(f"--speed-factor must be in [{MIN_SPEED_FACTOR}, 1], not {speed_req}")
+        sim.set_speed_factor(speed_req)
+        log("real time" if speed_req >= 1.0 else f"slow motion: the sim runs at {speed_req:g}x real time")
+    speed = speed_req if speed_req is not None else speed_was
     progress = Progress(runs)
     results = Path(args.results_root)
     code = code_state(host, stack, stack.checkout)
@@ -1129,6 +1224,7 @@ def run(
                 res = RunResult(
                     r, "error", datetime.now(timezone.utc), 0.0, error=str(e)
                 )
+            res.speed_factor = speed
             d = write_run(results, res, code, stack.changed)
             laps = res.referee.get("lap_times") or []
             log(
@@ -1139,6 +1235,11 @@ def run(
             )
             worst = max(worst, 0 if res.outcome == "finished" else 1)
     finally:
+        if speed_req is not None and speed_req != (speed_was or 1.0):
+            try:
+                sim.set_speed_factor(speed_was or 1.0)   # as it was before the benchmark
+            except BenchmarkError as e:
+                log(f"warning: {e}")
         host.down(log)
         stack.down(log, results / "mission")
     return worst
@@ -1181,6 +1282,12 @@ def main(argv: list[str] | None = None) -> int:
         "--panda-sha", help="command that prints the pipeline commit on the latte panda"
     )
     ap.add_argument("--sim", default="127.0.0.1:41451", help="the sim's RPC host:port")
+    ap.add_argument(
+        "--speed-factor",
+        type=float,
+        help="run the sessions in slow motion: 0.5, 0.25, 0.1 (default: the sim's own, real time). "
+        "For comparing algorithms without the PC's speed in the result",
+    )
     ap.add_argument(
         "--mc-url",
         default=MC_URL,

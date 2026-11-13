@@ -390,6 +390,10 @@ void IFSSIMRosWrapper::initializeSubscribers()
         "signal/ebs", ebs_qos,
         std::bind(&IFSSIMRosWrapper::ebsRequestCb, this, std::placeholders::_1));
 
+    assi_state_sub_ = node_->create_subscription<std_msgs::msg::UInt8>(
+        "/assi/state", 10,
+        std::bind(&IFSSIMRosWrapper::assiStateCb, this, std::placeholders::_1));
+
     // /signal/ebs_reset — explicit release of the EBS latch. Without this
     // the bridge's `ebs_triggered_` had no way to flip back to false after
     // a session ended with the autonomous-stop logic firing — every
@@ -880,6 +884,7 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     const bool first_on_new_stream = sensor_stream_reconnected_.exchange(false);
     const int64_t previous_clock_ns = clock_gate_.mark_ns();
     const auto clock_step = clock_gate_.update(now.nanoseconds(), first_on_new_stream);
+    sim_now_ns_.store(clock_gate_.mark_ns(), std::memory_order_relaxed);
     if (clock_step == ifssim_bridge::SimClockGate::Step::kNewSession) {
         // The command client may still hold the old sim's socket: the stream
         // threads reconnect it only if it already looked broken when they
@@ -923,15 +928,21 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
         gps_pub_->publish(msg);
     }
 
-    // IMU
+    // IMU — one sample per frame on the 400 Hz stream, stamped with the
+    // sample's own sim time (imu_timestamp). The plugin's IMU emits the 400 Hz
+    // grid of sim time inside each ~60 Hz tick; before, it sent one sample per
+    // tick and this topic repeated it ~6.7 times with +1 ns stamps. A frame
+    // with imu_timestamp 0 carries no new sample, so /imu is not published.
+    if (f.imu_timestamp != 0)
     {
         // Monotonic guard — see imu_stamp_guard_ in the header. GLIM rejects
-        // any IMU sample whose stamp ≤ the previously-accepted one, so a
-        // repeated tick stamp is bumped by 1 ns. A new sim session restarts
-        // the sequence instead of staying pinned to the old one.
+        // any IMU sample whose stamp ≤ the previously-accepted one; with one
+        // stamp per sample this should no longer fire, but a repeat is still
+        // bumped by 1 ns rather than dropped. A new sim session restarts the
+        // sequence instead of staying pinned to the old one.
         const rclcpp::Time imu_stamp(
             imu_stamp_guard_.next(
-                now.nanoseconds(),
+                static_cast<int64_t>(f.imu_timestamp),
                 clock_step == ifssim_bridge::SimClockGate::Step::kNewSession),
             RCL_ROS_TIME);
 
@@ -1235,6 +1246,9 @@ void IFSSIMRosWrapper::lwsPublishTimerCb()
     // bit-consistent — a downstream EKF that uses both can't get them
     // out of sync. See #462.
     if (!lws_sensor_) return;
+    // 100 Hz of sim time: in slow motion the wall timer fires more often
+    // than that per sim second (sim_rate_gate.h).
+    if (!lws_rate_gate_.due(sim_now_ns_.load(std::memory_order_relaxed))) return;
     const double cmd_road_rad =
         latest_steering_cmd_rad_.load(std::memory_order_relaxed);
     const double cmd_sw_rad = cmd_road_rad * steering_ratio_;
@@ -1259,6 +1273,8 @@ void IFSSIMRosWrapper::tireLoadsTimerCb()
     // index by name not by position, but they should know the order from
     // the dim label too.
     if (!client_ || !client_->isConnected()) return;
+    // 20 Hz of sim time, as above.
+    if (!tire_loads_rate_gate_.due(sim_now_ns_.load(std::memory_order_relaxed))) return;
     std::string resp = client_->sendCommand("getTireLoads truth");
     if (resp.empty() || resp.find("\"error\"") != std::string::npos) return;
 
@@ -1467,6 +1483,30 @@ void IFSSIMRosWrapper::ebsRequestCb(const std_msgs::msg::Empty::SharedPtr msg)
     // locks all input channels and clamps handbrake=true.
     client_->sendCommand("activateEbs");
     RCLCPP_INFO(node_->get_logger(), "EBS engaged — handbrake latched, all inputs locked");
+}
+
+void IFSSIMRosWrapper::assiStateCb(const std_msgs::msg::UInt8::SharedPtr msg)
+{
+    // AS byte values: mission_control.interface_contract (AS_READY = 2).
+    constexpr uint8_t kAsReady = 2;
+    if (!client_ || !client_->isConnected()) return;
+    const int on = msg->data == kAsReady ? 1 : 0;
+    const rclcpp::Time now = node_->now();
+    // Sim time restarts with the sim, so a step backwards also counts as stale.
+    bool stale = start_lights_sent_at_.nanoseconds() == 0 ||
+        now.get_clock_type() != start_lights_sent_at_.get_clock_type();
+    if (!stale) {
+        const double dt = (now - start_lights_sent_at_).seconds();
+        stale = dt > 5.0 || dt < 0.0;
+    }
+    if (on == start_lights_sent_ && !stale) return;
+    const std::string reply = client_->sendCommand(on ? "setStartLights 1" : "setStartLights 0");
+    if (on != start_lights_sent_) {
+        RCLCPP_INFO(node_->get_logger(), "Start lights %s (AS state %u): %s",
+            on ? "on" : "out", msg->data, reply.c_str());
+    }
+    start_lights_sent_ = on;
+    start_lights_sent_at_ = now;
 }
 
 void IFSSIMRosWrapper::ebsResetCb(const std_msgs::msg::Empty::SharedPtr msg)

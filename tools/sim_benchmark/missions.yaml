@@ -14,6 +14,8 @@
 #
 # The timeouts are guesses until the rig has measured runs (at the pipeline's default speed).
 
+# Runs on the real Circuit de Barcelona-Catalunya main straight: acceleration.csv's
+# sidecar loads the Montmeló world (docs/worlds.md).
 acceleration:
   mc_name: accel
   tracks: [acceleration.csv]

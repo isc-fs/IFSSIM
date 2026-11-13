@@ -5,7 +5,7 @@ A track's cones live in `<track>.csv`. Everything around them lives in a sidecar
 The roadmap's design rules shape the file:
 
 - **Generated, not drawn (rule 3).** A generator (`tools/envgen`) turns a seed and a profile into the sidecar. The plugin only instantiates what the file says and draws no randomness of its own. A world is reproduced exactly by its file.
-- **Opt-in (rule 5).** Nothing is loaded unless `settings.json` has `"Environment": { "Enabled": true }`. The default is `false`, so the flat world stays the regression baseline, and while it is off a sidecar next to a track is ignored.
+- **Opt-in (rule 5).** Nothing is loaded unless `settings.json` has `"Environment": { "Enabled": true }`. The default is `false`, so the flat world stays the regression baseline, and while it is off a sidecar next to a track is ignored. The one exception is a venue's track (profile `venue_<venue>`, written by `envgen.venue`), which loads its sidecar either way ([venues.md](venues.md)).
 - **Loaded with the track, before its cones (rule 4).** This happens both for the track the sim boots with and for `loadTrack`.
 
 ## Format v1
@@ -30,6 +30,7 @@ The roadmap's design rules shape the file:
 | `profile` | yes | The generator's profile name, for example `flat_baseline` or `stress`. |
 | `ground.extent` | no | The ground the generator laid out: `x_min`, `y_min`, `x_max`, `y_max` in metres, with min below max. |
 | `props` | no | One entry per prop. `class` is a non-empty string; `x` and `y` are in metres; `yaw_deg` is optional (default 0). |
+| `world` | no | A real place to build around the track: `name` (letters, digits, `_`) is a folder in `Content/tracks/worlds/`, and `x`, `y` is where the world's origin sits in this frame, in metres. See [worlds.md](worlds.md). A world loads even with `Environment.Enabled` off; only the props follow that switch. |
 
 ### Prop classes
 
@@ -42,6 +43,8 @@ The plugin builds each class from its real mesh when one is installed, and other
 | `tripod` | a timekeeping light barrier on three thin legs | 0.5 m leg radius, 1.15 m tall |
 | `tyre_wall` | four stacks of tyres in a row, along `yaw_deg` | 2.4 × 0.6 m, 0.6 m tall |
 | `cone_stack` | four spare small cones nested, about as tall as a big orange cone | Ø 0.23 m, 0.50 m tall |
+
+Venues add `tree`, `lamp_post`, `parked_car`, `bench`, `sidewalk` (LiDAR-only) and `berm`: see [venues.md](venues.md).
 
 ## Generating one
 

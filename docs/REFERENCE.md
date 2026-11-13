@@ -195,10 +195,10 @@ Regen torque is gated by the **battery cell-input current limit**, not by the mo
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Max regen power | 6,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
+| Max regen power | 11,000 | W | `MaxRegenPower` (settings.json) → `Motor->P.MaxRegenPowerW` |
 | Max regen torque | 230 | Nm | `MaxRegenTorque` (settings.json) → `Motor->P.MaxRegenTorqueNm` |
 
-At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=6000` yields ~8.8 Nm of available regen — the power cap binds at all but the lowest speeds.
+At 6,500 RPM (≈680 rad/s), `MaxRegenPowerW=11000` yields ~16 Nm of available regen — the power cap binds above ~460 RPM (≈2.3 m/s). 11 kW is the pack's charge limit: 95s6p Sony VTC6 cells at their 5 A maximum continuous charge, 30 A at ~370 V (it was 6 kW, about their 3 A standard charge).
 
 The implementation includes a **single-quadrant regen guard**: regen torque is forced to zero whenever the wheel isn't rotating forward. Asking for regen at `ω ≤ 0` would (a) be electrically unsafe on the real inverter, and (b) produce reverse motor torque on a stationary wheel — driving the car backward from rest, which the real IFS-08 controller cannot do.
 
@@ -315,18 +315,25 @@ intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
 
 ### 4.2 IMU
 
-**Implementation:** `FSDSImuSensor` — 6-DOF inertial measurement in body frame, parameterised for a **BMI088** (the unit on the real IFS-08).
+**Implementation:** `FSDSImuSensor` — 6-DOF inertial measurement in body frame, modelled on the **BMI088** as the car's uDV reads and publishes it.
+
+**Sample stream.** The uDV reads the IMU at 400 Hz on a hardware timer; the sim ticks at ~60 Hz. Each tick the sensor emits every 2.5 ms slot of sim time that fell inside it, with the plant's truth interpolated between the previous tick and this one and an independent noise draw per sample. The TCP sensor stream sends one frame per sample, and the bridge stamps `/imu` with the sample's own sim time (`imu_timestamp`), so `/imu` is 400 distinct samples per sim second. The accelerometer refreshes at `AccelOdrHz` (100 Hz, uDV's ACC_CONF 0xA8) and holds its value in between, so each accel value appears 4 times, as on the car. Readings are clamped to the full scale and quantised to the sensor's LSB. The truth is still the plant's per-tick state, so nothing above 30 Hz (vibration) is in it.
 
 | Parameter | Default | Configurable | Source |
 |---|---|---|---|
-| Accelerometer noise std (white, Gaussian) | 0.024 m/s² | ✓ | `AccelNoiseStd` |
-| Gyroscope noise std (white, Gaussian) | 0.0035 rad/s | ✓ | `GyroNoiseStd` |
+| Sample rate | 400 Hz of sim time | ✓ | `SampleRateHz` (0 = one per tick) |
+| Accelerometer output data rate (held between updates) | 100 Hz | ✓ | `AccelOdrHz` |
+| Accelerometer white noise σ per update, x/y/z | 0.018 / 0.025 / 0.025 m/s² | ✓ | `AccelNoiseStdXYZ` |
+| Gyroscope white noise σ per sample, x/y/z | 0.0049 / 0.0059 / 0.0023 rad/s | ✓ | `GyroNoiseStdXYZ` |
+| Published covariance σ (and the noise when no XYZ is set) | 0.0287 m/s², 0.0037 rad/s | ✓ | `AccelNoiseStd`, `GyroNoiseStd` |
+| Turn-on offset σ (one draw per session, not removed) | 0.05 m/s², 0.0025 rad/s | ✓ | `AccelTurnOnBiasStd`, `GyroTurnOnBiasStd` |
 | Accelerometer bias steady-state σ | 0.01 m/s² | ✓ | `AccelBiasStd` |
 | Gyroscope bias steady-state σ | 0.0002 rad/s | ✓ | `GyroBiasStd` |
-| Accelerometer bias correlation time τ | 100 s | ✓ | `AccelBiasTau` |
-| Gyroscope bias correlation time τ | 100 s | ✓ | `GyroBiasTau` |
+| Accelerometer / gyroscope bias correlation time τ | 100 s | ✓ | `AccelBiasTau`, `GyroBiasTau` |
+| Resolution | 1.796 mm/s² (±6 g), 1.064 mrad/s (±2000 °/s) | ✓ | `AccelLsb`, `GyroLsb` |
+| Full scale | 58.84 m/s², 34.907 rad/s | ✓ | `AccelRange`, `GyroRange` |
 
-**BMI088 derivation.** Datasheet noise densities: accel `175 µg/√Hz`, gyro `0.014 °/s/√Hz`. At 400 Hz sample rate (200 Hz Nyquist BW) those become `~0.024 m/s²` and `~0.0035 rad/s` per-sample stddevs, matching the defaults above. Bench-test bias drift for a MEMS IMU at FS race-car operating temperatures is typically ~100 s correlation time.
+**Where the numbers come from.** Range, rates and resolution are the uDV firmware's BMI088 configuration. White noise is fitted (Allan deviation) from raw BMI088 logs: accel 2.03/2.78/2.75 mm/s²/√Hz and gyro 0.32/0.39/0.15 mrad/s/√Hz, turned into per-sample σ for the 40 Hz accel and 116 Hz gyro filters; the gyro x/y values match the car's parked `/imu`. The car's `/imu` is not bias-corrected (uDV uses its boot calibration only for its own attitude filter), and the turn-on gyro offset differed by several mrad/s between the logs and a car bag, hence a fresh draw per session. The logs are too short to fit in-run drift, so the Ornstein–Uhlenbeck parameters are unchanged.
 
 **Noise model.** Gaussian white noise plus an **Ornstein–Uhlenbeck** bias process. The discrete update each tick is
 
@@ -558,7 +565,13 @@ struct SensorFrame {
 
     // Controls echo (most recent setCarControls input)
     float    throttle, steering, brake;
-};
+
+    // Ground truth, body frame (no sensor noise)
+    float    gt_vel_body_x, gt_vel_body_y, gt_vel_body_z;          // m/s
+    float    gt_ang_vel_body_x, gt_ang_vel_body_y, gt_ang_vel_body_z; // rad/s
+
+    uint64_t imu_timestamp;   // sim time of this frame's IMU sample, ns; 0 = no new sample
+};   // 188 bytes, static_assert on both sides
 ```
 
 ### LiDAR Frame (port 41453, ~10 Hz)
@@ -784,7 +797,8 @@ Coordinates are in ENU metres relative to track origin.
 
 | File | Description |
 |---|---|
-| `acceleration.csv` | Standard acceleration straight |
+| `acceleration.csv` | Standard acceleration straight, on the Montmeló straight world (`acceleration.env.json`, [worlds.md](worlds.md)) |
+| `characterisation.csv` | The acceleration cones on flat ground, for `tools/characterise` |
 | `skidpad.csv` | FSG skidpad figure-8 |
 | `random_track.csv` | Example random layout |
 

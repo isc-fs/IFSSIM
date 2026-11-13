@@ -138,7 +138,8 @@ def sidecar_path(track_csv: str) -> str:
 
 
 def shift_sidecar(path: str, cx: float, cy: float) -> bool:
-    """Move a sidecar's props and ground extent by (-cx, -cy), as the cones move.
+    """Move a sidecar's props, ground extent and world origin by (-cx, -cy), as
+    the cones move.
 
     Returns True if a sidecar was there and was rewritten. A sidecar that isn't
     valid JSON is left alone: the plugin reports it as invalid either way.
@@ -154,6 +155,10 @@ def shift_sidecar(path: str, cx: float, cy: float) -> bool:
         if isinstance(p, dict) and "x" in p and "y" in p:
             p["x"] = round(p["x"] - cx, 3)
             p["y"] = round(p["y"] - cy, 3)
+    world = env.get("world")
+    if isinstance(world, dict) and "x" in world and "y" in world:
+        world["x"] = round(world["x"] - cx, 3)
+        world["y"] = round(world["y"] - cy, 3)
     ext = (env.get("ground") or {}).get("extent")
     if isinstance(ext, dict):
         for k, d in (("x_min", cx), ("x_max", cx), ("y_min", cy), ("y_max", cy)):

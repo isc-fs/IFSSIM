@@ -141,6 +141,10 @@ class RosBridge:
         # previous run.
         self._dv_status_seq: int = 0
         self._dv_status_stamp: float = 0.0
+        # Latest /assi/state byte from the sim uDV emulator (sim_supervisor),
+        # and when it arrived. Reported by as_snapshot() for the benchmark.
+        self._as_state: Optional[int] = None
+        self._as_state_stamp: float = 0.0
         self._bridge_lock = threading.Lock()
 
     def _spin_up(self) -> None:
@@ -173,6 +177,15 @@ class RosBridge:
             Bool, TOPIC_SIM_ESTOP, latched)
         self._node.create_subscription(
             UInt8, TOPIC_DV_STATUS, self._on_dv_status, latched)
+        # /assi/state rides the uplink QoS (BEST_EFFORT, VOLATILE), like the
+        # real uDV's; a latched subscription would never match it.
+        from mission_control.interface_contract import TOPIC_ASSI_STATE
+        try:
+            from mission_control.interface_qos import UPLINK_QOS as assi_qos
+        except ImportError:
+            from rclpy.qos import qos_profile_sensor_data as assi_qos
+        self._node.create_subscription(
+            UInt8, TOPIC_ASSI_STATE, self._on_as_state, assi_qos)
         self._control_get_state_client = self._node.create_client(
             GetState, "/control_node/get_state")
 
@@ -224,6 +237,24 @@ class RosBridge:
         self._dv_status = int(msg.data)
         self._dv_status_stamp = time.monotonic()
         self._dv_status_seq += 1
+
+    def _on_as_state(self, msg) -> None:
+        self._as_state = int(msg.data)
+        self._as_state_stamp = time.monotonic()
+
+    def as_snapshot(self) -> dict:
+        """The latest /dv/status and /assi/state bytes, None when absent or
+        older than DV_STATUS_STALE_S. Both are heartbeats, so a stale value is
+        not the current state."""
+        now = time.monotonic()
+
+        def fresh(value: Optional[int], stamp: float) -> Optional[int]:
+            return value if value is not None and now - stamp <= DV_STATUS_STALE_S else None
+
+        return {
+            "dv_status": fresh(self._dv_status, self._dv_status_stamp),
+            "as_state": fresh(self._as_state, self._as_state_stamp),
+        }
 
     def _publish_intent(self, intent: int) -> int:
         """Publish a panel intent; returns the /dv/status count at that
