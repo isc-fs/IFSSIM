@@ -59,6 +59,7 @@ shipping pipeline, documentation.
 
 - **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
   --format` exits 0 then, with no server version. Only a version counts as ready now.
+
 - **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
   read its readback slot before the render thread had queued the new copy, so it returned that slot's
   previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
