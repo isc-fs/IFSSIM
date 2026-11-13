@@ -89,6 +89,7 @@ shipping pipeline, documentation.
   resolve `host.docker.internal`, so it never saw the sim and START waited until it
   timed out.
 
+- **Trackdrive's mission timeout is 1300 s instead of 2400 s** (`tools/sim_benchmark/missions.yaml`): the slowest measured 10-lap finish was 1054.7 s, so a run that never finishes no longer holds the GPU box for 40 minutes.
 - **The mission benchmark ends a run as soon as the car goes to AS Emergency** instead of waiting out `timeout_s` (2400 s for trackdrive). The run's outcome is `emergency`, with `emergency_at_s` in the manifest, `race/emergency` and `race/emergency_at_s` in the results, and the usual laps, telemetry and events. Mission Control's `/api/event/state` now reports `as_state` (`/assi/state`) and `dv_status` (`/dv/status`). An AS Emergency only ends the run after the car was seen driving in it, so a state latched from the previous run does not.
 - **`run_mission_benchmark --pipeline-on latte_panda` starts the bridge again.** The bridge-only
   container skips the image's entrypoint, so `ros2 launch` couldn't find `ifssim_bridge`. The launch
