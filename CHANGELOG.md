@@ -115,6 +115,7 @@ shipping pipeline, documentation.
   - It skips viz_relay (`DV_VIZ_RELAY=false`), which only draws in the sim's window.
   - Each mission run records `box/cpu_wait` (Linux CPU pressure) and `box/load1`, and the report shows the CPU wait next to the sim speed.
   - Off the GPU box nothing changes.
+- **The sim IMU now publishes like the car's.** `/imu` carries 400 distinct samples per sim second, each stamped with its own sim time, instead of one sample per ~60 Hz tick repeated about 7 times with +1 ns stamps. The accelerometer refreshes at 100 Hz and holds in between (uDV's ACC_CONF), readings are quantised and clamped to uDV's ±6 g / ±2000 °/s settings, white noise is per axis from raw BMI088 logs, and each session draws a turn-on gyro/accel offset that is not removed, as on the car. The sensor frame gains `imu_timestamp` (188 bytes): the plugin and the bridge must be updated together. `tools/scenario_runner/verify_determinism.py` pairs `/imu` with ground truth on the ticks where the two grids meet.
 
 - **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
   car bag. The sim mounted it level, so a third of its beams saw sky and the ground started at ~5.3 m
@@ -415,6 +416,10 @@ shipping pipeline, documentation.
   car characterisation drives the same cones on flat ground
   (`characterisation.csv`), since its turns need open space beside the
   start.
+- **Frame-time log.** Every 5 s the sim logs `FSDS Frame:` with the mean
+  and worst game-thread, render-thread, RHI and GPU time per frame (the
+  `stat unit` numbers), so a run below real time shows which one is the
+  limit (docs/rendering_presets.md). Needs a UE recompile.
 - **Montmeló surfaces and markings from the aerial photo.** Measured on the
   ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
   verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
