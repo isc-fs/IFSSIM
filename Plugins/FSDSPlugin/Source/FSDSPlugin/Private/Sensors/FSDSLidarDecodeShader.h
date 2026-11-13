@@ -61,6 +61,11 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 
 		SHADER_PARAMETER(float, RangeNoiseStdCm)
 		SHADER_PARAMETER(float, DropoutRate)
+		SHADER_PARAMETER(float, RangeNoiseRangeCoeffCm)
+		SHADER_PARAMETER(float, RangeNoiseRefReflectance)
+		SHADER_PARAMETER(float, RangeNoiseReflectanceExp)
+		SHADER_PARAMETER(float, EdgeOutlierRate)
+		SHADER_PARAMETER(float, IntensityNoiseRel)
 
 		SHADER_PARAMETER(uint32, RNGSeed)
 

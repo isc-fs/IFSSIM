@@ -107,6 +107,22 @@ WALL_BACKSTOP = 6.0
 # slower sim gives the pipeline more time per sim second than it has on the car.
 # The sim's HUD shows the same threshold (FFSDSRealTime::GoodFactor).
 REAL_TIME_OK = 0.95
+
+# Linux's CPU pressure: microseconds some runnable task waited for a CPU (/proc/pressure/cpu,
+# "some ... total="). Its growth over a run, per second of the run, says how CPU-starved the
+# machine was; on the GPU box that, not the code, is what drops the sim below real time.
+CPU_PRESSURE = Path("/proc/pressure/cpu")
+
+
+def cpu_pressure_us() -> float | None:
+    """The machine's cumulative CPU-pressure stall time in µs; None where Linux doesn't report it."""
+    try:
+        for line in CPU_PRESSURE.read_text().splitlines():
+            if line.startswith("some "):
+                return float(line.rsplit("total=", 1)[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 # --speed-factor runs the pipeline's sessions in slow motion (the sim's
 # setSpeedFactor, docs/sim_timing.md): 1 is real time, 0.25 gives the
 # pipeline four times its real time per sim second, for comparing algorithms
@@ -429,6 +445,27 @@ def build_cache(image: str) -> list[tuple[str, str]]:
     return [(f"{mine}{folder}", folder) for folder in ("build", "install")]
 
 
+def stack_cpu_args(env) -> list[str]:
+    """Extra ``docker run`` flags for the stack from the environment (the GPU box's CI sets them).
+
+    ``BENCH_CPU_SHARES``: the container's CPU weight (Docker's default is 1024, the same as
+    every other service on the box). Raised, the pipeline keeps its CPU when other jobs
+    share the machine.
+    ``DV_VIZ_RELAY``: ``false`` skips viz_relay, the sim's in-game pipeline view, which
+    nobody sees in a headless run and which costs about half a core.
+    """
+    args: list[str] = []
+    shares = (env.get("BENCH_CPU_SHARES") or "").strip()
+    if shares:
+        if not shares.isdigit() or int(shares) < 2:
+            raise BenchmarkError(f"BENCH_CPU_SHARES must be a whole number >= 2, not {shares!r}")
+        args += ["--cpu-shares", shares]
+    viz = (env.get("DV_VIZ_RELAY") or "").strip()
+    if viz:
+        args += ["-e", f"DV_VIZ_RELAY={viz}"]
+    return args
+
+
 def running_stacks() -> list[str]:
     """Other pipeline stack containers running now (docker compose's dv_pipeline_stack)."""
     r = docker("ps", "--format", "{{.Names}}")
@@ -583,6 +620,7 @@ class Stack:
             "-e",
             f"FASTRTPS_DEFAULT_PROFILES_FILE={WS}/fastdds_profile.xml",
         ]
+        run += stack_cpu_args(os.environ)
         for var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
             run += [
                 "-e",
@@ -755,6 +793,8 @@ class RunResult:
     sim_start: float | None = None  # the sim clock when the run began (doo events are stamped on it)
     speed_factor: float | None = None  # the sim's speed while the pipeline drove, when it reports it
     emergency_at: float | None = None  # seconds into the run (sim time when reported) the car went to AS Emergency
+    cpu_wait: float | None = None  # share of the run some task waited for a CPU (Linux CPU pressure)
+    load1: float | None = None  # the machine's 1-minute load average at the end of the run
 
 
 class Progress:
@@ -811,6 +851,7 @@ def run_one(
         sim.cmd("simSetVehiclePose {x} {y} {z} {qw} {qx} {qy} {qz}".format(**pose))
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
+    p0 = cpu_pressure_us()
     sim0 = sim.sim_time()  # None: this sim doesn't report its clock, count real time
     progress.report(r.index, 0.0, f"{where} · starting the pipeline")
     status, body = mc.post(
@@ -886,18 +927,22 @@ def run_one(
         time.sleep(poll_s)
         if sim0 is not None:
             sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
+    seconds = time.monotonic() - t0
+    p1 = cpu_pressure_us()
     mc.post("/api/pipeline/stop")
     return RunResult(
         r,
         outcome,
         started,
-        time.monotonic() - t0,
+        seconds,
         ref,
         offset,
         telemetry=telemetry,
         sim_seconds=None if sim0 is None else sim_now - sim0,
         sim_start=sim0,
         emergency_at=emergency_at,
+        cpu_wait=None if p0 is None or p1 is None or seconds <= 0 else min(1.0, (p1 - p0) / 1e6 / seconds),
+        load1=os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
     )
 
 
@@ -964,6 +1009,10 @@ def race_metrics(res: RunResult) -> dict[str, float]:
             out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
     if res.speed_factor is not None:
         out["race/speed_factor"] = res.speed_factor
+    if res.cpu_wait is not None:
+        out["box/cpu_wait"] = round(res.cpu_wait, 3)
+    if res.load1 is not None:
+        out["box/load1"] = round(res.load1, 2)
     if laps:
         out |= {
             "race/lap_time_best_s": min(laps),
