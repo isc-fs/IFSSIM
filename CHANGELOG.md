@@ -57,6 +57,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **On Windows, the Benchmarks page starts the worker itself.** Start worker and the
+  machine check (Setup) now run `run_spec.py` in WSL through `wsl.exe`, instead of asking
+  you to start the worker from a WSL terminal.
 - **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
   --format` exits 0 then, with no server version. Only a version counts as ready now.
 
