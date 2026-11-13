@@ -9,7 +9,7 @@ For each mission, track and repeat (in that order), one run:
   3. optionally move the car off the start gate by a seeded random offset (``start_pose.noise``);
   4. start the mission the way the operator panel does (``/api/event/start``: arm, wait for the
      pipeline to be ready, the EKF's calibration window with the brake held, go);
-  5. follow the referee (``/api/event/state``) until it says finished, or the timeout;
+  5. follow the referee (``/api/event/state``) until it says finished, the car goes to AS Emergency, or the timeout;
   6. write the run: ``<results>/mission/<mission>_<track>/<code>/seed<k>/`` with ``manifest.json``
      (code, scenario, referee state), ``results.json`` (race metrics), ``laps.csv``,
      ``events.csv``, a coarse ``telemetry.csv`` (the layout bench-view's Sim pages read) and
@@ -91,6 +91,11 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+# FS-Rules T14.9 AS state bytes on /assi/state, and the pipeline's /dv/status
+# DV_EMERGENCY (mission_control.interface_contract). Mission Control reports
+# both in /api/event/state as as_state / dv_status.
+AS_EMERGENCY, AS_DRIVING = 1, 3
+DV_EMERGENCY = 5
 MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
@@ -739,7 +744,7 @@ def offset_pose(gate: dict, pose: dict, seed: int) -> tuple[dict, dict]:
 @dataclass
 class RunResult:
     run: PlannedRun
-    outcome: str  # finished | timeout | error
+    outcome: str  # finished | emergency | timeout | error
     started: datetime
     seconds: float
     referee: dict = field(default_factory=dict)
@@ -749,6 +754,7 @@ class RunResult:
     sim_seconds: float | None = None  # the run's length in sim time, when the sim reports it
     sim_start: float | None = None  # the sim clock when the run began (doo events are stamped on it)
     speed_factor: float | None = None  # the sim's speed while the pipeline drove, when it reports it
+    emergency_at: float | None = None  # seconds into the run (sim time when reported) the car went to AS Emergency
 
 
 class Progress:
@@ -829,6 +835,11 @@ def run_one(
     ref: dict = {}
     telemetry: list[dict] = []
     outcome = "timeout"
+    emergency_at: float | None = None
+    # AS Emergency only counts once this run has been seen driving: the AS
+    # state latches, so a value left over from the previous run must not end
+    # this one. DV_EMERGENCY comes from the running pipeline's own heartbeat.
+    seen_driving = False
     limit = float(m["timeout_s"])
     sim_now = sim0
 
@@ -860,6 +871,18 @@ def run_one(
         if ref.get("finished"):
             outcome = "finished"
             break
+        as_state, dv_status = ref.get("as_state"), ref.get("dv_status")
+        seen_driving = seen_driving or as_state == AS_DRIVING
+        if dv_status == DV_EMERGENCY or (seen_driving and as_state == AS_EMERGENCY):
+            # EBS fired: the car stays stopped, so waiting out timeout_s
+            # (2400 s for trackdrive) only burns the bench's time.
+            outcome = "emergency"
+            emergency_at = round(elapsed(), 2)
+            log(
+                f"{where}: AS Emergency {emergency_at:.1f} s in "
+                f"(/assi/state {as_state}, /dv/status {dv_status}), ending the run"
+            )
+            break
         time.sleep(poll_s)
         if sim0 is not None:
             sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
@@ -874,6 +897,7 @@ def run_one(
         telemetry=telemetry,
         sim_seconds=None if sim0 is None else sim_now - sim0,
         sim_start=sim0,
+        emergency_at=emergency_at,
     )
 
 
@@ -927,7 +951,10 @@ def race_metrics(res: RunResult) -> dict[str, float]:
         "race/n_off_track": oc,
         "race/penalty_s": doo * DOO_PENALTY_S + oc * OC_PENALTY_S,
         "race/run_time_s": res.seconds,
+        "race/emergency": 1 if res.outcome == "emergency" else 0,
     }
+    if res.emergency_at is not None:
+        out["race/emergency_at_s"] = res.emergency_at
     if res.sim_seconds is not None:
         out["race/run_sim_time_s"] = res.sim_seconds
         if res.seconds > 0:
@@ -1059,6 +1086,7 @@ def write_run(
             "EventType": ref.get("event") or r.mission,
         },
         "outcome": res.outcome,
+        "emergency_at_s": res.emergency_at,
         "error": res.error,
         "settings": m,
     }
@@ -1075,7 +1103,12 @@ def write_run(
             {
                 "kind": "dnf",
                 "t": round(res.seconds, 1),
-                "detail": res.error or res.outcome,
+                "detail": res.error
+                or (
+                    f"emergency at {res.emergency_at:.1f} s"
+                    if res.emergency_at is not None
+                    else res.outcome
+                ),
             }
         ]
         if res.outcome != "finished"

@@ -22,8 +22,17 @@ class FakeWorld:
     """What the fake Mission Control and sim share: the referee, and what was asked of them."""
 
     def __init__(
-        self, laps_per_poll=1, start_fails=False, never_finishes=False, sim_step=None
+        self,
+        laps_per_poll=1,
+        start_fails=False,
+        never_finishes=False,
+        sim_step=None,
+        assi=None,
     ):
+        # (as_state, dv_status) reported on each referee poll while running, the last
+        # one repeating; None: Mission Control reports neither (no ROS bridge)
+        self.assi = assi
+        self.assi_polls = 0
         self.calls: list[str] = []
         # sim seconds each getSimStatus advances the sim clock by; None: no sim_time (an old build)
         self.sim_step = sim_step
@@ -39,7 +48,12 @@ class FakeWorld:
         if self.running and not self.never_finishes:
             self.laps = min(self.required, self.laps + self.laps_per_poll)
         done = self.running and self.laps >= self.required and not self.never_finishes
-        return {
+        extra = {}
+        if self.assi and self.running:
+            as_state, dv_status = self.assi[min(self.assi_polls, len(self.assi) - 1)]
+            self.assi_polls += 1
+            extra = {"as_state": as_state, "dv_status": dv_status}
+        return extra | {
             "laps": self.laps,
             "required_laps": self.required,
             "finished": done,
@@ -679,3 +693,34 @@ def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
     assert rc == 1 and any("counts real time" in x for x in logs)
     assert "race/run_sim_time_s" not in res and res["race/run_time_s"] < 1.0
     assert "race/real_time_factor" not in res   # no sim clock, no factor
+
+
+def test_an_as_emergency_ends_the_run_at_once_and_says_so(tmp_path):
+    # driving (AS 3, DV 3) for two polls, then the pipeline raises EBS (AS 1, DV 5)
+    w = FakeWorld(never_finishes=True, sim_step=1.0, assi=[(3, 3), (3, 3), (1, 5)])
+    rc, logs = _run(tmp_path, w, timeout_s=2400.0)
+    res = _result(tmp_path)
+    assert rc == 1 and any(": emergency" in x for x in logs)
+    assert any("AS Emergency" in x and "ending the run" in x for x in logs)
+    assert res["race/emergency"] == 1 and res["race/finished"] == 0
+    # a few sim seconds in, nowhere near the 2400 s timeout
+    assert 0.0 < res["race/emergency_at_s"] < 10.0 and res["race/run_sim_time_s"] < 10.0
+    [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
+    man = json.loads((d / "manifest.json").read_text())
+    assert man["outcome"] == "emergency" and man["emergency_at_s"] == res["race/emergency_at_s"]
+    assert "emergency at" in (d / "events.csv").read_text()
+
+
+def test_an_as_emergency_left_from_the_last_run_does_not_end_this_one(tmp_path):
+    # AS Emergency latched from before, never seen driving, pipeline not in emergency: runs to the timeout
+    w = FakeWorld(never_finishes=True, sim_step=1.0, assi=[(1, 3)])
+    rc, logs = _run(tmp_path, w, timeout_s=5.0)
+    res = _result(tmp_path)
+    assert rc == 1 and any(": timeout" in x for x in logs)
+    assert res["race/emergency"] == 0 and "race/emergency_at_s" not in res
+
+
+def test_a_finish_beats_the_emergency_brake_that_follows_it(tmp_path):
+    w = FakeWorld(sim_step=1.0, assi=[(3, 3), (1, 5)])
+    rc, logs = _run(tmp_path, w, timeout_s=60.0)
+    assert rc == 0 and _result(tmp_path)["race/finished"] == 1

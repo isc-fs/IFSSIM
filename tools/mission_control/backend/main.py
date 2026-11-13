@@ -549,6 +549,14 @@ def event_state():
                 state["bag_error"] = rec["error"]
         else:
             state["bag_state"] = "none"
+    # The AS state machine and the pipeline's status (/assi/state,
+    # /dv/status), so a client following the run (the mission benchmark)
+    # sees AS Emergency without waiting for the referee to time out. Absent
+    # when the ROS bridge isn't up (tests, no rclpy).
+    try:
+        state.update(RosBridge.get().as_snapshot())
+    except Exception:
+        pass
     return state
 
 @app.post("/api/event/set", dependencies=[Depends(require_api_key)])
