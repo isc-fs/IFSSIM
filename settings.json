@@ -70,15 +70,25 @@
         }
       },
       "Sensors": {
-        "_comment_imu": "BMI088-class noise model (the unit on the real IFS-08). Datasheet noise densities: accel 175 µg/√Hz, gyro 0.014 °/s/√Hz. At 400 Hz sample rate (200 Hz Nyquist BW) those become ~0.024 m/s² and ~0.0035 rad/s per-sample standard deviations. Bias drift is modelled as Ornstein–Uhlenbeck with a 100 s correlation time, a typical bench-test characteristic for a MEMS IMU at FS race-car operating temperatures.",
+        "_comment_imu": "BMI088 as the car's uDV reads it: 400 Hz on a hardware timer, gyro ±2000 °/s (LSB 1.064 mrad/s, 1 kHz ODR, 116 Hz filter), accel ±6 g (LSB 1.796 mm/s²) at a 100 Hz ODR (ACC_CONF 0xA8), so each accel value repeats 4 times on /imu. /imu is not bias-corrected. Per-axis white noise is fitted from raw BMI088 logs (2026-09-29, 6 stationary power-ups, Allan deviation): accel 2.03/2.78/2.75 mm/s²/√Hz -> σ 0.018/0.025/0.025 m/s² per 100 Hz update (40 Hz filter), gyro 0.32/0.39/0.15 mrad/s/√Hz -> σ 0.0049/0.0059/0.0023 rad/s per 400 Hz sample (116 Hz filter); the gyro x/y values match the car's parked /imu (4.8/4.7 mrad/s). Turn-on gyro offsets were +1.8/+1.7/−0.7 mrad/s on the logger and −3.4/−1.1/−2.6 mrad/s in the 2026-09-20 car bag, so a fresh draw of σ 2.5 mrad/s per session; the car's |g| read 0.9 % low, so accel σ 0.05 m/s². AccelNoiseStd/GyroNoiseStd stay the scalars the bridge publishes as covariance, equal to uDV's (8.25e-4, 1.37e-5). In-run bias drift is still Ornstein–Uhlenbeck with τ 100 s: the logs are too short to fit it.",
         "Imu": {
           "SensorType": 2, "Enabled": true,
-          "AccelNoiseStd": 0.024,
-          "GyroNoiseStd": 0.0035,
+          "SampleRateHz": 400,
+          "AccelOdrHz": 100,
+          "AccelNoiseStd": 0.0287,
+          "GyroNoiseStd": 0.0037,
+          "AccelNoiseStdXYZ": [0.018, 0.025, 0.025],
+          "GyroNoiseStdXYZ": [0.0049, 0.0059, 0.0023],
+          "AccelTurnOnBiasStd": 0.05,
+          "GyroTurnOnBiasStd": 0.0025,
           "AccelBiasStd": 0.01,
           "GyroBiasStd": 0.0002,
           "AccelBiasTau": 100.0,
-          "GyroBiasTau": 100.0
+          "GyroBiasTau": 100.0,
+          "AccelLsb": 0.0017961,
+          "GyroLsb": 0.0010642,
+          "AccelRange": 58.84,
+          "GyroRange": 34.907
         },
         "Gps": {
           "SensorType": 3, "Enabled": true,

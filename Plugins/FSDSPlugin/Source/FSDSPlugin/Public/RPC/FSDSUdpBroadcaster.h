@@ -80,7 +80,15 @@ struct FFSDSSensorFrame
 	// /testing_only/odom's twist.angular from these — closes the gap left
 	// by #315 (which only populated twist.linear).
 	float GtAngVelBodyX = 0.f, GtAngVelBodyY = 0.f, GtAngVelBodyZ = 0.f; // rad/s
+
+	// Sim time of the IMU sample this frame carries, in ns. The IMU emits a
+	// 400 Hz sample stream (FSDSImuSensor) while frames are captured once per
+	// ~60 Hz tick, so the TCP stream sends one frame per IMU sample and the
+	// bridge stamps /imu with this instead of the tick time. 0 = this frame
+	// carries no new IMU sample; the bridge then does not publish /imu for it.
+	uint64 ImuTimestamp = 0;
 };
+static_assert(sizeof(FFSDSSensorFrame) == 188, "FFSDSSensorFrame must match the bridge's SensorFrame (udp_receiver.h) byte for byte");
 
 struct FFSDSLidarChunkHeader
 {
