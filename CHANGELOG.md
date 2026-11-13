@@ -57,6 +57,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **On Windows, the Benchmarks page starts the worker itself.** Start worker and the
+  machine check (Setup) now run `run_spec.py` in WSL through `wsl.exe`, instead of asking
+  you to start the worker from a WSL terminal.
 - **Benchmark runs queued on Windows now reach the sim.** The worker runs in WSL, where
   127.0.0.1 isn't Windows in WSL's default NAT mode. Without `--sim`, a mission benchmark
   run from WSL now uses WSL's gateway (Windows) when only it answers on port 41451.
