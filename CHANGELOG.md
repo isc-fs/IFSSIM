@@ -37,6 +37,15 @@ shipping pipeline, documentation.
   `characterisation`, `acceleration` (and its world sidecar) or `skidpad` changed files
   under version control. Built-in tracks now load as they are: they fit the floor, and
   acceleration's start line stays on the Montmeló world's origin.
+- **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
+  read its readback slot before the render thread had queued the new copy, so it returned that slot's
+  previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
+  ahead and spawned a ghost row, which bent the acceleration path. Readiness is now checked on the
+  render thread, after the copy is queued.
+- **The pipeline stack image clusters cones the way the car does.** It was
+  missing the `dbscan` package, so cone detection's default cluster backend
+  (`pypi`) fell back to grid/sklearn in every sim run, sim check and
+  benchmark. The image now installs it, as the pipeline's own CI does.
 
 - **Mission benchmarks on a snap-installed Docker.** The benchmark copied the
   pipeline into `/tmp` and mounted the copy into its stack, but snap's Docker
