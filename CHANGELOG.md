@@ -762,6 +762,15 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`package_windows.sh` stops when the build fails.** `RunUAT.bat` runs
+  under `cmd.exe`, whose exit code doesn't reach bash, so a compile error
+  printed `BUILD FAILED` and the script went on to stage and zip the previous
+  build's binary as if it were the new one. It now reads UAT's own verdict
+  (`AutomationTool exiting with ExitCode=0`) and exits 1 otherwise.
+- **`package_windows.sh` keeps the user's `GameUserSettings.ini`.** It copied
+  the project's default over it on every package, throwing away what was
+  chosen in the sim (the window, the menu's frame rate, the graphics
+  settings). It now seeds the file only when there is none.
 - **Hidden engine-braking drag removed.** Chaos's engine was set to brake the rear wheels with EngineRPM x 0.05 N.m whenever its own throttle was zero, and the pawn always passes it zero (the EMRAX drives the wheels directly). That was a speed-proportional drag of about 0.085·v m/s², present while driving as well as coasting, and most of the coast-down excess the car characterisation found (1.02 vs 0.31 m/s² at 10 m/s). `EngineBrakeEffect` is now 0, and the startup log warns if it isn't.
 - **The sim car kept driving after leaving AS Driving.** The uDV emulator only stopped relaying `/ctrl/cmd`, and the bridge and pawn hold the last command, so an emergency, an e-stop or the end of a run left the car on its last throttle and steering. It now does what the car's firmware does: zeroes the command on leaving Driving or when `/ctrl/cmd` is older than 0.5 s, fires the EBS on AS Emergency, and treats a `/dv/status` heartbeat older than 0.4 s mid-run as an emergency (it was read as idle, with a 1.5 s window). Arming from AS Off releases an EBS latched by the previous run.
 - Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.
