@@ -32,6 +32,11 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **The local benchmark queue works with Docker Desktop.** What Mission Control queued was root's
+  with no write access for others, as Docker Desktop shows every folder of the mount as root's,
+  so a worker started in WSL failed writing the job's state (`Permission denied`). With no
+  owner to give them to, the queue's folders and files now get the permissions of the folder above.
+
 - **The sim builds on Windows again.** MSVC refused `FSDSDaylight.cpp` (#810): it put the
   sun's `uint32` bitfield `bAtmosphereSunLight` into a `bool` in a brace initialiser, a
   narrowing conversion (C2397) the Linux build accepts.
