@@ -47,7 +47,12 @@ float MinRangeCm;             // discard hits closer than this
 float MaxRangeCm;             // far-plane sentinel (depths >= this = no hit)
 StructuredBuffer<float> ChannelMaxRangeCm;  // per-channel max-range, NumberOfChannels entries
 
-float RangeNoiseStdCm;        // 0 = no noise
+float RangeNoiseStdCm;        // σ at 0 m for ρ = RangeNoiseRefReflectance; 0 = no noise
+float RangeNoiseRangeCoeffCm; // σ grows by this · range_m² (cm)
+float RangeNoiseRefReflectance; // ρ at which the reflectance factor is 1
+float RangeNoiseReflectanceExp; // σ ∝ (ρ_ref/ρ)^exp; 0 = off
+float EdgeOutlierRate;        // probability of a mixed return at a >30 cm depth edge
+float IntensityNoiseRel;      // relative σ of scan-to-scan intensity jitter
 float DropoutRate;            // [0, 1]; 0 = no dropout
 
 uint  RNGSeed;                // re-seeded each scan from CPU side
@@ -214,40 +219,6 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float ChannelMaxR = ChannelMaxRangeCm[VIdx];
 	if (RayDistCm > ChannelMaxR) return;
 
-	// Per-ray RNG seed combines a per-scan seed (CPU side) with the
-	// ray index so each ray gets a distinct deterministic stream.
-	uint RNGState = pcg_hash(RayIdx ^ RNGSeed);
-
-	// Dropout — reject this hit with probability DropoutRate.
-	if (DropoutRate > 0.0)
-	{
-		RNGState = pcg_hash(RNGState);
-		const float r = u32_to_unit_float(RNGState);
-		if (r < DropoutRate) return;
-	}
-
-	// Box-Muller Gaussian range noise (σ = RangeNoiseStdCm). Same
-	// statistical model as FSDSSensorNoise::RandStandardNormal on the
-	// CPU path, so dual-path validation in Phase 4 compares like-for-
-	// like distributions.
-	if (RangeNoiseStdCm > 0.0)
-	{
-		RNGState = pcg_hash(RNGState);
-		const float u1 = max(u32_to_unit_float(RNGState), 1e-7);
-		RNGState = pcg_hash(RNGState);
-		const float u2 = u32_to_unit_float(RNGState);
-		const float Gauss = sqrt(-2.0 * log(u1)) * cos(6.2831853 * u2);
-		RayDistCm += RangeNoiseStdCm * Gauss;
-	}
-
-	// Re-check both bounds *after* noise — mirrors the CPU path's
-	// post-noise `if (Dist < MinRange || Dist > ChannelMaxR) continue;`
-	// (FSDSLidarSensor.cpp PerformScan). Without the upper re-check, a
-	// hit that lands just under ChannelMaxR pre-noise but gets pushed
-	// past it by +noise would survive on GPU and be dropped on CPU —
-	// the boundary divergence flagged by audit issue #231.
-	if (RayDistCm < MinRangeCm || RayDistCm > ChannelMaxR) return;
-
 	// Reconstruct 3D point along the spherical ray. Direction from
 	// (h, v) in vehicle frame using the same Tait-Bryan ordering as
 	// the CPU path's FRotator(VAngle, HAngle, 0).Vector():
@@ -257,17 +228,8 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float DirY = CosV * SinH;
 	const float DirZ = SinV;
 
-	// Reconstruct in vehicle-local frame: sensor-relative endpoint
-	// plus the sensor mount offset (in metres). The CPU path gets
-	// this for free via OwnerTransform.InverseTransformPosition;
-	// here we have to add it explicitly because the shader works in
-	// the sensor's local frame.
-	const float ScaleM = RayDistCm / 100.0;
-	const float3 DirSensor = float3(DirX, DirY, DirZ);
-	const float Px = dot(MountRotRowX, DirSensor) * ScaleM + SensorOffsetXm;
-	const float Py = dot(MountRotRowY, DirSensor) * ScaleM + SensorOffsetYm;
-	const float Pz = dot(MountRotRowZ, DirSensor) * ScaleM + SensorOffsetZm;
-
+	// Reflectance and incidence come before the noise: the range noise
+	// depends on the reflectance, and the edge model on the neighbour depths.
 	// === Intensity (#255 / #321 / #358). Hesai-class working principle:
 	//   intensity = ρ × cos(θ_inc) × (R_ref / range)²
 	// where ρ is the surface reflectance, θ_inc is the angle of
@@ -359,10 +321,91 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		dot(SensorRotRowZ, DirVehicle));
 	const float CosIncidence = saturate(dot(-DirWorld, NormalWorld));
 
+	// Per-ray RNG seed combines a per-scan seed (CPU side) with the
+	// ray index so each ray gets a distinct deterministic stream.
+	uint RNGState = pcg_hash(RayIdx ^ RNGSeed);
+
+	// Dropout — reject this hit with probability DropoutRate.
+	if (DropoutRate > 0.0)
+	{
+		RNGState = pcg_hash(RNGState);
+		const float r = u32_to_unit_float(RNGState);
+		if (r < DropoutRate) return;
+	}
+
+	// Range noise (σ in cm), measured on the car's Hesai (manual bag
+	// 2026-09-20, parked, matched ring x 0.1° azimuth cells):
+	//   σ(r, ρ) = (RangeNoiseStdCm + RangeNoiseRangeCoeffCm · r_m²)
+	//             · (RangeNoiseRefReflectance / ρ)^RangeNoiseReflectanceExp
+	// ~1.5 cm at 5-10 m, ~1.9 cm at 10-15 m, 4-7 cm beyond 15 m; dark
+	// returns are noisier (σ ∝ ρ^-0.8: 4.5 cm at reflectivity ~5 %, 0.7 cm
+	// at ~45 %). The reflectance term uses the material ρ, not ρ·cos θ: the
+	// car's intensity is calibrated reflectivity, flat with incidence.
+	// With the extra coefficients at 0 this is the old flat Gaussian.
+	RNGState = pcg_hash(RNGState);
+	const float NoiseU1 = max(u32_to_unit_float(RNGState), 1e-7);
+	RNGState = pcg_hash(RNGState);
+	const float NoiseU2 = u32_to_unit_float(RNGState);
+	const float NoiseRadius = sqrt(-2.0 * log(NoiseU1));
+	const float GaussRange = NoiseRadius * cos(6.2831853 * NoiseU2);
+	const float GaussIntensity = NoiseRadius * sin(6.2831853 * NoiseU2);  // the Box-Muller pair's second, independent sample
+	{
+		const float RangeMPreNoise = RayDistCm / 100.0;
+		float SigmaCm = RangeNoiseStdCm + RangeNoiseRangeCoeffCm * RangeMPreNoise * RangeMPreNoise;
+		if (RangeNoiseReflectanceExp > 0.0)
+		{
+			const float RhoFactor = pow(RangeNoiseRefReflectance / max(Reflectance, 0.02), RangeNoiseReflectanceExp);
+			SigmaCm *= clamp(RhoFactor, 0.3, 4.0);
+		}
+		RayDistCm += SigmaCm * GaussRange;
+	}
+
+	// Mixed returns at silhouettes: where a neighbouring texel's depth
+	// jumps by more than 30 cm (a cone edge against the background), the
+	// car's returns sometimes land between the two surfaces. With
+	// probability EdgeOutlierRate, place the return uniformly between this
+	// hit and the farthest neighbour. The car shows such >30 cm jumps on
+	// ~2 % of object returns at 5-10 m.
+	if (EdgeOutlierRate > 0.0)
+	{
+		const float DFar = max(max(DLeft, DRight), max(DUp, DDown));
+		if (DFar - DepthZCm > 30.0)
+		{
+			RNGState = pcg_hash(RNGState);
+			if (u32_to_unit_float(RNGState) < EdgeOutlierRate)
+			{
+				RNGState = pcg_hash(RNGState);
+				const float Mix = u32_to_unit_float(RNGState);
+				RayDistCm = lerp(RayDistCm, DFar / CosAlpha, Mix);
+			}
+		}
+	}
+
+	// Re-check both bounds *after* noise — mirrors the CPU path's
+	// post-noise `if (Dist < MinRange || Dist > ChannelMaxR) continue;`
+	// (FSDSLidarSensor.cpp PerformScan). Without the upper re-check, a
+	// hit that lands just under ChannelMaxR pre-noise but gets pushed
+	// past it by +noise would survive on GPU and be dropped on CPU —
+	// the boundary divergence flagged by audit issue #231.
+	if (RayDistCm < MinRangeCm || RayDistCm > ChannelMaxR) return;
+
+	// Reconstruct in vehicle-local frame: sensor-relative endpoint
+	// plus the sensor mount offset (in metres). The CPU path gets
+	// this for free via OwnerTransform.InverseTransformPosition;
+	// here we have to add it explicitly because the shader works in
+	// the sensor's local frame.
+	const float ScaleM = RayDistCm / 100.0;
+	const float3 DirSensor = float3(DirX, DirY, DirZ);
+	const float Px = dot(MountRotRowX, DirSensor) * ScaleM + SensorOffsetXm;
+	const float Py = dot(MountRotRowY, DirSensor) * ScaleM + SensorOffsetYm;
+	const float Pz = dot(MountRotRowZ, DirSensor) * ScaleM + SensorOffsetZm;
+
 	const float RangeM   = max(ScaleM, 0.01);  // floor at 1 cm so the inverse-square doesn't blow up at point-blank
 	const float RangeRef = max(RReferenceM, 1e-3);
 	const float Falloff  = (RangeRef * RangeRef) / (RangeM * RangeM);
-	const float Intensity = saturate(Reflectance * CosIncidence * Falloff);
+	// Scan-to-scan intensity jitter, relative (car: ~14 %).
+	const float Intensity = saturate(Reflectance * CosIncidence * Falloff
+		* max(0.0, 1.0 + IntensityNoiseRel * GaussIntensity));
 
 	// cm → m + ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The w
 	// channel carries intensity for valid hits ([0, 1]); -1.0 sentinel

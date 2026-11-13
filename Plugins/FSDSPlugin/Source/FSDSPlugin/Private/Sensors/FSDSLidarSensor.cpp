@@ -367,8 +367,18 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				continue;
 
 			float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
-			if (RangeNoiseStd > 0.f)
-				Dist += RangeNoiseStd * RandStandardNormal(Noise());
+			{
+				// Same σ model as the GPU shader, with the CPU path's placeholder
+				// reflectance (0.5). No edge outliers here: they need neighbour depths.
+				const float RangeMPre = Dist / 100.f;
+				float SigmaCm = RangeNoiseStd + RangeNoiseRangeCoeffCm * RangeMPre * RangeMPre;
+				if (RangeNoiseReflectanceExp > 0.f)
+				{
+					SigmaCm *= FMath::Clamp(FMath::Pow(RangeNoiseRefReflectance / 0.5f, RangeNoiseReflectanceExp), 0.3f, 4.f);
+				}
+				if (SigmaCm > 0.f)
+					Dist += SigmaCm * RandStandardNormal(Noise());
+			}
 
 			// Re-cull after noise — a +noise sample can push Dist past
 			// the channel's max range. Match the GPU path which checks
@@ -401,8 +411,11 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				static_cast<float>(FVector::DotProduct(-RayDir, Hit.ImpactNormal)));
 			const float RangeM   = FMath::Max(Dist / 100.0f, 0.01f);
 			const float Falloff  = (R_REFERENCE_M * R_REFERENCE_M) / (RangeM * RangeM);
+			const float Jitter = IntensityNoise > 0.f
+				? FMath::Max(0.f, 1.f + IntensityNoise * static_cast<float>(RandStandardNormal(Noise())))
+				: 1.f;
 			const float Intensity = FMath::Clamp(
-				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff, 0.0f, 1.0f);
+				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff * Jitter, 0.0f, 1.0f);
 
 			SlotResults[SlotIdx] = {
 				static_cast<float>(LocalHit.X) / 100.f,
@@ -1091,6 +1104,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HStartRad, HEndRad, VUpperRad, VLowerRad, TiltRad;
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
+		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
+		float EdgeOutlierRate, IntensityNoiseRel;
 		uint32 RNGSeed;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
@@ -1131,6 +1146,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.MaxRangeCm         = MaxRange;
 	U.RangeNoiseStdCm    = RangeNoiseStd;
 	U.DropoutRate        = DropoutRate;
+	U.RangeNoiseRangeCoeffCm   = RangeNoiseRangeCoeffCm;
+	U.RangeNoiseRefReflectance = RangeNoiseRefReflectance;
+	U.RangeNoiseReflectanceExp = RangeNoiseReflectanceExp;
+	U.EdgeOutlierRate          = EdgeOutlierRate;
+	U.IntensityNoiseRel        = IntensityNoise;
 	// Per-scan seed derived from the scenario seed plus a scan counter, so
 	// dropouts and range noise still vary scan to scan but the whole sequence
 	// replays identically for a given seed. Previously this was
@@ -1312,6 +1332,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->MaxRangeCm            = U.MaxRangeCm;
 			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
 			Params->DropoutRate           = U.DropoutRate;
+			Params->RangeNoiseRangeCoeffCm   = U.RangeNoiseRangeCoeffCm;
+			Params->RangeNoiseRefReflectance = U.RangeNoiseRefReflectance;
+			Params->RangeNoiseReflectanceExp = U.RangeNoiseReflectanceExp;
+			Params->EdgeOutlierRate          = U.EdgeOutlierRate;
+			Params->IntensityNoiseRel        = U.IntensityNoiseRel;
 			Params->RNGSeed               = U.RNGSeed;
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;
