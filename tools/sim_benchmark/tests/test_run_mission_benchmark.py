@@ -724,3 +724,87 @@ def test_a_finish_beats_the_emergency_brake_that_follows_it(tmp_path):
     w = FakeWorld(sim_step=1.0, assi=[(3, 3), (1, 5)])
     rc, logs = _run(tmp_path, w, timeout_s=60.0)
     assert rc == 0 and _result(tmp_path)["race/finished"] == 1
+
+
+# ------------------------------------------------------------------ where the sim is
+def test_a_given_sim_address_is_used_as_is(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: pytest.fail("no lookup"))
+    assert rmb.sim_address("10.0.0.5:4000") == ("10.0.0.5", 4000)
+
+
+def test_outside_wsl_the_sim_is_on_this_machine(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: None)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_from_wsl_in_nat_mode_the_sim_is_on_windows(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: host == "172.18.240.1")
+    assert rmb.sim_address(None) == ("172.18.240.1", 41451)
+
+
+def test_from_wsl_in_mirrored_mode_the_sim_stays_on_localhost(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: True)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_with_the_sim_down_the_error_names_localhost(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: False)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_windows_host_is_read_from_wsls_default_route(monkeypatch, tmp_path):
+    files = {
+        "/proc/sys/kernel/osrelease": "5.15.167.4-microsoft-standard-WSL2\n",
+        "/proc/net/route": "Iface\tDestination\tGateway\tFlags\n"
+        "eth0\t0000F0AC\t00000000\t0001\n"
+        "eth0\t00000000\t01F012AC\t0003\n",
+    }
+    real = rmb.Path.read_text
+    monkeypatch.setattr(
+        rmb.Path,
+        "read_text",
+        lambda self, *a, **k: files[self.as_posix()] if self.as_posix() in files else real(self, *a, **k),
+    )
+    assert rmb.wsl_windows_host() == "172.18.240.1"
+    files["/proc/sys/kernel/osrelease"] = "6.8.0-generic\n"
+    assert rmb.wsl_windows_host() is None
+
+
+def test_the_stack_takes_its_cpu_weight_and_viz_switch_from_the_environment(
+    tmp_path, world, docker, monkeypatch
+):
+    assert rmb.stack_cpu_args({}) == []  # a laptop run changes nothing
+    monkeypatch.setenv("BENCH_CPU_SHARES", "8192")
+    monkeypatch.setenv("DV_VIZ_RELAY", "false")
+    rc, _ = _run(tmp_path, world)
+    assert rc == 0
+    run = docker.run_args()
+    assert run[run.index("--cpu-shares") + 1] == "8192"
+    assert "DV_VIZ_RELAY=false" in run
+    with pytest.raises(rmb.BenchmarkError):
+        rmb.stack_cpu_args({"BENCH_CPU_SHARES": "lots"})
+
+
+def test_a_run_records_how_cpu_starved_the_machine_was(tmp_path, monkeypatch):
+    # /proc/pressure/cpu's "some" total grows by 0.25 s per second of the run
+    clock = {"t": 100.0}
+    real = rmb.time.monotonic
+    monkeypatch.setattr(rmb, "cpu_pressure_us", lambda: (real() - clock["t"]) * 0.25e6)
+    rc, _ = _run(tmp_path, FakeWorld(never_finishes=True, sim_step=1.0), timeout_s=3.0)
+    res = _result(tmp_path)
+    assert rc == 1
+    assert res["box/cpu_wait"] == pytest.approx(0.25, abs=0.02)
+    assert "box/load1" in res
+
+
+def test_cpu_pressure_is_read_from_the_some_line(tmp_path, monkeypatch):
+    p = tmp_path / "cpu"
+    p.write_text("some avg10=20.79 avg60=21.74 avg300=13.63 total=14420655869\n"
+                 "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")
+    monkeypatch.setattr(rmb, "CPU_PRESSURE", p)
+    assert rmb.cpu_pressure_us() == 14420655869.0
+    monkeypatch.setattr(rmb, "CPU_PRESSURE", tmp_path / "missing")
+    assert rmb.cpu_pressure_us() is None  # not Linux, or an old kernel: nothing recorded

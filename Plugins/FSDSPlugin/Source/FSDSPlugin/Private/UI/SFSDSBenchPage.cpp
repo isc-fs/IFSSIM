@@ -5,6 +5,7 @@
 
 #include "GenericPlatform/GenericPlatformHttp.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/FileHelper.h"
@@ -314,6 +315,50 @@ namespace BenchUi
 		for (const FString& X : Values) J.Add(MakeShared<FJsonValueString>(X));
 		O->SetArrayField(Key, J);
 	}
+
+	// Starts Command, detached, in a login shell in the repo (its paths relative to the repo).
+	// On Windows in WSL's default distro: the benchmarks need Linux, and WSL sees the repo
+	// under /mnt and Docker Desktop's engine. The script goes in results/.bench there, where
+	// wsl.exe --cd (which takes the Windows path) finds it.
+	bool LaunchInRepo(const FString& Repo, const TCHAR* Prefix, const FString& Command, FString& Error)
+	{
+		const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
+		IFileManager::Get().MakeDirectory(*Bench, true);
+#if PLATFORM_WINDOWS
+		const FString Exe = FPaths::Combine(FPlatformMisc::GetEnvironmentVariable(TEXT("SystemRoot")), TEXT("System32/wsl.exe"));
+		if (!FPaths::FileExists(Exe))
+		{
+			Error = TEXT("WSL isn't installed, and the benchmarks run in it: install it (wsl --install) with Ubuntu, then try again.");
+			return false;
+		}
+		const FString Name = FString(Prefix) + TEXT("windows.sh");
+		const FString Script = FPaths::Combine(Bench, Name);
+		const FString Body = TEXT("cd ../../../.. || exit 1\n") + Command + TEXT("\n");
+		const FString Args = FString::Printf(TEXT("--cd \"%s\" -e bash -l %s"), *FPaths::ConvertRelativePathToFull(Bench), *Name);
+#else
+		// Through a script, as FFSDSStackStarter::Run does: CreateProc on Linux ignores the
+		// working folder and splits its arguments on spaces.
+		auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
+		const FString Exe = TEXT("/bin/bash");
+		const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), Prefix, TEXT(".sh"));
+		const FString Body = FString::Printf(TEXT("cd %s || exit 1\n%s\n"), *Quote(Repo), *Command);
+		const FString Args = FString::Printf(TEXT("-l \"%s\""), *Script);
+#endif
+		if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		{
+			Error = FString::Printf(TEXT("Couldn't write %s."), *Script);
+			return false;
+		}
+		FProcHandle H = FPlatformProcess::CreateProc(*Exe, *Args,
+			/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
+		if (!H.IsValid())
+		{
+			Error = FString::Printf(TEXT("Couldn't start %s."), *Exe);
+			return false;
+		}
+		FPlatformProcess::CloseProc(H);
+		return true;
+	}
 }
 
 void SFSDSBenchPage::Construct(const FArguments& InArgs)
@@ -521,11 +566,7 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 								if (bWorkerAlive && bWorkerStopping) return LOCTEXT("WorkerStopping", "Stopping once no spec is running.");
 								if (bWorkerAlive) return LOCTEXT("Worker", "Worker running: queued specs run one at a time.");
 								if (FPlatformTime::Seconds() < WorkerStartingUntil) return LOCTEXT("WorkerStarting", "Starting the worker...");
-#if PLATFORM_WINDOWS
-								return LOCTEXT("NoWorkerWin", "No worker: queued specs wait. Start one from WSL: python3 tools/sim_benchmark/run_spec.py --work");
-#else
 								return LOCTEXT("NoWorker", "No worker: queued specs wait until you start it.");
-#endif
 							})
 							.ToolTipText_Lambda([this]()
 							{
@@ -548,11 +589,7 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 								{
 									if (!bQueueKnown || !Client.IsValid()) return false;
 									if (bWorkerAlive) return !bWorkerStopping;
-#if PLATFORM_WINDOWS
-									return false;
-#else
 									return FPlatformTime::Seconds() >= WorkerStartingUntil && !RepoDir().IsEmpty();
-#endif
 								}))
 						]
 					]
@@ -2412,27 +2449,20 @@ void SFSDSBenchPage::CheckMachine()
 {
 	const double T = FPlatformTime::Seconds();
 	NextMachineCheck = T + 60.0;
-#if PLATFORM_WINDOWS
-	return;   // run_spec.py's checks need a Linux host (the worker runs in WSL there)
-#else
 	const FString Repo = RepoDir();
 	if (Repo.IsEmpty() || T < MachineCheckUntil) return;
 	// run_spec.py --rig saves its checks where the backend reads them (results/.bench/rig.json).
-	const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
-	IFileManager::Get().MakeDirectory(*Bench, true);
-	auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
-	const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-rig-"), TEXT(".sh"));
-	const FString Body = FString::Printf(TEXT("cd %s || exit 1\nexec python3 tools/sim_benchmark/run_spec.py --rig --json > /dev/null 2>> %s\n"),
-		*Quote(Repo), *Quote(FPaths::Combine(Bench, TEXT("rig-check.out"))));
-	if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)) return;
-	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/bin/bash"), *FString::Printf(TEXT("-l \"%s\""), *Script),
-		/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
-	if (!H.IsValid()) return;
-	FPlatformProcess::CloseProc(H);
-	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds; read it back then.
+	FString Error;
+	if (!BenchUi::LaunchInRepo(Repo, TEXT("fsds-rig-"),
+		TEXT("exec python3 tools/sim_benchmark/run_spec.py --rig --json > /dev/null 2>> tools/sim_benchmark/results/.bench/rig-check.out"), Error))
+	{
+		return;
+	}
+	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds (about 14 s from
+	// WSL on Windows, Python's start included); read it back then.
 	MachineCheckUntil = T + 12.0;
 	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
-	for (const float After : { 4.f, 8.f, 13.f })
+	for (const float After : { 4.f, 8.f, 13.f, 20.f })
 	{
 		RegisterActiveTimer(After, FWidgetActiveTimerDelegate::CreateLambda([Weak](double, float)
 		{
@@ -2440,44 +2470,26 @@ void SFSDSBenchPage::CheckMachine()
 			return EActiveTimerReturnType::Stop;
 		}));
 	}
-#endif
 }
 
 void SFSDSBenchPage::StartWorker()
 {
-#if PLATFORM_WINDOWS
-	SetNote(TEXT("Start the worker in a terminal (WSL): python3 tools/sim_benchmark/run_spec.py --work"), true);
-#else
 	const FString Repo = RepoDir();
 	if (Repo.IsEmpty())
 	{
 		SetNote(TEXT("The IFSSIM folder isn't set: START once to set it up."), true);
 		return;
 	}
-	// It runs on the host like the sim (a benchmark needs the host's Docker and paths),
-	// and outlives the page: the queue keeps running when you leave it. Through a script,
-	// as FFSDSStackStarter::Run does: CreateProc on Linux ignores the working folder and
-	// splits its arguments on spaces.
-	const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
-	IFileManager::Get().MakeDirectory(*Bench, true);
-	const FString Log = FPaths::Combine(Bench, TEXT("worker.out"));
-	auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
-	const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-worker-"), TEXT(".sh"));
-	const FString Body = FString::Printf(TEXT("cd %s || exit 1\nexec python3 tools/sim_benchmark/run_spec.py --work >> %s 2>&1\n"),
-		*Quote(Repo), *Quote(Log));
-	if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	// It runs on the host like the sim (a benchmark needs the host's Docker and paths; on
+	// Windows, WSL), and outlives the page: the queue keeps running when you leave it.
+	const FString Log = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench/worker.out"));
+	FString Error;
+	if (!BenchUi::LaunchInRepo(Repo, TEXT("fsds-worker-"),
+		TEXT("exec python3 tools/sim_benchmark/run_spec.py --work >> tools/sim_benchmark/results/.bench/worker.out 2>&1"), Error))
 	{
-		SetNote(FString::Printf(TEXT("Couldn't write %s."), *Script), true);
+		SetNote(FString::Printf(TEXT("Couldn't start the worker: %s"), *Error), true);
 		return;
 	}
-	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/bin/bash"), *FString::Printf(TEXT("-l \"%s\""), *Script),
-		/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
-	if (!H.IsValid())
-	{
-		SetNote(TEXT("Couldn't start the worker (/bin/bash)."), true);
-		return;
-	}
-	FPlatformProcess::CloseProc(H);
 	WorkerStartingUntil = FPlatformTime::Seconds() + BenchUi::WorkerStartS;
 	SetNote(FString::Printf(TEXT("Starting the worker; its output goes to %s."), *Log), false);
 	NextQueue = 0.0;
@@ -2494,7 +2506,6 @@ void SFSDSBenchPage::StartWorker()
 		}
 		return EActiveTimerReturnType::Stop;
 	}));
-#endif
 }
 
 void SFSDSBenchPage::StopWorker()
