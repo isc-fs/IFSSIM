@@ -32,6 +32,11 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **On Windows, tracks load from the repository after START.** START runs `docker compose`
+  through cmd.exe, which doesn't set `PWD`, so the backend's `UE5_TRACKS_DIR` came out as
+  `/Content/tracks`: the sim fell back to its own copy of a track, and couldn't load one that
+  only the repository has. START now sets `PWD` to the compose folder.
+
 - **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
   read its readback slot before the render thread had queued the new copy, so it returned that slot's
   previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
