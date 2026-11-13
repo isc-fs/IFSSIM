@@ -54,7 +54,9 @@ TOP = {
     "pipeline",
     "sweep",
     "experiment",
+    "boards",
 }
+BOARD_MODES = ("hil", "vhil")
 # scratch: tried out, never a baseline, purged after a while; official: kept (PR and merge runs).
 # Not part of spec_id: the same settings run as scratch or official are the same run of the code.
 EXPERIMENTS = ("scratch", "official")
@@ -245,6 +247,10 @@ def validate(spec: dict[str, Any], m: Manifest) -> dict[str, Any]:
             )
     s["pipeline"] = {k: v for k, v in pipeline.items() if v}
 
+    boards = s.get("boards")
+    if boards:
+        errors += _board_errors(boards, m)
+
     sweep = s.get("sweep") or {}
     if not isinstance(sweep, dict):
         errors.append("sweep: a mapping of key.path to a list of values")
@@ -259,6 +265,33 @@ def validate(spec: dict[str, Any], m: Manifest) -> dict[str, Any]:
     if errors:
         raise SpecError("\n".join(errors))
     return s
+
+
+def _board_errors(b: Any, m: Manifest) -> list[str]:
+    """``boards: {mode: hil|vhil, system: <vhil system>, firmware: {board: ref}}``."""
+    if not isinstance(b, dict):
+        return ["boards: a mapping (mode, system, firmware)"]
+    known = m.boards or {}
+    errors = []
+    mode = b.get("mode")
+    if mode not in BOARD_MODES:
+        return [f"boards.mode: one of {', '.join(BOARD_MODES)}"]
+    if mode == "vhil":
+        systems = known.get("vhil") or {}
+        if b.get("system") not in systems:
+            errors.append(f"boards.system: one of {', '.join(systems) or 'none (bench.yaml lists no vHIL systems)'}")
+            allowed: list[str] = []
+        else:
+            allowed = systems[b["system"]]
+    else:
+        allowed = known.get("hil") or []
+    fw = b.get("firmware") or {}
+    if not isinstance(fw, dict):
+        errors.append("boards.firmware: a mapping of board to branch, PR or commit")
+        fw = {}
+    for board in sorted(set(fw) - set(allowed)):
+        errors.append(f"boards.firmware.{board}: not a board of this {'system' if mode == 'vhil' else 'bench'} ({', '.join(allowed) or 'none'})")
+    return errors
 
 
 # ------------------------------------------------------------------ jobs

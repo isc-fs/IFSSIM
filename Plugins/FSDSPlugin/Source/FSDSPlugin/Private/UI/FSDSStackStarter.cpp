@@ -306,6 +306,14 @@ bool FFSDSStackStarter::Run(const FString& WorkDir, const FString& Command, FStr
 	}
 
 #if PLATFORM_WINDOWS
+	// docker-compose.yml builds paths from ${PWD} (the backend's UE5_TRACKS_DIR). A
+	// shell sets it, cmd.exe doesn't: compose left it blank, the backend asked the sim
+	// for /Content/tracks/<name>, and the sim loaded its own copy of the track instead
+	// of the repository's (or none, for a track only the repository has).
+	if (!WorkDir.IsEmpty())
+	{
+		FPlatformMisc::SetEnvironmentVar(TEXT("PWD"), *FPaths::ConvertRelativePathToFull(WorkDir));
+	}
 	// /s: cmd strips just the outer quotes, so quoted paths inside (spaces,
 	// accents) reach the command as they are.
 	const FString Exe = TEXT("cmd.exe");
@@ -321,7 +329,12 @@ bool FFSDSStackStarter::Run(const FString& WorkDir, const FString& Command, FStr
 	const FString Exe = TEXT("/bin/bash");
 #endif
 	ScriptPath = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-run-"), TEXT(".sh"));
-	if (!FFileHelper::SaveStringToFile(TEXT("exec 2>&1\n") + Command + TEXT("\n"), *ScriptPath,
+	// The script goes to WorkDir itself: CreateProc on Linux leaves the child in
+	// the engine's Binaries folder, where `docker compose` finds no compose file
+	// (exit 14, "no configuration file provided").
+	const FString Cd = WorkDir.IsEmpty() ? FString()
+		: FString::Printf(TEXT("cd '%s' || exit 1\n"), *WorkDir.Replace(TEXT("'"), TEXT("'\\''")));
+	if (!FFileHelper::SaveStringToFile(TEXT("exec 2>&1\n") + Cd + Command + TEXT("\n"), *ScriptPath,
 		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 	{
 		Close();
