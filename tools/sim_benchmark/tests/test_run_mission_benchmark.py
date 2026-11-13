@@ -188,13 +188,18 @@ slam_node:
 """
 
 
-def _checkout(tmp_path, params=True):
-    """An IFSSIM checkout with a small pipeline: two packages and a file that isn't one."""
+def _checkout(tmp_path, params=True, bridge=True):
+    """An IFSSIM checkout with a small pipeline (two packages and a file that isn't one)
+    and, with ``bridge``, the sim bridge's package under ros2/src."""
     root = tmp_path / "checkout"
     for pkg in ("bringup", "slam"):
         (root / "pipeline" / pkg).mkdir(parents=True, exist_ok=True)
         (root / "pipeline" / pkg / "package.xml").write_text("<package/>")
     (root / "pipeline" / "README.md").write_text("not a package")
+    if bridge:
+        (root / "ros2" / "src" / "ifssim_bridge" / "src").mkdir(parents=True, exist_ok=True)
+        (root / "ros2" / "src" / "ifssim_bridge" / "package.xml").write_text("<package/>")
+        (root / "ros2" / "src" / "ifssim_bridge" / "src" / "wrapper.cpp").write_text("// v1")
     if params:
         (root / "pipeline" / "bringup" / "config").mkdir(exist_ok=True)
         (root / "pipeline" / "bringup" / "config" / "params.yaml").write_text(
@@ -442,12 +447,16 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     )  # Fast DDS shared memory, as compose
     mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
     targets = sorted(_mount(m)[1] for m in mounts if "/src/" in m)
+    # the pipeline's packages and the sim bridge's: the image's own bridge may be older
+    # than the sim's sensor frame
     assert targets == [
         "/dv_pipeline_stack_ws/src/bringup",
+        "/dv_pipeline_stack_ws/src/ifssim_bridge",
         "/dv_pipeline_stack_ws/src/slam",
     ]
     hosts = [Path(_mount(m)[0]) for m in mounts if "/src/" in m]
-    assert all(h.is_absolute() and h.parent.name == "pipeline" for h in hosts)
+    assert all(h.is_absolute() for h in hosts)
+    assert sorted(h.parent.name for h in hosts) == ["pipeline", "pipeline", "ros2"]
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
     # ... and the copy sits under the results root, never in /tmp, which snap's Docker
@@ -475,6 +484,42 @@ def test_the_stacks_build_is_kept_between_runs_of_one_image(tmp_path, world, doc
     assert "bench_ws_0123456789ab_install:/dv_pipeline_stack_ws/install" in mounts
     assert docker.volumes == ["bench_ws_0123456789ab_build", "bench_numba_cache"]
     assert any(a.startswith("DV_SRC_HASH=") for a in run)  # so unchanged sources skip colcon
+
+
+def test_a_change_to_the_bridge_alone_changes_the_stacks_source_hash(
+    tmp_path, world, docker
+):
+    """The entrypoint skips colcon when DV_SRC_HASH matches the cached build: a bridge
+    change must not be skipped."""
+    docker.image_id = "sha256:0123456789abcdef"
+    checkout = _checkout(tmp_path / "c")
+
+    def src_hash():
+        rc, _ = _run(tmp_path, world, checkout=str(checkout))
+        assert rc == 0
+        last = [c for c in docker.calls if c[0] == "run" and "--rm" not in c][-1]
+        return next(a for a in last if a.startswith("DV_SRC_HASH="))
+
+    first = src_hash()
+    assert src_hash() == first  # same sources, same hash: colcon is skipped
+    (checkout / "ros2" / "src" / "ifssim_bridge" / "src" / "wrapper.cpp").write_text(
+        "// v2: a bigger sensor frame"
+    )
+    assert src_hash() != first
+
+
+def test_a_checkout_without_the_bridge_still_runs_its_pipeline(
+    tmp_path, world, docker
+):
+    checkout = _checkout(tmp_path / "c", bridge=False)
+    rc, _ = _run(tmp_path, world, checkout=str(checkout))
+    assert rc == 0
+    run = docker.run_args()
+    mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
+    assert sorted(_mount(m)[1] for m in mounts if "/src/" in m) == [
+        "/dv_pipeline_stack_ws/src/bringup",
+        "/dv_pipeline_stack_ws/src/slam",
+    ]
 
 
 def test_the_source_hash_follows_paths_and_contents(tmp_path):
