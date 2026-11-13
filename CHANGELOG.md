@@ -32,6 +32,9 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`run_mission_benchmark --pipeline-on latte_panda` starts the bridge again.** The bridge-only
+  container skips the image's entrypoint, so `ros2 launch` couldn't find `ifssim_bridge`. The launch
+  now adds `fs_msgs`, `ifssim_bridge` and `dv_msgs` to `AMENT_PREFIX_PATH`, as the entrypoint does.
 - **LiDAR clouds no longer carry points from two scans earlier.** On 40–50 % of scans the GPU LiDAR
   read its readback slot before the render thread had queued the new copy, so it returned that slot's
   previous scan (200 ms old) stamped with the new capture time. At 12 m/s SLAM placed those cones 2.4 m
