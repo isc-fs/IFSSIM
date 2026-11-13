@@ -1422,12 +1422,17 @@ def track_load(name: str):
     # (UE5_TRACKS_DIR defaults to TRACKS_DIR), so the sim reads the rewritten
     # bytes. Cheap when already centred — one min/max pass, no rewrite — so
     # newly generated tracks pass straight through. See track_centering.
-    try:
-        from track_centering import ensure_centered
-        if ensure_centered(filepath):
-            log_event("track_recenter", f"Recentred {name} on origin before load")
-    except Exception as e:
-        _state_logger.warning("track centering skipped for %s: %s", name, e)
+    # Built-in tracks are left as they are: they ship in the repository, sit
+    # where they are on purpose (acceleration's start line on the Montmeló
+    # world's origin) and fit the floor, and rewriting them changed files
+    # under version control on every load.
+    if name not in BUILTIN_TRACKS:
+        try:
+            from track_centering import ensure_centered
+            if ensure_centered(filepath):
+                log_event("track_recenter", f"Recentred {name} on origin before load")
+        except Exception as e:
+            _state_logger.warning("track centering skipped for %s: %s", name, e)
     with _state_lock:
         result = sim.load_track(ue5_path)
         if event_type:

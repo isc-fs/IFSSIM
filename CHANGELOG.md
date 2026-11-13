@@ -32,6 +32,12 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Loading a built-in track no longer rewrites it.** Mission Control centred every
+  track on the origin as it loaded it, rewriting the file in place, so loading
+  `characterisation`, `acceleration` (and its world sidecar) or `skidpad` changed files
+  under version control. Built-in tracks now load as they are: they fit the floor, and
+  acceleration's start line stays on the Montmeló world's origin.
+
 - **START brings up the stack on Linux.** The menu's commands ran in the engine's
   folder instead of the repository, so `docker compose` found no compose file
   ("docker compose failed: exit status 14"); and Mission Control's backend couldn't
