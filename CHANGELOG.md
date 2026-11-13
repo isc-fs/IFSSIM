@@ -57,6 +57,13 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **Mission benchmarks build the sim bridge from the checkout, not the image.** The
+  benchmark's stack rebuilt `pipeline/` from the checkout but kept the bridge baked into
+  `ifssim-dv_pipeline_stack`, however old. After #875 grew the sensor frame, a stack image
+  from before it read the sim's stream out of step: the pipeline got IMU, wheel speeds and
+  steering at a few Hz, and acceleration runs drifted onto the cones (6 of 12 on this
+  Windows PC). `ros2/src` is now copied into the stack like `pipeline/` and rebuilt when it
+  changes (about a minute the first time).
 - **The bridge refuses a sim whose sensor frame isn't its own.** The sensor stream has no
   length prefix, so a bridge and a sim plugin from commits with different frame sizes (as
   across #875) read every frame after the first out of step, dropped them on the bad magic
