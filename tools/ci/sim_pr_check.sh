@@ -163,6 +163,17 @@ if python3 -c 'import json, sys; sys.exit(0 if (json.load(open(sys.argv[1])).get
 fi
 echo "car characterisation: ${characterise:-off}"
 
+# The box is shared (other CI runners, renders) and its 8 cores are already full with
+# the sim (~4 threads) and the pipeline (~5): every other service there has the same
+# CPU weight as a container, so a compile job takes as much CPU as the whole sim and
+# the sim drops to 0.6-0.8x real time. 8192 shares is a cgroup weight of ~313, about 3x
+# the others', for the sim's and the stack's containers only while this check runs.
+# viz_relay draws the pipeline over the track in the sim's window; headless, nobody
+# sees it, and it costs about half a core.
+export IFSSIM_SIM_CPU_SHARES="${IFSSIM_SIM_CPU_SHARES-8192}"
+export BENCH_CPU_SHARES="${BENCH_CPU_SHARES-8192}"
+export DV_VIZ_RELAY="${DV_VIZ_RELAY:-false}"
+
 # --poll-s 0.2: the car's path is sampled 5 times a second (the maps need it).
 # shellcheck disable=SC2086  # $characterise is one flag or nothing
 python3 -m headless_run run --sim "$SIM" --settings-dir "$ROOT" --mc-up \

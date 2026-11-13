@@ -101,6 +101,18 @@ isn't supported (`ClockSpeed` in `settings.json` has no effect).
   `--mc-up` sets (`IFSSIM_HOST`).
 - To run every night: a systemd timer or cron entry calling
   `python3 -m headless_run loop --cycles N ...`, which exits on its own.
+- On a shared machine, keep the run's CPU. The sim needs about 4 threads and the
+  pipeline about 5, and any other job there competes with them as an equal. Below
+  ~0.95× real time the car drives worse. The GPU box's sim check sets:
+  - `IFSSIM_SIM_CPU_SHARES` (with `IFSSIM_SIM_CONTAINER`, default `ifssim-sim`): after
+    the sim starts, `docker update --cpu-shares` on its container.
+  - `BENCH_CPU_SHARES`: `--cpu-shares` for the benchmark's pipeline container.
+  - `DV_VIZ_RELAY=false`: no viz_relay. It draws the pipeline's view in the sim's
+    window, which a headless run doesn't show, and costs about half a core.
+
+  Each run records `box/cpu_wait` in its `results.json`: the share of the run during
+  which some task waited for a CPU (Linux's `/proc/pressure/cpu`). The sim check's
+  report shows it next to the sim speed.
 
 ## Status
 
