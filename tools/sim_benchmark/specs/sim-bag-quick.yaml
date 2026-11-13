@@ -1,5 +1,5 @@
 # A few minutes: perception on the first 200 LiDAR frames and SLAM, on one bag.
-# Pick the bag with --set benchmarks.sim_bag.bags=<name> (bench-run --list shows them).
+# Pick the bag with --set benchmarks.sim_bag.bags=<name> (run_spec.py --list shows them).
 schema: 1
 name: simulator bag, quick check
 benchmarks:

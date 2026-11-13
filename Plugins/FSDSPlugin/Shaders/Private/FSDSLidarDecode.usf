@@ -68,6 +68,14 @@ float3 SensorRotRowX;
 float3 SensorRotRowY;
 float3 SensorRotRowZ;
 
+// Mount rotation, sensor frame -> vehicle frame. The capture camera is
+// rotated with the sensor, so (h, v), the texel lookup and the depth-to-
+// range conversion all stay in the sensor frame; only the reconstructed
+// point is rotated into the vehicle frame. Identity for a level mount.
+float3 MountRotRowX;
+float3 MountRotRowY;
+float3 MountRotRowZ;
+
 // Inverse-square reference range (m). Perpendicular surfaces at this
 // range return the unmodified reflectance — i.e. intensity = ρ_905.
 // Set CPU-side from a const so a single edit re-tunes the gain across
@@ -255,9 +263,10 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	// here we have to add it explicitly because the shader works in
 	// the sensor's local frame.
 	const float ScaleM = RayDistCm / 100.0;
-	const float Px = DirX * ScaleM + SensorOffsetXm;
-	const float Py = DirY * ScaleM + SensorOffsetYm;
-	const float Pz = DirZ * ScaleM + SensorOffsetZm;
+	const float3 DirSensor = float3(DirX, DirY, DirZ);
+	const float Px = dot(MountRotRowX, DirSensor) * ScaleM + SensorOffsetXm;
+	const float Py = dot(MountRotRowY, DirSensor) * ScaleM + SensorOffsetYm;
+	const float Pz = dot(MountRotRowZ, DirSensor) * ScaleM + SensorOffsetZm;
 
 	// === Intensity (#255 / #321 / #358). Hesai-class working principle:
 	//   intensity = ρ × cos(θ_inc) × (R_ref / range)²

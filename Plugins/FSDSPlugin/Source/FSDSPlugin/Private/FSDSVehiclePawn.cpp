@@ -680,6 +680,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
 				LidarSensor->MaxRange = SensorPair.Value.MaxRange * 100.f;     // meters → cm
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
+				LidarSensor->MountRotation = SensorPair.Value.Rotation;
 				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 
@@ -749,6 +750,21 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
 				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd;
 				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
+				ImuSensor->AccelBiasTau = SensorPair.Value.AccelBiasTau;
+				ImuSensor->GyroBiasTau = SensorPair.Value.GyroBiasTau;
+				// Sample stream and digitisation. The sensor works in cm/s² for
+				// accel (see FSDSImuSensor.cpp), so the m/s² values scale by 100
+				// here; the noise σ are scaled inside the sensor instead.
+				ImuSensor->SampleRateHz = SensorPair.Value.ImuSampleRateHz;
+				ImuSensor->AccelOdrHz = SensorPair.Value.AccelOdrHz;
+				ImuSensor->AccelNoiseStdXYZ = SensorPair.Value.AccelNoiseStdXYZ;
+				ImuSensor->GyroNoiseStdXYZ = SensorPair.Value.GyroNoiseStdXYZ;
+				ImuSensor->AccelTurnOnBiasStd = SensorPair.Value.AccelTurnOnBiasStd * 100.f;
+				ImuSensor->GyroTurnOnBiasStd = SensorPair.Value.GyroTurnOnBiasStd;
+				ImuSensor->AccelLsb = SensorPair.Value.AccelLsb * 100.f;
+				ImuSensor->GyroLsb = SensorPair.Value.GyroLsb;
+				ImuSensor->AccelRange = SensorPair.Value.AccelRange * 100.f;
+				ImuSensor->GyroRange = SensorPair.Value.GyroRange;
 				break;
 			}
 		}
@@ -1692,6 +1708,9 @@ void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	// DefaultInput.ini.
 	PlayerInputComponent->BindKey(FFSDSLauncher::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleLauncher);
 	PlayerInputComponent->BindKey(FFSDSHud::ToggleKey(), IE_Pressed, this, &AFSDSVehiclePawn::OnToggleHud);
+
+	// Esc: pause a manual run, or bring back the front-end menu.
+	PlayerInputComponent->BindKey(EKeys::Escape, IE_Pressed, this, &AFSDSVehiclePawn::OnMenuKey);
 }
 
 void AFSDSVehiclePawn::OnToggleHud()
@@ -1699,6 +1718,14 @@ void AFSDSVehiclePawn::OnToggleHud()
 	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
 	{
 		GM->GetHud().Toggle();
+	}
+}
+
+void AFSDSVehiclePawn::OnMenuKey()
+{
+	if (AFSDSGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AFSDSGameMode>() : nullptr)
+	{
+		GM->GetMenu().OnEscape();
 	}
 }
 

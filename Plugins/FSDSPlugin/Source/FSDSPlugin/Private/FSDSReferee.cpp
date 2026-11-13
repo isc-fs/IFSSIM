@@ -113,6 +113,21 @@ void AFSDSReferee::Tick(float DeltaTime)
 		}
 	}
 
+	// One-way track: there is no crossing to start the clock, so it starts
+	// when the car sets off. (Acceleration starts it when the event is set.)
+	if (bOneWayTrack && bFinishLineValid && !bLapTimerRunning && !State.bFinished)
+	{
+		const APlayerController* PC = GetWorld()->GetFirstPlayerController();
+		const APawn* Car = PC ? PC->GetPawn() : nullptr;
+		constexpr float SetOffCmPerS = 50.f;
+		if (Car && Car->GetVelocity().Size2D() > SetOffCmPerS)
+		{
+			LapStartTime = GetWorld()->GetTimeSeconds();
+			bLapTimerRunning = true;
+			UE_LOG(LogTemp, Log, TEXT("FSDS Referee: one-way run started at %.2f s"), LapStartTime);
+		}
+	}
+
 	// Out-of-bounds detection (throttled to avoid per-frame cost)
 	OffTrackTimer += DeltaTime;
 	if (OffTrackTimer >= OffTrackCheckInterval && State.Cones.Num() > 10)
@@ -337,6 +352,8 @@ void AFSDSReferee::UpdateFinishLine()
 			// Degenerate: fall back to using all oranges rather than no gate
 			FinishCluster = OrangePositions;
 		}
+		// Oranges left out of the finish cluster are a separate start gate.
+		bOneWayTrack = FinishCluster.Num() < OrangePositions.Num();
 
 		// Compute finish line center and direction from the cluster
 		FVector Sum = FVector::ZeroVector;
@@ -363,8 +380,9 @@ void AFSDSReferee::UpdateFinishLine()
 		FinishLineTrigger->SetWorldRotation(FinishLineDirection.Rotation());
 
 		bFinishLineValid = true;
-		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Finish line at (%.0f, %.0f) width=%.0f cm, %d/%d orange cones in finish cluster"),
-			FinishLineCenter.X, FinishLineCenter.Y, LineWidth, FinishCluster.Num(), OrangePositions.Num());
+		UE_LOG(LogTemp, Log, TEXT("FSDS Referee: Finish line at (%.0f, %.0f) width=%.0f cm, %d/%d orange cones in finish cluster%s"),
+			FinishLineCenter.X, FinishLineCenter.Y, LineWidth, FinishCluster.Num(), OrangePositions.Num(),
+			bOneWayTrack ? TEXT(" (one-way track: one pass finishes)") : TEXT(""));
 	}
 }
 
@@ -384,6 +402,7 @@ void AFSDSReferee::ResetState()
 	bVehicleInsideFinishZone = false;
 	bFinishLineValid = false;
 	bFinishAnchoredToTrack = false;
+	bOneWayTrack = false;
 	bWasOffTrack = false;
 	bPositionsRecorded = false;
 	PositionSnapshotTimer = 0.f;
@@ -553,15 +572,15 @@ void AFSDSReferee::OnFinishLineOverlap(UPrimitiveComponent* OverlappedComp, AAct
 		float LapTime = (float)(CurrentTime - LapStartTime);
 
 		// Minimum time to avoid false triggers
-		float MinTime = (State.EventType == EFSDSEventType::Acceleration) ? 1.0f : 3.0f;
+		float MinTime = (State.EventType == EFSDSEventType::Acceleration || bOneWayTrack) ? 1.0f : 3.0f;
 
 		if (LapTime > MinTime)
 		{
 			LapCompleted(LapTime);
 			LapStartTime = CurrentTime; // Start next lap
 
-			// Check if event is finished
-			if (State.Laps.Num() >= State.RequiredLaps)
+			// Check if event is finished. A one-way track has no second lap.
+			if (State.Laps.Num() >= State.RequiredLaps || bOneWayTrack)
 			{
 				State.bFinished = true;
 				UE_LOG(LogTemp, Log, TEXT("FSDS Referee: EVENT FINISHED — %d/%d laps, DOO=%d, OC=%d"),

@@ -27,13 +27,14 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from sim_client import SimConnection
-from scoring import compute_scoring
+from scoring import compute_scoring, valid_reference
 
 # #465 — bag-record helpers. Pure-Python, no FastAPI coupling, so the
 # test suite can drive subprocess calls with mocks. See bag_recorder.py
 # for the orchestration contract this module relies on.
 import bag_recorder as _bag
 import benchmark_control_runner as _benchmark
+import bench_queue as _bench
 import mission_catalog as _missions
 import track_creator as _creator
 from ros_bridge import RosBridge, StartMissionOutcome
@@ -371,6 +372,7 @@ class TrackCreate(BaseModel):
 class TrackPreview(BaseModel):
     spec: dict
     strict: bool = False
+    venue: Optional[str] = None   # also keep the cones on this venue's lot (docs/venues.md)
 
 class TeleportRequest(BaseModel):
     x: float
@@ -547,6 +549,14 @@ def event_state():
                 state["bag_error"] = rec["error"]
         else:
             state["bag_state"] = "none"
+    # The AS state machine and the pipeline's status (/assi/state,
+    # /dv/status), so a client following the run (the mission benchmark)
+    # sees AS Emergency without waiting for the referee to time out. Absent
+    # when the ROS bridge isn't up (tests, no rclpy).
+    try:
+        state.update(RosBridge.get().as_snapshot())
+    except Exception:
+        pass
     return state
 
 @app.post("/api/event/set", dependencies=[Depends(require_api_key)])
@@ -1058,6 +1068,83 @@ def pipeline_start():
         "message": outcome.message,
     }
 
+# Car copies being made on demand (the sim's Bags page): bag name -> state,
+# "making" until done, then "done" or "error: ...". Under _car_parity_lock.
+_car_parity_jobs: dict = {}
+_car_parity_lock = threading.Lock()
+
+
+def _car_parity_in_background(name: str) -> None:
+    try:
+        res = _bag.make_car_parity(name)
+    except Exception as ex:  # noqa: BLE001 — report it, don't kill the thread silently
+        res = {"ok": False, "error": f"raised: {ex}"}
+    with _car_parity_lock:
+        _car_parity_jobs[name] = "done" if res.get("ok") else f"error: {res.get('error', 'unknown')}"
+    log_event("record_bag", f"car copy of {name}: {_car_parity_jobs[name]}")
+
+
+@app.post("/api/bags/{name}/car_parity", dependencies=[Depends(require_api_key)])
+def bag_car_parity_make(name: str):
+    """Make `<name>_carparity` (LiDAR+IMU only, for the car's test stand) from
+    a bag in the bags folder, in the background (about a minute a lap). Off
+    after each recording by default (IFSSIM_BAG_CAR_PARITY); this makes one
+    when someone needs it. GET the same path for its state."""
+    with _car_parity_lock:
+        if _car_parity_jobs.get(name) == "making":
+            return {"ok": True, "state": "making"}
+        _car_parity_jobs[name] = "making"
+    threading.Thread(target=_car_parity_in_background, args=(name,),
+                     name=f"car-parity-{name}", daemon=True).start()
+    return {"ok": True, "state": "making"}
+
+
+@app.get("/api/bags/{name}/car_parity")
+def bag_car_parity_state(name: str):
+    """none | making | done | error: <why>."""
+    with _car_parity_lock:
+        return {"state": _car_parity_jobs.get(name, "none")}
+
+
+def _pull_bag_in_background(name: str) -> None:
+    """#498 auto-pull of a stopped bag onto the host (`./bags/<name>`),
+    off `_state_lock` (pipeline_stop starts it in a thread). Best-effort:
+    a failure leaves the bag safe in the volume, for `tools/pull-bag.sh`.
+    The result lands in `_active_recording` only while it still describes
+    this bag (a new START may have replaced it meanwhile)."""
+    global _active_recording
+    try:
+        pull = _bag.auto_pull_and_clean(name)
+    except Exception as ex:  # noqa: BLE001 — never kill the thread silently
+        pull = {"ok": False, "error": f"auto-pull raised: {ex}"}
+    update: dict = {"state": "stopped"}
+    if pull.get("ok"):
+        update["host_path"] = pull["host_path"]
+        # Car-liftable derivative (LiDAR+IMU only), if produced.
+        cp = pull.get("car_parity_path")
+        if cp:
+            update["car_parity_path"] = cp
+            log_event("record_bag", f"car-parity bag → {cp}")
+        elif pull.get("car_parity_error"):
+            log_event("record_bag", f"car-parity derive skipped: {pull['car_parity_error']}")
+        if pull.get("error"):
+            # Bag is on the host, but the volume-side rm failed: a warning,
+            # not a failed recording.
+            log_event("record_bag", f"auto-pulled {name} → {pull['host_path']} (warning: {pull['error']})")
+        else:
+            log_event("record_bag", f"auto-pulled {name} → {pull['host_path']}")
+    else:
+        update["pull_error"] = pull.get("error", "unknown auto-pull failure")
+        log_event(
+            "record_bag",
+            f"auto-pull failed for {name}: {update['pull_error']} — bag is still in "
+            "/bags volume, retrieve with `tools/pull-bag.sh`",
+        )
+    with _state_lock:
+        if _active_recording and _active_recording.get("name") == name:
+            _active_recording.update(update)
+
+
 @app.post("/api/pipeline/stop", dependencies=[Depends(require_api_key)])
 def pipeline_stop():
     """Tear down: cancel RuntimeControl, then SetMission(mission_id=0)."""
@@ -1154,51 +1241,22 @@ def pipeline_stop():
                 if _bag.is_auto_pull_enabled() and (
                     stop_resp.get("ok") or recovered
                 ):
-                    pull = _bag.auto_pull_and_clean(name)
-                    if pull.get("ok"):
-                        bag_info["host_path"] = pull["host_path"]
-                        _active_recording["host_path"] = pull["host_path"]
-                        # Car-liftable derivative (LiDAR+IMU only), if produced.
-                        cp = pull.get("car_parity_path")
-                        if cp:
-                            bag_info["car_parity_path"] = cp
-                            _active_recording["car_parity_path"] = cp
-                            log_event("record_bag", f"car-parity bag → {cp}")
-                        elif pull.get("car_parity_error"):
-                            log_event(
-                                "record_bag",
-                                f"car-parity derive skipped: "
-                                f"{pull['car_parity_error']}")
-                        if pull.get("error"):
-                            # Cleanup partial-failure path: bag is on host,
-                            # but the volume-side rm failed. Surface as a
-                            # warning, don't taint the bag_info["state"].
-                            log_event(
-                                "record_bag",
-                                f"auto-pulled {name} → {pull['host_path']} "
-                                f"(warning: {pull['error']})",
-                            )
-                        else:
-                            log_event(
-                                "record_bag",
-                                f"auto-pulled {name} → {pull['host_path']}",
-                            )
-                    else:
-                        # Pull failed: bag stays in volume. Log it so
-                        # the user knows to retrieve manually.
-                        bag_info["pull_error"] = pull.get(
-                            "error", "unknown auto-pull failure",
-                        )
-                        log_event(
-                            "record_bag",
-                            f"auto-pull failed for {name}: "
-                            f"{bag_info['pull_error']} — "
-                            "bag is still in /bags volume, "
-                            "retrieve with `tools/pull-bag.sh`",
-                        )
+                    # The pull (a GB-sized copy over the host bind mount,
+                    # plus the car-parity convert) takes minutes. Run it
+                    # off `_state_lock`: under it, /api/event/state and
+                    # every other endpoint stalled until it finished
+                    # (measured: ~3 min for a 60 s autocross lap).
+                    # bag_state reads "saving" until then.
+                    _active_recording["state"] = "saving"
+                    bag_info["state"] = "saving"
             # Keep the dict around with its terminal state so the
             # next /api/event/state response can still surface the
             # final bag path — cleared by the next event_start.
+    if bag_info is not None and bag_info.get("state") == "saving":
+        threading.Thread(
+            target=_pull_bag_in_background, args=(bag_info["name"],),
+            name=f"bag-pull-{bag_info['name']}", daemon=True,
+        ).start()
     log_event("pipeline", "Pipeline stopped (autonomy torn down)")
     response = {"ok": True, "pipeline": "stopped", "via": "ros_action"}
     if bag_info is not None:
@@ -1269,6 +1327,7 @@ def vehicle_teleport(req: TeleportRequest):
 # the `HTTPException(400)` shape the endpoints expect.
 from track_validators import (
     TrackNameError,
+    protected_reason,
     validate_track_name as _vt_name,
     validate_track_stem as _vt_stem,
     resolve_track_path as _rt_path,
@@ -1324,6 +1383,8 @@ def track_list():
             "blue": len(cones["blue"]), "yellow": len(cones["yellow"]),
             "orange": len(cones["big_orange"]) + len(cones["small_orange"]),
             "builtin": name in BUILTIN_TRACKS,
+            # can't be replaced or deleted (built-in, or the stress library)
+            "protected": protected_reason(name, BUILTIN_TRACKS) is not None,
             "event_type": BUILTIN_TRACKS.get(name),
             # drawn in the track creator: its spec can be reopened
             "editable": _creator.has_spec(f),
@@ -1361,12 +1422,17 @@ def track_load(name: str):
     # (UE5_TRACKS_DIR defaults to TRACKS_DIR), so the sim reads the rewritten
     # bytes. Cheap when already centred — one min/max pass, no rewrite — so
     # newly generated tracks pass straight through. See track_centering.
-    try:
-        from track_centering import ensure_centered
-        if ensure_centered(filepath):
-            log_event("track_recenter", f"Recentred {name} on origin before load")
-    except Exception as e:
-        _state_logger.warning("track centering skipped for %s: %s", name, e)
+    # Built-in tracks are left as they are: they ship in the repository, sit
+    # where they are on purpose (acceleration's start line on the Montmeló
+    # world's origin) and fit the floor, and rewriting them changed files
+    # under version control on every load.
+    if name not in BUILTIN_TRACKS:
+        try:
+            from track_centering import ensure_centered
+            if ensure_centered(filepath):
+                log_event("track_recenter", f"Recentred {name} on origin before load")
+        except Exception as e:
+            _state_logger.warning("track centering skipped for %s: %s", name, e)
     with _state_lock:
         result = sim.load_track(ue5_path)
         if event_type:
@@ -1426,14 +1492,16 @@ def track_delete(name: str):
     # — replaced with the shared `_validate_track_name` helper for
     # consistency.
     name = _validate_track_name(name)
-    if name in BUILTIN_TRACKS:
-        return JSONResponse({"error": "Cannot delete built-in track"}, status_code=400)
+    reason = protected_reason(name, BUILTIN_TRACKS)
+    if reason:
+        return JSONResponse({"error": f"Cannot delete: {reason}"}, status_code=400)
     filepath = _resolve_track_path(name)
     if os.path.exists(filepath):
         os.remove(filepath)
         spec_file = _creator.spec_path(filepath)
         if os.path.exists(spec_file):
             os.remove(spec_file)
+        _creator.remove_venue_sidecar(filepath)
         return {"deleted": name}
     return JSONResponse({"error": "Not found"}, status_code=404)
 
@@ -1445,7 +1513,8 @@ def track_delete(name: str):
 
 @app.post("/api/track/preview_spec")
 def track_preview_spec(req: TrackPreview):
-    code, body = _creator.preview(req.spec, strict=req.strict)
+    code, body = _creator.preview(req.spec, strict=req.strict, venue=req.venue,
+                                  tracks_dir=TRACKS_DIR)
     return body if code == 200 else JSONResponse(body, status_code=code)
 
 
@@ -1469,18 +1538,71 @@ def track_spec(name: str):
                             status_code=404)
     return spec
 
+def _run_random_generator(params: "TrackGenerate"):
+    """Run the random generator into a fresh temp dir: (tmp_dir, its csv).
+    The caller removes tmp_dir. The imports are local: the third-party
+    package resolves only after the sys.path insert at module load, and a
+    missing dependency should be a 500 here, not take the whole API down."""
+    from track_generator import TrackGenerator
+    from utils import Mode, SimType
+
+    # output_yaml() builds its path as: os.path.realpath(os.path.dirname(__file__)) + output_location
+    # __file__ is inside TRACK_GEN_PATH (read-only mount), so we use a traversal to
+    # redirect output into a writable tmpdir: TRACK_GEN_PATH + /../../tmp/xxx = /tmp/xxx
+    import tempfile
+    tmp_dir = tempfile.mkdtemp()
+    rel_to_gen = os.path.relpath(tmp_dir, TRACK_GEN_PATH)
+    output_location = "/" + rel_to_gen  # e.g. "/../../tmp/tmpXXXXXX"
+
+    # `os.chdir` is process-global. Two concurrent track-generate
+    # calls would race on CWD; an unrelated handler running in the
+    # same process between chdir-in and chdir-out would also see
+    # the wrong CWD. Serialize with a dedicated lock and restore
+    # CWD in finally so an exception inside `create_track()`
+    # doesn't leave the whole backend stuck in TRACK_GEN_PATH.
+    with _gen_lock:
+        orig_dir = os.getcwd()
+        os.chdir(TRACK_GEN_PATH)
+        try:
+            gen = TrackGenerator(
+                n_points=params.n_points, n_regions=params.n_regions,
+                min_bound=10., max_bound=float(params.max_bound),
+                mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
+                create_output_file=True, output_location=output_location,
+                sim_type=SimType.FSDS
+            )
+            gen.create_track()
+        finally:
+            os.chdir(orig_dir)
+
+    return tmp_dir, os.path.join(tmp_dir, "random_track.csv")
+
+
+@app.post("/api/track/random_spec", dependencies=[Depends(require_api_key)])
+def track_random_spec(params: TrackGenerate):
+    """A random track as the track editor's control points, nothing saved.
+
+    The editor shows it as a fresh drawing to edit, check and save like any
+    drawn track (see random_spec.py)."""
+    try:
+        tmp_dir, gen_file = _run_random_generator(params)
+        try:
+            if not os.path.exists(gen_file):
+                return JSONResponse({"error": "Generation failed"}, status_code=500)
+            cones = parse_track_csv(gen_file)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        from random_spec import control_points
+        points = control_points(cones["blue"], cones["yellow"])
+        return {"points": [list(p) for p in points], "closed": True}
+    except ImportError as e:
+        return JSONResponse({"error": f"Track generator not found: {e}"}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.post("/api/track/generate", dependencies=[Depends(require_api_key)])
 def track_generate(params: TrackGenerate):
     try:
-        # `sys.path` insertion now happens once at module load
-        # (#327 B9). Imports here are still local because the
-        # third-party package only resolves after that insert and
-        # we want the failure mode (missing dependency) to surface
-        # as a 500 from this endpoint rather than a hard import
-        # error at app startup that takes the whole API down.
-        from track_generator import TrackGenerator
-        from utils import Mode, SimType
-
         # Pre-#327 (B4) `params.name` was used directly as the
         # destination filename stem — `name="../../etc/passwd"`
         # would have written to TRACKS_DIR/../../etc/passwd.csv.
@@ -1489,36 +1611,7 @@ def track_generate(params: TrackGenerate):
         # always-safe.
         name_base = _validate_track_stem(params.name.strip()) if params.name.strip() else f"track_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # output_yaml() builds its path as: os.path.realpath(os.path.dirname(__file__)) + output_location
-        # __file__ is inside TRACK_GEN_PATH (read-only mount), so we use a traversal to
-        # redirect output into a writable tmpdir: TRACK_GEN_PATH + /../../tmp/xxx = /tmp/xxx
-        import tempfile
-        tmp_dir = tempfile.mkdtemp()
-        rel_to_gen = os.path.relpath(tmp_dir, TRACK_GEN_PATH)
-        output_location = "/" + rel_to_gen  # e.g. "/../../tmp/tmpXXXXXX"
-
-        # `os.chdir` is process-global. Two concurrent track-generate
-        # calls would race on CWD; an unrelated handler running in the
-        # same process between chdir-in and chdir-out would also see
-        # the wrong CWD. Serialize with a dedicated lock and restore
-        # CWD in finally so an exception inside `create_track()`
-        # doesn't leave the whole backend stuck in TRACK_GEN_PATH.
-        with _gen_lock:
-            orig_dir = os.getcwd()
-            os.chdir(TRACK_GEN_PATH)
-            try:
-                gen = TrackGenerator(
-                    n_points=params.n_points, n_regions=params.n_regions,
-                    min_bound=10., max_bound=float(params.max_bound),
-                    mode=Mode.RANDOM, plot_track=False, visualise_voronoi=False,
-                    create_output_file=True, output_location=output_location,
-                    sim_type=SimType.FSDS
-                )
-                gen.create_track()
-            finally:
-                os.chdir(orig_dir)
-
-        gen_file = os.path.join(tmp_dir, "random_track.csv")
+        tmp_dir, gen_file = _run_random_generator(params)
 
         if os.path.exists(gen_file):
             os.makedirs(TRACKS_DIR, exist_ok=True)
@@ -1548,6 +1641,9 @@ def scoring_summary(
     t_best: Optional[float] = Query(None),
     uss: bool = Query(False),
 ):
+    if t_best is not None and not valid_reference(t_best):
+        raise HTTPException(status_code=422, detail="t_best must be a number greater than 0")
+
     ref = sim.get_referee_state()
     if not ref:
         return {"error": "No referee data"}
@@ -1586,6 +1682,88 @@ def export_session_log():
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename=session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"}
     )
+
+
+# === Benchmarks tab (bench_queue.py) ===
+
+class BenchLaunch(BaseModel):
+    spec: dict
+    target: str = "local"
+    name: Optional[str] = None
+    requested_by: Optional[str] = None
+
+
+@app.post("/api/bench/launch", dependencies=[Depends(require_api_key)])
+def bench_launch(req: BenchLaunch):
+    """Queue a run spec. Local: a worker on this machine runs it (run_spec.py --work)."""
+    try:
+        out = _bench.launch(req.spec, req.target, req.requested_by, req.name)
+    except _bench.LaunchError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    log_event("benchmark", f"queued {out['id']} ({req.target})")
+    return out
+
+
+@app.get("/api/bench/presets")
+def bench_presets():
+    """The run spec presets (tools/sim_benchmark/specs) and the override files
+    (specs/overrides), as JSON, each preset with the rig parts it needs."""
+    return _bench.presets()
+
+
+@app.get("/api/bench/manifest")
+def bench_manifest():
+    """What a custom run can set: each benchmark's settings (bench.yaml), bags, missions, tracks."""
+    return _bench.manifest()
+
+
+@app.get("/api/bench/refs")
+def bench_refs(
+    repo: str = Query(..., description="owner/name, one bench.yaml names"),
+    branch: Optional[str] = Query(None, description="a branch or #PR: its latest commits instead"),
+):
+    """A repository's branches and open PRs, or a branch's latest commits, for the Setup
+    tab's version pickers."""
+    return _bench.commits(repo, branch) if branch else _bench.refs(repo)
+
+
+class BenchCheck(BaseModel):
+    spec: dict
+
+
+@app.post("/api/bench/check")
+def bench_check(req: BenchCheck):
+    """The worker's validation of a spec, before it is queued: its problems, or its jobs."""
+    return _bench.check(req.spec)
+
+
+@app.post("/api/bench/worker/stop", dependencies=[Depends(require_api_key)])
+def bench_worker_stop():
+    """Ask the local worker to stop once no spec is running."""
+    out = _bench.stop_worker()
+    log_event("benchmark", "asked the worker to stop")
+    return out
+
+
+@app.get("/api/bench/queue")
+def bench_queue(limit: int = Query(50, ge=1, le=500)):
+    """The local worker and the queued, running and finished specs, newest first."""
+    return _bench.queue(limit)
+
+
+@app.post("/api/bench/cancel/{job_id}", dependencies=[Depends(require_api_key)])
+def bench_cancel(job_id: str):
+    state = _bench.cancel(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no queued spec {job_id}")
+    log_event("benchmark", f"cancel {job_id}: {state}")
+    return {"id": job_id, "state": state}
+
+
+@app.get("/api/bench/rig")
+def bench_rig():
+    """What this machine can run now (sim, Docker, LattePanda, HIL), for the component boxes."""
+    return _bench.rig()
 
 
 # === WebSocket Telemetry ===

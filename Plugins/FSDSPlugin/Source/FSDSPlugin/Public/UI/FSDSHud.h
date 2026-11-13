@@ -35,6 +35,14 @@ public:
 	/** The key from settings ("Key"), or H when that isn't a key name. */
 	static FKey ToggleKey();
 
+	/** Detailed adds regen and the car's position (Settings, HUD); saved in
+	 *  GameUserSettings [FSDSHud] Detailed. */
+	static bool IsDetailed();
+	static void SetDetailed(bool bOn);
+
+private:
+	static bool bDetailed;
+
 private:
 	void Show();
 	void Hide();

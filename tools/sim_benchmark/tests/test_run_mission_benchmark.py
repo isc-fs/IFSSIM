@@ -22,8 +22,17 @@ class FakeWorld:
     """What the fake Mission Control and sim share: the referee, and what was asked of them."""
 
     def __init__(
-        self, laps_per_poll=1, start_fails=False, never_finishes=False, sim_step=None
+        self,
+        laps_per_poll=1,
+        start_fails=False,
+        never_finishes=False,
+        sim_step=None,
+        assi=None,
     ):
+        # (as_state, dv_status) reported on each referee poll while running, the last
+        # one repeating; None: Mission Control reports neither (no ROS bridge)
+        self.assi = assi
+        self.assi_polls = 0
         self.calls: list[str] = []
         # sim seconds each getSimStatus advances the sim clock by; None: no sim_time (an old build)
         self.sim_step = sim_step
@@ -39,7 +48,12 @@ class FakeWorld:
         if self.running and not self.never_finishes:
             self.laps = min(self.required, self.laps + self.laps_per_poll)
         done = self.running and self.laps >= self.required and not self.never_finishes
-        return {
+        extra = {}
+        if self.assi and self.running:
+            as_state, dv_status = self.assi[min(self.assi_polls, len(self.assi) - 1)]
+            self.assi_polls += 1
+            extra = {"as_state": as_state, "dv_status": dv_status}
+        return extra | {
             "laps": self.laps,
             "required_laps": self.required,
             "finished": done,
@@ -363,6 +377,8 @@ def test_the_latte_panda_needs_its_commands_and_runs_them(tmp_path, world, docke
     # here only the bridge: the latte panda runs the pipeline
     run = " ".join(docker.run_args())
     assert "--entrypoint bash" in run and "bridge.launch.py" in run
+    # the entrypoint is skipped, so the launch adds what it would to the path
+    assert "/dv_pipeline_stack_ws/install/ifssim_bridge:" in run
     assert "host:=host.docker.internal" in run
     assert "DV_REBUILD_ON_STARTUP" not in run and "/src/slam" not in run
     [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
@@ -434,6 +450,9 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     assert all(h.is_absolute() and h.parent.name == "pipeline" for h in hosts)
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
+    # ... and the copy sits under the results root, never in /tmp, which snap's Docker
+    # mounts as an empty folder
+    assert all(h.is_relative_to((tmp_path / "results").resolve()) for h in hosts)
     assert ["rm", "-f", rmb.CONTAINER] in docker.calls
     # root-owned files in the copy are removed from a container, as root
     assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
@@ -635,6 +654,8 @@ def test_the_timeout_counts_sim_time_not_real_time(tmp_path):
     assert rc == 1 and any(": timeout" in x for x in logs)
     assert res["race/run_sim_time_s"] >= 5.0 and res["race/run_time_s"] < 2.0
     assert not any("counts real time" in x for x in logs)
+    # sim seconds per real second: far above 1 here, so the timing results hold
+    assert res["race/real_time_factor"] > 2.0 and res["race/real_time_ok"] == 1
 
 
 def test_a_stalled_sim_clock_still_ends_on_the_real_time_backstop(tmp_path):
@@ -642,8 +663,27 @@ def test_a_stalled_sim_clock_still_ends_on_the_real_time_backstop(tmp_path):
     rc, _ = _run(tmp_path, frozen, timeout_s=0.1)
     res = _result(tmp_path)
     assert rc == 1 and res["race/run_sim_time_s"] == 0.0
+    assert res["race/real_time_factor"] == 0.0 and res["race/real_time_ok"] == 0
     # past the 0.1 s timeout in real time (the sim clock never moved), stopped by the backstop
     assert 0.1 < res["race/run_time_s"] < 0.1 * rmb.WALL_BACKSTOP + 1.0
+
+
+def test_slow_motion_is_set_for_the_runs_and_put_back(tmp_path):
+    # 1 sim s per poll: far faster than real time, so it passes at any target
+    w = FakeWorld(never_finishes=True, sim_step=1.0)
+    rc, logs = _run(tmp_path, w, timeout_s=3.0, speed_factor=0.25)
+    res = _result(tmp_path)
+    sets = [c for c in w.calls if c.startswith("SIM setSpeedFactor")]
+    assert sets == ["SIM setSpeedFactor 0.25", "SIM setSpeedFactor 1"]
+    assert any("slow motion" in x for x in logs)
+    assert res["race/speed_factor"] == 0.25 and res["race/real_time_ok"] == 1
+
+
+def test_a_bad_speed_factor_stops_before_any_run(tmp_path):
+    w = FakeWorld()
+    with pytest.raises(rmb.BenchmarkError, match="speed-factor"):
+        _run(tmp_path, w, speed_factor=2.0)
+    assert not any(c.startswith("SIM setSpeedFactor") for c in w.calls)
 
 
 def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
@@ -652,3 +692,35 @@ def test_a_sim_without_sim_time_falls_back_to_real_time(tmp_path):
     res = _result(tmp_path)
     assert rc == 1 and any("counts real time" in x for x in logs)
     assert "race/run_sim_time_s" not in res and res["race/run_time_s"] < 1.0
+    assert "race/real_time_factor" not in res   # no sim clock, no factor
+
+
+def test_an_as_emergency_ends_the_run_at_once_and_says_so(tmp_path):
+    # driving (AS 3, DV 3) for two polls, then the pipeline raises EBS (AS 1, DV 5)
+    w = FakeWorld(never_finishes=True, sim_step=1.0, assi=[(3, 3), (3, 3), (1, 5)])
+    rc, logs = _run(tmp_path, w, timeout_s=2400.0)
+    res = _result(tmp_path)
+    assert rc == 1 and any(": emergency" in x for x in logs)
+    assert any("AS Emergency" in x and "ending the run" in x for x in logs)
+    assert res["race/emergency"] == 1 and res["race/finished"] == 0
+    # a few sim seconds in, nowhere near the 2400 s timeout
+    assert 0.0 < res["race/emergency_at_s"] < 10.0 and res["race/run_sim_time_s"] < 10.0
+    [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
+    man = json.loads((d / "manifest.json").read_text())
+    assert man["outcome"] == "emergency" and man["emergency_at_s"] == res["race/emergency_at_s"]
+    assert "emergency at" in (d / "events.csv").read_text()
+
+
+def test_an_as_emergency_left_from_the_last_run_does_not_end_this_one(tmp_path):
+    # AS Emergency latched from before, never seen driving, pipeline not in emergency: runs to the timeout
+    w = FakeWorld(never_finishes=True, sim_step=1.0, assi=[(1, 3)])
+    rc, logs = _run(tmp_path, w, timeout_s=5.0)
+    res = _result(tmp_path)
+    assert rc == 1 and any(": timeout" in x for x in logs)
+    assert res["race/emergency"] == 0 and "race/emergency_at_s" not in res
+
+
+def test_a_finish_beats_the_emergency_brake_that_follows_it(tmp_path):
+    w = FakeWorld(sim_step=1.0, assi=[(3, 3), (1, 5)])
+    rc, logs = _run(tmp_path, w, timeout_s=60.0)
+    assert rc == 0 and _result(tmp_path)["race/finished"] == 1

@@ -72,6 +72,19 @@ struct FFSDSSensorSettings
 	float GyroBiasStd = 0.f;          // rad/s steady-state σ
 	float AccelBiasTau = 100.f;       // s
 	float GyroBiasTau = 100.f;        // s
+	// IMU sample stream and digitisation (uDV parity, see FSDSImuSensor.h).
+	// XYZ noise overrides the scalar per axis (REP-103 axes) when non-zero;
+	// the scalars stay what the bridge publishes as /imu covariance.
+	float ImuSampleRateHz = 400.f;    // Hz of sim time; 0 = one sample per tick
+	float AccelOdrHz = 0.f;           // Hz; accel held between updates; 0 = every sample
+	FVector AccelNoiseStdXYZ = FVector::ZeroVector;  // m/s² per accel update
+	FVector GyroNoiseStdXYZ = FVector::ZeroVector;   // rad/s per sample
+	float AccelTurnOnBiasStd = 0.f;   // m/s², constant per session
+	float GyroTurnOnBiasStd = 0.f;    // rad/s, constant per session
+	float AccelLsb = 0.f;             // m/s²; 0 = no quantisation
+	float GyroLsb = 0.f;              // rad/s; 0 = no quantisation
+	float AccelRange = 0.f;           // m/s² full scale; 0 = unlimited
+	float GyroRange = 0.f;            // rad/s full scale; 0 = unlimited
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
@@ -285,6 +298,12 @@ public:
 	bool bHudEnabled = true;
 	FString HudKey = TEXT("H");
 
+	// --- Front-end menu ----------------------------------------------------
+	//
+	// "Menu": { "Enabled" }. The full-screen menu the sim opens on (event,
+	// track, driver, START); see UI/FSDSMenu.h. -NoMenu also turns it off.
+	bool bMenuEnabled = true;
+
 	/** The settings.json actually loaded; empty when defaults are in use. */
 	FString LoadedFromPath;
 
@@ -295,6 +314,15 @@ public:
 	// (docs/environment_sidecar.md). Off by default: the flat world stays the
 	// regression baseline, and while this is off a sidecar is ignored.
 	bool bEnvironmentEnabled = false;
+
+	// --- Timing ------------------------------------------------------------
+	//
+	// "Timing": { "SpeedFactor" }. How fast the simulation runs while the
+	// pipeline drives: 1 is real time (the default, for testing the car's
+	// computer), below 1 a slow motion for comparing algorithms (0.5, 0.25,
+	// 0.1). Manual driving is always real time. The menu and the
+	// setSpeedFactor RPC change it while the sim runs. See FSDSRealTime.h.
+	double TimingSpeedFactor = 1.0;
 
 	TMap<FString, FFSDSVehicleSettings> Vehicles;
 

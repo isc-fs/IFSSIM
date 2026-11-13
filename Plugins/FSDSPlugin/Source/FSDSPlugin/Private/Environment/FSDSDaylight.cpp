@@ -107,7 +107,7 @@ void AFSDSDaylight::BeginPlay()
 	{
 		if (UDirectionalLightComponent* L = Cast<UDirectionalLightComponent>(It->GetLightComponent()))
 		{
-			Sun = {L, L->GetComponentRotation(), L->Intensity, L->bAtmosphereSunLight};
+			Sun = {L, L->GetComponentRotation(), L->Intensity, L->bAtmosphereSunLight != 0};
 			L->SetIntensity(SunLux);
 			L->SetAtmosphereSunLight(true);
 			break;
