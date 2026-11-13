@@ -34,6 +34,7 @@ from scoring import compute_scoring, valid_reference
 # for the orchestration contract this module relies on.
 import bag_recorder as _bag
 import benchmark_control_runner as _benchmark
+import bench_queue as _bench
 import mission_catalog as _missions
 import track_creator as _creator
 from ros_bridge import RosBridge, StartMissionOutcome
@@ -548,6 +549,14 @@ def event_state():
                 state["bag_error"] = rec["error"]
         else:
             state["bag_state"] = "none"
+    # The AS state machine and the pipeline's status (/assi/state,
+    # /dv/status), so a client following the run (the mission benchmark)
+    # sees AS Emergency without waiting for the referee to time out. Absent
+    # when the ROS bridge isn't up (tests, no rclpy).
+    try:
+        state.update(RosBridge.get().as_snapshot())
+    except Exception:
+        pass
     return state
 
 @app.post("/api/event/set", dependencies=[Depends(require_api_key)])
@@ -1413,12 +1422,17 @@ def track_load(name: str):
     # (UE5_TRACKS_DIR defaults to TRACKS_DIR), so the sim reads the rewritten
     # bytes. Cheap when already centred — one min/max pass, no rewrite — so
     # newly generated tracks pass straight through. See track_centering.
-    try:
-        from track_centering import ensure_centered
-        if ensure_centered(filepath):
-            log_event("track_recenter", f"Recentred {name} on origin before load")
-    except Exception as e:
-        _state_logger.warning("track centering skipped for %s: %s", name, e)
+    # Built-in tracks are left as they are: they ship in the repository, sit
+    # where they are on purpose (acceleration's start line on the Montmeló
+    # world's origin) and fit the floor, and rewriting them changed files
+    # under version control on every load.
+    if name not in BUILTIN_TRACKS:
+        try:
+            from track_centering import ensure_centered
+            if ensure_centered(filepath):
+                log_event("track_recenter", f"Recentred {name} on origin before load")
+        except Exception as e:
+            _state_logger.warning("track centering skipped for %s: %s", name, e)
     with _state_lock:
         result = sim.load_track(ue5_path)
         if event_type:
@@ -1668,6 +1682,88 @@ def export_session_log():
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename=session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"}
     )
+
+
+# === Benchmarks tab (bench_queue.py) ===
+
+class BenchLaunch(BaseModel):
+    spec: dict
+    target: str = "local"
+    name: Optional[str] = None
+    requested_by: Optional[str] = None
+
+
+@app.post("/api/bench/launch", dependencies=[Depends(require_api_key)])
+def bench_launch(req: BenchLaunch):
+    """Queue a run spec. Local: a worker on this machine runs it (run_spec.py --work)."""
+    try:
+        out = _bench.launch(req.spec, req.target, req.requested_by, req.name)
+    except _bench.LaunchError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    log_event("benchmark", f"queued {out['id']} ({req.target})")
+    return out
+
+
+@app.get("/api/bench/presets")
+def bench_presets():
+    """The run spec presets (tools/sim_benchmark/specs) and the override files
+    (specs/overrides), as JSON, each preset with the rig parts it needs."""
+    return _bench.presets()
+
+
+@app.get("/api/bench/manifest")
+def bench_manifest():
+    """What a custom run can set: each benchmark's settings (bench.yaml), bags, missions, tracks."""
+    return _bench.manifest()
+
+
+@app.get("/api/bench/refs")
+def bench_refs(
+    repo: str = Query(..., description="owner/name, one bench.yaml names"),
+    branch: Optional[str] = Query(None, description="a branch or #PR: its latest commits instead"),
+):
+    """A repository's branches and open PRs, or a branch's latest commits, for the Setup
+    tab's version pickers."""
+    return _bench.commits(repo, branch) if branch else _bench.refs(repo)
+
+
+class BenchCheck(BaseModel):
+    spec: dict
+
+
+@app.post("/api/bench/check")
+def bench_check(req: BenchCheck):
+    """The worker's validation of a spec, before it is queued: its problems, or its jobs."""
+    return _bench.check(req.spec)
+
+
+@app.post("/api/bench/worker/stop", dependencies=[Depends(require_api_key)])
+def bench_worker_stop():
+    """Ask the local worker to stop once no spec is running."""
+    out = _bench.stop_worker()
+    log_event("benchmark", "asked the worker to stop")
+    return out
+
+
+@app.get("/api/bench/queue")
+def bench_queue(limit: int = Query(50, ge=1, le=500)):
+    """The local worker and the queued, running and finished specs, newest first."""
+    return _bench.queue(limit)
+
+
+@app.post("/api/bench/cancel/{job_id}", dependencies=[Depends(require_api_key)])
+def bench_cancel(job_id: str):
+    state = _bench.cancel(job_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"no queued spec {job_id}")
+    log_event("benchmark", f"cancel {job_id}: {state}")
+    return {"id": job_id, "state": state}
+
+
+@app.get("/api/bench/rig")
+def bench_rig():
+    """What this machine can run now (sim, Docker, LattePanda, HIL), for the component boxes."""
+    return _bench.rig()
 
 
 # === WebSocket Telemetry ===

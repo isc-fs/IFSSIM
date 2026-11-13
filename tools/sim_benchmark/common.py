@@ -16,6 +16,13 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def pipeline_dir() -> Path:
+    """The pipeline the benchmark mounts: run_spec.py's worktree of the spec's
+    code.pipeline ($BENCH_PIPELINE_DIR), else this checkout's pipeline/."""
+    p = os.environ.get("BENCH_PIPELINE_DIR", "").strip()
+    return Path(p) if p else repo_root() / "pipeline"
+
+
 def sim_benchmark_dir() -> Path:
     return repo_root() / "tools" / "sim_benchmark"
 
@@ -202,10 +209,10 @@ def maybe_reexec_in_docker(
     paths = DockerPaths(argv)
     results = paths.results
     results.mkdir(parents=True, exist_ok=True)
-    cone_detection_src = repo_root() / "pipeline" / "cone_detection"
-    cone_slam_src = repo_root() / "pipeline" / "cone_slam"
-    path_planning_src = repo_root() / "pipeline" / "path_planning"
-    control_src = repo_root() / "pipeline" / "control"
+    cone_detection_src = pipeline_dir() / "cone_detection"
+    cone_slam_src = pipeline_dir() / "cone_slam"
+    path_planning_src = pipeline_dir() / "path_planning"
+    control_src = pipeline_dir() / "control"
     image = os.environ.get("IFSSIM_DV_IMAGE", "ifssim-dv_pipeline_stack:latest")
     inner_argv = _translate_argv(argv, paths)
     if not any(

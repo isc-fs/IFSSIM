@@ -7,7 +7,7 @@ Every run dir made by ``common.make_run_dir`` gets a ``provenance.json``, plus
 * ``ifssim.unpushed.bundle`` / ``pipeline.unpushed.bundle`` when HEAD has
   commits that no remote has (as far as the last ``git fetch`` knows): a git
   bundle of exactly those commits, so someone else can check the code out;
-* ``spec.json`` when ``bench-run`` started the run (``$BENCH_SPEC``): the run
+* ``spec.json`` when ``run_spec.py`` started the run (``$BENCH_SPEC``): the run
   spec, with its ``spec_id`` (which settings and parameter overrides it used).
 
 Two runs of the same commit can then be told apart, and any run can be rebuilt
@@ -251,11 +251,21 @@ def docker_image(image: str) -> dict[str, Any]:
     return info
 
 
+ENV_PIPELINE = "BENCH_PIPELINE_DIR"
+
+
+def pipeline_dir(root: Path) -> Path:
+    """The pipeline a run uses: run_spec.py's worktree of the spec's code.pipeline
+    ($BENCH_PIPELINE_DIR), else this checkout's pipeline/ submodule."""
+    p = os.environ.get(ENV_PIPELINE, "").strip()
+    return Path(p) if p else root / "pipeline"
+
+
 def capture(image: str | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """(provenance, {file name: diff}) for the checkout this file lives in. Host only."""
     root = repo_root()
     ifssim, ifssim_diff = git_state(root)
-    pipeline, pipeline_diff = git_state(root / "pipeline")
+    pipeline, pipeline_diff = git_state(pipeline_dir(root))
     code = {"ifssim": ifssim, "pipeline": pipeline}
     if image:
         code["image"] = docker_image(image)
@@ -263,7 +273,7 @@ def capture(image: str | None = None) -> tuple[dict[str, Any], dict[str, str]]:
         f"{name}.unpushed.bundle": data
         for name, repo, st in (
             ("ifssim", root, ifssim),
-            ("pipeline", root / "pipeline", pipeline),
+            ("pipeline", pipeline_dir(root), pipeline),
         )
         if (data := unpushed_bundle(repo, st)) is not None
     }

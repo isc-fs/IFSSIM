@@ -8,6 +8,7 @@
 #include "UI/SFSDSTrackEditor.h"
 #include "Widgets/SCompoundWidget.h"
 #include "UI/SFSDSBagsPage.h"
+#include "UI/SFSDSBenchPage.h"
 
 class SFSDSTrackMap;
 class SScrollBox;
@@ -71,7 +72,7 @@ public:
 	virtual FReply OnKeyDown(const FGeometry& Geometry, const FKeyEvent& KeyEvent) override;
 
 private:
-	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3, Logs = 4, Bags = 5 };
+	enum class EPage : int32 { Drive = 0, Editor = 1, Results = 2, Settings = 3, Logs = 4, Bags = 5, Bench = 6 };
 
 	TSharedRef<SWidget> BuildMain();
 	TSharedRef<SWidget> BuildRunBox();
