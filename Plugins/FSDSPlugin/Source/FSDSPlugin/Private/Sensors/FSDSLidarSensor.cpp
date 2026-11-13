@@ -21,6 +21,7 @@
 #include "Sensors/FSDSLidarDecodeShader.h"
 #include "FSDSReferee.h"  // FSDSConeStencil:: IDs (#321 D-Phase-1)
 #include "Materials/MaterialInterface.h"  // M_LiDARStencilEncoder load (#321 D-Phase-2)
+#include "Rendering/FSDSFrameTimes.h"
 
 using FSDSNoise::RandStandardNormal;
 
@@ -74,7 +75,7 @@ static TAutoConsoleVariable<int32> CVarLidarDebugColorChannel(
 
 static TAutoConsoleVariable<int32> CVarLidarStencilEncoder(
 	TEXT("fsds.LidarGPU.StencilEncoder"),
-	1,
+	0,  // experiment: colour capture off
 	TEXT("Read once, at startup (-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0). ")
 	TEXT("1 (default) = per-material 905 nm reflectance: the colour capture ")
 	TEXT("renders each scan and M_LiDARStencilEncoder feeds the LUT. ")
@@ -91,6 +92,18 @@ static TAutoConsoleVariable<int32> CVarLidarDumpRT(
 	TEXT("Debug: 1 = after the 5th GPU scan, save the LiDAR depth and colour ")
 	TEXT("captures to Saved/LidarGPU/{DepthRT.exr, ColorRT.png}. 0 (default) = off. ")
 	TEXT("The depth save asserts on Vulkan (Linux) in non-Shipping builds."),
+	ECVF_Default);
+
+// Experiment: limit what the two scan captures draw. Montmeló renders its
+// whole world (terrain, buildings, props, trees) twice per scan though the
+// LiDAR sees ~30 m. > 0 adds a far culling plane this many metres along the
+// capture's forward axis, set on every scan so it doesn't depend on when
+// MaxRange is applied. The projection stays infinite (bFiniteFarPlane is
+// left off), so the depth the decode shader reads is unchanged.
+static TAutoConsoleVariable<float> CVarLidarCaptureMaxDistanceM(
+	TEXT("fsds.LidarGPU.CaptureMaxDistanceM"),
+	35.0f,
+	TEXT("Far culling distance for the LiDAR's scene captures, in metres. 0 = no limit."),
 	ECVF_Default);
 
 UFSDSLidarSensor::UFSDSLidarSensor()
@@ -981,6 +994,20 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 		GPUPendingSensorWorldPos = Xf.TransformPosition(SensorOffset);
 		GPUPendingOwnerRotation  = Xf.GetRotation();
 	}
+
+	{
+		const float LidarCullM = CVarLidarCaptureMaxDistanceM.GetValueOnGameThread();
+		const float LidarCullCm = LidarCullM > 0.f ? LidarCullM * 100.f : 0.f;
+		GPUDepthCapture->MaxViewDistanceOverride = LidarCullCm;
+		if (GPUColorCapture) GPUColorCapture->MaxViewDistanceOverride = LidarCullCm;
+		if (GPUCaptureCount == 0)
+		{
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS LiDAR GPU: capture far cull = %.0f m (fsds.LidarGPU.CaptureMaxDistanceM, 0 = none) | MaxRange = %.0f m"),
+				LidarCullM, MaxRange / 100.f);
+		}
+	}
+	FSDSFrameTimes::NoteLidarScan();
 
 	const double T0 = FPlatformTime::Seconds();
 	GPUDepthCapture->CaptureScene();
