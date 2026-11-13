@@ -390,9 +390,14 @@ services:
     #     Desktop for Windows that port is not published on the
     #     Windows host itself: reach the API through the frontend,
     #     http://127.0.0.1:3000/api/.
-    #   • extra_hosts is also a no-op (host networking always uses
-    #     the host's resolver); kept off this entry.
+    #   • extra_hosts still writes /etc/hosts under host networking:
+    #     it is what makes IFSSIM_HOST's default (host.docker.internal)
+    #     resolve on Linux, as on dv_pipeline_stack. Without it the
+    #     backend never reaches the sim and START waits for it forever.
     network_mode: host
+    extra_hosts:
+      # Resolves host.docker.internal on Linux (noop on Mac/Windows where it's built-in)
+      - "host.docker.internal:host-gateway"
     environment:
       - IFSSIM_HOST=${IFSSIM_HOST:-host.docker.internal}
       - IFSSIM_PORT=${IFSSIM_PORT:-41451}

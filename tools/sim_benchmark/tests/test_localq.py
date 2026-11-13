@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -413,3 +415,21 @@ def test_a_run_on_another_commit_leaves_your_work_alone(piped, tmp_path):
     assert head == "dev"
     wts = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "worktree", "list"], capture_output=True, text=True).stdout
     assert len(wts.strip().splitlines()) == 1  # the run's worktree is gone
+
+def test_with_no_owner_above_what_root_creates_gets_the_folders_permissions(m, monkeypatch):
+    # Docker Desktop shows every folder of the mount as root's: no owner to give it to
+    monkeypatch.setattr(lq.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(lq.os, "chown", lambda *a: pytest.fail("chown with no owner above"))
+    real_stat = Path.stat
+
+    def as_root(self, *a, **k):
+        st = real_stat(self, *a, **k)
+        return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, 0, 0, *st[6:10]))
+
+    monkeypatch.setattr(Path, "stat", as_root)
+    m.results.mkdir()
+    m.results.chmod(0o777)
+    jid = lq.enqueue(m.results, spec(), requested_by="mission_control")
+    job = lq.queue_dir(m.results) / jid
+    assert stat.S_IMODE(os.stat(job).st_mode) == 0o777
+    assert stat.S_IMODE(os.stat(job / "job.json").st_mode) == 0o666

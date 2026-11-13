@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 import uuid
 from datetime import datetime, timezone
@@ -49,17 +50,28 @@ def now() -> str:
 
 def _adopt(path: Path) -> None:
     """Mission Control's backend runs as root in its container: what it creates here
-    goes to whoever owns the folder above, so the host's worker can write it too."""
+    goes to whoever owns the folder above, so the host's worker can write it too.
+
+    Docker Desktop (Windows, Mac) shows every folder of a bind mount as root's, so
+    there is no owner to give it to; it gets the permissions of the folder above
+    instead. Without that the queue's folders were root's and 755 to WSL, and a
+    worker started there couldn't write a job's state."""
     if os.geteuid() != 0:
         return
+    above = None
     for up in path.parents:
         try:
             st = up.stat()
         except OSError:
             continue
+        if above is None:
+            above = st
         if st.st_uid != 0:
             os.chown(path, st.st_uid, st.st_gid)
             return
+    if above is not None:
+        mode = stat.S_IMODE(above.st_mode)
+        os.chmod(path, mode if path.is_dir() else mode & 0o666)
 
 
 def make_dirs(d: Path) -> None:
