@@ -11,14 +11,16 @@
 #
 # Env:
 #   IFSSIM_BUILD   the packaged sim (…/Linux/IFSSIM.sh); required
-#   IFSSIM_SIM     the box's container wrapper for it (default /usr/local/bin/ifssim-sim)
+#   CI_HOME        the box's CI folder: baseline, owner marker (default /build/ifssim-ci)
+#   IFSSIM_SIM     how to start the sim: the box's container wrapper
+#                  (/usr/local/bin/ifssim-sim) when it has one, else IFSSIM_BUILD itself
 #   RESULTS        results root (default tools/sim_benchmark/results/ci)
 #   REPEATS        acceleration runs (default: sim_check.json's)
 #   RANDOM_SEEDS   comma-separated seeds for the random tracks, to drive given
 #                  ones again (default: new ones from GITHUB_RUN_ID)
 #   REPORT         where the report and maps go (default $RESULTS/report)
 #   BASELINE       the last dev run's report.json, to compare with
-#                  (default /build/ifssim-ci/baseline/report.json)
+#                  (default $CI_HOME/baseline/report.json)
 #   DV_IMAGE       the pipeline image built for this run; draws the maps
 #   SESSION_LOCK   default /var/tmp/ifssim-session.lock
 #   LOCK_WAIT_S    how long to wait for it (default 14400)
@@ -29,14 +31,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SIM="${IFSSIM_SIM:-/usr/local/bin/ifssim-sim}"
 RESULTS="${RESULTS:-$ROOT/tools/sim_benchmark/results/ci}"
 REPORT="${REPORT:-$RESULTS/report}"
-BASELINE="${BASELINE:-/build/ifssim-ci/baseline/report.json}"
+CI_HOME="${CI_HOME:-/build/ifssim-ci}"
+BASELINE="${BASELINE:-$CI_HOME/baseline/report.json}"
 LOCK="${SESSION_LOCK:-/var/tmp/ifssim-session.lock}"
 LOCK_WAIT_S="${LOCK_WAIT_S:-14400}"
 : "${IFSSIM_BUILD:?set IFSSIM_BUILD to the packaged IFSSIM.sh}"
 export IFSSIM_BUILD
+# The container wrapper on a box that has one (gpu-1080's leases the GPU from its
+# render farm), else the packaged build itself (tools/ci/README.md).
+if [ -z "${IFSSIM_SIM:-}" ] && [ -x /usr/local/bin/ifssim-sim ]; then
+  IFSSIM_SIM=/usr/local/bin/ifssim-sim
+fi
+SIM="${IFSSIM_SIM:-$IFSSIM_BUILD}"
 # Own compose project, so this run's images and containers never replace the
 # ones a manual run on the box uses.
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ifssim-ci}"
@@ -51,7 +59,7 @@ echo "lock held"
 # which leaves the sim container up and this file behind: the next check then
 # knows that sim is CI's own and removes it. A sim with no marker was started
 # by someone else and is never touched.
-OWNER="${SIM_OWNER_FILE:-/build/ifssim-ci/ci-sim.owner}"
+OWNER="${SIM_OWNER_FILE:-$CI_HOME/ci-sim.owner}"
 ours=0
 
 # shellcheck disable=SC2329  # run by the traps

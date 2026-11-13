@@ -16,6 +16,8 @@
 #include <cstring>
 #include <algorithm>
 #include <limits>
+#include <chrono>
+#include <vector>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -551,9 +553,65 @@ static bool readExact(int fd, void* buf, size_t len)
     return true;
 }
 
+bool IFSSIMRosWrapper::syncSensorStream(int fd, bool& mismatched, const SensorFrame* already_read)
+{
+    // Eight frames: enough for FrameStride() to see three magics whatever the
+    // offset, ~4 ms of stream at 400 frames/s.
+    constexpr size_t kProbeBytes = 8 * sizeof(SensorFrame);
+    std::vector<uint8_t> buf;
+    if (already_read) {
+        const auto* p = reinterpret_cast<const uint8_t*>(already_read);
+        buf.assign(p, p + sizeof(SensorFrame));
+    }
+    const size_t have = buf.size();
+    buf.resize(have + kProbeBytes);
+    if (!readExact(fd, buf.data() + have, kProbeBytes)) return false;
+
+    const size_t stride = ifssim_bridge::FrameStride(buf.data(), buf.size(), SENSOR_MAGIC);
+    if (stride == 0) {
+        // No two magics in eight frames' worth: not a sensor stream we can read
+        // at all. Leave it to the per-frame magic check, which calls us again.
+        RCLCPP_WARN(node_->get_logger(),
+            "Sensor stream: no frame boundary found in %zu bytes; still looking", buf.size());
+        return true;
+    }
+    if (stride != sizeof(SensorFrame)) {
+        mismatched = true;
+        RCLCPP_ERROR(node_->get_logger(),
+            "Sensor frames from the sim are %zu bytes, but this bridge reads %zu-byte frames: "
+            "the sim plugin and the bridge are from different commits, and the frame changed "
+            "size between them. Not publishing /imu, wheel speeds, steering or odometry from "
+            "this sim. Use a bridge from the sim's commit: rebuild the stack image "
+            "(docker compose build dv_pipeline_stack) from the commit the sim was packaged "
+            "from, or run the sim that matches this bridge.",
+            stride, sizeof(SensorFrame));
+        return true;
+    }
+    mismatched = false;
+    const long first = ifssim_bridge::FindMagic(buf.data(), buf.size(), SENSOR_MAGIC);
+    const size_t skip = ifssim_bridge::BytesToNextFrame(buf.size(), static_cast<size_t>(first), stride);
+    if (skip > 0) {
+        std::vector<uint8_t> sink(skip);
+        if (!readExact(fd, sink.data(), skip)) return false;
+    }
+    return true;
+}
+
 void IFSSIMRosWrapper::sensorStreamThread()
 {
     RCLCPP_INFO(node_->get_logger(), "Sensor stream thread started");
+
+    int synced_fd = -1;       // the connection whose frame size was checked
+    bool mismatched = false;  // its frames aren't this bridge's SensorFrame
+    auto last_error = std::chrono::steady_clock::now();
+
+    auto drop_connection = [&](int fd) {
+        RCLCPP_WARN(node_->get_logger(), "Sensor stream disconnected");
+        int expected = fd;
+        if (sensor_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
+        synced_fd = -1;  // a reconnect may reuse the fd number: check it again
+        triggerReconnect();
+    };
 
     while (streaming_) {
         int fd = sensor_stream_fd_.load();
@@ -562,16 +620,46 @@ void IFSSIMRosWrapper::sensorStreamThread()
             continue;
         }
 
+        // A new connection (or a reconnected sim, maybe another build): check the
+        // frame size before anything is published from it.
+        if (fd != synced_fd) {
+            mismatched = false;
+            if (!syncSensorStream(fd, mismatched)) {
+                drop_connection(fd);
+                continue;
+            }
+            synced_fd = fd;
+            last_error = std::chrono::steady_clock::now();
+        }
+
         SensorFrame frame;
         if (!readExact(fd, &frame, sizeof(frame))) {
-            RCLCPP_WARN(node_->get_logger(), "Sensor stream disconnected");
-            int expected = fd;
-            if (sensor_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
-            triggerReconnect();
+            drop_connection(fd);
             continue;
         }
 
-        if (frame.magic != SENSOR_MAGIC) continue;
+        if (mismatched) {
+            // Keep draining, so the sim's send doesn't time out and tear the stream
+            // down every second, but publish nothing from misread frames. Say why
+            // every 10 s: this is the only sign of it.
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_error > std::chrono::seconds(10)) {
+                last_error = now;
+                RCLCPP_ERROR(node_->get_logger(),
+                    "Sensor stream: still not publishing, the sim's frames aren't %zu bytes "
+                    "(see the error above): the bridge and the sim plugin must come from the "
+                    "same commit",
+                    sizeof(SensorFrame));
+            }
+            continue;
+        }
+
+        if (frame.magic != SENSOR_MAGIC) {
+            // Out of step. Find the frame boundary again (and check the size again)
+            // instead of reading mid-frame from here on.
+            if (!syncSensorStream(fd, mismatched, &frame)) drop_connection(fd);
+            continue;
+        }
 
         // Hand off to the publish thread. Single-slot buffer with
         // drop-oldest semantics — if the consumer hasn't yet drained the

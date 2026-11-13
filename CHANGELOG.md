@@ -64,6 +64,13 @@ shipping pipeline, documentation.
   steering at a few Hz, and acceleration runs drifted onto the cones (6 of 12 on this
   Windows PC). `ros2/src` is now copied into the stack like `pipeline/` and rebuilt when it
   changes (about a minute the first time).
+- **The bridge refuses a sim whose sensor frame isn't its own.** The sensor stream has no
+  length prefix, so a bridge and a sim plugin from commits with different frame sizes (as
+  across #875) read every frame after the first out of step, dropped them on the bad magic
+  and published about 1 in 47: the car drove badly and nothing said why. The bridge now
+  measures the sim's frame size from the stream when it connects and when a frame is out of
+  step. On a mismatch it logs both sizes and how to fix it, every 10 s, and publishes
+  nothing from that sim; on a glitch it finds the next frame instead of staying out of step.
 - **On Windows, the Benchmarks page starts the worker itself.** Start worker and the
   machine check (Setup) now run `run_spec.py` in WSL through `wsl.exe`, instead of asking
   you to start the worker from a WSL terminal.
@@ -124,6 +131,13 @@ shipping pipeline, documentation.
   sits next to the run's results.
 
 ### Changed
+
+- **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
+  `tools/ci/sim_build.sh` and `sim_pr_check.sh` take one folder, `CI_HOME`
+  (default `/build/ifssim-ci`, so `gpu-1080` is unchanged), for the shared
+  build, the baseline and the owner marker. Without the box's container
+  wrapper the check starts the packaged build itself. `tools/ci/README.md`
+  says how to run the check on your own machine.
 
 - **The GPU box's sim check keeps its CPU, and its report says when the box was busy.**
   - The box has 8 cores, and the sim (~4 threads) plus the pipeline (~5) already fill them.
@@ -762,6 +776,15 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`package_windows.sh` stops when the build fails.** `RunUAT.bat` runs
+  under `cmd.exe`, whose exit code doesn't reach bash, so a compile error
+  printed `BUILD FAILED` and the script went on to stage and zip the previous
+  build's binary as if it were the new one. It now reads UAT's own verdict
+  (`AutomationTool exiting with ExitCode=0`) and exits 1 otherwise.
+- **`package_windows.sh` keeps the user's `GameUserSettings.ini`.** It copied
+  the project's default over it on every package, throwing away what was
+  chosen in the sim (the window, the menu's frame rate, the graphics
+  settings). It now seeds the file only when there is none.
 - **Hidden engine-braking drag removed.** Chaos's engine was set to brake the rear wheels with EngineRPM x 0.05 N.m whenever its own throttle was zero, and the pawn always passes it zero (the EMRAX drives the wheels directly). That was a speed-proportional drag of about 0.085·v m/s², present while driving as well as coasting, and most of the coast-down excess the car characterisation found (1.02 vs 0.31 m/s² at 10 m/s). `EngineBrakeEffect` is now 0, and the startup log warns if it isn't.
 - **The sim car kept driving after leaving AS Driving.** The uDV emulator only stopped relaying `/ctrl/cmd`, and the bridge and pawn hold the last command, so an emergency, an e-stop or the end of a run left the car on its last throttle and steering. It now does what the car's firmware does: zeroes the command on leaving Driving or when `/ctrl/cmd` is older than 0.5 s, fires the EBS on AS Emergency, and treats a `/dv/status` heartbeat older than 0.4 s mid-run as an emergency (it was read as idle, with a 1.5 s window). Arming from AS Off releases an EBS latched by the previous run.
 - Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.
