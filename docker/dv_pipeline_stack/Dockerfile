@@ -29,6 +29,13 @@ RUN pip install --no-cache-dir \
     icecream \
     typing_extensions
 
+# cone_detection's default cluster backend (cluster_backend: pypi). Without it
+# the node quietly falls back to grid/sklearn, so the sim never ran the
+# backend the car uses. --no-deps: it declares numpy>=2, and numpy is pinned
+# to 1.x above; the abi3 wheel works with 1.24 (the pipeline's CI installs it
+# the same way and tests it against sklearn).
+RUN pip install --no-cache-dir --no-deps dbscan
+
 # FaSTTUBe Formula Student Driverless path planner (PR #243).
 # Installed --no-deps because the package declares numpy>=1.25 while
 # cv_bridge in ros:humble is ABI-locked to numpy 1.x — all of papalotis's
