@@ -2458,10 +2458,11 @@ void SFSDSBenchPage::CheckMachine()
 	{
 		return;
 	}
-	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds; read it back then.
+	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds (about 14 s from
+	// WSL on Windows, Python's start included); read it back then.
 	MachineCheckUntil = T + 12.0;
 	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
-	for (const float After : { 4.f, 8.f, 13.f })
+	for (const float After : { 4.f, 8.f, 13.f, 20.f })
 	{
 		RegisterActiveTimer(After, FWidgetActiveTimerDelegate::CreateLambda([Weak](double, float)
 		{
