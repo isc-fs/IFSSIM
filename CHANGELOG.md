@@ -118,6 +118,13 @@ shipping pipeline, documentation.
 
 ### Changed
 
+- **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
+  `tools/ci/sim_build.sh` and `sim_pr_check.sh` take one folder, `CI_HOME`
+  (default `/build/ifssim-ci`, so `gpu-1080` is unchanged), for the shared
+  build, the baseline and the owner marker. Without the box's container
+  wrapper the check starts the packaged build itself. `tools/ci/README.md`
+  says how to run the check on your own machine.
+
 - **The GPU box's sim check keeps its CPU, and its report says when the box was busy.**
   - The box has 8 cores, and the sim (~4 threads) plus the pipeline (~5) already fill them.
   - Every other service there (other CI runners, renders) had the same CPU weight as the sim, so a compile job took CPU from it. The sim fell to 0.6–0.8× real time on the same commit that ran at 0.99× on a quiet box.

@@ -14,12 +14,13 @@
 # Env:
 #   UE5_ROOT  the engine (required to package)
 #   STAGE     where a new build is staged (required)
-#   SHARED    the shared builds (default /build/ifssim-ci/builds)
+#   CI_HOME   the box's CI folder (default /build/ifssim-ci)
+#   SHARED    the shared builds (default $CI_HOME/builds)
 #   PUBLISH   true: a new build becomes the shared one (set on dev)
 #   FORCE_PACKAGE  true: package even if the shared build would do
 set -euo pipefail
 
-SHARED="${SHARED:-/build/ifssim-ci/builds}"
+SHARED="${SHARED:-${CI_HOME:-/build/ifssim-ci}/builds}"
 : "${STAGE:?set STAGE}"
 BUILD_INPUTS='^(Source|Plugins|Config|Content)/|^IFSSIM\.uproject$'
 NOT_BUILD_INPUTS='^Content/tracks/'
