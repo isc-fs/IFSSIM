@@ -32,6 +32,12 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **START brings up the stack on Linux.** The menu's commands ran in the engine's
+  folder instead of the repository, so `docker compose` found no compose file
+  ("docker compose failed: exit status 14"); and Mission Control's backend couldn't
+  resolve `host.docker.internal`, so it never saw the sim and START waited until it
+  timed out.
+
 - **The mission benchmark ends a run as soon as the car goes to AS Emergency** instead of waiting out `timeout_s` (2400 s for trackdrive). The run's outcome is `emergency`, with `emergency_at_s` in the manifest, `race/emergency` and `race/emergency_at_s` in the results, and the usual laps, telemetry and events. Mission Control's `/api/event/state` now reports `as_state` (`/assi/state`) and `dv_status` (`/dv/status`). An AS Emergency only ends the run after the car was seen driving in it, so a state latched from the previous run does not.
 - **`run_mission_benchmark --pipeline-on latte_panda` starts the bridge again.** The bridge-only
   container skips the image's entrypoint, so `ros2 launch` couldn't find `ifssim_bridge`. The launch
