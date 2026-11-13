@@ -327,6 +327,7 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavResults", "Results"), EPage::Results) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavLogs", "Logs"), EPage::Logs) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavBags", "Bags"), EPage::Bags) ]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavBench", "Benchmarks"), EPage::Bench) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavSettings", "Settings"), EPage::Settings) ]
 						+ SVerticalBox::Slot().FillHeight(1.f) [ SNew(SSpacer) ]
 						+ SVerticalBox::Slot().AutoHeight()
@@ -381,6 +382,12 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						.Client(Client)
 						.Note(BagsNote)
 						.NoteError(bBagsNoteError)
+					]
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SFSDSBenchPage)
+						.IsActive_Lambda([this]() { return Screen == EScreen::Main && Page == EPage::Bench; })
+						.Client(Client)
 					]
 				]
 			]

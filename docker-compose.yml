@@ -495,6 +495,9 @@ services:
       - ./bags:/host_bags
       # Sim-only tools (track_driver, sim_benchmark) for benchmark_control sessions.
       - ./tools:/ifssim_tools:ro
+      # The benchmark manifest, next to tools/ as in the repository: the
+      # Benchmarks page's form and spec checks read it (bench_queue.py).
+      - ./bench.yaml:/bench.yaml:ro
       - ./pipeline/control:/control_pkg:ro
       - ./tools/sim_benchmark/results:/benchmark_results
       # `pipeline_ctrl` shared-volume mount removed in #381 — flag-file

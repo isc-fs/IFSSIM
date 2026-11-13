@@ -189,6 +189,90 @@ def where_and_who() -> dict[str, Any]:
 
 
 ENV_PROGRESS = "BENCH_PROGRESS_FILE"
+# where the benchmarks take the pipeline from (run_provenance.ENV_PIPELINE): a worktree of
+# the spec's code.pipeline, or this checkout's pipeline/ when it's unset
+ENV_PIPELINE = "BENCH_PIPELINE_DIR"
+
+
+def _pipeline_refspec(ref: str) -> tuple[str | None, str]:
+    """(what to fetch, what was asked) for a code.pipeline value: a PR ("#88", "pr/88"),
+    a commit (7-40 hex: fetched only if it isn't here), or a branch."""
+    import re
+
+    r = ref.strip()
+    pr = re.fullmatch(r"(?:#|pr/|pull/)(\d+)", r)
+    if pr:
+        return f"pull/{pr.group(1)}/head", f"PR #{pr.group(1)}"
+    if re.fullmatch(r"[0-9a-f]{7,40}", r):
+        return None, f"commit {r}"
+    return r, f"branch {r}"
+
+
+def pipeline_worktree(m: mf.Manifest, ref: str, where: Path) -> str:
+    """Check the spec's code.pipeline out at ``where`` (a git worktree of the pipeline
+    submodule, so provenance reads it like any checkout); returns its commit. A branch,
+    a PR (#88) or a commit; ``branch@commit`` pins a commit and checks it's on the branch.
+    The person's own pipeline/ checkout (its branch, its changes) is never touched."""
+    import re
+
+    repo = m.repos.get("pipeline")
+    if repo is None:
+        raise sp.SpecError("code.pipeline: the manifest has no pipeline repository")
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+
+    def first(r: subprocess.CompletedProcess) -> str:
+        lines = (r.stderr or r.stdout or "").strip().splitlines()
+        return lines[-1] if lines else f"exit {r.returncode}"
+
+    # "branch@commit" / "#88@commit": that commit, which must be on the branch or PR
+    base, _, pinned = ref.strip().rpartition("@")
+    if base and re.fullmatch(r"[0-9a-f]{7,40}", pinned):
+        refspec, what = _pipeline_refspec(base)
+        if refspec is None:
+            raise sp.SpecError(f"code.pipeline: {ref}: before the @ goes a branch or #PR")
+        r = git("fetch", "--quiet", "origin", refspec)
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: couldn't fetch {what}: {first(r)}")
+        tip = git("rev-parse", "FETCH_HEAD").stdout.strip()
+        r = git("rev-parse", "--verify", "--quiet", f"{pinned}^{{commit}}")
+        if r.returncode != 0 or git("merge-base", "--is-ancestor", r.stdout.strip(), tip).returncode != 0:
+            raise sp.SpecError(f"code.pipeline: commit {pinned} isn't on {what}")
+        sha = r.stdout.strip()
+        where.parent.mkdir(parents=True, exist_ok=True)
+        r = git("worktree", "add", "--detach", "--force", str(where), sha)
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: couldn't check out {pinned}: {first(r)}")
+        return sha
+
+    refspec, what = _pipeline_refspec(ref)
+    if refspec is None:
+        r = git("rev-parse", "--verify", "--quiet", f"{ref.strip()}^{{commit}}")
+        if r.returncode != 0:
+            git("fetch", "--quiet", "origin")
+            r = git("rev-parse", "--verify", "--quiet", f"{ref.strip()}^{{commit}}")
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: no {what} in the pipeline repository")
+    else:
+        r = git("fetch", "--quiet", "origin", refspec)
+        if r.returncode != 0:
+            raise sp.SpecError(f"code.pipeline: couldn't fetch {what}: {first(r)}")
+        r = git("rev-parse", "FETCH_HEAD")
+    sha = r.stdout.strip()
+    where.parent.mkdir(parents=True, exist_ok=True)
+    r = git("worktree", "add", "--detach", "--force", str(where), sha)
+    if r.returncode != 0:
+        raise sp.SpecError(f"code.pipeline: couldn't check out {what}: {first(r)}")
+    return sha
+
+
+def remove_pipeline_worktree(m: mf.Manifest, where: Path) -> None:
+    repo = m.repos.get("pipeline")
+    if repo is None:
+        return
+    subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(where)], capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True)
 
 
 def run_queued(
@@ -205,6 +289,32 @@ def run_queued(
     except sp.SpecError as e:
         lq.set_state(m.results, jid, state="failed", ended=lq.now(), error=str(e))
         return "failed"
+    env: dict[str, str] = {}
+    ref = (spec.get("code") or {}).get("pipeline")
+    tree = d / "pipeline" if ref else None
+    if tree is not None:
+        lq.set_state(m.results, jid, current=f"getting pipeline {ref}")
+        try:
+            sha = pipeline_worktree(m, str(ref), tree)
+        except sp.SpecError as e:
+            lq.set_state(m.results, jid, state="failed", ended=lq.now(), error=str(e), current=None)
+            return "failed"
+        env[ENV_PIPELINE] = str(tree)
+        lq.set_state(m.results, jid, pipeline={"ref": ref, "sha": sha})
+    try:
+        return _run_jobs(m, j, spec, jobs, d, env, on_tick)
+    finally:
+        if tree is not None:
+            remove_pipeline_worktree(m, tree)
+
+
+def _run_jobs(
+    m: mf.Manifest, j: dict[str, Any], spec: dict[str, Any], jobs: list[Any], d: Path,
+    env: dict[str, str], on_tick: Callable[[], None],
+) -> str:
+    from . import localq as lq
+
+    jid = j["id"]
     lq.set_state(
         m.results, jid, state="running", started=lq.now(), total=len(jobs), done=0,
         waiting=None,
@@ -231,7 +341,7 @@ def run_queued(
 
         rc = execute(
             m, rec, d / str(i), log=d / "worker.log", should_stop=stop,
-            env={ENV_PROGRESS: str(progress)},
+            env={**env, ENV_PROGRESS: str(progress)},
         )
         last = lq.read_json(progress)  # a job may end before its first check
         if rc == 130 and lq.cancel_requested(m.results, jid):
@@ -278,14 +388,22 @@ def work(
     def tick(current: str | None = None) -> None:
         nonlocal status, last_rig
         if time.monotonic() - last_rig > rig_every_s:
-            status = check_rig()
+            status = rig_status(m, check_rig)
             lq.write_json(bd / "rig.json", status)
             last_rig = time.monotonic()
         lq.heartbeat(m.results, job=current)
 
+    # A stop asked for before this worker started was for an earlier one.
+    lq.clear_stop(m.results)
     print(f"worker for {m.results}: waiting for queued specs", flush=True)
     while True:
         tick()
+        if lq.stop_requested(m.results):
+            # between specs: a running one has finished (Mission Control's Stop worker)
+            lq.clear_stop(m.results)
+            (bd / "worker.json").unlink(missing_ok=True)  # not running: at once, not in 30 s
+            print("asked to stop: stopping", flush=True)
+            return 0
         picked = None
         for j in reversed([j for j in lq.jobs(m.results) if j["state"] == "queued"]):
             probs = rg.problems(j["spec"], status)
@@ -309,6 +427,55 @@ def work(
         print(f"=== {picked['id']} {picked.get('name') or ''}", flush=True)
         state = run_queued(m, picked, on_tick=lambda: tick(picked["id"]))
         print(f"    {state}", flush=True)
+
+
+def _run_direct(
+    m: mf.Manifest, jobs: list[Any], records: list[dict[str, Any]], batch_dir: Path,
+    env: dict[str, str], stop_on_error: bool,
+) -> list[tuple[Any, int, float]]:
+    """Run the jobs one by one, here (run_spec.py <spec>): (job, exit, seconds) each."""
+    results = []
+    for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
+        print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
+        t0 = time.time()
+        rc = execute(m, rec, batch_dir / str(i), env=env)
+        results.append((job, rc, time.time() - t0))
+        if rc != 0:
+            print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)
+            if stop_on_error:
+                break
+    return results
+
+
+def code_versions(m: mf.Manifest) -> dict[str, dict[str, Any]]:
+    """What code a local run uses: each repository in the manifest as it is checked out
+    (a local run runs the checkout as it is). Mission Control shows it on its boxes."""
+    out: dict[str, dict[str, Any]] = {}
+    for name, path in m.repos.items():
+        def git(*args: str) -> str | None:
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(path), *args], capture_output=True, text=True, timeout=10
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            return r.stdout.strip() if r.returncode == 0 else None
+
+        commit = git("rev-parse", "--short", "HEAD")
+        if not commit:
+            continue
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        out[name] = {
+            "commit": commit,
+            "branch": None if branch in (None, "HEAD") else branch,  # HEAD: a pinned submodule
+            "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+        }
+    return out
+
+
+def rig_status(m: mf.Manifest, check_rig: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """The rig's checks and the code a run would use, as rig.json holds them."""
+    return check_rig() | {"code": code_versions(m)}
 
 
 def print_status(summary: dict[str, Any]) -> None:
@@ -416,7 +583,10 @@ def main(argv: list[str] | None = None) -> int:
     from . import rig as rg
 
     if a.rig:
-        status = rg.check()
+        # saved for Mission Control too: its page runs this to check the machine
+        # when no worker is running
+        status = rig_status(m, rg.check)
+        lq.write_json(lq.bench_dir(m.results) / "rig.json", status)
         print(json.dumps(status, indent=2)) if a.json else print_rig(status)
         return 0
     if a.status:
@@ -457,11 +627,14 @@ def main(argv: list[str] | None = None) -> int:
     print("--- spec (merged) ---")
     print(yaml.safe_dump(spec, sort_keys=False).rstrip())
     print(f"--- {len(jobs)} job(s) ---")
-    if spec.get("code"):
+    others = {k: v for k, v in (spec.get("code") or {}).items() if k != "pipeline"}
+    if others:
         print(
-            f"note: code {spec['code']} is checked out by whoever launches the spec; "
+            f"note: code {others} is checked out by whoever launches the spec; "
             f"this runs the checkout in {m.root} as it is"
         )
+    if (spec.get("code") or {}).get("pipeline"):
+        print(f"pipeline: {spec['code']['pipeline']}, checked out for this run (not this checkout's pipeline/)")
     records = []
     origin = where_and_who()
     for i, job in enumerate(jobs, 1):
@@ -477,16 +650,22 @@ def main(argv: list[str] | None = None) -> int:
     if a.dry_run:
         return 0
 
-    results = []
-    for i, (job, rec) in enumerate(zip(jobs, records, strict=True), 1):
-        print(f"\n=== [{i}/{len(jobs)}] {job.label()}", flush=True)
-        t0 = time.time()
-        rc = execute(m, rec, batch_dir / str(i))
-        results.append((job, rc, time.time() - t0))
-        if rc != 0:
-            print(f"!!! job {i} failed (exit {rc})", file=sys.stderr)
-            if a.stop_on_error:
-                break
+    env: dict[str, str] = {}
+    tree = None
+    if (spec.get("code") or {}).get("pipeline"):
+        tree = batch_dir / "pipeline"
+        try:
+            sha = pipeline_worktree(m, str(spec["code"]["pipeline"]), tree)
+        except sp.SpecError as e:
+            print(e, file=sys.stderr)
+            return 2
+        print(f"pipeline at {sha[:7]} in {tree}")
+        env[ENV_PIPELINE] = str(tree)
+    try:
+        results = _run_direct(m, jobs, records, batch_dir, env, a.stop_on_error)
+    finally:
+        if tree is not None:
+            remove_pipeline_worktree(m, tree)
 
     print("\nDone:")
     for job, rc, dt in results:

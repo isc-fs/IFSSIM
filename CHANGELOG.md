@@ -14,6 +14,31 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
+  replay recorded bags), the missions, tracks (each mission's own are listed), runs per
+  track, parameter override files from `tools/sim_benchmark/specs/overrides/`, and the
+  rest of `bench.yaml`'s settings under More settings (drawn from the manifest, so new
+  settings show without a sim change). The backend runs the worker's own validation as
+  you edit (`POST /api/bench/check`) and refuses a spec that fails it; the bar next to
+  Queue says how many runs it makes, or what's wrong. Setup: the Sim, Pipeline and
+  boards boxes, with the code a run uses, where the pipeline runs, and what this machine
+  can run now (the page checks it itself with `run_spec.py --rig`, no worker needed).
+  Start worker / Stop worker run the local queue's worker; the queue shows each spec's
+  progress, with Cancel and its folder.
+
+- **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
+  checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
+  for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that
+  pipeline instead of this checkout's `pipeline/`; `branch@commit` pins a commit and checks
+  it's on the branch. Your own `pipeline/` (its branch, uncommitted changes) is never
+  touched. The Benchmarks page's Setup tab picks it with two fields that suggest as you
+  type: the branch or PR, then one of its latest commits (`GET /api/bench/refs`, from
+  GitHub).
+- **Boards in a run spec (`boards:`)**: real (HIL, bench-01) or emulated (vHIL, with an
+  IFS-vHIL system), with a firmware branch, PR or commit per board; `bench.yaml` lists the
+  boards, their firmware repos and the vHIL systems. The Setup tab picks them. Runs with
+  boards wait for car-in-the-loop: until then the rig refuses them.
+
 - **A local benchmark queue for Mission Control's Benchmarks tab.** `POST /api/bench/launch`
   (target `local`) queues a run spec in `tools/sim_benchmark/results/.bench/queue/`;
   `run_spec.py --work` runs the queue on the host, one spec at a time. `GET /api/bench/queue`,
@@ -31,6 +56,9 @@ shipping pipeline, documentation.
   runner and a link to its logs.
 
 ### Fixed
+
+- **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
+  --format` exits 0 then, with no server version. Only a version counts as ready now.
 
 - **On Windows, tracks load from the repository after START.** START runs `docker compose`
   through cmd.exe, which doesn't set `PWD`, so the backend's `UE5_TRACKS_DIR` came out as

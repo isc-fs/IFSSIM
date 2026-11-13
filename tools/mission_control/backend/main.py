@@ -1704,6 +1704,47 @@ def bench_launch(req: BenchLaunch):
     return out
 
 
+@app.get("/api/bench/presets")
+def bench_presets():
+    """The run spec presets (tools/sim_benchmark/specs) and the override files
+    (specs/overrides), as JSON, each preset with the rig parts it needs."""
+    return _bench.presets()
+
+
+@app.get("/api/bench/manifest")
+def bench_manifest():
+    """What a custom run can set: each benchmark's settings (bench.yaml), bags, missions, tracks."""
+    return _bench.manifest()
+
+
+@app.get("/api/bench/refs")
+def bench_refs(
+    repo: str = Query(..., description="owner/name, one bench.yaml names"),
+    branch: Optional[str] = Query(None, description="a branch or #PR: its latest commits instead"),
+):
+    """A repository's branches and open PRs, or a branch's latest commits, for the Setup
+    tab's version pickers."""
+    return _bench.commits(repo, branch) if branch else _bench.refs(repo)
+
+
+class BenchCheck(BaseModel):
+    spec: dict
+
+
+@app.post("/api/bench/check")
+def bench_check(req: BenchCheck):
+    """The worker's validation of a spec, before it is queued: its problems, or its jobs."""
+    return _bench.check(req.spec)
+
+
+@app.post("/api/bench/worker/stop", dependencies=[Depends(require_api_key)])
+def bench_worker_stop():
+    """Ask the local worker to stop once no spec is running."""
+    out = _bench.stop_worker()
+    log_event("benchmark", "asked the worker to stop")
+    return out
+
+
 @app.get("/api/bench/queue")
 def bench_queue(limit: int = Query(50, ge=1, le=500)):
     """The local worker and the queued, running and finished specs, newest first."""

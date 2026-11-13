@@ -3,6 +3,7 @@ checks (launch/rig.py), against a small manifest and a fake benchmark."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import stat
@@ -251,6 +252,169 @@ def test_what_root_creates_goes_to_the_results_folders_owner(m, monkeypatch):
     assert any(n.startswith(".job.json") for n in names)
     assert any(n.startswith(".state.json") for n in names)
 
+
+def test_a_worker_asked_to_stop_leaves_the_queue_and_says_it_stopped(m):
+    jid = lq.enqueue(m.results, spec(), requested_by="alice")
+
+    def rig_then_stop():
+        lq.request_stop(m.results)  # Mission Control's Stop worker, while it waits
+        return READY_RIG
+
+    assert lq.worker(m.results)["stopping"] is False
+    # without once=True it would wait for more specs: the stop is what ends it
+    assert run.work(m, check_rig=rig_then_stop) == 0
+    assert lq.job(m.results, jid)["state"] == "queued"  # left for the next worker
+    w = lq.worker(m.results)
+    assert not w["alive"] and not w["stopping"]
+
+
+def test_a_stop_asked_before_the_worker_started_is_forgotten(m):
+    lq.request_stop(m.results)
+    jid = lq.enqueue(m.results, spec(), requested_by="alice")
+    assert run.work(m, once=True, check_rig=lambda: READY_RIG) == 0
+    assert lq.job(m.results, jid)["state"] == "done"
+
+
+def test_docker_that_cant_reach_its_daemon_is_not_ready():
+    # `docker info --format` exits 0 without a server version when the socket refuses
+    status = rg.check({"id": "desk"}, run=fake_runner({
+        "nvidia-smi": (0, "GPU 0: x\n", ""),
+        "docker": (0, "\n", "permission denied while trying to connect to the Docker daemon socket\n"),
+    }))
+    assert status["parts"]["docker"]["status"] == "unavailable"
+    assert "permission denied" in status["parts"]["docker"]["reason"]
+    assert status["parts"]["pipeline_bench_pc"]["status"] == "unavailable"
+
+
+def test_the_rig_check_is_saved_for_mission_control_with_the_code(m, monkeypatch):
+    monkeypatch.setattr(rg, "check", lambda: READY_RIG)
+    monkeypatch.setattr(run, "code_versions", lambda _m: {"ifssim": {"commit": "abc1234", "branch": "dev", "dirty": False}})
+    assert run.main(["--repo", str(m.root), "--rig", "--json"]) == 0
+    saved = lq.read_json(lq.bench_dir(m.results) / "rig.json")
+    assert saved["id"] == "test" and saved["code"]["ifssim"]["branch"] == "dev"
+
+
+def test_code_versions_reads_each_repository(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "dev", str(repo)], check=True)
+    (repo / "f").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "f"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], check=True)
+    fake = mf.Manifest(root=repo, results=repo / "r", presets=None, repos={"ifssim": repo, "pipeline": tmp_path / "none"},
+                       bag_dirs={}, benchmarks={})
+    got = run.code_versions(fake)
+    assert set(got) == {"ifssim"} and got["ifssim"]["branch"] == "dev" and not got["ifssim"]["dirty"]
+    (repo / "f").write_text("y")
+    assert run.code_versions(fake)["ifssim"]["dirty"]
+
+
+# ------------------------------------------------------------------ code.pipeline and boards
+def _git(*args, cwd):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, check=True,
+                   capture_output=True)
+
+
+@pytest.fixture
+def piped(m, tmp_path):
+    """The manifest with a pipeline clone whose origin has dev, a branch and PR #7."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git("init", "-q", "-b", "dev", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 1\n")
+    _git("add", ".", cwd=origin)
+    _git("commit", "-qm", "dev", cwd=origin)
+    _git("checkout", "-qb", "feat/x", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 2\n")
+    _git("commit", "-qam", "branch", cwd=origin)
+    _git("checkout", "-q", "dev", cwd=origin)
+    _git("checkout", "-qb", "pr7", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 7\n")
+    _git("commit", "-qam", "pr", cwd=origin)
+    _git("update-ref", "refs/pull/7/head", "pr7", cwd=origin)
+    _git("checkout", "-q", "dev", cwd=origin)
+    _git("clone", "-q", str(origin), str(tmp_path / "pipeline"), cwd=tmp_path)
+    return dataclasses.replace(m, repos={**m.repos, "pipeline": tmp_path / "pipeline"})
+
+
+def test_code_pipeline_checks_out_a_branch_a_pr_or_a_commit(piped, tmp_path):
+    for ref, gate in (("feat/x", "2"), ("#7", "7"), ("pr/7", "7")):
+        where = tmp_path / "wt" / ref.replace("/", "_").replace("#", "")
+        sha = run.pipeline_worktree(piped, ref, where)
+        assert (where / "params.yaml").read_text() == f"gate: {gate}\n" and len(sha) == 40
+        run.remove_pipeline_worktree(piped, where)
+        assert not where.exists()
+    dev = subprocess.run(["git", "-C", str(tmp_path / "origin"), "rev-parse", "dev"], capture_output=True, text=True).stdout.strip()
+    assert run.pipeline_worktree(piped, dev[:9], tmp_path / "wt" / "c") == dev
+    with pytest.raises(run.sp.SpecError, match="couldn't fetch branch nope"):
+        run.pipeline_worktree(piped, "nope", tmp_path / "wt" / "n")
+
+
+def test_a_queued_spec_runs_on_its_code_pipeline_and_cleans_up(piped):
+    jid = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "feat/x"}}, requested_by="alice")
+    run.work(piped, once=True, check_rig=lambda: READY_RIG)
+    st = lq.job(piped.results, jid)["status"]
+    assert st["state"] == "done" and st["pipeline"]["ref"] == "feat/x"
+    assert not (lq.queue_dir(piped.results) / jid / "pipeline").exists()  # the worktree is gone
+    bad = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "nope"}}, requested_by="alice")
+    run.work(piped, once=True, check_rig=lambda: READY_RIG)
+    st = lq.job(piped.results, bad)["status"]
+    assert st["state"] == "failed" and "nope" in st["error"]
+
+
+def test_boards_are_checked_against_the_manifest_and_need_car_in_the_loop(m):
+    boards = {"firmware": {"ecu": {"repo": "isc-fs/ecu", "default": "dev"}, "ams": {"repo": "isc-fs/ams", "default": "dev"}},
+              "hil": ["ecu"], "vhil": {"ecu-ams": ["ecu", "ams"]}}
+    mb = dataclasses.replace(m, boards=boards)
+    ok = spec() | {"boards": {"mode": "vhil", "system": "ecu-ams", "firmware": {"ams": "feat/y"}}}
+    assert run.sp.validate(ok, mb)["boards"]["system"] == "ecu-ams"
+    for bad, want in (
+        ({"mode": "can"}, "boards.mode"),
+        ({"mode": "vhil", "system": "udv"}, "boards.system"),
+        ({"mode": "hil", "firmware": {"ams": "dev"}}, "boards.firmware.ams"),
+    ):
+        with pytest.raises(run.sp.SpecError, match=want):
+            run.sp.validate(spec() | {"boards": bad}, mb)
+    assert rg.needs(ok)[-1] == "vhil"
+    probs = rg.problems(ok, rg.check({"id": "desk"}, run=fake_runner({})))
+    assert {"part": "vhil", "status": "absent", "reason": "car-in-the-loop not wired yet"} in probs
+
+
+def test_vhil_follows_docker_once_car_in_the_loop_is_wired(monkeypatch):
+    docker_up = {"nvidia-smi": (0, "GPU 0: x\n", ""), "docker": (0, "27.0\n", "")}
+    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "absent"
+    monkeypatch.setattr(rg, "CAR_IN_THE_LOOP", True)
+    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "ready"
+    down = rg.check({"id": "d"}, run=fake_runner({"docker": (1, "", "Cannot connect\n")}))
+    assert down["parts"]["vhil"] == {"status": "unavailable", "reason": "needs Docker"}
+
+
+def test_a_commit_pinned_on_a_branch_must_be_on_it(piped, tmp_path):
+    log = lambda ref: subprocess.run(["git", "-C", str(tmp_path / "origin"), "rev-parse", ref], capture_output=True, text=True).stdout.strip()
+    on_branch, dev = log("feat/x~1"), log("dev")  # feat/x's parent is dev's commit
+    pinned = log("feat/x")
+    assert run.pipeline_worktree(piped, f"feat/x@{pinned[:8]}", tmp_path / "p1") == pinned
+    assert run.pipeline_worktree(piped, f"feat/x@{on_branch[:8]}", tmp_path / "p2") == on_branch
+    pr = log("pr7")
+    assert run.pipeline_worktree(piped, f"#7@{pr[:8]}", tmp_path / "p3") == pr
+    with pytest.raises(run.sp.SpecError, match="isn't on branch dev"):
+        run.pipeline_worktree(piped, f"dev@{pinned[:8]}", tmp_path / "p4")
+    # the person's own clone keeps its branch and files
+    head = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert head == "dev" and (tmp_path / "pipeline" / "params.yaml").read_text() == "gate: 1\n"
+
+
+def test_a_run_on_another_commit_leaves_your_work_alone(piped, tmp_path):
+    mine = tmp_path / "pipeline" / "params.yaml"
+    mine.write_text("gate: my uncommitted change\n")
+    jid = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "feat/x"}}, requested_by="alice")
+    run.work(piped, once=True, check_rig=lambda: READY_RIG)
+    assert lq.job(piped.results, jid)["state"] == "done"
+    assert mine.read_text() == "gate: my uncommitted change\n"
+    head = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert head == "dev"
+    wts = subprocess.run(["git", "-C", str(tmp_path / "pipeline"), "worktree", "list"], capture_output=True, text=True).stdout
+    assert len(wts.strip().splitlines()) == 1  # the run's worktree is gone
 
 def test_with_no_owner_above_what_root_creates_gets_the_folders_permissions(m, monkeypatch):
     # Docker Desktop shows every folder of the mount as root's: no owner to give it to
