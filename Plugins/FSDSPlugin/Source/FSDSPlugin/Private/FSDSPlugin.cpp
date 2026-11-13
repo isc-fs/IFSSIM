@@ -2,6 +2,7 @@
 
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
+#include "Rendering/FSDSFrameTimes.h"
 #include "ShaderCore.h"
 
 #if PLATFORM_WINDOWS
@@ -60,10 +61,15 @@ void FFSDSPluginModule::StartupModule()
 		const FString ShaderDir = FPaths::Combine(Plugin->GetBaseDir(), TEXT("Shaders"));
 		AddShaderSourceDirectoryMapping(TEXT("/Plugin/FSDSPlugin"), ShaderDir);
 	}
+
+	// "FSDS Frame:" every 5 s: game, render, RHI and GPU time per frame
+	// (game runs only; it stays quiet in the editor and commandlets).
+	FSDSFrameTimes::Start();
 }
 
 void FFSDSPluginModule::ShutdownModule()
 {
+	FSDSFrameTimes::Stop();
 #if PLATFORM_WINDOWS
 	// Release the elevated timer resolution. Paired with the
 	// timeBeginPeriod(1) call in StartupModule().
