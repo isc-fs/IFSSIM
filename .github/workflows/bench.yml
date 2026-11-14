@@ -1,0 +1,149 @@
+name: Bench
+run-name: >-
+  Bench: ${{ inputs.name || (startsWith(inputs.spec, '{') && 'custom spec') || inputs.spec }}${{
+  inputs.id && format(' [{0}]', inputs.id) || '' }}
+
+# Runs one benchmark spec on the GPU runner (the bench PC): the same
+# `tools/sim_benchmark/run_spec.py` anyone runs on their own machine, through
+# tools/ci/bench_run.sh, which starts a headless sim and Mission Control's backend
+# around it when the spec drives the sim. Mission Control's Benchmarks tab
+# (Target: Runner) starts it with the spec as JSON; the Run workflow form takes a
+# preset name too (tools/sim_benchmark/specs). The nightly suites call it
+# (nightly.yml).
+#
+# What it tests: the `ifssim` input, else the spec's `code.ifssim` (a branch, a PR
+# of this repo, or a commit; never a fork's PR), else the commit this run was
+# started on. The spec's `code.pipeline` is checked out by run_spec.py itself.
+#
+# Results: the runs stay on the box under $CI_HOME/runs/bench-<run>; their JSON and
+# CSV files (no bags) are the `bench-<id>` artifact, which Mission Control's
+# "fetch results" downloads into your own results folder.
+#
+# Who can start it: anyone with write access (workflow_dispatch). It never runs
+# for pull requests, so a fork can't reach the runner through it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "a preset (tools/sim_benchmark/specs) or the spec as JSON"
+        default: missions-basic
+      name:
+        description: "a name for the run (shown in Mission Control's queue)"
+        default: ""
+      id:
+        description: "Mission Control's id for the run (it finds the run by it)"
+        default: ""
+      ifssim:
+        description: "IFSSIM branch, #PR or commit to test (empty: the spec's code.ifssim, else this branch)"
+        default: ""
+      runner:
+        description: "the runner label"
+        type: choice
+        options: [gpu, gpu-1080]
+        default: gpu
+      package:
+        description: "package the sim even if the shared dev build would do"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      spec: {type: string, default: missions-basic}
+      name: {type: string, default: ""}
+      id: {type: string, default: ""}
+      ifssim: {type: string, default: ""}
+      runner: {type: string, default: gpu}
+      package: {type: boolean, default: false}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+      what: ${{ steps.ref.outputs.what }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: tools/ci
+          lfs: false
+      - id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPEC: ${{ inputs.spec }}
+          IFSSIM: ${{ inputs.ifssim }}
+        run: python3 tools/ci/bench_resolve.py
+
+  bench:
+    needs: resolve
+    runs-on: [self-hosted, Linux, X64, "${{ inputs.runner || 'gpu' }}"]
+    timeout-minutes: 720
+    env:
+      COMPOSE_PROJECT_NAME: ifssim-ci
+      DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+      IFSSIM_DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+      STAGE: ${{ github.workspace }}/Saved/StagedBuildsCI
+      SPEC: ${{ inputs.spec }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          # as in sim-pr.yml: LFS after checkout, and keep Intermediate/ and Saved/
+          lfs: false
+          submodules: true
+          clean: false
+
+      - name: Fetch LFS files
+        run: git lfs pull
+
+      # The box's paths come from the runner's environment (CI_HOME, UE5_ROOT), with
+      # gpu-1080's layout as the default; the spec is checked before anything is built.
+      - name: Check the spec
+        id: spec
+        env:
+          WHAT: ${{ needs.resolve.outputs.what }}
+        run: |
+          ci_home="${CI_HOME:-/build/ifssim-ci}"
+          spec="$SPEC"
+          if [[ "$spec" == "{"* ]]; then printf '%s' "$spec" > "$RUNNER_TEMP/spec.json"; spec="$RUNNER_TEMP/spec.json"; fi
+          drives="$(python3 tools/sim_benchmark/run_spec.py "$spec" --print-spec \
+            | python3 -c 'import json, sys; print("true" if "missions" in json.load(sys.stdin)["benchmarks"] else "false")')"
+          { echo "UE5_ROOT=${UE5_ROOT:-$ci_home/UE_5.8}"; echo "UE-LocalDataCachePath=$ci_home/ddc"
+            echo "RESULTS=$ci_home/runs/bench-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"; echo "SPEC_ARG=$spec"; } >> "$GITHUB_ENV"
+          echo "drives_sim=$drives" >> "$GITHUB_OUTPUT"
+          echo "IFSSIM: $WHAT; drives the sim: $drives"
+
+      - name: Pick or package the sim
+        if: steps.spec.outputs.drives_sim == 'true'
+        env:
+          PUBLISH: "false"
+          FORCE_PACKAGE: ${{ inputs.package || false }}
+        run: tools/ci/sim_build.sh
+
+      - name: Build the pipeline images
+        run: |
+          docker build -f docker/dv_pipeline_stack/Dockerfile -t "$DV_IMAGE" .
+          docker compose build mission_control_backend
+
+      - name: Run the spec
+        env:
+          BENCH_TRIGGER: runner
+          BENCH_REQUESTED_BY: ${{ github.triggering_actor }}
+        run: tools/ci/bench_run.sh "$SPEC_ARG"
+
+      - name: Upload the results
+        if: always() && env.RESULTS != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ inputs.id || format('{0}-{1}', github.run_id, github.run_attempt) }}
+          # the measurements, not the bags (the free plan's artifact quota)
+          path: |
+            ${{ env.RESULTS }}/**/*.json
+            ${{ env.RESULTS }}/**/*.csv
+            ${{ env.RESULTS }}/**/*.log
+            !${{ env.RESULTS }}/**/sim.log
+          retention-days: 14
+          if-no-files-found: ignore

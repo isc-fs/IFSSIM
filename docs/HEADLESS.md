@@ -27,6 +27,12 @@ python3 -m headless_run run --sim ../Saved/StagedBuilds/Linux/IFSSIM.sh --mc-up 
 # Continuous: a fresh sim each cycle, until Ctrl-C or --cycles N.
 python3 -m headless_run loop --sim ../Saved/StagedBuilds/Linux/IFSSIM.sh --mc-up \
     -- --missions all --start-noise
+
+# Any command around a fresh sim and Mission Control: a run spec, as the bench
+# PC's runner does it (tools/ci/bench_run.sh). The command gets the sim's
+# address and the backend's URL in IFSSIM_SIM_ADDR and IFSSIM_MC_URL.
+python3 -m headless_run exec --sim ../Saved/StagedBuilds/Linux/IFSSIM.sh --mc-up \
+    -- python3 tools/sim_benchmark/run_spec.py missions-basic
 ```
 
 The benchmark runs with the same Python as the CLI, and needs PyYAML

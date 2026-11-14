@@ -1,0 +1,15 @@
+# The extensive benchmark: acceleration, skidpad and autocross (its 4 tracks), 5 runs per
+# track, each from a seeded random start pose (seeds 1-5, so every commit gets the same
+# 5 poses): 30 runs. Trackdrive, once per track from the nominal start, is a run of its
+# own (missions-basic with missions=trackdrive), as the nightly does (.github/workflows/nightly.yml).
+# The sim and Mission Control must be running.
+#   python3 tools/sim_benchmark/run_spec.py missions-extensive
+schema: 1
+name: missions, extensive
+benchmarks:
+  missions:
+    repeats: 1
+    settings:
+      missions: acceleration,skidpad,autocross
+      repeats: 5
+      start_noise: true

@@ -1,0 +1,38 @@
+name: Nightly benchmarks
+
+# The suites too long for a PR, every night on dev, report-only: the extensive
+# mission benchmark (tools/sim_benchmark/specs/missions-extensive.yaml: acceleration,
+# skidpad and autocross, 5 noisy starts per track), then trackdrive once per track.
+# Each is one bench.yml run on the GPU runner; their results are the
+# bench-nightly-* artifacts and each job's summary.
+#
+# GitHub starts scheduled workflows from the default branch (main), so this runs
+# once it is on main; it always tests dev (`ifssim: dev`).
+
+on:
+  schedule:
+    - cron: "0 1 * * *" # 01:00 UTC, when nobody is waiting on the runner
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  extensive:
+    uses: ./.github/workflows/bench.yml
+    with:
+      spec: missions-extensive
+      name: "nightly: extensive"
+      id: nightly-extensive-${{ github.run_id }}
+      ifssim: dev
+
+  trackdrive:
+    needs: extensive
+    if: always()
+    uses: ./.github/workflows/bench.yml
+    with:
+      spec: '{"name": "nightly: trackdrive", "benchmarks": {"missions": {"settings": {"missions": "trackdrive"}}}}'
+      name: "nightly: trackdrive"
+      id: nightly-trackdrive-${{ github.run_id }}
+      ifssim: dev
