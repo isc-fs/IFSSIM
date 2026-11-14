@@ -68,3 +68,21 @@ Ubuntu's snap Docker gives containers the GPU only with `--runtime=nvidia`
 (`--gpus all` fails), and has a `/tmp` of its own: a host folder under `/tmp`
 is mounted as an empty one. The benchmark keeps its temporary copies under the
 results folder for that reason, so put `RESULTS` under your home, not `/tmp`.
+
+## Setting up a box for the runner
+
+`setup_bench_host.sh` turns a clean Ubuntu 24.04 LTS into a GPU runner: the
+NVIDIA driver (held), Docker CE with the NVIDIA Container Toolkit (not the snap),
+Vulkan, `gh`, Tailscale, a `runner` user without sudo, `CI_HOME`, and the Actions
+runner registered to the org with only its labels (`self-hosted,Linux,X64,gpu`).
+Each step can run on its own and again; `--dry-run` prints what it would do.
+
+```bash
+sudo tools/ci/setup_bench_host.sh --dry-run
+sudo tools/ci/setup_bench_host.sh                       # everything but the registration
+sudo RUNNER_TOKEN=<token> tools/ci/setup_bench_host.sh runner
+```
+
+Unreal Engine is built by hand (it needs an Epic-linked GitHub account) into
+`$CI_HOME/UE_5.8`, the `UE5_ROOT` the runner's `.env` names. The bench PC's rig
+descriptor is `rigs/bench-pc.yaml`.
