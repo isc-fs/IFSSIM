@@ -20,6 +20,8 @@
 #include "ShaderParameterMacros.h"
 #include "Sensors/FSDSLidarDecodeShader.h"
 #include "FSDSReferee.h"  // FSDSConeStencil:: IDs (#321 D-Phase-1)
+#include "Environment/FSDSWorldActor.h"
+#include "EngineUtils.h"  // TActorIterator
 #include "Materials/MaterialInterface.h"  // M_LiDARStencilEncoder load (#321 D-Phase-2)
 
 using FSDSNoise::RandStandardNormal;
@@ -1213,7 +1215,27 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		U.IntensityMax          = IntensityMax;
 		U.IntensityRound        = bIntensityRound ? 1u : 0u;
 	}
-	U.LuminanceReflectanceGain = FMath::Max(0.f, LuminanceReflectanceGain);
+	// Luminance → ρ gain. The level's floor renders darker than asphalt
+	// (luminance ~0.04), so the default gain lifts it; a track's world
+	// (Montmeló) brings photo-matched colours and hides that floor, so it
+	// gets its own gain.
+	bool bWorldBuilt = false;
+	if (UWorld* W = GetWorld())
+	{
+		for (TActorIterator<AFSDSWorldActor> It(W); It; ++It)
+		{
+			if (It->IsBuilt()) { bWorldBuilt = true; break; }
+		}
+	}
+	const float Gain = (bWorldBuilt && WorldLuminanceReflectanceGain >= 0.f)
+		? WorldLuminanceReflectanceGain : LuminanceReflectanceGain;
+	U.LuminanceReflectanceGain = FMath::Max(0.f, Gain);
+	if (LastWorldGainState != int8(bWorldBuilt))
+	{
+		LastWorldGainState = int8(bWorldBuilt);
+		UE_LOG(LogTemp, Log, TEXT("FSDS LiDAR: luminance-to-reflectance gain %.2f (%s)"),
+			U.LuminanceReflectanceGain, bWorldBuilt ? TEXT("track world built") : TEXT("level floor"));
+	}
 	// Per-scan seed derived from the scenario seed plus a scan counter, so
 	// dropouts and range noise still vary scan to scan but the whole sequence
 	// replays identically for a given seed. Previously this was

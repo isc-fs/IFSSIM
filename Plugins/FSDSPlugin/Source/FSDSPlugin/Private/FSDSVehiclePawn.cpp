@@ -694,6 +694,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->IntensityIncidenceExp = SensorPair.Value.IntensityIncidenceExp;
 				LidarSensor->IntensityMax = SensorPair.Value.IntensityMax;
 				LidarSensor->LuminanceReflectanceGain = SensorPair.Value.LuminanceReflectanceGain;
+				LidarSensor->WorldLuminanceReflectanceGain = SensorPair.Value.WorldLuminanceReflectanceGain;
 				LidarSensor->bIntensityRound = SensorPair.Value.bIntensityRound;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 

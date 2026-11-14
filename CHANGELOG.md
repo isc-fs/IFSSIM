@@ -61,6 +61,8 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **LiDAR intensity on Montmeló.** The 3.2 luminance gain from #912 matched the level's floor to the car but put Montmeló's photo-matched asphalt at about 3× the car's ground. While a track's world is built the sensor now uses `WorldLuminanceReflectanceGain` (1), and both grounds land near the car's.
+
 - **Mission benchmarks build the sim bridge from the checkout, not the image.** The
   benchmark's stack rebuilt `pipeline/` from the checkout but kept the bridge baked into
   `ifssim-dv_pipeline_stack`, however old. After #875 grew the sensor frame, a stack image
