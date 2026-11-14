@@ -98,7 +98,8 @@ struct FFSDSSensorSettings
 	float RangeNoiseRangeCoeff = 0.f;      // m per m² of range: σ grows by this · r² (LiDAR)
 	float RangeNoiseRefReflectance = 0.2f; // ρ where the reflectance factor is 1 (LiDAR)
 	float RangeNoiseReflectanceExp = 0.f;  // σ ∝ (ρ_ref/ρ)^exp, 0 = off (LiDAR)
-	float EdgeOutlierRate = 0.f;           // mixed-return probability at depth edges (LiDAR)
+	float EdgeSwapRate = 0.f;              // at a depth edge: P(return from the other surface) (LiDAR)
+	float EdgeDropRate = 0.f;              // at a depth edge: P(no return) (LiDAR)
 	float IntensityNoise = 0.f;            // relative σ of intensity jitter (LiDAR)
 	// Intensity law (LiDAR): I = IntensityScale · ρ · cos(θ)^IntensityIncidenceExp
 	// · r^-IntensityRangeExp, clamped to [0, IntensityMax], rounded when

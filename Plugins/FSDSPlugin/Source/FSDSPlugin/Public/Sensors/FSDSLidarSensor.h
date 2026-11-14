@@ -141,9 +141,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float RangeNoiseReflectanceExp = 0.0f;
 
-	/** Probability of a mixed return (between the hit and the background) at a >30 cm depth edge. GPU path only. */
+	/** Depth edges: where a neighbouring beam (left or right, same channel)
+	 *  ranges more than 30 cm away, the return comes back from that other
+	 *  surface with probability EdgeSwapRate, or not at all with probability
+	 *  EdgeDropRate. The car's Hesai does both at cone silhouettes: objects
+	 *  grow into the beams beside them and edge beams flicker. GPU path only. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
-	float EdgeOutlierRate = 0.0f;
+	float EdgeSwapRate = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float EdgeDropRate = 0.0f;
 
 	/** Relative σ of scan-to-scan intensity jitter (0 = none). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")

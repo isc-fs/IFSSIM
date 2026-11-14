@@ -687,7 +687,8 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->RangeNoiseRangeCoeffCm = SensorPair.Value.RangeNoiseRangeCoeff * 100.f;
 				LidarSensor->RangeNoiseRefReflectance = SensorPair.Value.RangeNoiseRefReflectance;
 				LidarSensor->RangeNoiseReflectanceExp = SensorPair.Value.RangeNoiseReflectanceExp;
-				LidarSensor->EdgeOutlierRate = SensorPair.Value.EdgeOutlierRate;
+				LidarSensor->EdgeSwapRate = SensorPair.Value.EdgeSwapRate;
+				LidarSensor->EdgeDropRate = SensorPair.Value.EdgeDropRate;
 				LidarSensor->IntensityNoise = SensorPair.Value.IntensityNoise;
 				LidarSensor->IntensityScale = SensorPair.Value.IntensityScale;
 				LidarSensor->IntensityRangeExp = SensorPair.Value.IntensityRangeExp;
