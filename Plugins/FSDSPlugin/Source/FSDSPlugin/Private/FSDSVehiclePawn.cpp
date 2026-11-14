@@ -700,6 +700,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				{
 					LidarSensor->PerChannelMaxRangeCm.Add(Rm * 100.f);
 				}
+				LidarSensor->ChannelElevationsDeg = SensorPair.Value.ChannelElevationsDeg;
 
 				// #223: select CPU (legacy ParallelFor + Chaos line traces)
 				// vs GPU (depth render + compute decode). Unknown values

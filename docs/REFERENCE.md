@@ -282,8 +282,9 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Channels | 116 | ✓ | `NumberOfChannels` |
 | Points per second | 1,740,000 | ✓ | `PointsPerSecond` |
 | Rotations per second | 10 Hz | ✓ | `RotationsPerSecond` |
-| Vertical FOV upper | +5.9° | ✓ | `VerticalFOVUpper` |
-| Vertical FOV lower | −12.4° | ✓ | `VerticalFOVLower` |
+| Channel elevations | measured from the car, −12.8° to +5.8° | ✓ | `ChannelElevationsDeg` |
+| Vertical FOV upper (no table) | +5.9° | ✓ | `VerticalFOVUpper` |
+| Vertical FOV lower (no table) | −12.4° | ✓ | `VerticalFOVLower` |
 | Horizontal FOV | −60° to +60° (120°) | ✓ | `HorizontalFOVStart/End` |
 | Max range (global) | 30 m | ✓ | `MaxRange` |
 | Per-channel max range | 25–30 m (datasheet shape) | ✓ | `PerChannelMaxRangeM` |
@@ -291,6 +292,8 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Point dropout rate | 1% | ✓ | `DropoutRate` |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
 | Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
+
+**Channel elevations.** The car's Hesai spaces its 116 beams unevenly: about 0.1° apart from −4° to +2.9°, 0.2° from −9° to −4° and from +2.9° to +4.6°, and 0.4° at the top and bottom. `ChannelElevationsDeg` gives one elevation per channel in the sensor frame, measured from a parked car bag; the sensor sorts it lowest first and takes its vertical FOV from its ends. Without it, the channels are spread evenly from `VerticalFOVLower` to `VerticalFOVUpper`. A length other than `NumberOfChannels` logs a warning and falls back to the even grid. Honoured by both back-ends.
 
 **Per-channel max range.** Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer rings reach less far than central beams (60 m bottom, 198 m centre, 90 m top on the real sensor). The sim uses a 116-element array linearly remapped from the datasheet's 60-198 m envelope into the 25–30 m simulator range budget, preserving the relative shape. Length must equal `NumberOfChannels`; mismatch logs a warning and falls back to the global `MaxRange`. Honoured by both back-ends.
 

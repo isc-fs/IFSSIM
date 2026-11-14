@@ -347,6 +347,24 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 		}
 	}
 
+	// Per-channel elevation table: "ChannelElevationsDeg": [e0, ..., e{N-1}]
+	// in degrees, sensor frame. Length must equal NumberOfChannels.
+	{
+		const TArray<TSharedPtr<FJsonValue>>* ElevArr = nullptr;
+		if (SensorObj->TryGetArrayField(TEXT("ChannelElevationsDeg"), ElevArr) && ElevArr)
+		{
+			Sensor.ChannelElevationsDeg.Reset(ElevArr->Num());
+			for (const TSharedPtr<FJsonValue>& Entry : *ElevArr)
+			{
+				double V = 0.0;
+				if (Entry->TryGetNumber(V))
+				{
+					Sensor.ChannelElevationsDeg.Add((float)V);
+				}
+			}
+		}
+	}
+
 	// LidarPath: "cpu" (default) or "gpu" — see #223. Only honoured when
 	// SensorType==6 (LiDAR); read by FSDSLidarSensor::BeginPlay. We
 	// store it on every sensor's settings struct uniformly because

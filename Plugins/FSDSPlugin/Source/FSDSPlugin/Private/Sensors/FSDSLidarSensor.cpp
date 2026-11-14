@@ -141,6 +141,37 @@ void UFSDSLidarSensor::EndPlay(const EEndPlayReason::Type Reason)
 
 void UFSDSLidarSensor::OnSettingsApplied()
 {
+	// Channel elevations: a measured table from settings.json, or the
+	// uniform grid. Done first because it can move VerticalFOVLower/Upper,
+	// which the GPU capture is sized from.
+	const bool bHasElevTable = ChannelElevationsDeg.Num() == NumberOfChannels && NumberOfChannels > 0;
+	if (!bHasElevTable)
+	{
+		if (ChannelElevationsDeg.Num() != 0)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS LiDAR: ChannelElevationsDeg has %d entries but NumberOfChannels=%d — using a uniform %.1f..%.1f° grid."),
+				ChannelElevationsDeg.Num(), NumberOfChannels, VerticalFOVLower, VerticalFOVUpper);
+		}
+		EffectiveElevationsDeg.SetNumUninitialized(FMath::Max(0, NumberOfChannels));
+		const float Step = (NumberOfChannels > 1)
+			? (VerticalFOVUpper - VerticalFOVLower) / (float)(NumberOfChannels - 1) : 0.f;
+		for (int32 v = 0; v < NumberOfChannels; v++)
+		{
+			EffectiveElevationsDeg[v] = VerticalFOVLower + v * Step;
+		}
+	}
+	else
+	{
+		EffectiveElevationsDeg = ChannelElevationsDeg;
+		EffectiveElevationsDeg.Sort();
+		VerticalFOVLower = EffectiveElevationsDeg[0];
+		VerticalFOVUpper = EffectiveElevationsDeg.Last();
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS LiDAR: per-channel elevation table, %d channels, %.2f..%.2f°"),
+			NumberOfChannels, VerticalFOVLower, VerticalFOVUpper);
+	}
+
 	const float HFov = HorizontalFOVEnd - HorizontalFOVStart;
 	const float VFov = VerticalFOVUpper - VerticalFOVLower;
 	const int32 PointsPerScan = PointsPerSecond / FMath::Max(1.f, RotationsPerSecond);
@@ -326,7 +357,9 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	ChannelDir.SetNumUninitialized(NumberOfChannels);
 	for (int32 v = 0; v < NumberOfChannels; v++)
 	{
-		const float VAngleRad = FMath::DegreesToRadians(VerticalFOVLower + v * VStep);
+		const float VAngleDeg = EffectiveElevationsDeg.IsValidIndex(v)
+			? EffectiveElevationsDeg[v] : VerticalFOVLower + v * VStep;
+		const float VAngleRad = FMath::DegreesToRadians(VAngleDeg);
 		ChannelDir[v] = { FMath::Cos(VAngleRad), FMath::Sin(VAngleRad) };
 	}
 
@@ -1275,10 +1308,20 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// uploads this into a structured buffer SRV bound as the shader's
 	// ChannelMaxRangeCm parameter.
 	const TArray<float> ChannelMaxRangeCmCopy = PerChannelMaxRangeCm;
+	// Same for the channel elevations, converted to radians for the shader.
+	TArray<float> ChannelElevationRadCopy;
+	ChannelElevationRadCopy.Reserve(NumberOfChannels);
+	for (int32 v = 0; v < NumberOfChannels; v++)
+	{
+		const float Deg = EffectiveElevationsDeg.IsValidIndex(v)
+			? EffectiveElevationsDeg[v]
+			: VerticalFOVLower + v * ((NumberOfChannels > 1) ? (VerticalFOVUpper - VerticalFOVLower) / (float)(NumberOfChannels - 1) : 0.f);
+		ChannelElevationRadCopy.Add(FMath::DegreesToRadians(Deg));
+	}
 
 	ENQUEUE_RENDER_COMMAND(FSDSLidarDecode)(
 		[Readback, RTResource, ColorRTResource,
-		 U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy](FRHICommandListImmediate& RHICmdList)
+		 U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy, ChannelElevationRadCopy](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHITexture* DepthRHI = RTResource->GetRenderTargetTexture();
 			if (!DepthRHI) return;
@@ -1311,11 +1354,21 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 				ChannelMaxRangeCmCopy.GetData(),
 				ChannelMaxRangeCmCopy.Num() * sizeof(float));
 
+			const int32 ElevCount = FMath::Max(1, ChannelElevationRadCopy.Num());
+			FRDGBufferRef ChannelElevBuf = GraphBuilder.CreateBuffer(
+				FRDGBufferDesc::CreateStructuredDesc(sizeof(float), ElevCount),
+				TEXT("FSDSLidarChannelElevation"));
+			GraphBuilder.QueueBufferUpload(
+				ChannelElevBuf,
+				ChannelElevationRadCopy.GetData(),
+				ChannelElevationRadCopy.Num() * sizeof(float));
+
 			auto* Params = GraphBuilder.AllocParameters<FFSDSLidarDecodeCS::FParameters>();
 			Params->DepthTexture          = DepthRDG;
 			Params->ColorTexture          = ColorRDG;   // #255
 			Params->OutPoints             = GraphBuilder.CreateUAV(OutBuf);
 			Params->ChannelMaxRangeCm     = GraphBuilder.CreateSRV(ChannelRangeBuf);
+			Params->ChannelElevationRad   = GraphBuilder.CreateSRV(ChannelElevBuf);
 			Params->NumChannels           = U.NumChannels;
 			Params->NumHorizontalSteps    = U.NumHorizontalSteps;
 			Params->RTWidth               = U.RTWidth;
