@@ -437,6 +437,7 @@ A few that get asked about; full list in `docker-compose.yml`.
 
 | Var | Default | Effect |
 |---|---|---|
+| `LIDAR_CLOUD_FORMAT` | `hesai` | `/lidar_points` layout: `hesai` = the car's driver layout (every ray, ring + per-point timestamp, 26 B/point, ~4.5 MB/scan); `compact` = valid hits only, x/y/z/intensity (~2.6 MB/scan). |
 | `LIDAR_VIZ_DECIMATION` | `4` | Subsampled `/lidar/Lidar1/viz` for browser viz. 0 disables; ≥2 publishes every Nth point. |
 | `IFSSIM_MC_API_KEY` | empty | When set, MC backend requires `X-API-Key` header on mutating endpoints. Empty = dev mode, open. |
 | `IFSSIM_BAG_AUTO_PULL` | `1` | Auto-pull finalised bag onto host filesystem on StopBag (`docker cp` from the volume to `./bags/<name>/`, then `rm` the volume copy). Set to `0` to disable; bag stays in the volume and you retrieve manually via `tools/pull-bag.sh`. |

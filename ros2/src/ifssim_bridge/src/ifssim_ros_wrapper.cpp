@@ -8,6 +8,7 @@
  */
 
 #include "ifssim_ros_wrapper.h"
+#include "hesai_cloud.h"
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <fs_msgs/msg/cone.hpp>
@@ -115,6 +116,19 @@ IFSSIMRosWrapper::IFSSIMRosWrapper(
         }
     }
 
+    // /lidar_points layout. "hesai" (default): the car's driver layout —
+    // every ray, 26-byte points with ring and per-point time, no-returns as
+    // zeros (needs a plugin with streamLidar2; falls back to compact on an
+    // older one). "compact": valid hits only, x/y/z/intensity, 16 bytes.
+    {
+        const std::string fmt = node_->declare_parameter<std::string>("lidar_cloud_format", "hesai");
+        lidar_hesai_format_ = (fmt != "compact");
+        if (fmt != "hesai" && fmt != "compact") {
+            RCLCPP_WARN(node_->get_logger(),
+                "lidar_cloud_format='%s' unknown — using 'hesai' (or set 'compact')", fmt.c_str());
+        }
+    }
+
     initializeConnection();
     initializePublishers();
     initializeSubscribers();
@@ -143,7 +157,7 @@ IFSSIMRosWrapper::~IFSSIMRosWrapper()
     if (lidar_pub_thread_.joinable()) lidar_pub_thread_.join();
 }
 
-int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
+int IFSSIMRosWrapper::openStreamSocket(const std::string& command, bool require_ok)
 {
     // Pre-#322 this had a leading AF_UNIX branch that opened
     // /tmp/ifssim_streams/lidar.sock when `command == "streamLidar"`
@@ -208,8 +222,32 @@ int IFSSIMRosWrapper::openStreamSocket(const std::string& command)
         total += n;
     }
     buf[3] = '\0';
+    if (require_ok && std::strcmp(buf, "OK\n") != 0) {
+        close(sock);
+        return -1;
+    }
 
     return sock;
+}
+
+int IFSSIMRosWrapper::openLidarStream()
+{
+    if (lidar_hesai_format_) {
+        const int fd = openStreamSocket("streamLidar2", /*require_ok=*/true);
+        if (fd >= 0) {
+            lidar_stream_v2_ = true;
+            return fd;
+        }
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            RCLCPP_WARN(node_->get_logger(),
+                "LiDAR: plugin has no streamLidar2 (older build?) — publishing the compact "
+                "x/y/z/intensity cloud instead of the Hesai layout");
+        }
+    }
+    lidar_stream_v2_ = false;
+    return openStreamSocket("streamLidar");
 }
 
 void IFSSIMRosWrapper::initializeConnection()
@@ -459,9 +497,10 @@ void IFSSIMRosWrapper::startStreaming()
     }
 
     if (lidar_transport_ == LidarTransport::Tcp) {
-        lidar_stream_fd_ = openStreamSocket("streamLidar");
+        lidar_stream_fd_ = openLidarStream();
         if (lidar_stream_fd_ >= 0) {
-            RCLCPP_INFO(node_->get_logger(), "LiDAR transport: TCP (streamLidar, PR-#482)");
+            RCLCPP_INFO(node_->get_logger(), "LiDAR transport: TCP (%s, PR-#482)",
+                lidar_stream_v2_ ? "streamLidar2, Hesai layout" : "streamLidar, compact");
         } else {
             RCLCPP_ERROR(node_->get_logger(),
                 "LiDAR transport: TCP requested but openStreamSocket failed — "
@@ -488,7 +527,7 @@ void IFSSIMRosWrapper::startStreaming()
                 hdr.sim_capture_ns = sim_capture_ns;
                 {
                     std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
-                    lidar_pending_ = PendingLidarFrame{hdr, points};
+                    lidar_pending_ = PendingLidarFrame{hdr, points, LidarOrganisation{}};
                 }
                 lidar_pub_cv_.notify_one();
             });
@@ -753,14 +792,25 @@ void IFSSIMRosWrapper::lidarStreamThread()
         }
 
         WireHeader hdr;
-        if (!readExact(fd, &hdr, sizeof(hdr))) {
+        // streamLidar2 adds 16 bytes after the same 32 (FFSDSLidarStreamHeaderV2).
+        #pragma pack(push, 1)
+        struct WireHeaderV2Tail {
+            int64_t  sweep_ns;
+            int32_t  slots;
+            uint32_t flags;    // bit 0: organised
+        };
+        #pragma pack(pop)
+        static_assert(sizeof(WireHeaderV2Tail) == 16, "V2 header is 48 bytes");
+        WireHeaderV2Tail tail{};
+        if (!readExact(fd, &hdr, sizeof(hdr))
+            || (hdr.magic == LIDAR2_MAGIC && !readExact(fd, &tail, sizeof(tail)))) {
             RCLCPP_WARN(node_->get_logger(), "LiDAR stream disconnected (header recv failed)");
             int expected = fd;
             if (lidar_stream_fd_.compare_exchange_strong(expected, -1)) close(fd);
             triggerReconnect();
             continue;
         }
-        if (hdr.magic != LIDAR_MAGIC) {
+        if (hdr.magic != LIDAR_MAGIC && hdr.magic != LIDAR2_MAGIC) {
             // Out-of-band garbage on the stream — desync.  Tearing
             // down the connection is the only safe recovery: we
             // can't reliably skip forward to the next header in a
@@ -819,7 +869,14 @@ void IFSSIMRosWrapper::lidarStreamThread()
 
         {
             std::lock_guard<std::mutex> lock(lidar_pub_mutex_);
-            lidar_pending_ = PendingLidarFrame{pub_hdr, points};
+            LidarOrganisation org{};
+            if (hdr.magic == LIDAR2_MAGIC && (tail.flags & 1u) && tail.slots > 0
+                && static_cast<int64_t>(tail.slots) * hdr.channels == hdr.total_points) {
+                org.organised = true;
+                org.slots = tail.slots;
+                org.sweep_ns = tail.sweep_ns;
+            }
+            lidar_pending_ = PendingLidarFrame{pub_hdr, points, org};
         }
         lidar_pub_cv_.notify_one();
     }
@@ -848,7 +905,7 @@ void IFSSIMRosWrapper::lidarPublishThread()
         // (PointCloud2 serialization + DDS fan-out + downstream subscriber
         // back-pressure) is purely consumer-side; the recv loop never
         // sees it.
-        onLidarFrame(frame.header, frame.points.data());
+        onLidarFrame(frame.header, frame.points.data(), frame.org);
     }
 
     RCLCPP_INFO(node_->get_logger(), "LiDAR publish thread exiting");
@@ -938,7 +995,7 @@ void IFSSIMRosWrapper::triggerReconnect()
     // the next datagram, so it doesn't need explicit reconnect.
     if (lidar_transport_ == LidarTransport::Tcp) {
         while (streaming_ && lidar_stream_fd_ < 0) {
-            int fd = openStreamSocket("streamLidar");
+            int fd = openLidarStream();
             if (fd >= 0) {
                 lidar_stream_fd_.store(fd);
                 RCLCPP_INFO(node_->get_logger(), "LiDAR stream reconnected (TCP)");
@@ -1186,7 +1243,8 @@ void IFSSIMRosWrapper::onSensorFrame(const SensorFrame& f)
     }
 }
 
-void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float* points)
+void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float* points,
+                                    const LidarOrganisation& org)
 {
     int total_points = header.total_points;
     if (total_points <= 0) return;
@@ -1247,20 +1305,41 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     // cost on this thread at the datasheet pts/s rate; the source data
     // is already a packed (x,y,z,intensity) float32 array, so the full
     // point payload is a single memcpy of total_points × 16 bytes.
-    sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(4,
-        "x",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "y",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "z",         1, sensor_msgs::msg::PointField::FLOAT32,
-        "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
-    modifier.resize(total_points);
+    if (org.organised) {
+        // The car's Hesai layout (hesai_cloud.h): every ray, 26-byte packed
+        // points with ring and per-point time, no-returns as zeros.
+        auto field = [](const char* name, uint32_t offset, uint8_t type) {
+            sensor_msgs::msg::PointField f;
+            f.name = name; f.offset = offset; f.datatype = type; f.count = 1;
+            return f;
+        };
+        using PF = sensor_msgs::msg::PointField;
+        msg.fields = {field("x", 0, PF::FLOAT32), field("y", 4, PF::FLOAT32),
+                      field("z", 8, PF::FLOAT32), field("intensity", 12, PF::FLOAT32),
+                      field("ring", ifssim_bridge::kHesaiOffsetRing, PF::UINT16),
+                      field("timestamp", ifssim_bridge::kHesaiOffsetTimestamp, PF::FLOAT64)};
+        msg.point_step = ifssim_bridge::kHesaiPointStep;
+        msg.is_dense = false;
+        msg.data = ifssim_bridge::packHesaiCloud(points, header.channels, org.slots,
+            lidar_stamp.seconds(), static_cast<double>(org.sweep_ns) * 1e-9);
+        msg.width = static_cast<uint32_t>(msg.data.size() / msg.point_step);
+        msg.row_step = msg.width * msg.point_step;
+    } else {
+        sensor_msgs::PointCloud2Modifier modifier(msg);
+        modifier.setPointCloud2Fields(4,
+            "x",         1, sensor_msgs::msg::PointField::FLOAT32,
+            "y",         1, sensor_msgs::msg::PointField::FLOAT32,
+            "z",         1, sensor_msgs::msg::PointField::FLOAT32,
+            "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
+        modifier.resize(total_points);
 
-    // NOTE: points are passed through verbatim — the downstream pipeline
-    // (cone detection / SLAM) was written against UE's left-handed axis
-    // convention, so "correcting" to REP-103 by negating Y here breaks
-    // cone clustering. Leave as-is for compatibility.
-    std::memcpy(msg.data.data(), points,
-                static_cast<size_t>(total_points) * 4 * sizeof(float));
+        // NOTE: points are passed through verbatim — the downstream pipeline
+        // (cone detection / SLAM) was written against UE's left-handed axis
+        // convention, so "correcting" to REP-103 by negating Y here breaks
+        // cone clustering. Leave as-is for compatibility.
+        std::memcpy(msg.data.data(), points,
+                    static_cast<size_t>(total_points) * 4 * sizeof(float));
+    }
 
     lidar_pub_->publish(msg);
 
@@ -1295,12 +1374,22 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
             // sampling are nice-to-haves but stride is enough to make
             // a browser tab usable and adds no per-frame allocation
             // beyond the cloud itself.
+            // An organised scan carries no-returns (intensity < 0): skip
+            // them, so the viz cloud stays valid hits only.
             float* dst = reinterpret_cast<float*>(viz.data.data());
-            for (int i = 0, src_idx = 0; i < viz_count; ++i, src_idx += static_cast<int>(N) * 4) {
-                dst[i*4 + 0] = points[src_idx + 0];
-                dst[i*4 + 1] = points[src_idx + 1];
-                dst[i*4 + 2] = points[src_idx + 2];
-                dst[i*4 + 3] = points[src_idx + 3];
+            int kept = 0;
+            for (int src_idx = 0; kept < viz_count && src_idx < total_points * 4;
+                 src_idx += static_cast<int>(N) * 4) {
+                if (org.organised && points[src_idx + 3] < 0.0f) continue;
+                dst[kept*4 + 0] = points[src_idx + 0];
+                dst[kept*4 + 1] = points[src_idx + 1];
+                dst[kept*4 + 2] = points[src_idx + 2];
+                dst[kept*4 + 3] = points[src_idx + 3];
+                ++kept;
+            }
+            if (kept < viz_count) {
+                mod.resize(kept);
+                viz.width = static_cast<uint32_t>(kept);
             }
 
             lidar_viz_pub_->publish(viz);

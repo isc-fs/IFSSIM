@@ -85,7 +85,9 @@ private:
 	 *  overflow in WSL2 on Windows) are structurally unfixable
 	 *  cross-platform from inside the plugin. */
 	void StreamSensors(FSocket* ClientSocket);
-	void StreamLidar(FSocket* ClientSocket);
+	/** bOrganised: "streamLidar2" — 48-byte V2 header and, on the GPU path,
+	 *  every ray in the car's Hesai order (FFSDSLidarStreamHeaderV2). */
+	void StreamLidar(FSocket* ClientSocket, bool bOrganised = false);
 	/** The other way: the stack's viz_relay sends the pipeline view (FFSDSPipelineView). */
 	void StreamViz(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;

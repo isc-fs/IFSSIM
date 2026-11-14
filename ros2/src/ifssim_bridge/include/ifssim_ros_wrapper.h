@@ -96,11 +96,19 @@ private:
     bool syncSensorStream(int fd, bool& mismatched, const SensorFrame* already_read = nullptr);
     void sensorPublishThread();  // Drains the single-slot buffer, calls onSensorFrame
     void lidarStreamThread();    // PR-#482: TCP recv loop, reads stream-header + payload
+    // Organised scan (streamLidar2, Flags bit 0): points hold every ray in
+    // the car's Hesai order, slots x channels; see hesai_cloud.h.
+    struct LidarOrganisation {
+        bool organised = false;
+        int32_t slots = 0;
+        int64_t sweep_ns = 0;
+    };
     void lidarPublishThread();   // Drains the single-slot buffer, calls onLidarFrame
 
     // Stream data handlers
     void onSensorFrame(const SensorFrame& frame);
-    void onLidarFrame(const LidarChunkHeader& header, const float* points);
+    void onLidarFrame(const LidarChunkHeader& header, const float* points,
+                      const LidarOrganisation& org);
 
     // Timer callbacks (TCP command client, low frequency)
     void goSignalTimerCb();
@@ -175,6 +183,7 @@ private:
     struct PendingLidarFrame {
         LidarChunkHeader header;
         std::vector<float> points;
+        LidarOrganisation org{};
     };
     std::mutex lidar_pub_mutex_;
     std::condition_variable lidar_pub_cv_;
@@ -394,5 +403,12 @@ private:
     void parseNoiseSettings(const std::string& settings_json);
 
     // Helper: open a raw TCP socket and send a command
-    int openStreamSocket(const std::string& command);
+    // require_ok: close and return -1 unless the plugin answers "OK\n"
+    // (an older plugin answers an unknown stream command with an error).
+    int openStreamSocket(const std::string& command, bool require_ok = false);
+    // LiDAR stream: streamLidar2 (Hesai layout) when lidar_cloud_format is
+    // "hesai" and the plugin supports it, else streamLidar.
+    int openLidarStream();
+    bool lidar_hesai_format_ = true;          // lidar_cloud_format parameter
+    std::atomic<bool> lidar_stream_v2_{false}; // the open stream uses the 48-byte header
 };
