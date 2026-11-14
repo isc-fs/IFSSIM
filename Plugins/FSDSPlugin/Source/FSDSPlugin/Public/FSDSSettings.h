@@ -47,6 +47,13 @@ struct FFSDSSensorSettings
 	// any mismatch logs a warning and falls back to the global value.
 	TArray<float> PerChannelMaxRangeM;
 
+	// Per-channel elevation in DEGREES, sensor frame, one entry per
+	// channel. Real LiDARs space their beams unevenly (the Hesai ATX packs
+	// them at ~0.1° around the horizon and ~0.2-0.4° at the edges). Empty
+	// (default) keeps the uniform VerticalFOVLower..Upper grid. Validation
+	// and sorting live in FSDSLidarSensor::OnSettingsApplied.
+	TArray<float> ChannelElevationsDeg;
+
 	// LiDAR path: "cpu" (default, ParallelFor + Chaos line traces) or
 	// "gpu" (depth-render + compute decode, #223). Read by
 	// FSDSLidarSensor::BeginPlay; switching at runtime requires a PIE

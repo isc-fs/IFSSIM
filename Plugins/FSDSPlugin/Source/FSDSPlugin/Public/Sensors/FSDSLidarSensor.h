@@ -161,6 +161,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	TArray<float> PerChannelMaxRangeCm;
 
+	/** Per-channel elevation in DEGREES (sensor frame), one per channel,
+	 *  from settings.json ChannelElevationsDeg. Empty = the uniform
+	 *  VerticalFOVLower..Upper grid. With NumberOfChannels entries,
+	 *  OnSettingsApplied sorts a copy lowest first (channel 0 = lowest)
+	 *  and sets VerticalFOVLower/Upper to its ends so the GPU capture
+	 *  covers every beam. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	TArray<float> ChannelElevationsDeg;
+
 	/** Ray-cast backend selection. Driven by settings.json LidarPath
 	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
 	 *  stop/start because BeginPlay sets up backend-specific resources. */
@@ -175,6 +184,12 @@ public:
 	void OnSettingsApplied();
 
 private:
+	/** The elevations both back-ends use, degrees, sorted lowest first:
+	 *  ChannelElevationsDeg when it has NumberOfChannels entries, else the
+	 *  uniform grid. Rebuilt by OnSettingsApplied; the input array is left
+	 *  as given so a later re-apply sees the same input. */
+	TArray<float> EffectiveElevationsDeg;
+
 	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
 
 	UPROPERTY() USceneCaptureComponent2D* GPUDepthCapture = nullptr;
