@@ -149,6 +149,31 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float IntensityNoise = 0.0f;
 
+	/** Intensity law: I = IntensityScale · ρ · cos(θ_inc)^IntensityIncidenceExp
+	 *  · range_m^-IntensityRangeExp · jitter, clamped to [0, IntensityMax] and
+	 *  rounded to whole numbers when bIntensityRound. The car's Hesai reports
+	 *  0-255 whole numbers that fall as r^-1.29 and don't depend on incidence.
+	 *  IntensityScale < 0 keeps the old law: ρ · cos · (R_ref / r)², 0..1, with
+	 *  R_ref 5 m on the GPU path and 1 m on the CPU path. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityScale = -1.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityRangeExp = 2.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityIncidenceExp = 1.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityMax = 1.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bIntensityRound = false;
+
+	/** GPU path: ρ for hits with no reflectance-LUT entry (ground, paint,
+	 *  scenery) is clamp(gain · scene luminance, 0, 1). Visible luminance
+	 *  is darker than 905 nm reflectance (asphalt renders at ~0.04); the
+	 *  shipped gain is fitted so the ground matches the car. Also feeds the
+	 *  reflectance term of the range noise. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float LuminanceReflectanceGain = 1.0f;
+
 	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
 	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
 	 *  = highest). When this array's length matches NumberOfChannels,

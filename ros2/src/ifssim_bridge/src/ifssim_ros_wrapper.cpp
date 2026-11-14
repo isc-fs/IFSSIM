@@ -1230,9 +1230,11 @@ void IFSSIMRosWrapper::onLidarFrame(const LidarChunkHeader& header, const float*
     msg.is_bigendian = false;
 
     // XYZ + intensity PointCloud2 (#255). Per-point payload is 16 B —
-    // (x, y, z, intensity) FLOAT32. Intensity ∈ [0, 1] is computed by
-    // the GPU decode shader / CPU LineTrace path:
-    //   intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+    // (x, y, z, intensity) FLOAT32. Intensity is computed by the GPU
+    // decode shader / CPU LineTrace path; settings.json ships the car's
+    // law (whole numbers 0-255, ~ ρ_905 × range^-1.29), and without
+    // IntensityScale it is the original ρ_905 × cos(θ_inc) × (R_ref / range)²
+    // in [0, 1]. Passed through untouched here.
     // (Hesai ATX-S01 working principle, see FSDSLidarDecode.usf and
     // FSDSLidarSensor.cpp::PerformScan.)
     //

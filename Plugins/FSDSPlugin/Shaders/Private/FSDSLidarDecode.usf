@@ -20,7 +20,7 @@
 //
 // Output buffer is float4[NumRays] where xyz is the point in metres
 // (vehicle frame, ROS REP-103: x forward, y left, z up) and w is the
-// intensity in [0, 1] for valid hits or -1.0 for no-hit/dropped/culled.
+// intensity in [0, IntensityMax] for valid hits or -1.0 for no-hit/dropped/culled.
 
 #include "/Engine/Public/Platform.ush"
 
@@ -54,6 +54,12 @@ float RangeNoiseRefReflectance; // ρ at which the reflectance factor is 1
 float RangeNoiseReflectanceExp; // σ ∝ (ρ_ref/ρ)^exp; 0 = off
 float EdgeOutlierRate;        // probability of a mixed return at a >30 cm depth edge
 float IntensityNoiseRel;      // relative σ of scan-to-scan intensity jitter
+float IntensityScale;         // I = Scale · ρ · cos^IncidenceExp · r^-RangeExp (old law: 25, 2, 1)
+float IntensityRangeExp;
+float IntensityIncidenceExp;  // 0 = flat with incidence (the car's Hesai)
+float IntensityMax;           // clamp: 1 for the old 0..1 scale, 255 for the car's
+uint  IntensityRound;         // 1 = whole numbers, like the car's
+float LuminanceReflectanceGain; // ρ = saturate(gain · luminance) for hits with no LUT entry
 float DropoutRate;            // [0, 1]; 0 = no dropout
 
 uint  RNGSeed;                // re-seeded each scan from CPU side
@@ -143,7 +149,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	if (RayIdx >= TotalRays) return;
 
 	// Default to invalid; bail-outs below leave this in place. The
-	// w channel carries intensity in [0,1] for valid hits or -1.0 as
+	// w channel carries intensity in [0, IntensityMax] for valid hits or -1.0 as
 	// the invalid sentinel — distinct from a clean 0.0 intensity (a
 	// black surface at grazing angle is a valid hit with intensity 0).
 	OutPoints[RayIdx] = float4(0.0, 0.0, 0.0, -1.0);
@@ -258,7 +264,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	{
 		// Phase-2 path: stencil in R, pre-computed luminance in G.
 		const uint StencilID = uint(ColorSample.r * 255.0 + 0.5);
-		const float LuminanceFallback = saturate(ColorSample.g);
+		const float LuminanceFallback = saturate(LuminanceReflectanceGain * ColorSample.g);
 		Reflectance = LuminanceFallback;
 		if (StencilID > 0u && StencilID < 16u)
 		{
@@ -272,7 +278,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	else
 	{
 		// Legacy path: raw FinalColorLDR, compute Rec.709 in shader.
-		Reflectance = saturate(dot(ColorSample.rgb, float3(0.2126, 0.7152, 0.0722)));
+		Reflectance = saturate(LuminanceReflectanceGain * dot(ColorSample.rgb, float3(0.2126, 0.7152, 0.0722)));
 	}
 
 	// Surface normal from depth gradient. We don't have a populated
@@ -399,15 +405,20 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float Py = dot(MountRotRowY, DirSensor) * ScaleM + SensorOffsetYm;
 	const float Pz = dot(MountRotRowZ, DirSensor) * ScaleM + SensorOffsetZm;
 
-	const float RangeM   = max(ScaleM, 0.01);  // floor at 1 cm so the inverse-square doesn't blow up at point-blank
-	const float RangeRef = max(RReferenceM, 1e-3);
-	const float Falloff  = (RangeRef * RangeRef) / (RangeM * RangeM);
+	const float RangeM   = max(ScaleM, 0.01);  // floor at 1 cm so the range law doesn't blow up at point-blank
+	// Intensity law, set CPU-side: Scale · ρ · cos^IncidenceExp · r^-RangeExp.
+	// The old law ρ·cos·(R_ref/r)² is Scale = R_ref², RangeExp 2, IncidenceExp 1,
+	// Max 1. The car's Hesai: whole numbers 0-255, ∝ r^-1.29, flat with incidence.
+	// pow(0, 0) is undefined in HLSL, hence the guard on the incidence term.
+	const float IncLaw   = IntensityIncidenceExp > 0.0 ? pow(max(CosIncidence, 1e-6), IntensityIncidenceExp) : 1.0;
+	const float Falloff  = pow(RangeM, -IntensityRangeExp);
 	// Scan-to-scan intensity jitter, relative (car: ~14 %).
-	const float Intensity = saturate(Reflectance * CosIncidence * Falloff
-		* max(0.0, 1.0 + IntensityNoiseRel * GaussIntensity));
+	float Intensity = clamp(Reflectance * IntensityScale * IncLaw * Falloff
+		* max(0.0, 1.0 + IntensityNoiseRel * GaussIntensity), 0.0, IntensityMax);
+	if (IntensityRound != 0u) Intensity = round(Intensity);
 
 	// cm → m + ROS REP-103 Y-flip (UE Y-right → ROS Y-left). The w
-	// channel carries intensity for valid hits ([0, 1]); -1.0 sentinel
+	// channel carries intensity for valid hits ([0, IntensityMax]); -1.0 sentinel
 	// for invalid was written above and any return-path bail leaves it.
 	// Debug (fsds.LidarGPU.DebugColorChannel): 2 = report the colour
 	// capture's raw R (the encoded stencil ID, x255), 3 = raw G (the

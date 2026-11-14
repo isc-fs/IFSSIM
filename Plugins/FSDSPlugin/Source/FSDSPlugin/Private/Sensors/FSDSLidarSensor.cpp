@@ -443,12 +443,21 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			const float CosIncidence = FMath::Max(0.0f,
 				static_cast<float>(FVector::DotProduct(-RayDir, Hit.ImpactNormal)));
 			const float RangeM   = FMath::Max(Dist / 100.0f, 0.01f);
-			const float Falloff  = (R_REFERENCE_M * R_REFERENCE_M) / (RangeM * RangeM);
+			// Same law as the GPU path; IntensityScale < 0 is the old
+			// ρ·cos·(R_ref/r)² with R_ref = 1 m here.
+			const bool bLegacyLaw = IntensityScale < 0.f;
+			const float LawScale = bLegacyLaw ? R_REFERENCE_M * R_REFERENCE_M : IntensityScale;
+			const float RangeExp = bLegacyLaw ? 2.f : IntensityRangeExp;
+			const float IncExp   = bLegacyLaw ? 1.f : IntensityIncidenceExp;
+			const float IncLaw   = IncExp > 0.f ? FMath::Pow(FMath::Max(CosIncidence, 1e-6f), IncExp) : 1.f;
+			const float Falloff  = FMath::Pow(RangeM, -RangeExp);
 			const float Jitter = IntensityNoise > 0.f
 				? FMath::Max(0.f, 1.f + IntensityNoise * static_cast<float>(RandStandardNormal(Noise())))
 				: 1.f;
-			const float Intensity = FMath::Clamp(
-				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff * Jitter, 0.0f, 1.0f);
+			float Intensity = FMath::Clamp(
+				CPU_REFLECTANCE_PLACEHOLDER * LawScale * IncLaw * Falloff * Jitter,
+				0.0f, bLegacyLaw ? 1.0f : IntensityMax);
+			if (!bLegacyLaw && bIntensityRound) Intensity = FMath::RoundToFloat(Intensity);
 
 			SlotResults[SlotIdx] = {
 				static_cast<float>(LocalHit.X) / 100.f,
@@ -1139,6 +1148,9 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
 		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
 		float EdgeOutlierRate, IntensityNoiseRel;
+		float IntensityScale, IntensityRangeExp, IntensityIncidenceExp, IntensityMax;
+		uint32 IntensityRound;
+		float LuminanceReflectanceGain;
 		uint32 RNGSeed;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
@@ -1184,6 +1196,24 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.RangeNoiseReflectanceExp = RangeNoiseReflectanceExp;
 	U.EdgeOutlierRate          = EdgeOutlierRate;
 	U.IntensityNoiseRel        = IntensityNoise;
+	// Intensity law. Scale < 0 = the old ρ·cos·(R_ref/r)² with R_ref = 5 m.
+	if (IntensityScale < 0.f)
+	{
+		U.IntensityScale        = 25.f;
+		U.IntensityRangeExp     = 2.f;
+		U.IntensityIncidenceExp = 1.f;
+		U.IntensityMax          = 1.f;
+		U.IntensityRound        = 0u;
+	}
+	else
+	{
+		U.IntensityScale        = IntensityScale;
+		U.IntensityRangeExp     = IntensityRangeExp;
+		U.IntensityIncidenceExp = IntensityIncidenceExp;
+		U.IntensityMax          = IntensityMax;
+		U.IntensityRound        = bIntensityRound ? 1u : 0u;
+	}
+	U.LuminanceReflectanceGain = FMath::Max(0.f, LuminanceReflectanceGain);
 	// Per-scan seed derived from the scenario seed plus a scan counter, so
 	// dropouts and range noise still vary scan to scan but the whole sequence
 	// replays identically for a given seed. Previously this was
@@ -1390,6 +1420,12 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->RangeNoiseReflectanceExp = U.RangeNoiseReflectanceExp;
 			Params->EdgeOutlierRate          = U.EdgeOutlierRate;
 			Params->IntensityNoiseRel        = U.IntensityNoiseRel;
+			Params->IntensityScale           = U.IntensityScale;
+			Params->IntensityRangeExp        = U.IntensityRangeExp;
+			Params->IntensityIncidenceExp    = U.IntensityIncidenceExp;
+			Params->IntensityMax             = U.IntensityMax;
+			Params->IntensityRound           = U.IntensityRound;
+			Params->LuminanceReflectanceGain = U.LuminanceReflectanceGain;
 			Params->RNGSeed               = U.RNGSeed;
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;
@@ -1505,7 +1541,7 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 	// output of FSDSLidarDecode.usf and packs valid hits into
 	// PointCloudBuffer in the flat-float [x,y,z,intensity, …] format
 	// FSDSUdpBroadcaster + GetPointCloud() consumers expect. The shader
-	// writes intensity ∈ [0, 1] in P.W for valid hits and -1.0 as the
+	// writes intensity ∈ [0, IntensityMax] in P.W for valid hits and -1.0 as the
 	// invalid sentinel (distinct from a clean 0.0 intensity, which is
 	// a valid hit on a black surface or grazing-angle return). Skips
 	// invalid entries (P.W < 0 → dropped / far-plane / out-of-range).

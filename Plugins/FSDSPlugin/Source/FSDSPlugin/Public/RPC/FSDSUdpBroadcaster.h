@@ -113,8 +113,8 @@ struct FFSDSLidarChunkHeader
 	// on). LagNs is kept for old-bridge fallback + wall-clock diagnostics.
 	int64 SimCaptureNs = 0;
 	// Followed by PointsInChunk * 4 * sizeof(float) bytes of point data:
-	// (x, y, z, intensity) per point — intensity ∈ [0, 1] in #255's
-	// physically-grounded model. Stride was 3 floats pre-#255.
+	// (x, y, z, intensity) per point — intensity in [0, IntensityMax]
+	// (0-255 with the shipped settings). Stride was 3 floats pre-#255.
 };
 
 // Wire header for the TCP LiDAR stream (PR-#482). One header per scan,

@@ -68,6 +68,14 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(float, RangeNoiseReflectanceExp)
 		SHADER_PARAMETER(float, EdgeOutlierRate)
 		SHADER_PARAMETER(float, IntensityNoiseRel)
+		// Intensity law: Scale · ρ · cos^IncidenceExp · r^-RangeExp, clamped to
+		// [0, Max], rounded when Round != 0.
+		SHADER_PARAMETER(float, IntensityScale)
+		SHADER_PARAMETER(float, IntensityRangeExp)
+		SHADER_PARAMETER(float, IntensityIncidenceExp)
+		SHADER_PARAMETER(float, IntensityMax)
+		SHADER_PARAMETER(float, LuminanceReflectanceGain)
+		SHADER_PARAMETER(uint32, IntensityRound)
 
 		SHADER_PARAMETER(uint32, RNGSeed)
 
