@@ -138,6 +138,13 @@ def test_runner_launch_without_write_access_is_403(gh, monkeypatch):
     assert e.value.status_code == 403
 
 
+def test_runner_launch_before_github_knows_bench_yml_says_so(gh, monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "t")  # no route: the fake answers 404, as GitHub does
+    with pytest.raises(bq.LaunchError) as e:
+        bq.launch(SPEC, "runner")
+    assert e.value.status_code == 404 and "default branch" in str(e.value)
+
+
 # ------------------------------------------------------------------ the queue
 def run(rid, wf, status, conclusion=None, created="2026-11-14T10:00:00Z", started=None, updated=None,
         title="t", actor="Alberto-cd"):

@@ -244,8 +244,17 @@ def launch(bench_dir: Path, spec: dict[str, Any], name: str | None = None) -> di
     if len(blob) > 60000:
         raise RunnerError("the spec is too big for a workflow input (60 kB)")
     name = (name or spec.get("name") or "custom spec").strip()[:100]
-    api("POST", f"repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches", token=t,
-        data={"ref": DISPATCH_REF, "inputs": {"spec": blob, "name": name, "id": jid}})
+    try:
+        api("POST", f"repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches", token=t,
+            data={"ref": DISPATCH_REF, "inputs": {"spec": blob, "name": name, "id": jid}})
+    except RunnerError as e:
+        if e.status_code != 404:
+            raise
+        # GitHub only dispatches a workflow it knows: one on the default branch, or
+        # one that has run before. A missing branch is a 422, not a 404.
+        raise RunnerError(
+            f"GitHub doesn't know {WORKFLOW} yet: it starts working once {WORKFLOW} is on "
+            f"{REPO}'s default branch (or your token can't see {REPO})", 404) from e
     _cache.clear()
     return {
         "id": jid,
