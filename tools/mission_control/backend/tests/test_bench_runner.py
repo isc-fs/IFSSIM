@@ -176,6 +176,12 @@ def test_the_queue_shows_every_gpu_workflow_and_finds_its_own_runs(gh, tmp_path,
     assert q["runs"][2]["state"] == "done" and q["runner_offline"] is False
 
 
+def test_a_push_runs_title_is_its_commit_messages_first_line(gh, tmp_path):
+    gh.on("GET", API + f"repos/{br.REPO}/actions/runs?per_page=100",
+          {"workflow_runs": [run(8, "sim-pr.yml", "completed", "success", title="fix: a thing (#1)\n\nlong body")]})
+    assert br.queue(bench(tmp_path))["runs"][0]["name"] == "fix: a thing (#1)"
+
+
 def test_a_run_queued_for_long_with_nothing_running_flags_the_runner(gh, tmp_path):
     gh.on("GET", API + f"repos/{br.REPO}/actions/runs?per_page=100",
           {"workflow_runs": [run(7, "bench.yml", "queued", created="2026-11-14T10:00:00Z")]})

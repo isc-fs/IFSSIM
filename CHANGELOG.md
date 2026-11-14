@@ -25,8 +25,10 @@ shipping pipeline, documentation.
   machine's results folder, where Local runs go. Sign-in: `GET /api/bench/github`, and
   GitHub's device flow (`POST /api/bench/github/login`, then `.../login/poll`) once the
   team's GitHub app id is in `IFSSIM_GITHUB_CLIENT_ID`; until then a token in
-  `GH_TOKEN` / `IFSSIM_GITHUB_TOKEN` works (`GH_TOKEN=$(gh auth token)`). The sim's page
-  still shows Bench PC as not built: its Runner view comes next.
+  `GH_TOKEN` / `IFSSIM_GITHUB_TOKEN` works (`GH_TOKEN=$(gh auth token)`). In the sim's
+  Benchmarks page, Bench PC now launches there: the queue column shows the bench PC's
+  runs (with Logs, Cancel and Fetch results) and who you are signed in as, with Sign in /
+  Sign out; Queue waits for a sign-in with write access.
 
 - **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
   replay recorded bags), the missions, tracks (each mission's own are listed), runs per

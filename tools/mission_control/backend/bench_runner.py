@@ -339,7 +339,8 @@ def queue(bench_dir: Path, limit: int = 30, now: float | None = None) -> dict[st
     out = []
     for r in runs[:limit]:
         state = _state(r)
-        title = r.get("display_title") or r.get("name") or ""
+        # a push's title is its commit message: its first line
+        title = ((r.get("display_title") or r.get("name") or "").strip().splitlines() or [""])[0]
         m = ID_RE.search(title)
         item: dict[str, Any] = {
             "run_id": r["id"],
