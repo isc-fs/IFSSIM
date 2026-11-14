@@ -26,6 +26,9 @@
 # Exit codes: run_spec.py's (0 every job finished, 1 some failed, 2 the spec has
 # problems), 3 the machine failed (sim or backend never up, lock never free).
 set -euo pipefail
+# The output goes through tee: without this, Python buffers it and the job log
+# shows nothing until a benchmark ends (minutes, or the whole run).
+export PYTHONUNBUFFERED=1
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [ $# -gt 0 ] || { echo "usage: $0 <spec file or preset>... [--set key=value]..." >&2; exit 2; }
