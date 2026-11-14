@@ -40,6 +40,10 @@ UFSDSWheelRear::UFSDSWheelRear()
 	// scaled x100 into N/m; see FSDSWheelFront.cpp for the full unit
 	// derivation and the cross-check against HeaveStiffness). Previously
 	// unset, so Chaos used its 250 default = 25 kN/m.
+	// FALLBACK ONLY. SpringRate, SuspensionDampingRatio and WheelMass are
+	// overwritten from settings.json (SpringRateRear, DampingRatioRear,
+	// WheelMassRear) by AFSDSVehiclePawn::ApplyTireModelToWheelCDOs before
+	// CreateVehicle(). These literals equal the FSDSSettings.h defaults.
 	SpringRate = 525.4f;
 
 	// Use the actual per-wheel vertical load (Fz) for grip calculation

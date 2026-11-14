@@ -257,6 +257,14 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("HeaveStiffness"), DblVal)) P.HeaveStiffness = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("PitchStiffness"), DblVal)) P.PitchStiffness = DblVal;
 
+		// Chaos wheel-class values per axle (delivered via the wheel CDOs).
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("SpringRateFront"), DblVal)) P.SpringRateFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("SpringRateRear"), DblVal)) P.SpringRateRear = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("DampingRatioFront"), DblVal)) P.DampingRatioFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("DampingRatioRear"), DblVal)) P.DampingRatioRear = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelMassFront"), DblVal)) P.WheelMassFront = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("WheelMassRear"), DblVal)) P.WheelMassRear = DblVal;
+
 		// Motor torque curve arrays
 		const TArray<TSharedPtr<FJsonValue>>* RPMArr;
 		const TArray<TSharedPtr<FJsonValue>>* TorqueArr;

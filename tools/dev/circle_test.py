@@ -48,7 +48,7 @@ def _sim_vehicle_physics() -> dict:
 
 _VP = _sim_vehicle_physics()
 # Fallbacks must match settings.json; tools/tests/test_constants_guard.py checks them.
-WHEELBASE_M = float(_VP.get("Wheelbase", 1.627))
+WHEELBASE_M = float(_VP.get("Wheelbase", 1.6244))
 MAX_STEER_DEG = float(_VP.get("MaxSteerAngle", 18.2))
 
 

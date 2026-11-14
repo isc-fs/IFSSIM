@@ -72,7 +72,13 @@ D = struct( ...
     'RollStiffnessFront',   27000.0, ...  % Nm/rad
     'RollStiffnessRear',    22000.0, ...  % Nm/rad
     'HeaveStiffness',       227600.0, ... % N/m, SUM of 4 wheel rates
-    'PitchStiffness',       155600.0);    % Nm/rad
+    'PitchStiffness',       155600.0, ... % Nm/rad
+    'SpringRateFront',      61290.0, ...  % N/m WHEEL rate per corner (Chaos SpringRate = /100)
+    'SpringRateRear',       52540.0, ...  % N/m
+    'DampingRatioFront',    1.5, ...      % Chaos SuspensionDampingRatio
+    'DampingRatioRear',     1.5, ...
+    'WheelMassFront',       10.0, ...     % kg, Chaos spin-inertia mass (I = 0.5 m r^2)
+    'WheelMassRear',        10.0);
 
 P = struct(); P.Source = struct();
 f = fieldnames(D);
@@ -132,6 +138,12 @@ P.Assumed.InertiaSource = 'ESTIMATE — typical FS values, not measured for this
 % Wheel+tyre. Corroborated two ways: a solid disc at 10 kg / r=0.202 gives 0.204,
 % and IFS_Sim carried 0.215. Sets how fast a wheel spins up or locks.
 P.Assumed.WheelInertia = 0.21;   % kg*m^2 per corner   ASSUMPTION
+% When settings.json carries WheelMassFront/Rear it is the SAME number Chaos
+% spins (0.5 m r^2), set from the CAD's rotating parts — use it, so the two
+% plants spin the same wheel.
+if strcmp(P.Source.WheelMassFront, 'settings.json') && strcmp(P.Source.WheelMassRear, 'settings.json')
+    P.Assumed.WheelInertia = 0.5 * mean([P.WheelMassFront P.WheelMassRear]) * P.WheelRadius^2;
+end
 
 % Slip divides by forward speed, which is zero at rest. Slip is computed against
 % max(|vx|, this). Below this speed the tyre model is not trustworthy.

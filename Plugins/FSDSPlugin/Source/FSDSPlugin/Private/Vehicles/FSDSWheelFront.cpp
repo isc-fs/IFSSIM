@@ -86,6 +86,10 @@ UFSDSWheelFront::UFSDSWheelFront()
 	// physics wheels from the CLASS DEFAULT OBJECT in CreateVehicle() before
 	// BeginPlay. Pushing suspension to a live vehicle instead is what
 	// launched the car into the air upside down on an earlier attempt.
+	// FALLBACK ONLY. SpringRate, SuspensionDampingRatio and WheelMass are
+	// overwritten from settings.json (SpringRateFront, DampingRatioFront,
+	// WheelMassFront) by AFSDSVehiclePawn::ApplyTireModelToWheelCDOs before
+	// CreateVehicle(). These literals equal the FSDSSettings.h defaults.
 	SpringRate = 612.9f;
 
 	// See FSDSWheelRear.cpp for rationale — use real per-wheel Fz, not

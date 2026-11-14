@@ -161,6 +161,28 @@ struct FFSDSVehiclePhysics
 	float HeaveStiffness = 227600.f;     // N/m (sum of 4 wheel rates)
 	float PitchStiffness = 155600.f;     // Nm/rad
 
+	// --- Chaos wheel classes, per axle ---
+	// Delivered into the wheel CLASS DEFAULT OBJECTS before CreateVehicle()
+	// (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs), the same route as the
+	// Pacejka curve; a live push resets solver suspension state.
+	//
+	// Defaults are exactly what FSDSWheelFront/Rear.cpp hardcoded before these
+	// keys existed, so a settings.json without them drives the same car.
+	//
+	// SpringRate is the WHEEL rate in N/m (spring rate x motion ratio^2), not
+	// the Chaos property: the property is this / 100 (see FSDSWheelFront.cpp
+	// for the unit derivation). Keep HeaveStiffness = 2*(Front + Rear) so the
+	// parametric load model and Chaos agree.
+	//
+	// WheelMass is what Chaos uses for wheel SPIN inertia (0.5 m r^2), not the
+	// unsprung mass; set it as 2 I / r^2 from the real rotating inertia.
+	float SpringRateFront = 61290.f;     // N/m wheel rate (350 lb/in, legacy)
+	float SpringRateRear = 52540.f;      // N/m wheel rate (300 lb/in, legacy)
+	float DampingRatioFront = 1.5f;      // Chaos SuspensionDampingRatio
+	float DampingRatioRear = 1.5f;
+	float WheelMassFront = 10.f;         // kg, spin-inertia equivalent
+	float WheelMassRear = 10.f;
+
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.
 	// See FSDSPacejkaTireModel.h for coefficient definitions.

@@ -143,12 +143,12 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Mass | 275 | kg | `Mass` |
+| Mass | 220 | kg | `Mass` |
 | Drivetrain | RWD | — | `Drivetrain` |
-| Wheel radius | 0.202 | m | `WheelRadius` |
+| Wheel radius | 0.2002 | m | `WheelRadius` |
 | Wheel width | 0.190 | m | `WheelWidth` |
 | Max steer angle | 18.2 | ° | `MaxSteerAngle` |
-| Wheelbase | 1.627 | m | `Wheelbase` |
+| Wheelbase | 1.6244 | m | `Wheelbase` |
 | Front track | 1.220 | m | `TrackFront` |
 | Rear track | 1.190 | m | `TrackRear` |
 | Weight distribution front | 43.8 | % | `WeightDistFront` |
@@ -242,7 +242,7 @@ Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric lo
 
 #### Wheels
 
-- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.202 m` from settings at runtime), 19 mm width, max steer 18.2° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
+- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.2002 m` from settings at runtime), 19 mm width, max steer 18.2° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
 - **Rear (`UFSDSWheelRear`):** Same tire, no steering, drive wheels (motor torque injected via `SetDriveTorque` with `Additive` combine method), `MaxBrakeTorque` sized at `BeginPlay` to `MaxRegenTorque · GearRatio · DrivetrainEfficiency / 2` per wheel so the brake input channel saturates correctly against the regen ceiling.
 
 #### Aerodynamics
