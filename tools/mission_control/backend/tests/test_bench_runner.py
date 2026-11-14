@@ -138,6 +138,17 @@ def test_runner_launch_without_write_access_is_403(gh, monkeypatch):
     assert e.value.status_code == 403
 
 
+def test_the_token_never_follows_a_redirect_to_another_host():
+    # artifact zips redirect to blob storage, which answers 401 to a GitHub token
+    import urllib.request
+    h = br._NoAuthAcrossHosts()
+    req = urllib.request.Request("https://api.github.com/x/zip", headers={"Authorization": "Bearer t"})
+    away = h.redirect_request(req, None, 302, "Found", {}, "https://blob.example.net/signed")
+    assert "Authorization" not in away.headers
+    same = h.redirect_request(req, None, 302, "Found", {}, "https://api.github.com/y")
+    assert same.headers.get("Authorization") == "Bearer t"
+
+
 def test_runner_launch_before_github_knows_bench_yml_says_so(gh, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "t")  # no route: the fake answers 404, as GitHub does
     with pytest.raises(bq.LaunchError) as e:

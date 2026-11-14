@@ -59,6 +59,22 @@ class RunnerError(RuntimeError):
 Http = Callable[..., Any]
 
 
+class _NoAuthAcrossHosts(urllib.request.HTTPRedirectHandler):
+    """Artifact downloads redirect to a signed blob-storage URL, which refuses a
+    request that still carries the GitHub token (401). Never send the token to
+    another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+            new.headers.pop("Authorization", None)
+            new.unredirected_hdrs.pop("Authorization", None)
+        return new
+
+
+_opener = urllib.request.build_opener(_NoAuthAcrossHosts)
+
+
 def _http(method: str, url: str, *, token: str | None = None, data: Any = None,
           form: bool = False, raw: bool = False, timeout: float = 15.0) -> Any:
     """One request; JSON back (or bytes with ``raw``), None for an empty answer."""
@@ -75,7 +91,7 @@ def _http(method: str, url: str, *, token: str | None = None, data: Any = None,
             headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _opener.open(req, timeout=timeout) as r:
             payload = r.read()
     except urllib.error.HTTPError as e:
         detail = ""
