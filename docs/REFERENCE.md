@@ -292,6 +292,7 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Point dropout rate | 1% | ✓ | `DropoutRate` |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
 | Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
+| Intensity law | car fit: 1460 · ρ · r^−1.29, rounded, 0–255 | ✓ | `IntensityScale`, `IntensityRangeExp`, `IntensityIncidenceExp`, `IntensityMax`, `IntensityRound` |
 
 **Channel elevations.** The car's Hesai spaces its 116 beams unevenly: about 0.1° apart from −4° to +2.9°, 0.2° from −9° to −4° and from +2.9° to +4.6°, and 0.4° at the top and bottom. `ChannelElevationsDeg` gives one elevation per channel in the sensor frame, measured from a parked car bag; the sensor sorts it lowest first and takes its vertical FOV from its ends. Without it, the channels are spread evenly from `VerticalFOVLower` to `VerticalFOVUpper`. A length other than `NumberOfChannels` logs a warning and falls back to the even grid. Honoured by both back-ends.
 
@@ -301,18 +302,21 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 **Mount.** `(X=0.0, Y=0.0, Z=1.10)` corresponds to the IFS-08's main hoop crossbar height, CoG-aligned, centred. Pre-2026 settings used a hood-mount approximation (`X=0.5, Z=0.9`); cone-detection cluster-height thresholds were rebaselined when the mount moved.
 
-**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 4 floats `(x, y, z, intensity)` — xyz in metres, intensity in [0, 1]. Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
+**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 4 floats `(x, y, z, intensity)` — xyz in metres, intensity in [0, `IntensityMax`] (whole numbers 0–255 with the shipped settings, like the car). Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
 
-**Intensity model (#255).** Mirrors the Hesai ATX-S01 working principle:
+**Intensity model.** The shipped settings use the law fitted to the car's Hesai:
 ```
-intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+intensity = round(min(IntensityScale × ρ_905 × cos(θ_inc)^IntensityIncidenceExp × range^−IntensityRangeExp, IntensityMax))
 ```
+with `IntensityScale` 1460, `IntensityRangeExp` 1.29, `IntensityIncidenceExp` 0, `IntensityMax` 255 and `IntensityRound` true. The car reports whole numbers 0–255 that fall as r^−1.29 (cone faces: about 28 at 4 m, 11 at 10 m, 4–5 at 16–18 m) and do not depend on the angle of incidence (on the ground, once the range law is divided out, what is left goes as cos^0.08). The scale matches the ground: the car's ground I·r^1.29 has median 183, and the sim's asphalt has ρ ≈ 0.125. The sim's blue cones (ρ 0.15) then land near the car's median cone-like object and the yellow ones (ρ 0.5) near its top decile; the car bag carries no cone colours to check them one by one. The pipeline's cone detection does not read intensity today.
+
+Leave `IntensityScale` out (or negative) for the original model of #255, described below: ρ_905 × cos(θ_inc) × (R_ref / range)², clamped to [0, 1].
 - **ρ_905** — surface reflectance at 905 nm. Two-stage rollout:
   - **Phase 1 (current).** The decode shader holds a 16-entry `ReflectanceLUT[]` pre-populated with datasheet ρ_905 values (blue ≈ 0.15, yellow ≈ 0.50, orange ≈ 0.65, white-stripe slot reserved). The cone spawner (`FSDSConeSpawner::SpawnStaticMeshCone`) tags each cone mesh with a `CustomDepthStencilValue` (1=blue, 2=yellow, 3=big-orange, 4=small-orange) so the LUT can be looked up by stencil. `r.CustomDepth=3` is enabled in `DefaultEngine.ini` to render the depth+stencil pass. **The LUT is inert by default** (`UseReflectanceLUT=0`); the shader still uses `FinalColorLDR` Rec.709 luminance for every hit. This stage ships the foundation so Phase 2 is a flip-the-flag change.
   - **Phase 2.** `M_LiDARStencilEncoder.uasset`, a post-process material on `GPUColorCapture`, writes `stencil_id / 255` into R and Rec.709 luminance into G of `FinalColorLDR`; the shader reads R → stencil ID → LUT, falling back to G for any hit whose stencil is 0 or whose LUT slot is unset. On by default (`fsds.LidarGPU.StencilEncoder 1`); the sensor reads it once, at startup, so turn it off with `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0`, not `-ExecCmds`. Off, the colour capture never renders and intensity carries no material information; that is the fallback if the faint viewport stippling of #488 shows in a packaged build. The colour capture then persists its rendering state: UE only applies a post-process material to a view with a view state, so without it the encoder never ran (#698). `fsds.LidarGPU.DebugColorChannel 1`/`2` reports raw R/G as the intensity, to check what the encoder writes.
 - **cos(θ_inc)** — angle of incidence between the ray and the surface normal at the hit. GPU path computes the normal in-shader from depth-buffer central differences (cross-product of neighbour-texel deltas, then mapped from view to world space using the sensor's world rotation rows passed as shader parameters). CPU path uses `FHitResult::ImpactNormal`.
 - **(R_ref / range)²** — Lambert inverse-square term. `R_ref = 5 m` so cone-distance hits land in a useful intensity range — surfaces closer than 5 m saturate to ρ·cos(θ), surfaces farther fall off quadratically. (`R_ref = 1 m` was tried first and squashed 75% of the dynamic range to zero.)
-- Output clamped to [0, 1]. Wire format encodes `intensity < 0` as the "no-hit" sentinel before the bridge filters; valid points carry `intensity ≥ 0`. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
+- Output clamped to [0, 1] in the original model. Wire format encodes `intensity < 0` as the "no-hit" sentinel before the bridge filters; valid points carry `intensity ≥ 0`. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
 
 **Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point.
 

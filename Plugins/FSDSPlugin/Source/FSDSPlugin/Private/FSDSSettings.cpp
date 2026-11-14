@@ -417,6 +417,11 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseReflectanceExp"), DblVal)) Sensor.RangeNoiseReflectanceExp = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("EdgeOutlierRate"), DblVal)) Sensor.EdgeOutlierRate = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("IntensityNoise"), DblVal)) Sensor.IntensityNoise = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityScale"), DblVal)) Sensor.IntensityScale = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityRangeExp"), DblVal)) Sensor.IntensityRangeExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityIncidenceExp"), DblVal)) Sensor.IntensityIncidenceExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityMax"), DblVal)) Sensor.IntensityMax = DblVal;
+	SensorObj->TryGetBoolField(TEXT("IntensityRound"), Sensor.bIntensityRound);
 
 	Vehicle.Sensors.Add(Name, Sensor);
 }

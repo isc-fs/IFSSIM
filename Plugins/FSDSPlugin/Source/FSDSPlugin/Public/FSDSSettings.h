@@ -100,6 +100,14 @@ struct FFSDSSensorSettings
 	float RangeNoiseReflectanceExp = 0.f;  // σ ∝ (ρ_ref/ρ)^exp, 0 = off (LiDAR)
 	float EdgeOutlierRate = 0.f;           // mixed-return probability at depth edges (LiDAR)
 	float IntensityNoise = 0.f;            // relative σ of intensity jitter (LiDAR)
+	// Intensity law (LiDAR): I = IntensityScale · ρ · cos(θ)^IntensityIncidenceExp
+	// · r^-IntensityRangeExp, clamped to [0, IntensityMax], rounded when
+	// bIntensityRound. Scale < 0 keeps the old law (ρ·cos·(R_ref/r)², 0..1).
+	float IntensityScale = -1.f;
+	float IntensityRangeExp = 2.f;
+	float IntensityIncidenceExp = 1.f;
+	float IntensityMax = 1.f;
+	bool bIntensityRound = false;
 };
 
 struct FFSDSVehiclePhysics
