@@ -26,6 +26,17 @@ shipping pipeline, documentation.
   Start worker / Stop worker run the local queue's worker; the queue shows each spec's
   progress, with Cancel and its folder.
 
+- **Benchmark specs on the GPU runner, and nightly suites.** `.github/workflows/bench.yml`
+  runs one spec (a preset, or the spec as JSON) on the bench PC through
+  `tools/ci/bench_run.sh`: the same `run_spec.py` you run locally, with a fresh headless
+  sim and Mission Control around it when the spec drives the sim (the new
+  `python3 -m headless_run exec -- <command>`). It tests the `ifssim` input or the
+  spec's `code.ifssim` (branch, same-repo PR or commit; never a fork's PR); the results'
+  JSON and CSV files are its `bench-<id>` artifact. `nightly.yml` runs the new
+  `missions-extensive` preset (acceleration, skidpad and autocross, 5 noisy starts per
+  track) and trackdrive on `dev` every night, report-only. `run_spec.py` gains
+  `--results DIR` and `--print-spec`.
+
 - **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
   checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
   for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that
