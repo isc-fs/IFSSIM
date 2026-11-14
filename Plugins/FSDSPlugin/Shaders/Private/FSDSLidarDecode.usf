@@ -69,6 +69,13 @@ uint   SweepReversed;
 float3 SweepVelMps;
 float3 SweepOmega;
 float DropoutRate;            // [0, 1]; 0 = no dropout
+float DropoutWeakRate;        // P(no return) at noiseless intensity 1 ...
+float DropoutWeakExp;         // ... falling as I^-Exp
+float DropoutWeakMax;         // cap
+float DropoutBurstScans;      // longest per-beam run, in same-direction scans; <= 1 = per scan
+float DropoutBurstIidShare;   // share of the probability drawn fresh every scan
+uint  DropoutScanIndex;       // scans of this sweep direction so far
+uint  DropoutCellSeed;        // fixed per seed generation
 
 uint  RNGSeed;                // re-seeded each scan from CPU side
 
@@ -344,6 +351,35 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		RNGState = pcg_hash(RNGState);
 		const float r = u32_to_unit_float(RNGState);
 		if (r < DropoutRate) return;
+	}
+
+	// Weak returns drop out. On the car's Hesai (manual bag 2026-09-20,
+	// parked, cells matched by ring and azimuth away from depth edges) a
+	// ground cell returns on 80 % of scans at intensity 0-2, 92 % at 2-8,
+	// 97-98 % at 8-32 and 99 % above: P(drop) ~ 0.2 · I^-0.77. A missing
+	// cell tends to stay missing (85 % of the time on the next scan of the
+	// same direction; runs median 3, mean 6.9 scans), so each beam gets a
+	// run length K, log-uniform in [2, DropoutBurstScans], and a phase, and
+	// draws once per K scans; a small share stays a fresh draw per scan.
+	// I is this hit's noiseless intensity, in output units.
+	if (DropoutWeakRate > 0.0)
+	{
+		const float RangeM0 = max(RayDistCm / 100.0, 0.01);
+		const float IncLaw0 = IntensityIncidenceExp > 0.0 ? pow(max(CosIncidence, 1e-6), IntensityIncidenceExp) : 1.0;
+		const float I0 = clamp(Reflectance * IntensityScale * IncLaw0 * pow(RangeM0, -IntensityRangeExp), 0.0, IntensityMax);
+		const float PDrop = min(DropoutWeakRate * pow(max(I0, 0.05), -DropoutWeakExp), DropoutWeakMax);
+		RNGState = pcg_hash(RNGState);
+		const float UScan = u32_to_unit_float(RNGState);
+		if (DropoutBurstScans > 1.0)
+		{
+			const uint CellHash = pcg_hash(RayIdx ^ DropoutCellSeed ^ (SweepReversed * 0x9E3779B9u));
+			const uint PhaseHash = pcg_hash(CellHash);
+			const float RunK = 2.0 * pow(max(DropoutBurstScans, 2.0) / 2.0, u32_to_unit_float(CellHash));
+			const uint Block = uint(floor(float(DropoutScanIndex) / RunK + u32_to_unit_float(PhaseHash)));
+			const float UBurst = u32_to_unit_float(pcg_hash(PhaseHash ^ pcg_hash(Block)));
+			if (UBurst < PDrop * (1.0 - DropoutBurstIidShare) || UScan < PDrop * DropoutBurstIidShare) return;
+		}
+		else if (UScan < PDrop) return;
 	}
 
 	// Range noise (σ in cm), measured on the car's Hesai (manual bag

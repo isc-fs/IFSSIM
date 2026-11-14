@@ -289,7 +289,7 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Max range (global) | 30 m | ✓ | `MaxRange` |
 | Per-channel max range | 25–30 m (datasheet shape) | ✓ | `PerChannelMaxRangeM` |
 | Range noise std (Gaussian) | 0.03 m | ✓ | `RangeNoiseStd` |
-| Point dropout rate | 1% | ✓ | `DropoutRate` |
+| Point dropout | 20% at I≈1 → 1% at I≈48, bursty | ✓ | `DropoutWeakRate`, `DropoutWeakExp`, `DropoutWeakMax`, `DropoutBurstScans`, `DropoutBurstIidShare` (GPU path); flat `DropoutRate` 0 |
 | Depth-edge swap / drop | 15% / 18% | ✓ | `EdgeSwapRate`, `EdgeDropRate` (GPU path) |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
 | Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
@@ -326,6 +326,8 @@ Leave `IntensityScale` out (or negative) for the original model of #255, describ
 **Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point.
 
 **Depth edges.** Where the neighbouring beam to the left or right (same channel) ranges more than 30 cm away, a return comes back from that other surface with probability `EdgeSwapRate`, or not at all with probability `EdgeDropRate`. The neighbours are the real beam directions projected into the depth capture. On the car (parked, 4–12 m), about 15% of returns at such an edge come from the other surface, almost none land in between, and edge beams return on about 73% of scans against about 90% inside a surface: objects grow into the beams beside them and their silhouettes flicker. GPU path only.
+
+**Dropout.** Weak returns go missing. A hit's chance of no return is `DropoutWeakRate · I^-DropoutWeakExp`, capped at `DropoutWeakMax`, where I is its intensity before jitter (0–255 on the car's scale). On the car, parked, ground cells return on 80% of scans at intensity 0–2, 92% at 2–8, 97–98% at 8–32 and 99% above. A missing beam tends to stay missing: on the next scan of the same sweep direction it is still missing 85% of the time, and runs last a median of 3 scans and a mean of 7. Each beam therefore draws once per K scans of one direction, with K log-uniform between 2 and `DropoutBurstScans` and a random phase per beam; `DropoutBurstIidShare` of the chance is drawn fresh each scan. `DropoutRate` adds a flat per-ray rate on top; it is 0 now. GPU path only; the CPU path keeps the flat rate.
 
 ### 4.2 IMU
 

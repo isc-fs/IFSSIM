@@ -130,6 +130,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
 
+	/** Weak-return dropout: P(no return) = DropoutWeakRate · I^-DropoutWeakExp,
+	 *  capped at DropoutWeakMax, with I the hit's noiseless intensity in output
+	 *  units (0-255 on the car's scale). The car's Hesai loses ~20 % of returns
+	 *  at I 0-2 and ~1 % at I 32-64. A drop lasts several scans of the same
+	 *  sweep direction: each beam gets its own run length, log-uniform from 2 to
+	 *  DropoutBurstScans (0 = a fresh draw every scan), and DropoutBurstIidShare
+	 *  of the probability stays a one-scan draw. GPU path only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutWeakRate = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutWeakExp = 0.77f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutWeakMax = 0.3f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutBurstScans = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutBurstIidShare = 0.05f;
+
 	/** Range-dependent noise: σ grows by this · range_m², in cm per m² (0 = flat σ). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float RangeNoiseRangeCoeffCm = 0.0f;
@@ -419,6 +437,8 @@ private:
 	// counter runs monotonically from editor start and a repeat scenario draws
 	// different GPU noise than the run it is meant to reproduce.
 	uint32 GpuScanCounterGeneration = 0;
+	/** Per-beam dropout-burst seed, drawn on the first scan of each seed generation. */
+	uint32 GpuDropoutCellSeed = 0;
 	FRandomStream NoiseStream;
 	// Generation this stream was seeded for. A scenario reset bumps the
 	// generation, which forces a re-seed so a repeat run genuinely restarts

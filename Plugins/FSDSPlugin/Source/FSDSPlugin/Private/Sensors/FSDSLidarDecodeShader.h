@@ -63,6 +63,14 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 
 		SHADER_PARAMETER(float, RangeNoiseStdCm)
 		SHADER_PARAMETER(float, DropoutRate)
+		// Weak-return dropout, see UFSDSLidarSensor::DropoutWeakRate.
+		SHADER_PARAMETER(float, DropoutWeakRate)
+		SHADER_PARAMETER(float, DropoutWeakExp)
+		SHADER_PARAMETER(float, DropoutWeakMax)
+		SHADER_PARAMETER(float, DropoutBurstScans)
+		SHADER_PARAMETER(float, DropoutBurstIidShare)
+		SHADER_PARAMETER(uint32, DropoutScanIndex)
+		SHADER_PARAMETER(uint32, DropoutCellSeed)
 		SHADER_PARAMETER(float, RangeNoiseRangeCoeffCm)
 		SHADER_PARAMETER(float, RangeNoiseRefReflectance)
 		SHADER_PARAMETER(float, RangeNoiseReflectanceExp)
