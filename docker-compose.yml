@@ -462,6 +462,12 @@ services:
       - IFSSIM_CONTROL_PKG=/control_pkg
       # Writable benchmark artifacts (tools/ is :ro at /ifssim_tools).
       - IFSSIM_BENCHMARK_RESULTS_ROOT=/benchmark_results
+      # Benchmarks tab, Target Runner (bench_runner.py): the GitHub app's client id for
+      # the sign-in, or a token (e.g. `GH_TOKEN=$(gh auth token) docker compose up`).
+      # Without either, Runner shows the queue but can't launch.
+      - IFSSIM_GITHUB_CLIENT_ID=${IFSSIM_GITHUB_CLIENT_ID:-}
+      - IFSSIM_GITHUB_TOKEN=${IFSSIM_GITHUB_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
     volumes:
       # Tracks dir: STAYS as a bind mount on purpose. mc_backend's
       # track_generate writes a CSV here; UE5 (the host process,

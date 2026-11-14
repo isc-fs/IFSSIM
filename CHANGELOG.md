@@ -14,6 +14,22 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **The Benchmarks backend's Runner target.** `POST /api/bench/launch` with
+  `target: runner` starts `.github/workflows/bench.yml` on GitHub with the spec, a name
+  and a short id (in the run's name, so the queue finds it). `GET /api/bench/queue` adds
+  `runner`: every run of the workflows on the GPU runner (bench, sim check, nightly),
+  newest first, with its state, who started it, the current step, a time-left estimate
+  (median of past runs, plus the runs ahead) and `runner_offline` when a run has waited
+  over 5 minutes with nothing running. `POST /api/bench/runner/cancel/{run}` cancels one;
+  `POST /api/bench/runner/fetch/{run}` downloads its `bench-*` results into this
+  machine's results folder, where Local runs go. Sign-in: `GET /api/bench/github`, and
+  GitHub's device flow (`POST /api/bench/github/login`, then `.../login/poll`) once the
+  team's GitHub app id is in `IFSSIM_GITHUB_CLIENT_ID`; until then a token in
+  `GH_TOKEN` / `IFSSIM_GITHUB_TOKEN` works (`GH_TOKEN=$(gh auth token)`). In the sim's
+  Benchmarks page, Bench PC now launches there: the queue column shows the bench PC's
+  runs (with Logs, Cancel and Fetch results) and who you are signed in as, with Sign in /
+  Sign out; Queue waits for a sign-in with write access.
+
 - **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
   replay recorded bags), the missions, tracks (each mission's own are listed), runs per
   track, parameter override files from `tools/sim_benchmark/specs/overrides/`, and the

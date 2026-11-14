@@ -16,11 +16,14 @@ struct FFSDSMcReply;
  *   GET  /api/bench/presets      starting points (tools/sim_benchmark/specs) and override files
  *   GET  /api/bench/manifest     what a spec can set: benchmarks and their settings, bags, missions, tracks
  *   POST /api/bench/check        the worker's validation: the spec's problems, or its jobs
- *   POST /api/bench/launch       queue it: Local, or Runner (the bench PC; 501 for now)
- *   GET  /api/bench/queue        the worker and the jobs, newest first
+ *   POST /api/bench/launch       queue it: Local, or Runner (the bench PC, through GitHub)
+ *   GET  /api/bench/queue        the worker and the jobs, newest first; with Runner, GitHub's
+ *                                runs on the GPU runner too (bench_runner.py)
  *   POST /api/bench/cancel/{id}
  *   POST /api/bench/worker/stop  the worker stops once no spec is running
  *   GET  /api/bench/rig          this machine's checks, for the component boxes
+ *   GET  /api/bench/github       who Runner launches as; POST .../github/login (+ /poll, /logout)
+ *   POST /api/bench/runner/cancel/{run}, /api/bench/runner/fetch/{run}
  *
  * The form asks for decisions, not the spec format: what to test (drive the
  * missions, or replay recorded bags), the few choices that matter for it in
@@ -71,8 +74,25 @@ private:
 		bool bCancelRequested = false;
 	};
 	struct FPart { FString Status, Reason; };
+	/** A run on the bench PC's GPU runner (GitHub Actions). */
+	struct FRun
+	{
+		int64 RunId = 0;
+		FString Id, Workflow, Name, State, Actor, Branch, Sha, Created, Url, Current;
+		int32 EtaS = -1, Ahead = 0;
+	};
 
 	EActiveTimerReturnType Poll(double Now, float Dt);
+	// --- the Runner target (the bench PC through GitHub) ----------------------
+	void PickTarget(bool bToRunner);
+	void FetchAccount();
+	void SignIn();
+	void PollSignIn();
+	void SignOut();
+	void CancelRun(int64 RunId);
+	void FetchResults(int64 RunId);
+	void RebuildRunnerQueue();
+	FText RunnerStatus() const;
 	void FetchPresets();
 	void FetchManifest();
 	void FetchQueue();
@@ -242,6 +262,18 @@ private:
 	TSharedPtr<SVerticalBox> QueueList;
 	FString CancelArmedFor;
 	double CancelArmedUntil = 0.0;
+
+	// the Runner target
+	bool bRunnerKnown = false, bRunnerOffline = false;
+	FString RunnerError;
+	TArray<FRun> Runs;
+	FString RunsShown;
+	TSet<int64> Fetching;
+	bool bAccountKnown = false, bSignedIn = false, bCanLaunch = true, bSignInAvailable = false;
+	FString Login, AccountSource, AccountError;
+	FString SignInCode, SignInUri;   // a device-flow sign-in in progress
+	double SignInPollAt = 0.0, SignInUntil = 0.0, NextAccount = 0.0;
+	int32 SignInInterval = 5;
 
 	FString Note;
 	bool bNoteError = false;

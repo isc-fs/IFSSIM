@@ -8,6 +8,7 @@ import time
 import pytest
 
 import bench_queue as bq
+import bench_runner as br
 
 SPEC = {"name": "accel", "benchmarks": {"missions": {"settings": {"missions": "acceleration"}}}}
 
@@ -15,6 +16,14 @@ SPEC = {"name": "accel", "benchmarks": {"missions": {"settings": {"missions": "a
 @pytest.fixture
 def results(tmp_path, monkeypatch):
     monkeypatch.setenv("IFSSIM_BENCHMARK_RESULTS_ROOT", str(tmp_path))
+    for env in ("IFSSIM_GITHUB_TOKEN", "GH_TOKEN"):
+        monkeypatch.delenv(env, raising=False)
+
+    def offline(*a, **kw):  # the runner part of the queue never reaches GitHub here
+        raise br.RunnerError("offline", 502)
+
+    monkeypatch.setattr(br, "http", offline)
+    br._cache.clear()
     return tmp_path
 
 
@@ -48,8 +57,8 @@ def test_with_a_worker_running_there_is_no_hint(results):
 
 def test_bad_launches_are_refused(results):
     with pytest.raises(bq.LaunchError) as e:
-        bq.launch(SPEC, "runner")
-    assert e.value.status_code == 501
+        bq.launch(SPEC, "runner")  # not signed in to GitHub
+    assert e.value.status_code == 401
     for bad in ({}, [], {"benchmarks": {}}):
         with pytest.raises(bq.LaunchError):
             bq.launch(bad)

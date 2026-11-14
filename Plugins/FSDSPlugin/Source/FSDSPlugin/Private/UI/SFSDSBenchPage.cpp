@@ -474,6 +474,8 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 								.Text_Lambda([this]()
 								{
 									if (!HasBenchmarks()) return LOCTEXT("PickWhat", "Pick what to test.");
+									if (bRunner && bAccountKnown && !bSignedIn) return LOCTEXT("SignInFirst", "Sign in to GitHub (on the right) to run on the bench PC.");
+									if (bRunner && bAccountKnown && !bCanLaunch) return LOCTEXT("NoWrite", "Your GitHub account can't start runs: it needs write access to IFSSIM.");
 									if (!bManifestKnown || !ManifestError.IsEmpty()) return LOCTEXT("AsIs", "The preset, as it is.");
 									if (CheckDueAt > 0.0 || !bChecked) return LOCTEXT("Checking", "Checking...");
 									if (!bCheckOk) return LOCTEXT("NotReady", "Not ready to queue:");
@@ -496,12 +498,12 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 4, 0)
 							[
 								BenchUi::Choice(LOCTEXT("Local", "This machine"), [this]() { return !bRunner; },
-									[this]() { if (bRunner) { bRunner = false; FetchRig(); } })
+									[this]() { PickTarget(false); })
 							]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
 							[
-								BenchUi::Choice(LOCTEXT("Runner", "Bench PC"), [this]() { return bRunner; }, [this]() { bRunner = true; },
-									LOCTEXT("RunnerTip", "Runs on the bench PC through GitHub: not built yet."))
+								BenchUi::Choice(LOCTEXT("Runner", "Bench PC"), [this]() { return bRunner; }, [this]() { PickTarget(true); },
+									LOCTEXT("RunnerTip", "Runs on the bench PC through GitHub (bench.yml), one run at a time with the sim checks. Needs a GitHub sign-in."))
 							]
 							+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 							[
@@ -562,6 +564,7 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 							SNew(STextBlock)
 							.Text_Lambda([this]()
 							{
+								if (bRunner) return RunnerStatus();
 								if (!bQueueKnown) return LOCTEXT("QueueUnknown", "Asking the backend...");
 								if (bWorkerAlive && bWorkerStopping) return LOCTEXT("WorkerStopping", "Stopping once no spec is running.");
 								if (bWorkerAlive) return LOCTEXT("Worker", "Worker running: queued specs run one at a time.");
@@ -570,23 +573,48 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 							})
 							.ToolTipText_Lambda([this]()
 							{
+								if (bRunner) return FText::FromString(AccountError.IsEmpty() ? AccountSource : AccountError);
 								return bWorkerAlive ? FText::Format(LOCTEXT("WorkerTip", "On {0}, pid {1}"), FText::FromString(WorkerHost),
 									FText::AsNumber(WorkerPid, &FNumberFormattingOptions::DefaultNoGrouping())) : FText::GetEmpty();
 							})
-							.ColorAndOpacity_Lambda([this]() { return FSlateColor(!bQueueKnown ? BenchUi::Muted : bWorkerAlive ? BenchUi::Good : BenchUi::Accent); })
+							.ColorAndOpacity_Lambda([this]()
+							{
+								if (bRunner)
+								{
+									if (!bAccountKnown) return FSlateColor(BenchUi::Muted);
+									if (bRunnerOffline || !RunnerError.IsEmpty()) return FSlateColor(BenchUi::Bad);
+									return FSlateColor(bSignedIn && SignInCode.IsEmpty() ? BenchUi::Good : BenchUi::Accent);
+								}
+								return FSlateColor(!bQueueKnown ? BenchUi::Muted : bWorkerAlive ? BenchUi::Good : BenchUi::Accent);
+							})
 							.Font(BenchUi::Font(10, TEXT("Bold"))).AutoWrapText(true)
 						]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8, 0, 0, 0)
 						[
 							BenchUi::Button(TAttribute<FText>::CreateLambda([this]()
 								{
+									if (bRunner)
+									{
+										if (!SignInCode.IsEmpty()) return LOCTEXT("SignInWaiting", "Waiting...");
+										if (!bSignedIn) return LOCTEXT("SignIn", "Sign in");
+										return AccountSource == TEXT("sign-in") ? LOCTEXT("SignOut", "Sign out") : LOCTEXT("TokenIn", "Token in use");
+									}
 									return bWorkerAlive ? (bWorkerStopping ? LOCTEXT("Stopping", "Stopping...") : LOCTEXT("StopWorker", "Stop worker"))
 										: LOCTEXT("StartWorker", "Start worker");
 								}),
 								BenchUi::PlainBtn,
-								[this]() { if (bWorkerAlive) StopWorker(); else StartWorker(); },
+								[this]()
+								{
+									if (bRunner) { if (bSignedIn) SignOut(); else SignIn(); return; }
+									if (bWorkerAlive) StopWorker(); else StartWorker();
+								},
 								TAttribute<bool>::CreateLambda([this]()
 								{
+									if (bRunner)
+									{
+										if (!Client.IsValid() || !bAccountKnown || !SignInCode.IsEmpty()) return false;
+										return bSignedIn ? AccountSource == TEXT("sign-in") : bSignInAvailable;
+									}
 									if (!bQueueKnown || !Client.IsValid()) return false;
 									if (bWorkerAlive) return !bWorkerStopping;
 									return FPlatformTime::Seconds() >= WorkerStartingUntil && !RepoDir().IsEmpty();
@@ -1975,6 +2003,7 @@ FString SFSDSBenchPage::NeverHere() const
 bool SFSDSBenchPage::CanQueue() const
 {
 	if (!Client.IsValid() || bLaunching || !Chosen() || !HasBenchmarks() || !NeverHere().IsEmpty()) return false;
+	if (bRunner && (!bAccountKnown || !bSignedIn || !bCanLaunch)) return false;
 	// Without the manifest the preset goes as it is, and the worker checks it.
 	if (!bManifestKnown || !ManifestError.IsEmpty()) return true;
 	return CheckDueAt <= 0.0 && bChecked && bCheckOk;
@@ -2004,6 +2033,8 @@ EActiveTimerReturnType SFSDSBenchPage::Poll(double Now, float Dt)
 	if (bQueueKnown && !bWorkerAlive && !bRunner && T >= NextMachineCheck) CheckMachine();
 	if (T >= NextQueue) FetchQueue();
 	if (T >= NextRig && !bRunner) FetchRig();
+	if (bRunner && T >= NextAccount) FetchAccount();
+	if (SignInPollAt > 0.0 && T >= SignInPollAt) PollSignIn();
 	if (CheckDueAt > 0.0 && T >= CheckDueAt) Check();
 	return EActiveTimerReturnType::Continue;
 }
@@ -2328,7 +2359,8 @@ void SFSDSBenchPage::FetchQueue()
 	NextQueue = FPlatformTime::Seconds() + BenchUi::QueueEveryS;
 	if (!Client.IsValid()) return;
 	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
-	Client->Get(TEXT("/api/bench/queue"), [Weak](const FFSDSMcReply& R)
+	// GitHub's runs only while Bench PC is picked: without a sign-in GitHub allows 60 reads an hour.
+	Client->Get(bRunner ? TEXT("/api/bench/queue") : TEXT("/api/bench/queue?runner=false"), [Weak](const FFSDSMcReply& R)
 	{
 		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
 		if (!Self.IsValid()) return;
@@ -2384,7 +2416,55 @@ void SFSDSBenchPage::FetchQueue()
 				*J.Waiting, *J.Error, J.bCancelRequested ? 1 : 0);
 		}
 		Self->Jobs = MoveTemp(Jobs);
-		if (Shown != Self->JobsShown || Self->QueueList->NumSlots() == 0)
+
+		// The bench PC's runs (bench_runner.queue), when they were asked for.
+		const TSharedPtr<FJsonObject>* RO = nullptr;
+		FString RunShown;
+		if (O->TryGetObjectField(TEXT("runner"), RO))
+		{
+			Self->bRunnerKnown = true;
+			Self->RunnerError.Empty();
+			(*RO)->TryGetStringField(TEXT("error"), Self->RunnerError);
+			Self->bRunnerOffline = false;
+			(*RO)->TryGetBoolField(TEXT("runner_offline"), Self->bRunnerOffline);
+			TArray<FRun> Runs;
+			const TArray<TSharedPtr<FJsonValue>>* RunList = nullptr;
+			if ((*RO)->TryGetArrayField(TEXT("runs"), RunList))
+			{
+				for (const TSharedPtr<FJsonValue>& V : *RunList)
+				{
+					const TSharedPtr<FJsonObject>* RJ = nullptr;
+					if (!V.IsValid() || !V->TryGetObject(RJ)) continue;
+					FRun Run;
+					(*RJ)->TryGetNumberField(TEXT("run_id"), Run.RunId);
+					(*RJ)->TryGetStringField(TEXT("id"), Run.Id);
+					(*RJ)->TryGetStringField(TEXT("workflow"), Run.Workflow);
+					(*RJ)->TryGetStringField(TEXT("name"), Run.Name);
+					(*RJ)->TryGetStringField(TEXT("state"), Run.State);
+					(*RJ)->TryGetStringField(TEXT("actor"), Run.Actor);
+					(*RJ)->TryGetStringField(TEXT("branch"), Run.Branch);
+					(*RJ)->TryGetStringField(TEXT("sha"), Run.Sha);
+					(*RJ)->TryGetStringField(TEXT("created"), Run.Created);
+					(*RJ)->TryGetStringField(TEXT("url"), Run.Url);
+					(*RJ)->TryGetStringField(TEXT("current"), Run.Current);
+					(*RJ)->TryGetNumberField(TEXT("eta_s"), Run.EtaS);
+					(*RJ)->TryGetNumberField(TEXT("ahead"), Run.Ahead);
+					RunShown += FString::Printf(TEXT("%lld|%s|%s|%d|%d\n"), Run.RunId, *Run.State, *Run.Current, Run.EtaS / 60, Run.Ahead);
+					Runs.Add(MoveTemp(Run));
+				}
+			}
+			Self->Runs = MoveTemp(Runs);
+			RunShown += Self->RunnerError;
+		}
+		if (Self->bRunner)
+		{
+			if (RunShown != Self->RunsShown || Self->QueueList->NumSlots() == 0)
+			{
+				Self->RunsShown = RunShown;
+				Self->RebuildRunnerQueue();
+			}
+		}
+		else if (Shown != Self->JobsShown || Self->QueueList->NumSlots() == 0)
 		{
 			Self->JobsShown = Shown;
 			Self->RebuildQueue();
@@ -2413,6 +2493,14 @@ void SFSDSBenchPage::Launch()
 		if (!R.Ok() || !O.IsValid())
 		{
 			Self->SetNote(Self->Unreachable(FString::Printf(TEXT("Couldn't queue %s"), *Name), R), true);
+			return;
+		}
+		FString Target;
+		O->TryGetStringField(TEXT("target"), Target);
+		if (Target == TEXT("runner"))
+		{
+			Self->SetNote(FString::Printf(TEXT("Started %s on the bench PC: it shows in the queue once GitHub has made the run."), *Name), false);
+			Self->NextQueue = FPlatformTime::Seconds() + 4.0;
 			return;
 		}
 		bool bWorker = false;
@@ -2630,6 +2718,326 @@ void SFSDSBenchPage::RebuildQueue()
 									CancelArmedUntil = 0.0;
 									Cancel(Id);
 								})
+						]
+					]
+				]
+			]
+		];
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The Runner target: the bench PC through GitHub (bench_runner.py)
+
+void SFSDSBenchPage::PickTarget(bool bToRunner)
+{
+	if (bRunner == bToRunner) return;
+	bRunner = bToRunner;
+	JobsShown.Empty();
+	RunsShown.Empty();
+	if (QueueList.IsValid()) QueueList->ClearChildren();   // the next poll draws the other queue
+	NextQueue = 0.0;
+	if (bRunner) FetchAccount();
+	else FetchRig();
+}
+
+FText SFSDSBenchPage::RunnerStatus() const
+{
+	if (!bAccountKnown) return LOCTEXT("AskingGitHubAccount", "Asking GitHub...");
+	if (!SignInCode.IsEmpty())
+	{
+		return FText::Format(LOCTEXT("EnterCode", "Enter {0} at {1} (opened in your browser)."),
+			FText::FromString(SignInCode), FText::FromString(SignInUri));
+	}
+	if (!RunnerError.IsEmpty())
+	{
+		return FText::Format(LOCTEXT("RunnerErr", "Can't read the bench PC's queue: {0}"), FText::FromString(RunnerError));
+	}
+	if (!bSignedIn)
+	{
+		return bSignInAvailable
+			? LOCTEXT("NotSignedIn", "Not signed in to GitHub: you see the queue, but can't start or cancel runs.")
+			: LOCTEXT("NoSignIn", "Not signed in, and sign-in isn't set up: start Mission Control with GH_TOKEN (e.g. gh auth token) to run here.");
+	}
+	if (bRunnerOffline)
+	{
+		return FText::Format(LOCTEXT("Offline", "Signed in as {0}. Runs have waited over 5 min with nothing running: is the runner online?"),
+			FText::FromString(Login));
+	}
+	return FText::Format(LOCTEXT("SignedIn", "Signed in as {0}. Runs wait for the bench PC, one at a time with the sim checks."),
+		FText::FromString(Login.IsEmpty() ? AccountSource : Login));
+}
+
+void SFSDSBenchPage::FetchAccount()
+{
+	NextAccount = FPlatformTime::Seconds() + 60.0;
+	if (!Client.IsValid()) return;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Get(TEXT("/api/bench/github"), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid()) return;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid())
+		{
+			// An older backend has no /api/bench/github.
+			Self->bAccountKnown = true;
+			Self->bSignedIn = false;
+			Self->AccountError = Self->Unreachable(TEXT("Can't ask who is signed in"), R);
+			return;
+		}
+		Self->bAccountKnown = true;
+		Self->bSignedIn = Self->bSignInAvailable = false;
+		Self->bCanLaunch = true;
+		Self->Login.Empty();
+		Self->AccountSource.Empty();
+		Self->AccountError.Empty();
+		O->TryGetBoolField(TEXT("signed_in"), Self->bSignedIn);
+		O->TryGetBoolField(TEXT("sign_in_available"), Self->bSignInAvailable);
+		O->TryGetBoolField(TEXT("can_launch"), Self->bCanLaunch);
+		O->TryGetStringField(TEXT("login"), Self->Login);
+		O->TryGetStringField(TEXT("source"), Self->AccountSource);
+		O->TryGetStringField(TEXT("error"), Self->AccountError);
+	});
+}
+
+void SFSDSBenchPage::SignIn()
+{
+	if (!Client.IsValid()) return;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Post(TEXT("/api/bench/github/login"), MakeShared<FJsonObject>(), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid()) return;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid())
+		{
+			Self->SetNote(Self->Unreachable(TEXT("Couldn't start the GitHub sign-in"), R), true);
+			return;
+		}
+		O->TryGetStringField(TEXT("user_code"), Self->SignInCode);
+		O->TryGetStringField(TEXT("verification_uri"), Self->SignInUri);
+		int32 Expires = 900;
+		O->TryGetNumberField(TEXT("expires_in"), Expires);
+		O->TryGetNumberField(TEXT("interval"), Self->SignInInterval);
+		Self->SignInInterval = FMath::Max(Self->SignInInterval, 1);
+		const double T = FPlatformTime::Seconds();
+		Self->SignInUntil = T + Expires;
+		Self->SignInPollAt = T + Self->SignInInterval;
+		if (!Self->SignInUri.IsEmpty()) FPlatformProcess::LaunchURL(*Self->SignInUri, nullptr, nullptr);
+		Self->SetNote(FString::Printf(TEXT("GitHub sign-in: enter %s on the page that opened in your browser."), *Self->SignInCode), false);
+	});
+}
+
+void SFSDSBenchPage::PollSignIn()
+{
+	SignInPollAt = 0.0;
+	if (!Client.IsValid() || SignInCode.IsEmpty()) return;
+	if (FPlatformTime::Seconds() > SignInUntil)
+	{
+		SignInCode.Empty();
+		SetNote(TEXT("The GitHub sign-in code expired: Sign in again."), true);
+		return;
+	}
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Post(TEXT("/api/bench/github/login/poll"), MakeShared<FJsonObject>(), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid()) return;
+		const TSharedPtr<FJsonObject> O = R.Object();
+		FString State;
+		if (R.Ok() && O.IsValid()) O->TryGetStringField(TEXT("state"), State);
+		if (State == TEXT("pending") || (!R.Ok() && !R.Reached()))
+		{
+			Self->SignInPollAt = FPlatformTime::Seconds() + Self->SignInInterval;
+			return;
+		}
+		Self->SignInCode.Empty();
+		if (State == TEXT("signed_in"))
+		{
+			FString Who;
+			O->TryGetStringField(TEXT("login"), Who);
+			Self->SetNote(FString::Printf(TEXT("Signed in to GitHub as %s."), *Who), false);
+		}
+		else
+		{
+			FString Err;
+			if (O.IsValid()) O->TryGetStringField(TEXT("error"), Err);
+			Self->SetNote(FString::Printf(TEXT("The GitHub sign-in didn't finish (%s)."), *(Err.IsEmpty() ? (R.Ok() ? State : R.Error) : Err)), true);
+		}
+		Self->FetchAccount();
+	});
+}
+
+void SFSDSBenchPage::SignOut()
+{
+	if (!Client.IsValid()) return;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Post(TEXT("/api/bench/github/logout"), MakeShared<FJsonObject>(), [Weak](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid()) return;
+		if (!R.Ok()) Self->SetNote(Self->Unreachable(TEXT("Couldn't sign out"), R), true);
+		Self->FetchAccount();
+	});
+}
+
+void SFSDSBenchPage::CancelRun(int64 RunId)
+{
+	if (!Client.IsValid()) return;
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Post(FString::Printf(TEXT("/api/bench/runner/cancel/%lld"), RunId), MakeShared<FJsonObject>(), [Weak, RunId](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid()) return;
+		Self->SetNote(R.Ok() ? FString::Printf(TEXT("Cancelling run %lld on the bench PC."), RunId)
+			: Self->Unreachable(TEXT("Couldn't cancel it"), R), !R.Ok());
+		Self->NextQueue = FPlatformTime::Seconds() + 3.0;
+	});
+}
+
+void SFSDSBenchPage::FetchResults(int64 RunId)
+{
+	if (!Client.IsValid() || Fetching.Contains(RunId)) return;
+	Fetching.Add(RunId);
+	RunsShown.Empty();   // redraw: its button says Fetching...
+	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
+	Client->Post(FString::Printf(TEXT("/api/bench/runner/fetch/%lld"), RunId), MakeShared<FJsonObject>(), [Weak, RunId](const FFSDSMcReply& R)
+	{
+		TSharedPtr<SFSDSBenchPage> Self = Weak.Pin();
+		if (!Self.IsValid()) return;
+		Self->Fetching.Remove(RunId);
+		Self->RunsShown.Empty();
+		const TSharedPtr<FJsonObject> O = R.Object();
+		if (!R.Ok() || !O.IsValid())
+		{
+			Self->SetNote(Self->Unreachable(TEXT("Couldn't fetch its results"), R), true);
+			return;
+		}
+		int32 Files = 0;
+		O->TryGetNumberField(TEXT("files"), Files);
+		Self->SetNote(FString::Printf(TEXT("Fetched %d files of run %lld into this machine's results (tools/sim_benchmark/results)."), Files, RunId), false);
+	});
+}
+
+void SFSDSBenchPage::RebuildRunnerQueue()
+{
+	if (!QueueList.IsValid()) return;
+	QueueList->ClearChildren();
+	if (Runs.Num() == 0)
+	{
+		QueueList->AddSlot().AutoHeight()
+		[
+			SNew(STextBlock)
+			.Text(bRunnerKnown ? LOCTEXT("RunnerEmpty", "Nothing has run on the bench PC lately.") : LOCTEXT("RunnerAsking", "Asking GitHub..."))
+			.Font(BenchUi::Font(10)).ColorAndOpacity(BenchUi::Muted)
+		];
+		return;
+	}
+	auto Minutes = [](int32 S) { return FMath::Max(1, FMath::RoundToInt(S / 60.f)); };
+	for (const FRun& Run : Runs)
+	{
+		const FString Kind = Run.Workflow == TEXT("bench.yml") ? TEXT("Bench") : Run.Workflow == TEXT("sim-pr.yml") ? TEXT("Sim check")
+			: Run.Workflow == TEXT("nightly.yml") ? TEXT("Nightly") : Run.Workflow;
+		TArray<FString> Meta;
+		Meta.Add(Kind);
+		if (!Run.Created.IsEmpty()) Meta.Add(BenchUi::When(Run.Created));
+		if (!Run.Actor.IsEmpty()) Meta.Add(Run.Actor);
+		if (!Run.Branch.IsEmpty()) Meta.Add(FString::Printf(TEXT("%s@%s"), *Run.Branch, *Run.Sha));
+		TArray<FString> Detail;
+		if (Run.State == TEXT("running") && !Run.Current.IsEmpty()) Detail.Add(Run.Current);
+		if (Run.State == TEXT("running") && Run.EtaS >= 0) Detail.Add(FString::Printf(TEXT("~%d min left"), Minutes(Run.EtaS)));
+		if (Run.State == TEXT("queued"))
+		{
+			if (Run.Ahead > 0) Detail.Add(FString::Printf(TEXT("%d ahead"), Run.Ahead));
+			if (Run.EtaS >= 0) Detail.Add(FString::Printf(TEXT("done in ~%d min"), Minutes(Run.EtaS)));
+		}
+		const bool bActive = Run.State == TEXT("queued") || Run.State == TEXT("running");
+		const bool bHasResults = (Run.Workflow == TEXT("bench.yml") || Run.Workflow == TEXT("nightly.yml")) && !bActive
+			&& Run.State != TEXT("cancelled");
+		const FString ArmKey = FString::Printf(TEXT("run:%lld"), Run.RunId);
+		const int64 RunId = Run.RunId;
+		const FString Url = Run.Url;
+
+		QueueList->AddSlot().AutoHeight().Padding(0, 0, 0, 6)
+		[
+			SNew(SBorder)
+			.BorderImage(BenchUi::White())
+			.BorderBackgroundColor(BenchUi::Card)
+			.Padding(FMargin(10.f, 7.f))
+			.ToolTipText(FText::FromString(Run.Id.IsEmpty() ? FString::Printf(TEXT("run %lld"), Run.RunId)
+				: FString::Printf(TEXT("run %lld, id %s"), Run.RunId, *Run.Id)))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+					[
+						SNew(STextBlock).Text(FText::FromString(Run.State))
+						.Font(BenchUi::Font(10, TEXT("Bold"))).ColorAndOpacity(BenchUi::StateColor(Run.State))
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock).Text(FText::FromString(Run.Name))
+						.Font(BenchUi::Font(11, TEXT("Bold"))).ColorAndOpacity(BenchUi::Ink)
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock).Text(FText::FromString(FString::Join(Meta, TEXT("  ·  "))))
+					.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Muted)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock).Text(FText::FromString(FString::Join(Detail, TEXT("  ·  "))))
+					.Visibility(Detail.Num() ? EVisibility::Visible : EVisibility::Collapsed)
+					.Font(BenchUi::Font(9)).ColorAndOpacity(BenchUi::Ink).AutoWrapText(true)
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+					[
+						SNew(SBox).Visibility(Url.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+						[
+							BenchUi::Button(LOCTEXT("Logs", "Logs"), BenchUi::PlainBtn, [Url]() { FPlatformProcess::LaunchURL(*Url, nullptr, nullptr); })
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+					[
+						SNew(SBox).Visibility(bHasResults ? EVisibility::Visible : EVisibility::Collapsed)
+						[
+							BenchUi::Button(TAttribute<FText>::CreateLambda([this, RunId]()
+								{
+									return Fetching.Contains(RunId) ? LOCTEXT("FetchingRes", "Fetching...") : LOCTEXT("FetchRes", "Fetch results");
+								}),
+								BenchUi::PlainBtn, [this, RunId]() { FetchResults(RunId); },
+								TAttribute<bool>::CreateLambda([this, RunId]() { return bSignedIn && !Fetching.Contains(RunId); }))
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SBox).Visibility(bActive ? EVisibility::Visible : EVisibility::Collapsed)
+						[
+							// as for local specs: a second click within 4 s
+							BenchUi::Button(TAttribute<FText>::CreateLambda([this, ArmKey]()
+								{
+									return FPlatformTime::Seconds() < CancelArmedUntil && CancelArmedFor == ArmKey
+										? LOCTEXT("CancelRunSure", "Click again to cancel") : LOCTEXT("CancelRun", "Cancel");
+								}),
+								BenchUi::PlainBtn, [this, ArmKey, RunId]()
+								{
+									if (FPlatformTime::Seconds() >= CancelArmedUntil || CancelArmedFor != ArmKey)
+									{
+										CancelArmedFor = ArmKey;
+										CancelArmedUntil = FPlatformTime::Seconds() + 4.0;
+										return;
+									}
+									CancelArmedUntil = 0.0;
+									CancelRun(RunId);
+								},
+								TAttribute<bool>::CreateLambda([this]() { return bSignedIn; }))
 						]
 					]
 				]
