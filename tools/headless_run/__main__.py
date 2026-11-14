@@ -11,8 +11,13 @@
     # Continuous: a fresh sim per cycle, until Ctrl-C (or --cycles N)
     python3 -m headless_run loop --sim ... --mc-up -- --missions all --start-noise
 
+    # Any command around a fresh sim and Mission Control, e.g. a run spec
+    # (what the bench PC's runner does: tools/ci/bench_run.sh)
+    python3 -m headless_run exec --sim ... --mc-up -- python3 tools/sim_benchmark/run_spec.py missions-basic
+
 Exit codes (run): 0 every mission finished, 1 some didn't, 3 the machine
-failed (sim didn't start or crashed, backend down), 130 interrupted.
+failed (sim didn't start or crashed, backend down), 130 interrupted. exec: the
+command's own exit code, or 3 / 130 as for run.
 See docs/HEADLESS.md.
 """
 
@@ -27,7 +32,7 @@ import time
 from pathlib import Path
 from typing import List
 
-from .orchestrate import RunConfig, TOOLS, exit_code, run_loop, run_once
+from .orchestrate import RunConfig, TOOLS, exit_code, run_command, run_loop, run_once
 from .simproc import SimError, SimProcess, resolve_command, rpc
 
 DEFAULT_RESULTS = TOOLS / "sim_benchmark" / "results"
@@ -64,7 +69,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="keep it up this long before judging (frame rate settles, LiDAR renders)")
 
     for name, hlp in (("run", "one benchmark run around a fresh sim"),
-                      ("loop", "benchmark runs on repeat, a fresh sim each cycle")):
+                      ("loop", "benchmark runs on repeat, a fresh sim each cycle"),
+                      ("exec", "any command (after --) around a fresh sim")):
         p = sub.add_parser(name, help=hlp)
         sim_args(p)
         p.add_argument("--results-root", default=str(DEFAULT_RESULTS))
@@ -74,6 +80,10 @@ def _parser() -> argparse.ArgumentParser:
                        help="start Mission Control's backend (docker compose up -d mission_control_backend)")
         p.add_argument("--max-run-s", type=float, default=0.0,
                        help="hard cap on one run, on top of the benchmark's own per-mission timeouts")
+        if name == "exec":
+            p.add_argument("--settle-s", type=float, default=120.0,
+                           help="wait (at most this long; 0 = don't) until the sim keeps real time")
+            continue
         p.add_argument("--characterise", action="store_true",
                        help="before the missions, run the car characterisation (tools/characterise): "
                             "scripted manoeuvres checked against settings.json, no pipeline")
@@ -168,8 +178,14 @@ def main(argv=None) -> int:
     cfg = RunConfig(sim_command=cmd, results_root=Path(a.results_root), benchmark_args=bench,
                     mc_url=a.mc_url.rstrip("/"), mc_key=a.mc_key, mc_up=a.mc_up, host=a.host,
                     sim_ready_timeout_s=a.ready_timeout_s, max_run_s=a.max_run_s,
-                    settle_s=a.settle_s, characterise_cmd=_characterise_cmd(a) if a.characterise else None)
+                    settle_s=a.settle_s,
+                    characterise_cmd=_characterise_cmd(a) if getattr(a, "characterise", False) else None)
     log = lambda m: print(m, flush=True)  # noqa: E731
+    if a.cmd == "exec":
+        if not bench:
+            print("error: exec needs a command after --", file=sys.stderr)
+            return 2
+        return run_command(cfg, bench, log=log, should_stop=should_stop)
     if a.cmd == "run":
         rec = run_once(cfg, log=log, should_stop=should_stop)
         return exit_code(rec["outcome"])

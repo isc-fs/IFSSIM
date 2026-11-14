@@ -276,6 +276,30 @@ def test_run_spec_hands_each_job_its_spec_and_overrides(repo: Path) -> None:
     assert spec["spec"]["benchmarks"]["sim_bag"]["only"] == ["slam"]
 
 
+def test_print_spec_prints_the_checked_spec_and_runs_nothing(repo: Path, capsys) -> None:
+    rc = run.main(
+        ["base", "--repo", str(repo), "--print-spec", "--set", "benchmarks.sim_bag.repeats=2"]
+    )
+    assert rc == 0
+    spec = json.loads(capsys.readouterr().out)
+    assert spec["benchmarks"]["sim_bag"]["repeats"] == 2 and spec["experiment"] == "scratch"
+    assert not (repo / "results").exists()
+
+
+def test_print_spec_of_a_bad_spec_exits_2(repo: Path) -> None:
+    rc = run.main(
+        ["base", "--repo", str(repo), "--print-spec", "--set", "benchmarks.sim_bag.bags=[zzz]"]
+    )
+    assert rc == 2
+
+
+def test_results_elsewhere(repo: Path, tmp_path: Path) -> None:
+    other = tmp_path / "runner-run"
+    assert run.main(["base", "--repo", str(repo), "--results", str(other)]) == 0
+    assert (other / run.WORK).is_dir()
+    assert not (repo / "results" / run.WORK).exists()
+
+
 def test_bad_spec_exits_2(repo: Path, capsys) -> None:
     rc = run.main(
         ["base", "--repo", str(repo), "--set", "benchmarks.sim_bag.bags=[zzz]"]

@@ -543,6 +543,17 @@ def main(argv: list[str] | None = None) -> int:
         "--repo", help="repository with bench.yaml (default: this checkout)"
     )
     ap.add_argument(
+        "--results",
+        metavar="DIR",
+        help="write the runs here instead of bench.yaml's results folder (the runner: "
+        "one folder per workflow run)",
+    )
+    ap.add_argument(
+        "--print-spec",
+        action="store_true",
+        help="print the merged, checked spec as JSON and run nothing",
+    )
+    ap.add_argument(
         "--dry-run", action="store_true", help="print the jobs, run nothing"
     )
     ap.add_argument("--list", action="store_true", help="what the manifest offers")
@@ -576,6 +587,8 @@ def main(argv: list[str] | None = None) -> int:
     except mf.ManifestError as e:
         print(e, file=sys.stderr)
         return 2
+    if a.results:
+        m = m.with_paths(results=Path(a.results).resolve())
     if a.list:
         print_list(m)
         return 0
@@ -611,6 +624,9 @@ def main(argv: list[str] | None = None) -> int:
     except sp.SpecError as e:
         print(f"The spec has problems:\n{e}", file=sys.stderr)
         return 2
+    if a.print_spec:
+        print(json.dumps(spec, indent=2, default=str))
+        return 0
 
     if a.queue:
         probs = rg.problems(spec, rg.check())
