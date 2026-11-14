@@ -110,6 +110,8 @@ struct FFSDSSensorSettings
 	bool bIntensityRound = false;
 	// ρ for hits with no reflectance-LUT entry = clamp(gain · scene luminance, 0, 1).
 	float LuminanceReflectanceGain = 1.f;
+	// The same gain while a track's world (Montmeló) is built; < 0 = LuminanceReflectanceGain.
+	float WorldLuminanceReflectanceGain = -1.f;
 };
 
 struct FFSDSVehiclePhysics

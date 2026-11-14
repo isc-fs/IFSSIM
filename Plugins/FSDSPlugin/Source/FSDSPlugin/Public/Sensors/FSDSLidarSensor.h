@@ -174,6 +174,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	float LuminanceReflectanceGain = 1.0f;
 
+	/** LuminanceReflectanceGain while a track's world (Montmeló) is built.
+	 *  A world brings photo-matched colours and hides the level's floor,
+	 *  which renders darker than asphalt. < 0 = use LuminanceReflectanceGain. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float WorldLuminanceReflectanceGain = -1.0f;
+
+private:
+	/** -1 unknown, 0 level floor, 1 a world is built: logs the gain on change. */
+	int8 LastWorldGainState = -1;
+public:
+
 	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
 	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
 	 *  = highest). When this array's length matches NumberOfChannels,
