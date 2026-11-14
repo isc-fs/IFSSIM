@@ -58,6 +58,8 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		// when settings.json doesn't provide overrides — see
 		// UFSDSLidarSensor::OnSettingsApplied).
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, ChannelMaxRangeCm)
+		// Per-channel elevation (rad, sensor frame), NumChannels entries.
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, ChannelElevationRad)
 
 		SHADER_PARAMETER(float, RangeNoiseStdCm)
 		SHADER_PARAMETER(float, DropoutRate)

@@ -14,6 +14,8 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **LiDAR beams at the car's elevations.** The sim's 116 LiDAR channels were spread evenly over −12.4…+5.9° (0.16° apart). The car's Hesai spaces them unevenly: about 0.1° around the horizon and 0.2–0.4° at the top and bottom. With the −8.6° mount, cones beyond about 10 m fall in the sparse top beams, so the sim put 1.6–1.8× the car's beams on them. `settings.json` now has `ChannelElevationsDeg`, the 116 elevations measured from the 2026-09-20 car bag, and both LiDAR back-ends use it. Remove the array to get the old even grid.
+
 - **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
   replay recorded bags), the missions, tracks (each mission's own are listed), runs per
   track, parameter override files from `tools/sim_benchmark/specs/overrides/`, and the
