@@ -1695,7 +1695,8 @@ class BenchLaunch(BaseModel):
 
 @app.post("/api/bench/launch", dependencies=[Depends(require_api_key)])
 def bench_launch(req: BenchLaunch):
-    """Queue a run spec. Local: a worker on this machine runs it (run_spec.py --work)."""
+    """Queue a run spec. Local: a worker on this machine runs it (run_spec.py --work).
+    Runner: the bench PC runs it through GitHub (bench.yml); needs a GitHub sign-in."""
     try:
         out = _bench.launch(req.spec, req.target, req.requested_by, req.name)
     except _bench.LaunchError as e:
@@ -1746,9 +1747,58 @@ def bench_worker_stop():
 
 
 @app.get("/api/bench/queue")
-def bench_queue(limit: int = Query(50, ge=1, le=500)):
-    """The local worker and the queued, running and finished specs, newest first."""
-    return _bench.queue(limit)
+def bench_queue(
+    limit: int = Query(50, ge=1, le=500),
+    runner: bool = Query(True, description="also GitHub's runs on the GPU runner"),
+):
+    """The local worker and the queued, running and finished specs, newest first; under
+    `runner`, every run on the bench PC's GPU runner (bench, sim check, nightly)."""
+    return _bench.queue(limit, runner)
+
+
+def _runner_call(fn, *args):
+    try:
+        return fn(*args)
+    except _bench._runner.RunnerError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+
+
+@app.get("/api/bench/github")
+def bench_github():
+    """Who the Runner target launches as (GitHub sign-in or a token), and whether they may."""
+    return _bench._runner.account(_bench.bench_dir())
+
+
+@app.post("/api/bench/github/login", dependencies=[Depends(require_api_key)])
+def bench_github_login():
+    """Start GitHub's device flow: show `user_code`, to be entered at `verification_uri`."""
+    return _runner_call(_bench._runner.sign_in_start)
+
+
+@app.post("/api/bench/github/login/poll", dependencies=[Depends(require_api_key)])
+def bench_github_login_poll():
+    """Whether the code was entered: pending, signed_in, expired or failed."""
+    return _runner_call(_bench._runner.sign_in_poll, _bench.bench_dir())
+
+
+@app.post("/api/bench/github/logout", dependencies=[Depends(require_api_key)])
+def bench_github_logout():
+    return _bench._runner.sign_out(_bench.bench_dir())
+
+
+@app.post("/api/bench/runner/cancel/{run_id}", dependencies=[Depends(require_api_key)])
+def bench_runner_cancel(run_id: int):
+    out = _runner_call(_bench._runner.cancel, _bench.bench_dir(), run_id)
+    log_event("benchmark", f"cancel runner run {run_id}")
+    return out
+
+
+@app.post("/api/bench/runner/fetch/{run_id}", dependencies=[Depends(require_api_key)])
+def bench_runner_fetch(run_id: int):
+    """Download a runner run's results into this machine's results folder."""
+    out = _runner_call(_bench._runner.fetch_results, _bench.bench_dir(), _bench.results_root(), run_id)
+    log_event("benchmark", f"fetched runner run {run_id}: {out['files']} files")
+    return out
 
 
 @app.post("/api/bench/cancel/{job_id}", dependencies=[Depends(require_api_key)])

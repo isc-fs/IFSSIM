@@ -13,7 +13,9 @@ runs the worker's own validation on a spec before it is queued, and ``launch`` r
 a spec that fails it. The sim has no YAML reader, so ``presets`` hands it the preset
 specs and the override files as JSON.
 
-Target *Runner* (the bench PC, through GitHub) is not built yet.
+Target *Runner* starts the spec on the bench PC through GitHub (``bench_runner.py``):
+``.github/workflows/bench.yml`` runs the same run_spec.py there. ``queue`` returns both:
+the local queue, and under ``runner`` GitHub's runs of every workflow on the GPU runner.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import bench_runner as _runner
 import benchmark_control_runner as _bcr
 
 TARGETS = ("local", "runner")
@@ -447,10 +450,10 @@ def launch(
 ) -> dict[str, Any]:
     if target not in TARGETS:
         raise LaunchError(f"target: one of {', '.join(TARGETS)}")
-    if target == "runner":
-        raise LaunchError("the Runner target (the bench PC through GitHub) isn't built yet", 501)
     if not isinstance(spec, dict) or not isinstance(spec.get("benchmarks"), dict) or not spec["benchmarks"]:
         raise LaunchError("spec: a run spec with at least one benchmark")
+    if target == "runner":
+        return _launch_runner(spec, name)
     spec = _for_this_backend(spec)
     try:
         m = load_manifest()
@@ -483,8 +486,37 @@ def launch(
     }
 
 
-def queue(limit: int = 50) -> dict[str, Any]:
-    return localq().summary(results_root(), limit)
+def _launch_runner(spec: dict[str, Any], name: str | None) -> dict[str, Any]:
+    """The spec is checked here as for Local, except for its bags: those are the bench
+    PC's, which this machine may not have (the runner checks them before it starts)."""
+    try:
+        m = load_manifest()
+    except SetupError:
+        m = None
+    if m is not None:
+        sp = _launch_module("spec")
+        try:
+            sp.validate(spec, m)
+        except sp.SpecError as e:
+            errors = [x for x in str(e).splitlines() if ".bags:" not in x]
+            if errors:
+                raise LaunchError(f"the spec has problems: {'; '.join(errors)}") from e
+    try:
+        return _runner.launch(bench_dir(), spec, name)
+    except _runner.RunnerError as e:
+        raise LaunchError(str(e), e.status_code) from e
+
+
+def bench_dir() -> Path:
+    return localq().bench_dir(results_root())
+
+
+def queue(limit: int = 50, runner: bool = True) -> dict[str, Any]:
+    """The local queue, and (``runner``) GitHub's runs on the GPU runner."""
+    out = localq().summary(results_root(), limit)
+    if runner:
+        out["runner"] = _runner.queue(bench_dir(), min(limit, 30))
+    return out
 
 
 def cancel(job_id: str) -> str | None:
