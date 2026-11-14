@@ -415,7 +415,8 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRangeCoeff"), DblVal)) Sensor.RangeNoiseRangeCoeff = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRefReflectance"), DblVal)) Sensor.RangeNoiseRefReflectance = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseReflectanceExp"), DblVal)) Sensor.RangeNoiseReflectanceExp = DblVal;
-	if (SensorObj->TryGetNumberField(TEXT("EdgeOutlierRate"), DblVal)) Sensor.EdgeOutlierRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("EdgeSwapRate"), DblVal)) Sensor.EdgeSwapRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("EdgeDropRate"), DblVal)) Sensor.EdgeDropRate = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("IntensityNoise"), DblVal)) Sensor.IntensityNoise = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("IntensityScale"), DblVal)) Sensor.IntensityScale = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("IntensityRangeExp"), DblVal)) Sensor.IntensityRangeExp = DblVal;

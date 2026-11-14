@@ -52,7 +52,8 @@ float RangeNoiseStdCm;        // σ at 0 m for ρ = RangeNoiseRefReflectance; 0 
 float RangeNoiseRangeCoeffCm; // σ grows by this · range_m² (cm)
 float RangeNoiseRefReflectance; // ρ at which the reflectance factor is 1
 float RangeNoiseReflectanceExp; // σ ∝ (ρ_ref/ρ)^exp; 0 = off
-float EdgeOutlierRate;        // probability of a mixed return at a >30 cm depth edge
+float EdgeSwapRate;           // at a >30 cm edge to a neighbouring beam: P(return from that surface)
+float EdgeDropRate;           // ... P(no return)
 float IntensityNoiseRel;      // relative σ of scan-to-scan intensity jitter
 float IntensityScale;         // I = Scale · ρ · cos^IncidenceExp · r^-RangeExp (old law: 25, 2, 1)
 float IntensityRangeExp;
@@ -372,24 +373,39 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		RayDistCm += SigmaCm * GaussRange;
 	}
 
-	// Mixed returns at silhouettes: where a neighbouring texel's depth
-	// jumps by more than 30 cm (a cone edge against the background), the
-	// car's returns sometimes land between the two surfaces. With
-	// probability EdgeOutlierRate, place the return uniformly between this
-	// hit and the farthest neighbour. The car shows such >30 cm jumps on
-	// ~2 % of object returns at 5-10 m.
-	if (EdgeOutlierRate > 0.0)
+	// Depth edges. Where the neighbouring beam to the left or right (same
+	// channel) ranges more than 30 cm away, the car's Hesai often returns
+	// that other surface instead (objects grow into the beams beside them)
+	// or nothing at all. Measured parked on the car, 4-12 m: ~15 % of edge
+	// returns come from the other surface and edge beams return on ~73 % of
+	// scans against ~90 % inside a surface. The neighbours are the real beam
+	// directions projected into the depth capture, not adjacent texels.
+	if ((EdgeSwapRate > 0.0 || EdgeDropRate > 0.0) && HStepRad > 0.0)
 	{
-		const float DFar = max(max(DLeft, DRight), max(DUp, DDown));
-		if (DFar - DepthZCm > 30.0)
+		const float RHereCm = DepthZCm / CosAlpha;
+		float ROtherCm = RHereCm;
+		float BestGapCm = 0.0;
+		[unroll] for (int k = -1; k <= 1; k += 2)
+		{
+			const float Hn  = HRad + float(k) * HStepRad;
+			const float CHn = cos(Hn);
+			const float IXn = sin(Hn) / max(CHn, 1e-6);
+			const float IYn = SinV / max(CosV * CHn, 1e-6);
+			if (IXn < -HHalfPlanar || IXn > HHalfPlanar || IYn < VBottomPlanar || IYn > VTopPlanar) continue;
+			const int Cn = clamp(int((IXn + HHalfPlanar) / (2.0 * HHalfPlanar) * float(RTWidth)), 0, int(RTWidth) - 1);
+			const int Rn = clamp(int((VTopPlanar - IYn) / (VTopPlanar - VBottomPlanar) * float(RTHeight)), 0, int(RTHeight) - 1);
+			const float RnCm = DepthTexture.Load(int3(Cn, Rn, 0)) / max(CosV * CHn, 1e-6);
+			const float GapCm = abs(RnCm - RHereCm);
+			if (GapCm > BestGapCm) { BestGapCm = GapCm; ROtherCm = RnCm; }
+		}
+		if (BestGapCm > 30.0)
 		{
 			RNGState = pcg_hash(RNGState);
-			if (u32_to_unit_float(RNGState) < EdgeOutlierRate)
-			{
-				RNGState = pcg_hash(RNGState);
-				const float Mix = u32_to_unit_float(RNGState);
-				RayDistCm = lerp(RayDistCm, DFar / CosAlpha, Mix);
-			}
+			const float U = u32_to_unit_float(RNGState);
+			if (U < EdgeDropRate) return;
+			// Swap keeps this ray's range noise. A neighbour past the range
+			// limits (sky) is culled by the bounds check below: no return.
+			if (U < EdgeDropRate + EdgeSwapRate) RayDistCm = ROtherCm + (RayDistCm - RHereCm);
 		}
 	}
 

@@ -1189,7 +1189,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
 		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
-		float EdgeOutlierRate, IntensityNoiseRel;
+		float EdgeSwapRate, EdgeDropRate, IntensityNoiseRel;
 		float IntensityScale, IntensityRangeExp, IntensityIncidenceExp, IntensityMax;
 		uint32 IntensityRound;
 		float LuminanceReflectanceGain;
@@ -1240,7 +1240,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.RangeNoiseRangeCoeffCm   = RangeNoiseRangeCoeffCm;
 	U.RangeNoiseRefReflectance = RangeNoiseRefReflectance;
 	U.RangeNoiseReflectanceExp = RangeNoiseReflectanceExp;
-	U.EdgeOutlierRate          = EdgeOutlierRate;
+	U.EdgeSwapRate             = EdgeSwapRate;
+	U.EdgeDropRate             = EdgeDropRate;
 	U.IntensityNoiseRel        = IntensityNoise;
 	// Intensity law. Scale < 0 = the old ρ·cos·(R_ref/r)² with R_ref = 5 m.
 	if (IntensityScale < 0.f)
@@ -1490,7 +1491,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->RangeNoiseRangeCoeffCm   = U.RangeNoiseRangeCoeffCm;
 			Params->RangeNoiseRefReflectance = U.RangeNoiseRefReflectance;
 			Params->RangeNoiseReflectanceExp = U.RangeNoiseReflectanceExp;
-			Params->EdgeOutlierRate          = U.EdgeOutlierRate;
+			Params->EdgeSwapRate             = U.EdgeSwapRate;
+			Params->EdgeDropRate             = U.EdgeDropRate;
 			Params->IntensityNoiseRel        = U.IntensityNoiseRel;
 			Params->IntensityScale           = U.IntensityScale;
 			Params->IntensityRangeExp        = U.IntensityRangeExp;
