@@ -18,11 +18,13 @@ For each mission, track and repeat (in that order), one run:
 WHERE THE PIPELINE RUNS (``--pipeline-on``):
 
   bench_pc     On this computer. With ``--stack own`` (the default) the benchmark starts its own
-               pipeline container (``bench-dv-stack``) from THIS checkout's ``pipeline/``: a copy of
-               it is mounted into the image (``$IFSSIM_DV_IMAGE``, else the one ``docker compose``
-               builds) and rebuilt at start-up, so the runs use exactly this checkout's pipeline
-               commit, which is what gets recorded. This is how to try the benchmark on any of our
-               computers, without the latte panda.
+               pipeline container (``bench-dv-stack``) from THIS checkout's ``pipeline/`` and sim
+               bridge (``ros2/src``): a copy of them is mounted into the image (``$IFSSIM_DV_IMAGE``,
+               else the one ``docker compose`` builds) and rebuilt at start-up, so the runs use
+               exactly this checkout's pipeline commit, which is what gets recorded, and a bridge
+               that reads the sim's sensor frames as this checkout's plugin writes them, however
+               old the image is. This is how to try the benchmark on any of our computers, without
+               the latte panda.
   latte_panda  On the latte panda. The benchmark's container runs only the sim bridge here; the
                pipeline (``ros2 launch bringup sim_pipeline.launch.py``: the autonomy against a
                bridge elsewhere) runs there, started and stopped by ``--panda-start`` /
@@ -444,6 +446,7 @@ STACK_UP_TIMEOUT_S = 1200.0  # rebuild (C++ too) + a cold Numba cache
 # colcon when the cached build was made from the same ones.
 BUILD_CACHE = "bench_ws_"
 PARAMS = Path("bringup") / "config" / "params.yaml"
+BRIDGE_SRC = Path("ros2") / "src"  # the sim bridge's packages, in the IFSSIM checkout
 COMPONENT_ALIASES = {"cone_detection": "cone_detection_node"}
 
 
@@ -688,15 +691,27 @@ class Stack:
                     "pipeline overrides: "
                     + ", ".join(f"{k}={v!r}" for k, v in self.changed.items())
                 )
+            # ... and of its sim bridge (ros2/src): the image's own is from whenever it was
+            # built, and a bridge older or newer than the sim misreads its sensor stream
+            # (#875 grew the frame; a 2026-11-09 image fed the pipeline a few Hz of IMU).
+            bridge = self.tmp / "ros2"
+            if (self.checkout / BRIDGE_SRC).is_dir():
+                shutil.copytree(
+                    self.checkout / BRIDGE_SRC, bridge, ignore=shutil.ignore_patterns(".git")
+                )
             for pkg in sorted(
-                p for p in src.iterdir() if (p / "package.xml").is_file()
+                p
+                for d in (src, bridge)
+                if d.is_dir()
+                for p in d.iterdir()
+                if (p / "package.xml").is_file()
             ):
                 run += ["-v", f"{pkg}:{WS}/src/{pkg.name}"]
             cache = build_cache(self.image)
             for volume, folder in cache:
                 run += ["-v", f"{volume}:{WS}/{folder}"]
             if cache:
-                run += ["-e", f"DV_SRC_HASH={source_hash(src)}"]
+                run += ["-e", f"DV_SRC_HASH={source_hash(self.tmp)}"]
             run += ["-e", "DV_REBUILD_ON_STARTUP=true", self.image]
             ready = STACK_READY
         else:  # the latte panda runs the pipeline: here only the sim bridge
@@ -712,7 +727,7 @@ class Stack:
             run += ["--entrypoint", "bash", self.image, "-c", launch]
             ready = None
         log(
-            f"starting the pipeline stack ({'pipeline from this checkout' if ready else 'bridge only'}, {self.image})"
+            f"starting the pipeline stack ({'pipeline and sim bridge from this checkout' if ready else 'bridge only'}, {self.image})"
         )
         r = docker(*run, timeout=600)
         self.started = (
