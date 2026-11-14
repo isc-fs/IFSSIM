@@ -341,7 +341,15 @@ private:
     // connection time via `getSensorOffset <name>` so the static TFs the
     // bridge publishes follow settings.json instead of stale hardcoded
     // numbers.
-    struct Vec3 { double x = 0.0; double y = 0.0; double z = 0.0; bool valid = false; };
+    struct Vec3 {
+        double x = 0.0; double y = 0.0; double z = 0.0; bool valid = false;
+        // Mount rotation (REP-103 body frame) and whether the sensor's data is
+        // in its own frame (then base_link -> sensor TF is this pose) or
+        // already in the vehicle frame (identity TF). Older plugins send
+        // neither: identity, vehicle frame.
+        double qw = 1.0; double qx = 0.0; double qy = 0.0; double qz = 0.0;
+        bool sensor_frame = false;
+    };
     Vec3 lidar_offset_;
 
     // Spawn position captured once at connection time via simGetVehiclePose.

@@ -60,6 +60,7 @@ struct FFSDSSensorSettings
 	// FSDSLidarSensor::BeginPlay; switching at runtime requires a PIE
 	// stop/start. Unknown values fall back to "cpu" with a warning log.
 	FString LidarPath = TEXT("cpu");
+	FString PointFrame = TEXT("vehicle");  // LiDAR points: "vehicle" or "sensor"
 
 	// Noise parameters (apply to all sensor types, 0 = no noise).
 	// All values are SI: m, m/s, m/s², rad/s. The plugin converts to its

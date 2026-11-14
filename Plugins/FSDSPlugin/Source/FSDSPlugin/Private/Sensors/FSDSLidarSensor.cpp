@@ -482,6 +482,11 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				const float Tau = SweepTauPerFrac * (bSweepReversed ? 1.f - Frac : Frac);
 				LocalHit -= Tau * (SweepVelMps * 100.0 + FVector::CrossProduct(SweepOmega, LocalHit));
 			}
+			// Sensor frame: relative to the mount, axes tilted with it.
+			if (bPointsInSensorFrame)
+			{
+				LocalHit = MountRotation.Quaternion().UnrotateVector(LocalHit - SensorOffset);
+			}
 			// UE5 vehicle local frame is left-handed (X-fwd, Y-RIGHT, Z-up).
 			// ROS REP-103 vehicle frame is right-handed (X-fwd, Y-LEFT, Z-up).
 			// Without the Y flip, every cone shows up mirrored across the
@@ -1230,6 +1235,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		FVector3f SweepVelMps;
 		FVector3f SweepOmega;
 		uint32 RNGSeed;
+		uint32 PointsInSensorFrame;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
 		// these to take the vehicle-local ray direction into world frame
@@ -1354,6 +1360,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.SweepVelMps    = FVector3f(GPUPendingVelLocalMps);
 	U.SweepOmega     = FVector3f(GPUPendingOmegaLocal);
 	// SensorOffset is stored in cm; shader takes metres.
+	U.PointsInSensorFrame = bPointsInSensorFrame ? 1u : 0u;
 	U.SensorOffsetXm     = SensorOffset.X / 100.f;
 	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
 	U.SensorOffsetZm     = SensorOffset.Z / 100.f;
@@ -1567,6 +1574,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->SensorRotRowX         = U.SensorRotRowX;  // #255
 			Params->SensorRotRowY         = U.SensorRotRowY;  // #255
 			Params->SensorRotRowZ         = U.SensorRotRowZ;  // #255
+			Params->PointsInSensorFrame   = U.PointsInSensorFrame;
 			Params->MountRotRowX          = U.MountRotRowX;
 			Params->MountRotRowY          = U.MountRotRowY;
 			Params->MountRotRowZ          = U.MountRotRowZ;

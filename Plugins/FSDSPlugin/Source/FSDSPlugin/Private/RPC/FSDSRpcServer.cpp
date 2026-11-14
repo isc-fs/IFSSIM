@@ -1276,6 +1276,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 		FString Name = Parts[1];
 		FVector UeOffsetCm(0.f, 0.f, 0.f);
+		FQuat UeMount = FQuat::Identity;
+		bool bSensorFrame = false;
 		bool bFound = false;
 
 		if (Name.Equals(TEXT("lidar"), ESearchCase::IgnoreCase))
@@ -1283,6 +1285,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (VehiclePawn->LidarSensor)
 			{
 				UeOffsetCm = VehiclePawn->LidarSensor->SensorOffset;
+				UeMount = VehiclePawn->LidarSensor->MountRotation.Quaternion();
+				bSensorFrame = VehiclePawn->LidarSensor->bPointsInSensorFrame;
 				bFound = true;
 			}
 		}
@@ -1293,7 +1297,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const float X = UeOffsetCm.X / 100.f;
 		const float Y = -UeOffsetCm.Y / 100.f;
 		const float Z = UeOffsetCm.Z / 100.f;
-		return FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}"), X, Y, Z);
+		// Mount rotation in the ROS body frame: mirroring Y maps the UE
+		// quaternion (w, x, y, z) to (w, -x, y, -z). "points" says which frame
+		// the sensor's data is in: "sensor" (relative to this mount, so the
+		// TF base_link -> sensor is this pose) or "vehicle" (identity TF).
+		return FString::Printf(
+			TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f,\"points\":\"%s\"}"),
+			X, Y, Z, UeMount.W, -UeMount.X, UeMount.Y, -UeMount.Z,
+			bSensorFrame ? TEXT("sensor") : TEXT("vehicle"));
 	}
 	else if (Method == TEXT("simGetGroundTruthKinematics"))
 	{
