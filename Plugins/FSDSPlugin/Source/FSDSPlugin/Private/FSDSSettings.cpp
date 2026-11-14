@@ -411,7 +411,15 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	}
 	if (SensorObj->TryGetNumberField(TEXT("VelocityNoiseStd"), DblVal)) Sensor.VelocityNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseStd"), DblVal)) Sensor.RangeNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakRate"), DblVal)) Sensor.DropoutWeakRate = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakExp"), DblVal)) Sensor.DropoutWeakExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakMax"), DblVal)) Sensor.DropoutWeakMax = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutBurstScans"), DblVal)) Sensor.DropoutBurstScans = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutBurstIidShare"), DblVal)) Sensor.DropoutBurstIidShare = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRangeCoeff"), DblVal)) Sensor.RangeNoiseRangeCoeff = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRefReflectance"), DblVal)) Sensor.RangeNoiseRefReflectance = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseReflectanceExp"), DblVal)) Sensor.RangeNoiseReflectanceExp = DblVal;

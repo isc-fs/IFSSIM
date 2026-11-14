@@ -95,6 +95,11 @@ struct FFSDSSensorSettings
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
+	float DropoutWeakRate = 0.f;      // P(no return) at intensity 1, falls as I^-DropoutWeakExp (LiDAR)
+	float DropoutWeakExp = 0.77f;
+	float DropoutWeakMax = 0.3f;      // cap on that probability (LiDAR)
+	float DropoutBurstScans = 0.f;    // longest same-direction run a drop lasts; 0 = per scan (LiDAR)
+	float DropoutBurstIidShare = 0.15f; // share of those drops that stay one-scan (LiDAR)
 	float RangeNoiseRangeCoeff = 0.f;      // m per m² of range: σ grows by this · r² (LiDAR)
 	float RangeNoiseRefReflectance = 0.2f; // ρ where the reflectance factor is 1 (LiDAR)
 	float RangeNoiseReflectanceExp = 0.f;  // σ ∝ (ρ_ref/ρ)^exp, 0 = off (LiDAR)

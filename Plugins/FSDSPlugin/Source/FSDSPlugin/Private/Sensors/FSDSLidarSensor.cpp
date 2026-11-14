@@ -1188,6 +1188,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HStartRad, HEndRad, VUpperRad, VLowerRad, TiltRad;
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
+		float DropoutWeakRate, DropoutWeakExp, DropoutWeakMax, DropoutBurstScans, DropoutBurstIidShare;
+		uint32 DropoutScanIndex, DropoutCellSeed;
 		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
 		float EdgeSwapRate, EdgeDropRate, IntensityNoiseRel;
 		float IntensityScale, IntensityRangeExp, IntensityIncidenceExp, IntensityMax;
@@ -1237,6 +1239,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.MaxRangeCm         = MaxRange;
 	U.RangeNoiseStdCm    = RangeNoiseStd;
 	U.DropoutRate        = DropoutRate;
+	U.DropoutWeakRate      = FMath::Max(0.f, DropoutWeakRate);
+	U.DropoutWeakExp       = DropoutWeakExp;
+	U.DropoutWeakMax       = FMath::Clamp(DropoutWeakMax, 0.f, 1.f);
+	U.DropoutBurstScans    = FMath::Max(0.f, DropoutBurstScans);
+	U.DropoutBurstIidShare = FMath::Clamp(DropoutBurstIidShare, 0.f, 1.f);
 	U.RangeNoiseRangeCoeffCm   = RangeNoiseRangeCoeffCm;
 	U.RangeNoiseRefReflectance = RangeNoiseRefReflectance;
 	U.RangeNoiseReflectanceExp = RangeNoiseReflectanceExp;
@@ -1304,6 +1311,16 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// alternating per scan, motion from the capture-time snapshot.
 	U.SweepDurationS = FMath::Max(0.f, SweepDurationMs) / 1000.f;
 	U.SweepReversed  = (bSweepAlternate && (GpuScanCounter & 1u)) ? 1u : 0u;
+	// Dropout bursts count scans of one sweep direction, like the car's
+	// beams (the two directions sample slightly different azimuths). The
+	// per-beam seed is drawn once per seed generation so bursts span scans
+	// (unseeded, MakeSeed reads the clock and would differ every scan).
+	if (GpuScanCounter == 1u || GpuDropoutCellSeed == 0u)
+	{
+		GpuDropoutCellSeed = FSDSRandom::MakeSeed(TEXT("Lidar.gpu.dropout"), 0) | 1u;
+	}
+	U.DropoutScanIndex = bSweepAlternate ? (GpuScanCounter >> 1) : GpuScanCounter;
+	U.DropoutCellSeed  = GpuDropoutCellSeed;
 	U.SweepVelMps    = FVector3f(GPUPendingVelLocalMps);
 	U.SweepOmega     = FVector3f(GPUPendingOmegaLocal);
 	// SensorOffset is stored in cm; shader takes metres.
@@ -1488,6 +1505,13 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->MaxRangeCm            = U.MaxRangeCm;
 			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
 			Params->DropoutRate           = U.DropoutRate;
+			Params->DropoutWeakRate = U.DropoutWeakRate;
+			Params->DropoutWeakExp = U.DropoutWeakExp;
+			Params->DropoutWeakMax = U.DropoutWeakMax;
+			Params->DropoutBurstScans = U.DropoutBurstScans;
+			Params->DropoutBurstIidShare = U.DropoutBurstIidShare;
+			Params->DropoutScanIndex = U.DropoutScanIndex;
+			Params->DropoutCellSeed = U.DropoutCellSeed;
 			Params->RangeNoiseRangeCoeffCm   = U.RangeNoiseRangeCoeffCm;
 			Params->RangeNoiseRefReflectance = U.RangeNoiseRefReflectance;
 			Params->RangeNoiseReflectanceExp = U.RangeNoiseReflectanceExp;

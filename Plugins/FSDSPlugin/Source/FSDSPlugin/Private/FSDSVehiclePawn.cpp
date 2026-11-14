@@ -700,6 +700,11 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->bSweepAlternate = SensorPair.Value.bSweepAlternate;
 				LidarSensor->bIntensityRound = SensorPair.Value.bIntensityRound;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
+				LidarSensor->DropoutWeakRate = SensorPair.Value.DropoutWeakRate;
+				LidarSensor->DropoutWeakExp = SensorPair.Value.DropoutWeakExp;
+				LidarSensor->DropoutWeakMax = SensorPair.Value.DropoutWeakMax;
+				LidarSensor->DropoutBurstScans = SensorPair.Value.DropoutBurstScans;
+				LidarSensor->DropoutBurstIidShare = SensorPair.Value.DropoutBurstIidShare;
 
 				// Per-channel max-range (#223 tune): convert metres → cm
 				// to match the global MaxRange units the sensor stores.
