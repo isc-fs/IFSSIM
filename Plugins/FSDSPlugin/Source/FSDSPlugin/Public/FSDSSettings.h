@@ -53,6 +53,7 @@ struct FFSDSSensorSettings
 	// (default) keeps the uniform VerticalFOVLower..Upper grid. Validation
 	// and sorting live in FSDSLidarSensor::OnSettingsApplied.
 	TArray<float> ChannelElevationsDeg;
+	TArray<int32> ChannelRingIds;     // car ring number per ChannelElevationsDeg entry (LiDAR)
 
 	// LiDAR path: "cpu" (default, ParallelFor + Chaos line traces) or
 	// "gpu" (depth-render + compute decode, #223). Read by

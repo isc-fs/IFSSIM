@@ -250,6 +250,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	TArray<float> ChannelElevationsDeg;
 
+	/** The car's ring number for each ChannelElevationsDeg entry (same
+	 *  order). The car's Hesai numbers its beams in two interleaved banks,
+	 *  not by elevation; the organised cloud puts each beam at its ring.
+	 *  Empty or invalid = rings by elevation, top first. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	TArray<int32> ChannelRingIds;
+
 	/** Ray-cast backend selection. Driven by settings.json LidarPath
 	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
 	 *  stop/start because BeginPlay sets up backend-specific resources. */
@@ -269,6 +276,8 @@ private:
 	 *  uniform grid. Rebuilt by OnSettingsApplied; the input array is left
 	 *  as given so a later re-apply sees the same input. */
 	TArray<float> EffectiveElevationsDeg;
+	// Organised cloud: ring r -> shader channel (lowest = 0). Built in OnSettingsApplied.
+	TArray<int32> RingToChannel;
 
 	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
 
