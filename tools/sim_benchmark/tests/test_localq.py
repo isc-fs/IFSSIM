@@ -230,6 +230,13 @@ def test_the_rig_descriptor_comes_from_the_environment(tmp_path, monkeypatch):
     assert rg.load() == {"id": "desk", "latte_panda": {"host": "10.0.0.2"}}
 
 
+def test_the_bench_pcs_descriptor_has_no_panda_or_hil_until_handover():
+    doc = rg.load(Path(__file__).resolve().parents[3] / "rigs" / "bench-pc.yaml")
+    assert doc["id"] == "bench-pc"
+    parts = rg.check(doc, run=fake_runner({}))["parts"]
+    assert parts["latte_panda"]["status"] == "absent" and parts["hil"]["status"] == "absent"
+
+
 def test_the_worker_from_the_command_line(m, monkeypatch):
     monkeypatch.setattr(rg, "check", lambda *a, **k: READY_RIG)
     jid = lq.enqueue(m.results, spec(), requested_by="alice")

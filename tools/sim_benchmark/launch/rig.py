@@ -15,7 +15,7 @@ the rig is this machine with no LattePanda and no HIL bench. Example::
     latte_panda: {host: 192.168.50.2, user: isc}   # checked over SSH
     hil: {bench: bench-01}                         # IFS_HIL's descriptor id
 
-The bench PC's descriptor will live in the repository (``rigs/``) once it exists.
+The bench PC's descriptor is ``rigs/bench-pc.yaml`` (its runner sets ``IFSSIM_RIG`` to it).
 """
 
 from __future__ import annotations
