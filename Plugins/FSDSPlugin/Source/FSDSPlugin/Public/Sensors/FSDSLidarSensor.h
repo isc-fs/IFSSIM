@@ -180,6 +180,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	float WorldLuminanceReflectanceGain = -1.0f;
 
+	/** Mirror sweep. The car's Hesai stamps a scan at its first point and
+	 *  measures the rest over the next ~90 ms, linearly in azimuth, without
+	 *  motion correction; the sweep direction alternates every scan. The sim
+	 *  captures a scan in one instant, so each point is moved by the car's
+	 *  motion over its delay: p' = p - tau (v + w x p), tau = SweepDurationMs
+	 *  times the azimuth's fraction of the FOV (1 - fraction on reversed
+	 *  scans). 0 = no sweep (one instant). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float SweepDurationMs = 0.0f;
+	/** Reverse the sweep direction every scan, like the car's mirror. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bSweepAlternate = true;
+
 private:
 	/** -1 unknown, 0 level floor, 1 a world is built: logs the gain on change. */
 	int8 LastWorldGainState = -1;
@@ -323,6 +336,14 @@ private:
 	FTransform GPUPendingOwnerTransform;
 	FVector    GPUPendingSensorWorldPos = FVector::ZeroVector;
 	FQuat      GPUPendingOwnerRotation  = FQuat::Identity;
+	// Vehicle velocity (m/s) and angular velocity (rad/s) in the vehicle's UE
+	// frame at capture time, for the sweep smear.
+	FVector    GPUPendingVelLocalMps    = FVector::ZeroVector;
+	FVector    GPUPendingOmegaLocal     = FVector::ZeroVector;
+	// The same for the CPU path, snapshot on the game thread before the async scan.
+	FVector    CpuSweepVelLocalMps      = FVector::ZeroVector;
+	FVector    CpuSweepOmegaLocal       = FVector::ZeroVector;
+	uint32     CpuSweepCounter          = 0;
 
 	// Diagnostic latency tracking — emitted on first successful
 	// readback and every 50th thereafter. Per-slot enqueue time lives

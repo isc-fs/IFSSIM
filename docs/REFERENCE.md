@@ -292,10 +292,13 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Point dropout rate | 1% | ✓ | `DropoutRate` |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
 | Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
+| Mirror sweep (motion smear) | 89.8 ms, alternating | ✓ | `SweepDurationMs`, `SweepAlternate` |
 | Intensity law | car fit: 1460 · ρ · r^−1.29, rounded, 0–255 | ✓ | `IntensityScale`, `IntensityRangeExp`, `IntensityIncidenceExp`, `IntensityMax`, `IntensityRound` |
 | Luminance → ρ gain (non-LUT hits) | 3.2 on the level floor, 1 on a track's world | ✓ | `LuminanceReflectanceGain`, `WorldLuminanceReflectanceGain` |
 
 **Channel elevations.** The car's Hesai spaces its 116 beams unevenly: about 0.1° apart from −4° to +2.9°, 0.2° from −9° to −4° and from +2.9° to +4.6°, and 0.4° at the top and bottom. `ChannelElevationsDeg` gives one elevation per channel in the sensor frame, measured from a parked car bag; the sensor sorts it lowest first and takes its vertical FOV from its ends. Without it, the channels are spread evenly from `VerticalFOVLower` to `VerticalFOVUpper`. A length other than `NumberOfChannels` logs a warning and falls back to the even grid. Honoured by both back-ends.
+
+**Mirror sweep.** The car's Hesai stamps a scan at its first point and measures the rest over the next 89.8 ms, linearly in azimuth (44.6 ms ± 0.74 ms/deg), with every ring at the same time. The direction reverses every scan. The driver doesn't correct for the car's motion, so at speed a cone at the edge of the FOV is measured up to 90 ms after the stamp, and in the opposite order on the next scan: static cones jump about 31 cm from scan to scan at 6–13 m/s. The sim captures a scan in one instant, so `SweepDurationMs` moves each point by the car's motion over its delay, p′ = p − τ·(v + ω × p), with τ = `SweepDurationMs` × the azimuth's fraction of the FOV (1 − fraction on reversed scans) and v, ω the car's velocity and angular velocity when the scan was captured. `SweepAlternate` reverses the direction every scan. 0 captures in one instant. Honoured by both back-ends.
 
 **Per-channel max range.** Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer rings reach less far than central beams (60 m bottom, 198 m centre, 90 m top on the real sensor). The sim uses a 116-element array linearly remapped from the datasheet's 60-198 m envelope into the 25–30 m simulator range budget, preserving the relative shape. Length must equal `NumberOfChannels`; mismatch logs a warning and falls back to the global `MaxRange`. Honoured by both back-ends.
 
