@@ -153,6 +153,29 @@ static_assert(sizeof(FFSDSLidarStreamHeader) == 32,
 	"this struct, bump a wire-version field instead of expecting "
 	"old bridges to keep parsing.");
 
+// Wire header for the organised LiDAR stream ("streamLidar2\n"). Same
+// first six fields as FFSDSLidarStreamHeader, magic "LID2". Followed by
+// TotalPoints * 4 floats (x, y, z, intensity). When Flags bit 0 is set the
+// payload is every ray of the scan in the car's Hesai order: Slots slots in
+// firing order, Channels rays each, ring 0 = top beam, intensity -1 = no
+// return; slot s fires SweepDurationNs * s / (Slots - 1) after the stamp.
+// Otherwise it is the compact cloud (valid hits only), as on streamLidar.
+// Bridges that don't ask for streamLidar2 keep getting the 32-byte header.
+struct FFSDSLidarStreamHeaderV2
+{
+	uint32 Magic = 0x4C494432; // "LID2", same convention as "LIDR" 0x4C494452
+	uint32 FrameID = 0;
+	int32  Channels = 0;
+	int32  TotalPoints = 0;
+	int64  LagNs = 0;
+	int64  SimCaptureNs = 0;
+	int64  SweepDurationNs = 0;
+	int32  Slots = 0;
+	uint32 Flags = 0;          // bit 0: organised
+};
+static_assert(sizeof(FFSDSLidarStreamHeaderV2) == 48,
+	"FFSDSLidarStreamHeaderV2 is part of the bridge<->sim ABI (bridge: ifssim_ros_wrapper.cpp).");
+
 #pragma pack(pop)
 
 /**

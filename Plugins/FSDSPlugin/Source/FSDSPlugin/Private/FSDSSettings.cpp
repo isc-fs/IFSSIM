@@ -363,6 +363,17 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 				}
 			}
 		}
+		// "ChannelRingIds": the car's ring number for each entry above.
+		const TArray<TSharedPtr<FJsonValue>>* RingArr = nullptr;
+		if (SensorObj->TryGetArrayField(TEXT("ChannelRingIds"), RingArr) && RingArr)
+		{
+			Sensor.ChannelRingIds.Reset(RingArr->Num());
+			for (const TSharedPtr<FJsonValue>& Entry : *RingArr)
+			{
+				double V = 0.0;
+				if (Entry->TryGetNumber(V)) Sensor.ChannelRingIds.Add((int32)V);
+			}
+		}
 	}
 
 	// LidarPath: "cpu" (default) or "gpu" — see #223. Only honoured when

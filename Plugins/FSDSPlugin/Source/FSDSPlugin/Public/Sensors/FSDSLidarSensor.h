@@ -53,6 +53,13 @@ public:
 	/** Get point count (number of 3D points, not floats) */
 	int32 GetPointCount() const;
 
+	/** The last GPU scan as the car's Hesai lays it out: every ray, slots in
+	 *  firing order (reversed when the sweep ran the other way), rings top
+	 *  first within a slot, [x,y,z,intensity] per ray with intensity -1 for
+	 *  no return. OutSweepS is the time from the first slot to the last.
+	 *  False (and empty) when there is no organised scan (CPU path). */
+	bool GetOrganisedPointCloud(TArray<float>& OutPoints, int32& OutChannels, int32& OutSlots, float& OutSweepS) const;
+
 	/** Get wall-clock (Cycles64) timestamp of last scan */
 	uint64 GetTimestamp() const { return LastTimestamp; }
 
@@ -243,6 +250,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	TArray<float> ChannelElevationsDeg;
 
+	/** The car's ring number for each ChannelElevationsDeg entry (same
+	 *  order). The car's Hesai numbers its beams in two interleaved banks,
+	 *  not by elevation; the organised cloud puts each beam at its ring.
+	 *  Empty or invalid = rings by elevation, top first. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	TArray<int32> ChannelRingIds;
+
 	/** Ray-cast backend selection. Driven by settings.json LidarPath
 	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
 	 *  stop/start because BeginPlay sets up backend-specific resources. */
@@ -262,6 +276,8 @@ private:
 	 *  uniform grid. Rebuilt by OnSettingsApplied; the input array is left
 	 *  as given so a later re-apply sees the same input. */
 	TArray<float> EffectiveElevationsDeg;
+	// Organised cloud: ring r -> shader channel (lowest = 0). Built in OnSettingsApplied.
+	TArray<int32> RingToChannel;
 
 	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
 
@@ -348,6 +364,9 @@ private:
 		// CaptureCycles64, becomes LastTimestampSimNs at consume. This is
 		// the value the bridge stamps header.stamp from under use_sim_time.
 		uint64 CaptureSimNs = 0;
+		// Sweep of this scan, for the organised cloud's slot order and times.
+		bool  bSweepReversed = false;
+		float SweepDurationS = 0.f;
 	};
 	static constexpr int32 ReadbackQueueDepth = 2;
 	FReadbackSlot ReadbackSlots[ReadbackQueueDepth];
@@ -419,6 +438,11 @@ private:
 
 	TArray<float> PointCloudBuffer;
 	int32 CachedPointCount = 0;
+	// Organised twin of PointCloudBuffer (GetOrganisedPointCloud), GPU path only.
+	TArray<float> OrganisedBuffer;
+	int32 OrganisedChannels = 0;
+	int32 OrganisedSlots = 0;
+	float OrganisedSweepS = 0.f;
 	uint64 LastTimestamp = 0;       // wall-clock (Cycles64) at capture
 	uint64 LastTimestampSimNs = 0;  // UE game/sim time at capture, ns
 	float CurrentHorizontalAngle = 0.f;

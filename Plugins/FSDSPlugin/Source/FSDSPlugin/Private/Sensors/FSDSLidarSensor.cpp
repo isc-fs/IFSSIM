@@ -171,6 +171,7 @@ void UFSDSLidarSensor::OnSettingsApplied()
 	// uniform grid. Done first because it can move VerticalFOVLower/Upper,
 	// which the GPU capture is sized from.
 	const bool bHasElevTable = ChannelElevationsDeg.Num() == NumberOfChannels && NumberOfChannels > 0;
+	RingToChannel.Reset();
 	if (!bHasElevTable)
 	{
 		if (ChannelElevationsDeg.Num() != 0)
@@ -191,6 +192,25 @@ void UFSDSLidarSensor::OnSettingsApplied()
 	{
 		EffectiveElevationsDeg = ChannelElevationsDeg;
 		EffectiveElevationsDeg.Sort();
+		// Ring numbering: entry i of the table is ring ChannelRingIds[i];
+		// its shader channel is its rank in the sorted table.
+		if (ChannelRingIds.Num() == NumberOfChannels)
+		{
+			TArray<int32> Order;
+			for (int32 i = 0; i < NumberOfChannels; i++) Order.Add(i);
+			Order.StableSort([this](int32 A, int32 B) { return ChannelElevationsDeg[A] < ChannelElevationsDeg[B]; });
+			TArray<int32> Ring2Ch;
+			Ring2Ch.Init(-1, NumberOfChannels);
+			bool bValid = true;
+			for (int32 Ch = 0; Ch < NumberOfChannels && bValid; Ch++)
+			{
+				const int32 Ring = ChannelRingIds[Order[Ch]];
+				bValid = Ring >= 0 && Ring < NumberOfChannels && Ring2Ch[Ring] < 0;
+				if (bValid) Ring2Ch[Ring] = Ch;
+			}
+			if (bValid) RingToChannel = MoveTemp(Ring2Ch);
+			else UE_LOG(LogTemp, Warning, TEXT("FSDS LiDAR: ChannelRingIds is not a permutation of 0..%d — rings by elevation instead."), NumberOfChannels - 1);
+		}
 		VerticalFOVLower = EffectiveElevationsDeg[0];
 		VerticalFOVUpper = EffectiveElevationsDeg.Last();
 		UE_LOG(LogTemp, Log,
@@ -543,6 +563,16 @@ TArray<float> UFSDSLidarSensor::GetPointCloud() const
 {
 	FScopeLock Lock(&const_cast<UFSDSLidarSensor*>(this)->PointCloudLock);
 	return PointCloudBuffer;
+}
+
+bool UFSDSLidarSensor::GetOrganisedPointCloud(TArray<float>& OutPoints, int32& OutChannels, int32& OutSlots, float& OutSweepS) const
+{
+	FScopeLock Lock(&const_cast<UFSDSLidarSensor*>(this)->PointCloudLock);
+	OutPoints   = OrganisedBuffer;
+	OutChannels = OrganisedChannels;
+	OutSlots    = OrganisedSlots;
+	OutSweepS   = OrganisedSweepS;
+	return OrganisedBuffer.Num() > 0;
 }
 
 int32 UFSDSLidarSensor::GetPointCount() const
@@ -1417,6 +1447,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		UWorld* W = GetWorld();
 		Slot.CaptureSimNs = W ? (uint64)(W->GetTimeSeconds() * 1e9) : 0;
 	}
+	Slot.bSweepReversed  = U.SweepReversed != 0u;
+	Slot.SweepDurationS  = U.SweepDurationS;
 	Slot.bInFlight       = true;
 	Slot.bLockDispatched = false;
 	NextDispatchSlot     = (NextDispatchSlot + 1) % ReadbackQueueDepth;
@@ -1669,10 +1701,38 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 		HitCount++;
 	}
 
+	// Organised copy in the car's Hesai order. The shader writes ray
+	// h * NumChannels + v, h from the left edge of the FOV (ROS +azimuth,
+	// where a forward sweep starts) and v from the lowest beam up. The car
+	// sends slots in firing order and its rings in its own numbering
+	// (ChannelRingIds; ring 0 = the top beam).
+	TArray<float> NewOrganised;
+	const int32 NumCh = FMath::Max(1, NumberOfChannels);
+	const int32 NumSlots = Points.Num() / NumCh;
+	if (NumSlots > 0 && NumSlots * NumCh == Points.Num())
+	{
+		NewOrganised.SetNumUninitialized(Points.Num() * 4);
+		float* Dst = NewOrganised.GetData();
+		for (int32 s = 0; s < NumSlots; s++)
+		{
+			const int32 h = Slot.bSweepReversed ? (NumSlots - 1 - s) : s;
+			for (int32 r = 0; r < NumCh; r++)
+			{
+				const int32 Ch = RingToChannel.Num() == NumCh ? RingToChannel[r] : (NumCh - 1 - r);
+				const FVector4f& P = Points[h * NumCh + Ch];
+				*Dst++ = P.X; *Dst++ = P.Y; *Dst++ = P.Z; *Dst++ = P.W;
+			}
+		}
+	}
+
 	{
 		FScopeLock Lock(&PointCloudLock);
 		PointCloudBuffer = MoveTemp(NewBuffer);
 		CachedPointCount = HitCount;
+		OrganisedBuffer   = MoveTemp(NewOrganised);
+		OrganisedChannels = NumCh;
+		OrganisedSlots    = NumSlots;
+		OrganisedSweepS   = Slot.SweepDurationS;
 		// Capture-time timestamp (#232) — use the cycles stamped when the
 		// depth render dispatched, not now. The readback ring delays
 		// consume by ~50-100 ms after capture, so stamping at consume time

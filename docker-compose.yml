@@ -86,6 +86,10 @@ services:
       # To bring the whole-scene copy back:
       #   LIDAR_VIZ_DECIMATION=4 docker compose up -d dv_pipeline_stack
       - LIDAR_VIZ_DECIMATION=${LIDAR_VIZ_DECIMATION:-0}
+      # /lidar_points layout: "hesai" (default) = the car's driver layout,
+      # every ray with ring + per-point timestamp, 26 B/point, ~4.5 MB/scan;
+      # "compact" = valid hits only, x/y/z/intensity, ~2.6 MB/scan.
+      - LIDAR_CLOUD_FORMAT=${LIDAR_CLOUD_FORMAT:-hesai}
       # Cap BLAS / OpenMP thread pools per process (#247). Cone_Detection's
       # RANSAC2 calls `np.dot()` 200× per scan; under default settings each
       # call spawned 8-10 BLAS threads, sustaining ~800% CPU on a single

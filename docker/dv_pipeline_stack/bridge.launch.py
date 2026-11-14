@@ -26,6 +26,12 @@ def generate_launch_description():
     except ValueError:
         lidar_viz_decimation = 0
 
+    # LIDAR_CLOUD_FORMAT — /lidar_points layout. "hesai" (default) is the
+    # car's driver layout: every ray (116 x 1500), 26-byte points with ring
+    # and per-point timestamp, no-returns as zeros (~4.5 MB/scan). "compact"
+    # is valid hits only, x/y/z/intensity (~2.6 MB/scan).
+    lidar_cloud_format = os.environ.get("LIDAR_CLOUD_FORMAT", "hesai") or "hesai"
+
     return LaunchDescription([
         DeclareLaunchArgument('host',         default_value='host.docker.internal'),
         DeclareLaunchArgument('port',         default_value='41451'),
@@ -44,6 +50,7 @@ def generate_launch_description():
                 'track_name':            LaunchConfiguration('track_name'),
                 'competition_mode':      False,
                 'lidar_viz_decimation':  lidar_viz_decimation,
+                'lidar_cloud_format':    lidar_cloud_format,
             }],
         ),
 
