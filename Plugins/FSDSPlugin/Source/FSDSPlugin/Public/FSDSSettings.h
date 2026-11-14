@@ -112,6 +112,10 @@ struct FFSDSSensorSettings
 	float LuminanceReflectanceGain = 1.f;
 	// The same gain while a track's world (Montmeló) is built; < 0 = LuminanceReflectanceGain.
 	float WorldLuminanceReflectanceGain = -1.f;
+	// Mirror sweep (LiDAR): a point at azimuth fraction f of the FOV is measured
+	// SweepDurationMs·f after the scan stamp (1-f on reversed scans); 0 = one instant.
+	float SweepDurationMs = 0.f;
+	bool bSweepAlternate = true;
 };
 
 struct FFSDSVehiclePhysics

@@ -60,6 +60,13 @@ float IntensityIncidenceExp;  // 0 = flat with incidence (the car's Hesai)
 float IntensityMax;           // clamp: 1 for the old 0..1 scale, 255 for the car's
 uint  IntensityRound;         // 1 = whole numbers, like the car's
 float LuminanceReflectanceGain; // ρ = saturate(gain · luminance) for hits with no LUT entry
+// Mirror sweep: the point at azimuth fraction f is measured SweepDurationS·f after the
+// stamp (1-f when SweepReversed); move it by the car's motion over that delay.
+// Velocities are in the vehicle's UE frame (m/s, rad/s). 0 = one instant.
+float  SweepDurationS;
+uint   SweepReversed;
+float3 SweepVelMps;
+float3 SweepOmega;
 float DropoutRate;            // [0, 1]; 0 = no dropout
 
 uint  RNGSeed;                // re-seeded each scan from CPU side
@@ -404,6 +411,13 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const float Px = dot(MountRotRowX, DirSensor) * ScaleM + SensorOffsetXm;
 	const float Py = dot(MountRotRowY, DirSensor) * ScaleM + SensorOffsetYm;
 	const float Pz = dot(MountRotRowZ, DirSensor) * ScaleM + SensorOffsetZm;
+	float3 PVeh = float3(Px, Py, Pz);
+	if (SweepDurationS > 0.0)
+	{
+		const float Frac = (NumHorizontalSteps > 1) ? float(HIdx) / float(NumHorizontalSteps - 1) : 0.5;
+		const float Tau  = SweepDurationS * (SweepReversed != 0u ? 1.0 - Frac : Frac);
+		PVeh -= Tau * (SweepVelMps + cross(SweepOmega, PVeh));
+	}
 
 	const float RangeM   = max(ScaleM, 0.01);  // floor at 1 cm so the range law doesn't blow up at point-blank
 	// Intensity law, set CPU-side: Scale · ρ · cos^IncidenceExp · r^-RangeExp.
@@ -425,5 +439,5 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	// luminance fallback), instead of the intensity.
 	const float OutIntensity = UseReflectanceLUT == 2u ? ColorSample.r
 		: (UseReflectanceLUT == 3u ? ColorSample.g : Intensity);
-	OutPoints[RayIdx] = float4(Px, -Py, Pz, OutIntensity);
+	OutPoints[RayIdx] = float4(PVeh.x, -PVeh.y, PVeh.z, OutIntensity);
 }

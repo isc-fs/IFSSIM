@@ -22,6 +22,30 @@
 #include "FSDSReferee.h"  // FSDSConeStencil:: IDs (#321 D-Phase-1)
 #include "Environment/FSDSWorldActor.h"
 #include "EngineUtils.h"  // TActorIterator
+#include "Components/PrimitiveComponent.h"
+
+namespace FSDSLidarSweepPrivate
+{
+	// Vehicle velocity at its origin (m/s) and angular velocity (rad/s), both in
+	// the vehicle's UE frame (X fwd, Y right, Z up). Numerically consistent with
+	// UE's cross product, so a point p moves at v + w x p in that frame.
+	static void OwnerVelocityLocal(const AActor* Owner, FVector& OutVelMps, FVector& OutOmega)
+	{
+		OutVelMps = FVector::ZeroVector; OutOmega = FVector::ZeroVector;
+		if (!Owner) return;
+		const FTransform Xf = Owner->GetActorTransform();
+		UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(Owner->GetRootComponent());
+		if (Root && Root->IsSimulatingPhysics())
+		{
+			OutVelMps = Xf.InverseTransformVectorNoScale(Root->GetPhysicsLinearVelocityAtPoint(Xf.GetLocation())) / 100.0;
+			OutOmega  = Xf.InverseTransformVectorNoScale(Root->GetPhysicsAngularVelocityInRadians());
+		}
+		else
+		{
+			OutVelMps = Xf.InverseTransformVectorNoScale(Owner->GetVelocity()) / 100.0;
+		}
+	}
+}
 #include "Materials/MaterialInterface.h"  // M_LiDARStencilEncoder load (#321 D-Phase-2)
 
 using FSDSNoise::RandStandardNormal;
@@ -288,6 +312,8 @@ void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 	// is already by value.
 	TWeakObjectPtr<UWorld> WeakWorld(World);
 	TWeakObjectPtr<AActor> WeakOwner(Owner);
+	FSDSLidarSweepPrivate::OwnerVelocityLocal(Owner, CpuSweepVelLocalMps, CpuSweepOmegaLocal);
+	++CpuSweepCounter;
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, WeakWorld, WeakOwner, OwnerTransform]()
 	{
 		UWorld* W = WeakWorld.Get();
@@ -315,6 +341,11 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	float VStep = (NumberOfChannels > 1) ? VFov / (float)(NumberOfChannels - 1) : 0.f;
 
 	FVector SensorWorldPos = OwnerTransform.TransformPosition(SensorOffset);
+	// Mirror sweep (see SweepDurationMs), snapshot on the game thread.
+	const float SweepTauPerFrac = FMath::Max(0.f, SweepDurationMs) / 1000.f;
+	const bool bSweepReversed = bSweepAlternate && (CpuSweepCounter & 1u);
+	const FVector SweepVelMps = CpuSweepVelLocalMps;
+	const FVector SweepOmega = CpuSweepOmegaLocal;
 	// Mount rotation first (sensor frame -> vehicle frame), then the vehicle's.
 	FQuat OwnerRotation = OwnerTransform.GetRotation() * MountRotation.Quaternion();
 
@@ -422,7 +453,15 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				continue;
 
 			const FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
-			const FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
+			FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
+			// Mirror sweep: move the point by the car's motion over its delay
+			// (cm; velocities in m/s, so x100 on the linear term).
+			if (SweepTauPerFrac > 0.f)
+			{
+				const float Frac = (HorizontalSteps > 1) ? float(h) / float(HorizontalSteps - 1) : 0.5f;
+				const float Tau = SweepTauPerFrac * (bSweepReversed ? 1.f - Frac : Frac);
+				LocalHit -= Tau * (SweepVelMps * 100.0 + FVector::CrossProduct(SweepOmega, LocalHit));
+			}
 			// UE5 vehicle local frame is left-handed (X-fwd, Y-RIGHT, Z-up).
 			// ROS REP-103 vehicle frame is right-handed (X-fwd, Y-LEFT, Z-up).
 			// Without the Y flip, every cone shows up mirrored across the
@@ -1038,6 +1077,7 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 		GPUPendingOwnerTransform = Xf;
 		GPUPendingSensorWorldPos = Xf.TransformPosition(SensorOffset);
 		GPUPendingOwnerRotation  = Xf.GetRotation();
+		FSDSLidarSweepPrivate::OwnerVelocityLocal(Owner, GPUPendingVelLocalMps, GPUPendingOmegaLocal);
 	}
 
 	const double T0 = FPlatformTime::Seconds();
@@ -1153,6 +1193,10 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float IntensityScale, IntensityRangeExp, IntensityIncidenceExp, IntensityMax;
 		uint32 IntensityRound;
 		float LuminanceReflectanceGain;
+		float SweepDurationS;
+		uint32 SweepReversed;
+		FVector3f SweepVelMps;
+		FVector3f SweepOmega;
 		uint32 RNGSeed;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
@@ -1255,6 +1299,12 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		GpuScanCounterGeneration = GpuGen;
 	}
 	U.RNGSeed            = FSDSRandom::MakeSeed(TEXT("Lidar.gpu"), ++GpuScanCounter);
+	// Mirror sweep: delay up to SweepDurationMs across the FOV, direction
+	// alternating per scan, motion from the capture-time snapshot.
+	U.SweepDurationS = FMath::Max(0.f, SweepDurationMs) / 1000.f;
+	U.SweepReversed  = (bSweepAlternate && (GpuScanCounter & 1u)) ? 1u : 0u;
+	U.SweepVelMps    = FVector3f(GPUPendingVelLocalMps);
+	U.SweepOmega     = FVector3f(GPUPendingOmegaLocal);
 	// SensorOffset is stored in cm; shader takes metres.
 	U.SensorOffsetXm     = SensorOffset.X / 100.f;
 	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
@@ -1448,6 +1498,10 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->IntensityMax             = U.IntensityMax;
 			Params->IntensityRound           = U.IntensityRound;
 			Params->LuminanceReflectanceGain = U.LuminanceReflectanceGain;
+			Params->SweepDurationS           = U.SweepDurationS;
+			Params->SweepReversed            = U.SweepReversed;
+			Params->SweepVelMps              = U.SweepVelMps;
+			Params->SweepOmega               = U.SweepOmega;
 			Params->RNGSeed               = U.RNGSeed;
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;
