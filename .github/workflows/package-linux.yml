@@ -75,6 +75,8 @@ jobs:
           for f in "$GITHUB_WORKSPACE/Content/tracks/"*.env.json; do
             if [ -e "$f" ]; then cp "$f" "$TRACKS_DST/"; fi
           done
+          # ...and the worlds their sidecars name (docs/worlds.md).
+          if [ -d "$GITHUB_WORKSPACE/Content/tracks/worlds" ]; then cp -R "$GITHUB_WORKSPACE/Content/tracks/worlds" "$TRACKS_DST/"; fi
           ls "$TRACKS_DST"
 
       - name: Tar artifact

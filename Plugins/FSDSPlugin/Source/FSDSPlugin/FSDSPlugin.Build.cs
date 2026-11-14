@@ -37,7 +37,10 @@ public class FSDSPlugin : ModuleRules
 			// packaged build. See FSDSZipReader.h.
 			"zlib",
 			// modelDescription.xml parsing.
-			"XmlParser"
+			"XmlParser",
+			// Worlds (Environment/FSDSWorldActor.cpp): terrain and structures
+			// generated at runtime from their data files.
+			"ProceduralMeshComponent"
 		});
 
 		// winmm.lib provides timeBeginPeriod / timeEndPeriod, which we
@@ -49,6 +52,9 @@ public class FSDSPlugin : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("winmm.lib");
+			// The folder picker (FFSDSStackStarter::PickFolder): IFileOpenDialog.
+			PublicSystemLibraries.Add("shell32.lib");
+			PublicSystemLibraries.Add("ole32.lib");
 		}
 	}
 }

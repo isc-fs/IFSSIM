@@ -282,7 +282,8 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	float VStep = (NumberOfChannels > 1) ? VFov / (float)(NumberOfChannels - 1) : 0.f;
 
 	FVector SensorWorldPos = OwnerTransform.TransformPosition(SensorOffset);
-	FQuat OwnerRotation = OwnerTransform.GetRotation();
+	// Mount rotation first (sensor frame -> vehicle frame), then the vehicle's.
+	FQuat OwnerRotation = OwnerTransform.GetRotation() * MountRotation.Quaternion();
 
 	TArray<float> NewPoints;
 	NewPoints.Reserve(PointsPerRotation * 3);
@@ -366,8 +367,18 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				continue;
 
 			float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
-			if (RangeNoiseStd > 0.f)
-				Dist += RangeNoiseStd * RandStandardNormal(Noise());
+			{
+				// Same σ model as the GPU shader, with the CPU path's placeholder
+				// reflectance (0.5). No edge outliers here: they need neighbour depths.
+				const float RangeMPre = Dist / 100.f;
+				float SigmaCm = RangeNoiseStd + RangeNoiseRangeCoeffCm * RangeMPre * RangeMPre;
+				if (RangeNoiseReflectanceExp > 0.f)
+				{
+					SigmaCm *= FMath::Clamp(FMath::Pow(RangeNoiseRefReflectance / 0.5f, RangeNoiseReflectanceExp), 0.3f, 4.f);
+				}
+				if (SigmaCm > 0.f)
+					Dist += SigmaCm * RandStandardNormal(Noise());
+			}
 
 			// Re-cull after noise — a +noise sample can push Dist past
 			// the channel's max range. Match the GPU path which checks
@@ -400,8 +411,11 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				static_cast<float>(FVector::DotProduct(-RayDir, Hit.ImpactNormal)));
 			const float RangeM   = FMath::Max(Dist / 100.0f, 0.01f);
 			const float Falloff  = (R_REFERENCE_M * R_REFERENCE_M) / (RangeM * RangeM);
+			const float Jitter = IntensityNoise > 0.f
+				? FMath::Max(0.f, 1.f + IntensityNoise * static_cast<float>(RandStandardNormal(Noise())))
+				: 1.f;
 			const float Intensity = FMath::Clamp(
-				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff, 0.0f, 1.0f);
+				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff * Jitter, 0.0f, 1.0f);
 
 			SlotResults[SlotIdx] = {
 				static_cast<float>(LocalHit.X) / 100.f,
@@ -594,7 +608,7 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->RegisterComponent();
 	GPUDepthCapture->SetRelativeLocation(SensorOffset);
 	// tilt=0 — see comment in geometry-derivation block above.
-	GPUDepthCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	GPUDepthCapture->SetRelativeRotation(MountRotation);  // camera = sensor axis; tilt=0 in the sensor frame
 	GPUDepthCapture->TextureTarget         = GPUDepthRT;
 	// Tried SCS_DeviceDepth here as an #488 residual-reduction attempt
 	// — device depth has less pipeline machinery than SceneDepth. It
@@ -713,7 +727,7 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUColorCapture->SetupAttachment(Owner->GetRootComponent());
 	GPUColorCapture->RegisterComponent();
 	GPUColorCapture->SetRelativeLocation(SensorOffset);
-	GPUColorCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	GPUColorCapture->SetRelativeRotation(MountRotation);
 	GPUColorCapture->TextureTarget         = GPUColorRT;
 	GPUColorCapture->CaptureSource         = ESceneCaptureSource::SCS_FinalColorLDR;
 	GPUColorCapture->bCaptureEveryFrame    = false;
@@ -1090,6 +1104,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HStartRad, HEndRad, VUpperRad, VLowerRad, TiltRad;
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
+		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
+		float EdgeOutlierRate, IntensityNoiseRel;
 		uint32 RNGSeed;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
@@ -1100,6 +1116,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		FVector3f SensorRotRowX;
 		FVector3f SensorRotRowY;
 		FVector3f SensorRotRowZ;
+		// Mount rotation, sensor frame -> vehicle frame: row i dotted with a
+		// sensor-frame direction gives its vehicle-frame component i.
+		FVector3f MountRotRowX;
+		FVector3f MountRotRowY;
+		FVector3f MountRotRowZ;
 		float RReferenceM;  // inverse-square reference range (#255)
 
 		// #321 D-Phase-1 — per-cone-material reflectance LUT. Filled
@@ -1125,6 +1146,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.MaxRangeCm         = MaxRange;
 	U.RangeNoiseStdCm    = RangeNoiseStd;
 	U.DropoutRate        = DropoutRate;
+	U.RangeNoiseRangeCoeffCm   = RangeNoiseRangeCoeffCm;
+	U.RangeNoiseRefReflectance = RangeNoiseRefReflectance;
+	U.RangeNoiseReflectanceExp = RangeNoiseReflectanceExp;
+	U.EdgeOutlierRate          = EdgeOutlierRate;
+	U.IntensityNoiseRel        = IntensityNoise;
 	// Per-scan seed derived from the scenario seed plus a scan counter, so
 	// dropouts and range noise still vary scan to scan but the whole sequence
 	// replays identically for a given seed. Previously this was
@@ -1160,6 +1186,16 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		U.SensorRotRowX = FVector3f(M.M[0][0], M.M[0][1], M.M[0][2]);
 		U.SensorRotRowY = FVector3f(M.M[1][0], M.M[1][1], M.M[1][2]);
 		U.SensorRotRowZ = FVector3f(M.M[2][0], M.M[2][1], M.M[2][2]);
+	}
+	{
+		// Columns are the rotated sensor axes; the shader wants rows.
+		const FQuat MountQ = MountRotation.Quaternion();
+		const FVector Ax = MountQ.RotateVector(FVector::XAxisVector);
+		const FVector Ay = MountQ.RotateVector(FVector::YAxisVector);
+		const FVector Az = MountQ.RotateVector(FVector::ZAxisVector);
+		U.MountRotRowX = FVector3f(Ax.X, Ay.X, Az.X);
+		U.MountRotRowY = FVector3f(Ax.Y, Ay.Y, Az.Y);
+		U.MountRotRowZ = FVector3f(Ax.Z, Ay.Z, Az.Z);
 	}
 	// Reference range for the inverse-square term (#255). Set to 5 m —
 	// a typical FS-cone detection distance — so perpendicular hits at
@@ -1296,6 +1332,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->MaxRangeCm            = U.MaxRangeCm;
 			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
 			Params->DropoutRate           = U.DropoutRate;
+			Params->RangeNoiseRangeCoeffCm   = U.RangeNoiseRangeCoeffCm;
+			Params->RangeNoiseRefReflectance = U.RangeNoiseRefReflectance;
+			Params->RangeNoiseReflectanceExp = U.RangeNoiseReflectanceExp;
+			Params->EdgeOutlierRate          = U.EdgeOutlierRate;
+			Params->IntensityNoiseRel        = U.IntensityNoiseRel;
 			Params->RNGSeed               = U.RNGSeed;
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;
@@ -1303,6 +1344,9 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->SensorRotRowX         = U.SensorRotRowX;  // #255
 			Params->SensorRotRowY         = U.SensorRotRowY;  // #255
 			Params->SensorRotRowZ         = U.SensorRotRowZ;  // #255
+			Params->MountRotRowX          = U.MountRotRowX;
+			Params->MountRotRowY          = U.MountRotRowY;
+			Params->MountRotRowZ          = U.MountRotRowZ;
 			Params->RReferenceM           = U.RReferenceM;    // #255
 			// #321 D-Phase-1 — bind LUT + flag. Inert until Phase 2.
 			// GET_SCALAR_ARRAY_ELEMENT writes through the FVector4f
@@ -1350,19 +1394,35 @@ void UFSDSLidarSensor::PollGPUReadback()
 		FReadbackSlot& Slot = ReadbackSlots[SlotIdx];
 		if (!Slot.bInFlight || Slot.bLockDispatched) continue;
 		if (!Slot.Readback.IsValid()) continue;
-		if (!Slot.Readback->IsReady()) continue;
 
-		// FRHIGPUBufferReadback::Lock asserts IsInRenderingThread(), so
-		// the lock+memcpy lives in a render command and the result
-		// bounces back via AsyncTask(GameThread) to
-		// ConsumeReadbackResult, tagged with SlotIdx so we know which
-		// slot to clear.
+		// Readiness is checked on the render thread, not here. EnqueueCopy
+		// (inside this slot's decode command) is what clears the fence, and
+		// the render thread can still be a frame behind: checked from the
+		// game thread, IsReady() then sees the slot's *previous* copy,
+		// long finished, and says yes. Vulkan's staging-buffer lock doesn't
+		// wait on the fence, so the read returned that previous copy, the
+		// points from two scans (200 ms) earlier, stamped with this scan's
+		// capture time. In the render command, which runs after the decode
+		// command, the fence belongs to this scan's copy.
 		FRHIGPUBufferReadback* Readback = Slot.Readback.Get();
 		Slot.bLockDispatched = true;
 
 		ENQUEUE_RENDER_COMMAND(FSDSLidarReadbackLock)(
 			[Readback, NumPoints, WeakSelf, SlotIdx](FRHICommandListImmediate& /*RHICmdList*/)
 			{
+				if (!Readback->IsReady())
+				{
+					AsyncTask(ENamedThreads::GameThread, [WeakSelf, SlotIdx]()
+					{
+						if (UFSDSLidarSensor* Self = WeakSelf.Get())
+						{
+							Self->ReadbackSlots[SlotIdx].bLockDispatched = false;  // poll again next tick
+							Self->GPUReadbackNotReadyPolls++;
+						}
+					});
+					return;
+				}
+
 				const uint32 NumBytes = NumPoints * sizeof(FVector4f);
 				const FVector4f* Src = (const FVector4f*)Readback->Lock(NumBytes);
 
@@ -1443,8 +1503,8 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 	if (GPUReadbackCount > 0 && (GPUReadbackCount % 50) == 0)
 	{
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS LiDAR GPU: readback #%d, %d hits, latency=%.2f ms"),
-			GPUReadbackCount, HitCount, GPUReadbackLastLatencyMs);
+			TEXT("FSDS LiDAR GPU: readback #%d, %d hits, latency=%.2f ms, not-ready polls=%d"),
+			GPUReadbackCount, HitCount, GPUReadbackLastLatencyMs, GPUReadbackNotReadyPolls);
 	}
 }
 

@@ -62,7 +62,16 @@ struct SensorFrame
     // Bridge writes these into /testing_only/odom's twist.angular,
     // closing the gap left by #315 (twist.linear only).
     float gt_ang_vel_body_x, gt_ang_vel_body_y, gt_ang_vel_body_z;
+
+    // Sim time of the IMU sample in this frame, ns. The plugin's IMU emits a
+    // 400 Hz sample stream and sends one frame per sample, so /imu is stamped
+    // with this rather than with the ~60 Hz tick in `timestamp`. 0 = no new
+    // IMU sample in this frame: /imu is not published for it. Matches
+    // FFSDSSensorFrame::ImuTimestamp.
+    uint64_t imu_timestamp;
 };
+static_assert(sizeof(SensorFrame) == 188,
+              "SensorFrame must match FFSDSSensorFrame (FSDSUdpBroadcaster.h) byte for byte");
 
 struct LidarChunkHeader
 {

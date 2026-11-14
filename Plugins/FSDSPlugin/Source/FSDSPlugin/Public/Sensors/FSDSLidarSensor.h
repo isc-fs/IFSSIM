@@ -109,6 +109,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	FVector SensorOffset = FVector(140.f, 0.f, 60.f);
 
+	/** Mount rotation relative to the vehicle (settings.json Lidar Roll/Pitch/Yaw,
+	 *  degrees; UE convention, negative Pitch = tilted down). The scan pattern
+	 *  (V-FOV, channels) is in the sensor's own frame; points stay in the vehicle
+	 *  frame, so consumers see the same frame with the beams where the car has them. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	FRotator MountRotation = FRotator::ZeroRotator;
+
 	/** Draw debug points in editor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;
@@ -122,6 +129,25 @@ public:
 	/** Random point dropout probability [0,1] (0 = no dropout). Typical ~0.01 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
+
+	/** Range-dependent noise: σ grows by this · range_m², in cm per m² (0 = flat σ). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseRangeCoeffCm = 0.0f;
+
+	/** Reflectance-dependent noise: σ ∝ (RefReflectance / ρ)^Exp, clamped to ×0.3..×4 (Exp 0 = off). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseRefReflectance = 0.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float RangeNoiseReflectanceExp = 0.0f;
+
+	/** Probability of a mixed return (between the hit and the background) at a >30 cm depth edge. GPU path only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float EdgeOutlierRate = 0.0f;
+
+	/** Relative σ of scan-to-scan intensity jitter (0 = none). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float IntensityNoise = 0.0f;
 
 	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
 	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
@@ -199,8 +225,8 @@ private:
 	//      runs the FSDSLidarDecode compute shader against the depth RT
 	//      to produce a structured buffer of float4 points, then issues
 	//      AddEnqueueCopyPass into a persistent FRHIGPUBufferReadback.
-	//   2. PollGPUReadback: game-thread checks IsReady, dispatches a
-	//      second render command to do Lock(NumBytes)/memcpy/Unlock and
+	//   2. PollGPUReadback: dispatches a render command that checks
+	//      IsReady there and, if ready, does Lock(NumBytes)/memcpy/Unlock and
 	//      AsyncTask the result back to the game thread.
 	//   3. ConsumeReadbackResult: unpacks the float4 array into the
 	//      flat-float [x,y,z, x,y,z, ...] PointCloudBuffer that
@@ -220,7 +246,7 @@ private:
 	struct FReadbackSlot
 	{
 		TUniquePtr<FRHIGPUBufferReadback> Readback;
-		bool   bInFlight       = false;  // EnqueueCopy issued; IsReady not yet observed
+		bool   bInFlight       = false;  // decode + EnqueueCopy dispatched; not yet consumed
 		bool   bLockDispatched = false;  // render-thread Lock queued; awaiting ConsumeReadbackResult
 		double EnqueueTimeSec  = 0.0;    // wallclock for latency telemetry
 		// Cycles64 stamp captured at dispatch (when the depth render fires);
@@ -253,6 +279,10 @@ private:
 	// recent slot's measured GPU→CPU round-trip.
 	double GPUReadbackLastLatencyMs  = 0.0;
 	int32  GPUReadbackCount          = 0;
+	// Polls that found the copy still running on the render thread. Before
+	// the readiness check moved there, these were read early and returned
+	// the previous scan in this slot.
+	int32  GPUReadbackNotReadyPolls  = 0;
 	bool   bGPULoggedFirstReadback   = false;
 
 	// Round-trip test for the spherical-ray ↔ planar-texel mapping.
