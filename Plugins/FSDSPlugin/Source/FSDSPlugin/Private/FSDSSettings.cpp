@@ -383,6 +383,8 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	{
 		FString PathVal;
 		if (SensorObj->TryGetStringField(TEXT("LidarPath"), PathVal)) Sensor.LidarPath = PathVal;
+		FString FrameVal;
+		if (SensorObj->TryGetStringField(TEXT("PointFrame"), FrameVal)) Sensor.PointFrame = FrameVal;
 	}
 
 	// Noise parameters (all sensor types)

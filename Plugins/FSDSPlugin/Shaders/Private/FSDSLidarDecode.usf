@@ -69,6 +69,7 @@ uint   SweepReversed;
 float3 SweepVelMps;
 float3 SweepOmega;
 float DropoutRate;            // [0, 1]; 0 = no dropout
+uint  PointsInSensorFrame;    // 1 = output relative to the mount, in its tilted frame
 float DropoutWeakRate;        // P(no return) at noiseless intensity 1 ...
 float DropoutWeakExp;         // ... falling as I^-Exp
 float DropoutWeakMax;         // cap
@@ -469,6 +470,15 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 		const float Frac = (NumHorizontalSteps > 1) ? float(HIdx) / float(NumHorizontalSteps - 1) : 0.5;
 		const float Tau  = SweepDurationS * (SweepReversed != 0u ? 1.0 - Frac : Frac);
 		PVeh -= Tau * (SweepVelMps + cross(SweepOmega, PVeh));
+	}
+	// Sensor frame, like the car's driver: back to the mount's origin and
+	// axes (MountRotRow* are the rows of sensor -> vehicle, so R^T p is
+	// the row-weighted sum). The sweep correction above stays in the
+	// vehicle frame, where the car's velocities are.
+	if (PointsInSensorFrame != 0u)
+	{
+		const float3 PRel = PVeh - float3(SensorOffsetXm, SensorOffsetYm, SensorOffsetZm);
+		PVeh = PRel.x * MountRotRowX + PRel.y * MountRotRowY + PRel.z * MountRotRowZ;
 	}
 
 	const float RangeM   = max(ScaleM, 0.01);  // floor at 1 cm so the range law doesn't blow up at point-blank

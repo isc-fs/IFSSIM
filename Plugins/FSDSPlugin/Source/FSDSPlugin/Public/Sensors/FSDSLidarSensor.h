@@ -123,6 +123,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	FRotator MountRotation = FRotator::ZeroRotator;
 
+	/** Points in the sensor's own frame (origin at the sensor, axes tilted
+	 *  with MountRotation), like the car's Hesai driver, instead of the
+	 *  vehicle frame. settings.json PointFrame "sensor" / "vehicle". The
+	 *  bridge publishes the matching base_link -> hesai_lidar TF. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bPointsInSensorFrame = false;
+
 	/** Draw debug points in editor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;

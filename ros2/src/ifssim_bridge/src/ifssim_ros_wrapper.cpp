@@ -306,10 +306,22 @@ IFSSIMRosWrapper::Vec3 IFSSIMRosWrapper::querySensorOffset(const std::string& na
     v.x = client_->parseDouble(resp, "x");
     v.y = client_->parseDouble(resp, "y");
     v.z = client_->parseDouble(resp, "z");
+    if (resp.find("\"qw\"") != std::string::npos) {
+        v.qw = client_->parseDouble(resp, "qw");
+        v.qx = client_->parseDouble(resp, "qx");
+        v.qy = client_->parseDouble(resp, "qy");
+        v.qz = client_->parseDouble(resp, "qz");
+        const double n = std::sqrt(v.qw * v.qw + v.qx * v.qx + v.qy * v.qy + v.qz * v.qz);
+        if (n > 1e-9) { v.qw /= n; v.qx /= n; v.qy /= n; v.qz /= n; }
+        else { v.qw = 1.0; v.qx = v.qy = v.qz = 0.0; }
+    }
+    v.sensor_frame = resp.find("\"points\":\"sensor\"") != std::string::npos;
     v.valid = true;
     RCLCPP_INFO(node_->get_logger(),
-        "Sensor '%s' mount: (%.3f, %.3f, %.3f) m (REP-103 body frame)",
-        name.c_str(), v.x, v.y, v.z);
+        "Sensor '%s' mount: (%.3f, %.3f, %.3f) m, q (w %.4f, x %.4f, y %.4f, z %.4f) "
+        "(REP-103 body frame); data in the %s frame",
+        name.c_str(), v.x, v.y, v.z, v.qw, v.qx, v.qy, v.qz,
+        v.sensor_frame ? "sensor" : "vehicle");
     return v;
 }
 
@@ -1593,7 +1605,26 @@ void IFSSIMRosWrapper::staticTfCb()
     // sensor z-offsets live in car_bringup, and the pipeline consumers key
     // off the frame NAME (not the offset) for the TF lookup to resolve.
     publishIdentityStatic("base_link", "imu_link");
-    publishIdentityStatic("base_link", "hesai_lidar");
+    // The LiDAR's points are in the sensor's own frame when the plugin says
+    // so (settings.json PointFrame "sensor", like the car's driver): then the
+    // TF is the real mount pose. Otherwise they are already in the vehicle
+    // frame and the TF stays identity.
+    if (lidar_offset_.valid && lidar_offset_.sensor_frame) {
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header.stamp = now;
+        tf.header.frame_id = "base_link";
+        tf.child_frame_id = "hesai_lidar";
+        tf.transform.translation.x = lidar_offset_.x;
+        tf.transform.translation.y = lidar_offset_.y;
+        tf.transform.translation.z = lidar_offset_.z;
+        tf.transform.rotation.w = lidar_offset_.qw;
+        tf.transform.rotation.x = lidar_offset_.qx;
+        tf.transform.rotation.y = lidar_offset_.qy;
+        tf.transform.rotation.z = lidar_offset_.qz;
+        static_tf_broadcaster_->sendTransform(tf);
+    } else {
+        publishIdentityStatic("base_link", "hesai_lidar");
+    }
     publishIdentityStatic("base_link", "fsds/GPS");
 
     // Camera static TFs and the camera sensors they referred to were
