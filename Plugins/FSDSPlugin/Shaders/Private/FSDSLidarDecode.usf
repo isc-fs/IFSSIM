@@ -357,8 +357,8 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	// parked, cells matched by ring and azimuth away from depth edges) a
 	// ground cell returns on 80 % of scans at intensity 0-2, 92 % at 2-8,
 	// 97-98 % at 8-32 and 99 % above: P(drop) ~ 0.2 · I^-0.77. A missing
-	// cell tends to stay missing (85 % of the time on the next scan of the
-	// same direction; runs median 3, mean 6.9 scans), so each beam gets a
+	// cell tends to stay missing (on cells missing 2-20 % of scans: again 65 %
+	// one same-direction scan later, 50 % four later), so each beam gets a
 	// run length K, log-uniform in [2, DropoutBurstScans], and a phase, and
 	// draws once per K scans; a small share stays a fresh draw per scan.
 	// I is this hit's noiseless intensity, in output units.

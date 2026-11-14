@@ -146,7 +146,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutBurstScans = 0.0f;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
-	float DropoutBurstIidShare = 0.05f;
+	float DropoutBurstIidShare = 0.15f;
 
 	/** Range-dependent noise: σ grows by this · range_m², in cm per m² (0 = flat σ). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
