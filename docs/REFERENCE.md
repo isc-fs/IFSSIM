@@ -290,6 +290,7 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Per-channel max range | 25–30 m (datasheet shape) | ✓ | `PerChannelMaxRangeM` |
 | Range noise std (Gaussian) | 0.03 m | ✓ | `RangeNoiseStd` |
 | Point dropout rate | 1% | ✓ | `DropoutRate` |
+| Depth-edge swap / drop | 15% / 18% | ✓ | `EdgeSwapRate`, `EdgeDropRate` (GPU path) |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
 | Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
 | Mirror sweep (motion smear) | 89.8 ms, alternating | ✓ | `SweepDurationMs`, `SweepAlternate` |
@@ -323,6 +324,8 @@ Leave `IntensityScale` out (or negative) for the original model of #255, describ
 - Output clamped to [0, 1] in the original model. Wire format encodes `intensity < 0` as the "no-hit" sentinel before the bridge filters; valid points carry `intensity ≥ 0`. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
 
 **Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point.
+
+**Depth edges.** Where the neighbouring beam to the left or right (same channel) ranges more than 30 cm away, a return comes back from that other surface with probability `EdgeSwapRate`, or not at all with probability `EdgeDropRate`. The neighbours are the real beam directions projected into the depth capture. On the car (parked, 4–12 m), about 15% of returns at such an edge come from the other surface, almost none land in between, and edge beams return on about 73% of scans against about 90% inside a surface: objects grow into the beams beside them and their silhouettes flicker. GPU path only.
 
 ### 4.2 IMU
 

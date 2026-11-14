@@ -14,6 +14,8 @@ shipping pipeline, documentation.
 
 ### Added
 
+- **LiDAR depth edges behave like the car's.** `EdgeOutlierRate` placed a few returns at cone silhouettes uniformly between the cone and the background. The car does something else: at an edge, about 15% of returns come from the other surface and edge beams drop out more often, so objects grow into the beams beside them and flicker. `EdgeSwapRate` (0.15) and `EdgeDropRate` (0.18) replace it, tested against the neighbouring beams rather than adjacent texels. **`EdgeOutlierRate` is no longer read.**
+
 - **LiDAR scans smear with the car's motion, like the car's.** The car's Hesai measures a scan over 90 ms, alternating direction, and doesn't correct for motion, so at speed its cones jump about 30 cm from scan to scan. The sim captured each scan in one instant. `SweepDurationMs` (89.8) and `SweepAlternate` now move each point by the car's motion over its delay.
 
 - **LiDAR intensity on the car's scale.** The sim reported intensity as 0–1 falling with the square of the range and with the angle of incidence. The car's Hesai reports whole numbers 0–255 that fall as r^−1.29 and ignore the angle. Five new LiDAR settings (`IntensityScale`, `IntensityRangeExp`, `IntensityIncidenceExp`, `IntensityMax`, `IntensityRound`) set the law, and `settings.json` ships the car's fit, scaled so the cones match. `LuminanceReflectanceGain` (3.2) brightens surfaces that take their reflectance from their rendered colour, so the asphalt matches the car's ground too; that also lowers the range noise on the ground, which the dark asphalt had pushed to its cap. Remove `IntensityScale` to get the old law.
