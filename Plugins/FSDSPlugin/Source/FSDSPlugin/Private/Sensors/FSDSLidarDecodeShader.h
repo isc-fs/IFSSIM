@@ -74,6 +74,7 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(float, IntensityRangeExp)
 		SHADER_PARAMETER(float, IntensityIncidenceExp)
 		SHADER_PARAMETER(float, IntensityMax)
+		SHADER_PARAMETER(float, LuminanceReflectanceGain)
 		SHADER_PARAMETER(uint32, IntensityRound)
 
 		SHADER_PARAMETER(uint32, RNGSeed)

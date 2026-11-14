@@ -59,6 +59,7 @@ float IntensityRangeExp;
 float IntensityIncidenceExp;  // 0 = flat with incidence (the car's Hesai)
 float IntensityMax;           // clamp: 1 for the old 0..1 scale, 255 for the car's
 uint  IntensityRound;         // 1 = whole numbers, like the car's
+float LuminanceReflectanceGain; // ρ = saturate(gain · luminance) for hits with no LUT entry
 float DropoutRate;            // [0, 1]; 0 = no dropout
 
 uint  RNGSeed;                // re-seeded each scan from CPU side
@@ -263,7 +264,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	{
 		// Phase-2 path: stencil in R, pre-computed luminance in G.
 		const uint StencilID = uint(ColorSample.r * 255.0 + 0.5);
-		const float LuminanceFallback = saturate(ColorSample.g);
+		const float LuminanceFallback = saturate(LuminanceReflectanceGain * ColorSample.g);
 		Reflectance = LuminanceFallback;
 		if (StencilID > 0u && StencilID < 16u)
 		{
@@ -277,7 +278,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	else
 	{
 		// Legacy path: raw FinalColorLDR, compute Rec.709 in shader.
-		Reflectance = saturate(dot(ColorSample.rgb, float3(0.2126, 0.7152, 0.0722)));
+		Reflectance = saturate(LuminanceReflectanceGain * dot(ColorSample.rgb, float3(0.2126, 0.7152, 0.0722)));
 	}
 
 	// Surface normal from depth gradient. We don't have a populated

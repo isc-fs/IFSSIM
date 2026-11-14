@@ -1150,6 +1150,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float EdgeOutlierRate, IntensityNoiseRel;
 		float IntensityScale, IntensityRangeExp, IntensityIncidenceExp, IntensityMax;
 		uint32 IntensityRound;
+		float LuminanceReflectanceGain;
 		uint32 RNGSeed;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
@@ -1212,6 +1213,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		U.IntensityMax          = IntensityMax;
 		U.IntensityRound        = bIntensityRound ? 1u : 0u;
 	}
+	U.LuminanceReflectanceGain = FMath::Max(0.f, LuminanceReflectanceGain);
 	// Per-scan seed derived from the scenario seed plus a scan counter, so
 	// dropouts and range noise still vary scan to scan but the whole sequence
 	// replays identically for a given seed. Previously this was
@@ -1423,6 +1425,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->IntensityIncidenceExp    = U.IntensityIncidenceExp;
 			Params->IntensityMax             = U.IntensityMax;
 			Params->IntensityRound           = U.IntensityRound;
+			Params->LuminanceReflectanceGain = U.LuminanceReflectanceGain;
 			Params->RNGSeed               = U.RNGSeed;
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;

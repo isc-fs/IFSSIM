@@ -166,6 +166,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bIntensityRound = false;
 
+	/** GPU path: ρ for hits with no reflectance-LUT entry (ground, paint,
+	 *  scenery) is clamp(gain · scene luminance, 0, 1). Visible luminance
+	 *  is darker than 905 nm reflectance (asphalt renders at ~0.04); the
+	 *  shipped gain is fitted so the ground matches the car. Also feeds the
+	 *  reflectance term of the range noise. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float LuminanceReflectanceGain = 1.0f;
+
 	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
 	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
 	 *  = highest). When this array's length matches NumberOfChannels,

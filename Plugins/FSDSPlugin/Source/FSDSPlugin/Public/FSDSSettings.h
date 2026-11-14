@@ -108,6 +108,8 @@ struct FFSDSSensorSettings
 	float IntensityIncidenceExp = 1.f;
 	float IntensityMax = 1.f;
 	bool bIntensityRound = false;
+	// ρ for hits with no reflectance-LUT entry = clamp(gain · scene luminance, 0, 1).
+	float LuminanceReflectanceGain = 1.f;
 };
 
 struct FFSDSVehiclePhysics
