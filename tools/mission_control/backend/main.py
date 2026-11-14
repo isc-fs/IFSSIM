@@ -35,6 +35,7 @@ from scoring import compute_scoring, valid_reference
 import bag_recorder as _bag
 import benchmark_control_runner as _benchmark
 import bench_queue as _bench
+import ebs_hold as _ebs_hold
 import mission_catalog as _missions
 import track_creator as _creator
 from ros_bridge import RosBridge, StartMissionOutcome
@@ -49,12 +50,15 @@ from ros_bridge import RosBridge, StartMissionOutcome
 _EKF_CAL_WAIT_S = 3.5
 
 # Polling interval during the cal wait. Each sample reads the sim's
-# vehicle state so we can prove (in the session log) whether EBS is
-# physically pinning the car. If vx stays at zero through the wait,
-# the calibration window saw stationary IMU. If vx > 0 mid-wait, EBS
-# is letting the chassis roll despite `activateEbs`, and the bring-up
-# reorder alone won't fix yaw drift.
+# speed, so the session log shows whether the car really stood still
+# while the EKF calibrated.
 _EKF_CAL_POLL_S = 0.5
+
+# Any sample at or above this during the cal wait fails the start: the
+# EKF's bias estimate absorbed motion. The car was already held still
+# before activation (ebs_hold.wait_until_held), so this only trips if the
+# EBS lets go or something pushes the car mid-window.
+_EKF_CAL_MAX_SPEED_MPS = 0.05
 
 
 # Built-in tracks that ship with the simulator — not deletable, auto-configure event type
@@ -589,10 +593,14 @@ def event_start(setup: EventSetup):
          ENGAGED — odometry_filter's on_activate kicks its 3 s
          stationary bias-calibration window with the car physically
          pinned, which is what makes the bias estimate valid.
+      2.5. Wait until the EBS is latched and the car has been still
+         for `ebs_hold.SETTLE_S` (the track load's teleport leaves it
+         bouncing ~0.5 s). Fails the start (409) after
+         `ebs_hold.SETTLE_TIMEOUT_S`.
       3.5. Sleep `_EKF_CAL_WAIT_S` for the EKF calibration window to
          finish, with EBS still holding the car still. Polls the sim
-         every `_EKF_CAL_POLL_S` and logs vx so we can prove (in the
-         session log) whether EBS actually pins the chassis. Without
+         every `_EKF_CAL_POLL_S`, logs the speeds and fails the start
+         (409) if the car moved during the window. Without
          this wait, Phase 4 races the calibration accumulator and
          the EKF absorbs early motion into bias (see #518 post-mortem
          on bag autocross_no-track_20260517_202133 — 22–32° yaw drift).
@@ -774,6 +782,44 @@ def event_start(setup: EventSetup):
                 status_code=503,
             )
 
+        # === Phase 2.5: the car held still under EBS (NO LOCK) ===
+        #
+        # The EKF calibrates from the moment it's activated, so the car
+        # must be still BEFORE Phase 3. The track load just teleported it
+        # onto the start gate and it bounces on its suspension for ~0.5 s
+        # with the EBS on; a warm pipeline configures faster than that, so
+        # a second run right after the first used to calibrate mid-bounce
+        # (session log: max speed 0.102 m/s, EBS_held=False).
+        if _ros_bridge_available:
+            def _relatch():
+                with _state_lock:
+                    sim.res_activate()
+
+            hold = _ebs_hold.wait_until_held(
+                lambda: float(sim.get_vehicle_state().get("speed", float("nan"))),
+                sim.is_ebs_latched,
+                _relatch,
+            )
+            log_event("event_start", f"pre-calibration hold: {hold.describe()}")
+            if not hold.ok:
+                try:
+                    RosBridge.get().stop_mission()
+                except Exception as ex:
+                    log_event("event_start", f"autonomy teardown failed: {ex}")
+                why = ("the EBS isn't latched" if not hold.latched
+                       else f"the car is still moving ({hold.last_speed or 0.0:.3f} m/s)")
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"The car wasn't held still under EBS within "
+                            f"{_ebs_hold.SETTLE_TIMEOUT_S:.0f} s ({why}); the EKF "
+                            f"can't calibrate. Start again once it has stopped."
+                        ),
+                    },
+                    status_code=409,
+                )
+
         # === Phase 3: activate + run via RuntimeControl (NO LOCK) ===
         #
         # ORDER MATTERS. Activate runs BEFORE EBS release so
@@ -809,14 +855,11 @@ def event_start(setup: EventSetup):
 
             # === Phase 3.5: wait for EKF calibration, log vx ===
             #
-            # We poll the sim's vehicle state every _EKF_CAL_POLL_S so
-            # the session log records whether EBS is actually pinning
-            # the chassis during the calibration window. If vx stays
-            # at 0, the EKF calibrated on stationary IMU — Track 1 of
-            # the post-#518 fix is working. If vx rises mid-wait, the
-            # `activateEbs` UE5 plugin call isn't physically stopping
-            # the car (it may just be locking control inputs) and the
-            # fix needs to happen one layer down in the plugin.
+            # We poll the sim's speed every _EKF_CAL_POLL_S so the
+            # session log records whether the car stood still through
+            # the calibration window. Phase 2.5 already held it still,
+            # so motion here (EBS let go, the car pushed) fails the
+            # start rather than driving on a skewed bias.
             log_event(
                 "event_start",
                 f"waiting {_EKF_CAL_WAIT_S:.1f}s for EKF stationary "
@@ -836,13 +879,34 @@ def event_start(setup: EventSetup):
                     _speed_samples.append(float("nan"))
                 time.sleep(_EKF_CAL_POLL_S)
             _max_speed = max((v for v in _speed_samples if v == v), default=0.0)
-            _ebs_held = _max_speed < 0.05  # 5 cm/s threshold for "still"
+            _still = _max_speed < _EKF_CAL_MAX_SPEED_MPS
+            try:
+                _latched = sim.is_ebs_latched()
+            except Exception:
+                _latched = None
             log_event(
                 "event_start",
                 f"EKF cal wait done | max speed during wait = "
-                f"{_max_speed:.3f} m/s | EBS_held={_ebs_held} | "
+                f"{_max_speed:.3f} m/s | still={_still} | EBS_latched={_latched} | "
                 f"samples={[round(v, 3) for v in _speed_samples]}",
             )
+            if not _still:
+                # The bias estimate absorbed motion: don't drive on it.
+                # The EBS is still latched; tear the autonomy down.
+                try:
+                    RosBridge.get().stop_mission()
+                except Exception as ex:
+                    log_event("event_start", f"autonomy teardown failed: {ex}")
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"The car moved during the EKF calibration "
+                            f"(up to {_max_speed:.3f} m/s); start again."
+                        ),
+                    },
+                    status_code=409,
+                )
 
         # === Phase 4: release EBS (under lock) ===
         with _state_lock:

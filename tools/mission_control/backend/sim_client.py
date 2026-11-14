@@ -228,6 +228,14 @@ class SimConnection:
         self._require_connected()
         self._cmd("releaseEbs")
 
+    def is_ebs_latched(self) -> bool:
+        """The pawn's own EBS latch (not the readback cache). Raises when
+        the sim doesn't answer, so a lost reply isn't read as "released"."""
+        resp = self._cmd("isEbsLatched")
+        if resp not in ("true", "false"):
+            raise RuntimeError(f"isEbsLatched: unexpected reply {resp!r}")
+        return resp == "true"
+
     def get_vehicle_state(self) -> dict:
         state = self._json_cmd("getCarState")
         controls = self._json_cmd("getCarControls")
