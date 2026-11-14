@@ -1188,6 +1188,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HStartRad, HEndRad, VUpperRad, VLowerRad, TiltRad;
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
+		uint32 DepthInterpolation;
 		float DropoutWeakRate, DropoutWeakExp, DropoutWeakMax, DropoutBurstScans, DropoutBurstIidShare;
 		uint32 DropoutScanIndex, DropoutCellSeed;
 		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
@@ -1239,6 +1240,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.MaxRangeCm         = MaxRange;
 	U.RangeNoiseStdCm    = RangeNoiseStd;
 	U.DropoutRate        = DropoutRate;
+	U.DepthInterpolation = bDepthInterpolation ? 1u : 0u;
 	U.DropoutWeakRate      = FMath::Max(0.f, DropoutWeakRate);
 	U.DropoutWeakExp       = DropoutWeakExp;
 	U.DropoutWeakMax       = FMath::Clamp(DropoutWeakMax, 0.f, 1.f);
@@ -1505,6 +1507,7 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->MaxRangeCm            = U.MaxRangeCm;
 			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
 			Params->DropoutRate           = U.DropoutRate;
+			Params->DepthInterpolation    = U.DepthInterpolation;
 			Params->DropoutWeakRate = U.DropoutWeakRate;
 			Params->DropoutWeakExp = U.DropoutWeakExp;
 			Params->DropoutWeakMax = U.DropoutWeakMax;

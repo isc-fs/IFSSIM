@@ -141,6 +141,8 @@
           "SweepAlternate": true,
           "_comment_dropout": "Measured on the car's Hesai (manual bag 2026-09-20, parked, cells matched by ring and azimuth away from depth edges): returns drop out by strength, not at random. Ground cells return on 80 % of scans at intensity 0-2, 92 % at 2-8, 97-98 % at 8-32, 99 % above, so P(drop) = DropoutWeakRate * I^-DropoutWeakExp, capped at DropoutWeakMax, with I the noiseless intensity (0-255). A drop lasts: on cells missing 2-20 % of the time, a missing cell is missing again 1/2/4/8/16 same-direction scans later 65/58/50/42/30 % of the time, against 13 % if scans were independent. Each beam draws once per K same-direction scans, K log-uniform in [2, DropoutBurstScans] per beam; DropoutBurstIidShare of the probability is drawn fresh each scan. 64 / 0.15 give 67/53/36/22/12 % offline: right over the first few scans, short of the car's slow tail. DropoutRate is an extra flat per-ray rate, now 0 (it was 0.01). GPU path only.",
           "DropoutRate": 0.0,
+          "_comment_depth": "GPU path: each beam reads the depth capture at its own sub-texel position (1/Z stepped toward the neighbouring texel when both neighbours lie on the same surface) instead of the nearest texel's centre. Without it, far grazing ground carries a fixed range ripple along each ring: 3-7 cm between adjacent azimuth cells at 6-22 m (parked, median of 27 scans) against the car's 0.7-2.6 cm.",
+          "DepthInterpolation": true,
           "DropoutWeakRate": 0.2,
           "DropoutWeakExp": 0.77,
           "DropoutWeakMax": 0.3,

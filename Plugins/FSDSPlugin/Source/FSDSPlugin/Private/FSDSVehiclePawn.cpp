@@ -699,6 +699,7 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->SweepDurationMs = SensorPair.Value.SweepDurationMs;
 				LidarSensor->bSweepAlternate = SensorPair.Value.bSweepAlternate;
 				LidarSensor->bIntensityRound = SensorPair.Value.bIntensityRound;
+				LidarSensor->bDepthInterpolation = SensorPair.Value.bDepthInterpolation;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
 				LidarSensor->DropoutWeakRate = SensorPair.Value.DropoutWeakRate;
 				LidarSensor->DropoutWeakExp = SensorPair.Value.DropoutWeakExp;

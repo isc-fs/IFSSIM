@@ -69,6 +69,7 @@ uint   SweepReversed;
 float3 SweepVelMps;
 float3 SweepOmega;
 float DropoutRate;            // [0, 1]; 0 = no dropout
+uint  DepthInterpolation;     // 1 = read depth at the beam's sub-texel position (1/Z interpolation)
 float DropoutWeakRate;        // P(no return) at noiseless intensity 1 ...
 float DropoutWeakExp;         // ... falling as I^-Exp
 float DropoutWeakMax;         // cap
@@ -214,7 +215,42 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	const int Col = clamp(int(TexelColF), 0, int(RTWidth)  - 1);
 	const int Row = clamp(int(TexelRowF), 0, int(RTHeight) - 1);
 
-	const float DepthZCm = DepthTexture.Load(int3(Col, Row, 0));
+	// Depth at this texel and its four neighbours (the neighbours also
+	// give the surface normal below).
+	const int CL = max(Col - 1, 0);
+	const int CR = min(Col + 1, int(RTWidth) - 1);
+	const int RU = max(Row - 1, 0);
+	const int RD = min(Row + 1, int(RTHeight) - 1);
+	const float DCentre = DepthTexture.Load(int3(Col, Row, 0));
+	const float DLeft  = DepthTexture.Load(int3(CL,  Row, 0));
+	const float DRight = DepthTexture.Load(int3(CR,  Row, 0));
+	const float DUp    = DepthTexture.Load(int3(Col, RU,  0));
+	const float DDown  = DepthTexture.Load(int3(Col, RD,  0));
+
+	// The depth texel holds the depth at its centre, but the beam passes
+	// up to half a texel away. On ground seen at a grazing angle that is
+	// a large range step, and it is the same for a beam every scan: a
+	// fixed ripple along each ring (3-7 cm between adjacent azimuth cells
+	// at 6-22 m, the car's ground 0.7-2.6 cm). On any plane 1/Z is linear
+	// in image coordinates, so step 1/Z from the centre toward the beam
+	// with the slope to the neighbour on that side. Only where both sides
+	// agree on the slope (the same surface); at a depth edge keep the
+	// texel's own depth.
+	float DepthZCm = DCentre;
+	if (DepthInterpolation != 0u && DCentre > 0.0)
+	{
+		const float FracC = TexelColF - (float(Col) + 0.5);
+		const float FracR = TexelRowF - (float(Row) + 0.5);
+		const float I0 = 1.0 / DCentre;
+		const float GL = I0 - 1.0 / max(DLeft, 1e-3), GR = 1.0 / max(DRight, 1e-3) - I0;
+		const float GU = I0 - 1.0 / max(DUp, 1e-3),   GD = 1.0 / max(DDown, 1e-3) - I0;
+		const bool PlanarC = abs(GR - GL) <= 0.2 * max(abs(GR), abs(GL)) + 1e-9;
+		const bool PlanarR = abs(GD - GU) <= 0.2 * max(abs(GD), abs(GU)) + 1e-9;
+		float InvZ = I0;
+		if (PlanarC && CL < Col && CR > Col) InvZ += (FracC >= 0.0 ? GR : GL) * FracC;
+		if (PlanarR && RU < Row && RD > Row) InvZ += (FracR >= 0.0 ? GD : GU) * FracR;
+		if (InvZ > 0.0) DepthZCm = 1.0 / InvZ;
+	}
 
 	// SCS_SceneDepth gives the perpendicular distance from the camera
 	// plane (z-axis depth in view space). To get the radial distance
@@ -303,14 +339,7 @@ void FSDSLidarDecodeCS(uint3 DTid : SV_DispatchThreadID)
 	// surface tangents in image space, which we cross to get the
 	// surface normal in *view* space, then rotate to world via the
 	// sensor's row vectors. Output is unit-length in world frame.
-	const int CL = max(Col - 1, 0);
-	const int CR = min(Col + 1, int(RTWidth) - 1);
-	const int RU = max(Row - 1, 0);
-	const int RD = min(Row + 1, int(RTHeight) - 1);
-	const float DLeft  = DepthTexture.Load(int3(CL,  Row, 0));
-	const float DRight = DepthTexture.Load(int3(CR,  Row, 0));
-	const float DUp    = DepthTexture.Load(int3(Col, RU,  0));
-	const float DDown  = DepthTexture.Load(int3(Col, RD,  0));
+	// (DLeft/DRight/DUp/DDown were loaded with the depth above.)
 	// View-space tangent vectors. dx_view = (texel_size_x_world,
 	// 0, dz/dx_pixel). Texel-to-world scale cancels out when we
 	// normalise so we can use the depth gradient directly with unit

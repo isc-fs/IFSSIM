@@ -95,6 +95,7 @@ struct FFSDSSensorSettings
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
+	bool bDepthInterpolation = false; // GPU LiDAR: sub-texel depth read
 	float DropoutWeakRate = 0.f;      // P(no return) at intensity 1, falls as I^-DropoutWeakExp (LiDAR)
 	float DropoutWeakExp = 0.77f;
 	float DropoutWeakMax = 0.3f;      // cap on that probability (LiDAR)

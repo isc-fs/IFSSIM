@@ -13,6 +13,7 @@ shipping pipeline, documentation.
 ## [Unreleased]
 
 ### Added
+- **LiDAR ground no longer ripples along each ring.** The GPU path read each beam's depth at the nearest texel's centre, so far grazing ground carried a fixed ripple: 3–7 cm between adjacent azimuth cells at 6–22 m, against the car's 0.7–2.6 cm. `DepthInterpolation` (on) reads the depth at the beam's own position, interpolating 1/depth on the same surface and never across a depth edge.
 - **LiDAR dropout follows return strength and comes in bursts, like the car's.** The sim dropped 1% of rays at random. The car's Hesai loses weak returns (about 20% at intensity 0–2, 1% above 32) and a missing beam usually stays missing for several scans. `DropoutWeakRate` (0.2), `DropoutWeakExp` (0.77), `DropoutWeakMax` (0.3), `DropoutBurstScans` (64) and `DropoutBurstIidShare` (0.15) model that on the GPU path, and `DropoutRate` drops to 0.
 
 - **LiDAR depth edges behave like the car's.** `EdgeOutlierRate` placed a few returns at cone silhouettes uniformly between the cone and the background. The car does something else: at an edge, about 15% of returns come from the other surface and edge beams drop out more often, so objects grow into the beams beside them and flicker. `EdgeSwapRate` (0.15) and `EdgeDropRate` (0.18) replace it, tested against the neighbouring beams rather than adjacent texels. **`EdgeOutlierRate` is no longer read.**

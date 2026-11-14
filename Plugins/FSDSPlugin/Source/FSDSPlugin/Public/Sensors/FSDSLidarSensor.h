@@ -130,6 +130,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
 
+	/** GPU path: read the depth capture at each beam's sub-texel position
+	 *  (1/Z stepped toward the neighbour texel on the same surface) instead
+	 *  of the nearest texel's centre. Removes the fixed range ripple along
+	 *  each ring on far, grazing ground. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bDepthInterpolation = false;
+
 	/** Weak-return dropout: P(no return) = DropoutWeakRate · I^-DropoutWeakExp,
 	 *  capped at DropoutWeakMax, with I the hit's noiseless intensity in output
 	 *  units (0-255 on the car's scale). The car's Hesai loses ~20 % of returns

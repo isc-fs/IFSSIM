@@ -435,6 +435,7 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("SweepDurationMs"), DblVal)) Sensor.SweepDurationMs = DblVal;
 	{ bool bVal; if (SensorObj->TryGetBoolField(TEXT("SweepAlternate"), bVal)) Sensor.bSweepAlternate = bVal; }
 	SensorObj->TryGetBoolField(TEXT("IntensityRound"), Sensor.bIntensityRound);
+	SensorObj->TryGetBoolField(TEXT("DepthInterpolation"), Sensor.bDepthInterpolation);
 
 	Vehicle.Sensors.Add(Name, Sensor);
 }
