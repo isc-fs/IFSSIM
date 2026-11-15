@@ -54,3 +54,12 @@ def test_the_results_carry_it():
     m = b.race_metrics(res)
     assert (m["box/boards_rtf"], m["box/boards_max_lag_s"], m["race/boards_real_time_ok"]) == (0.89, 4.2, 0)
     assert "box/boards_rtf" not in b.race_metrics(b.RunResult(run=None, outcome="finished", started=None, seconds=1.0))
+
+
+def test_a_restart_inside_the_window_does_not_spoil_the_pace():
+    """The server restarts the car when the operator goes OFF, at the end of the run: its clock
+    goes back to zero, and the lines after it must not be mixed with the run's."""
+    run = rows(rtf=1.0, n=12)                                    # 22 s of the run, in step with the wall
+    after = [{"wall": T0.timestamp() + 24 + 2 * i, "t": 0.5 + 2 * i, "lag_s": 0.0} for i in range(2)]
+    p = b.boards_pace_of(run + after)
+    assert p == {"rtf": 1.0, "max_lag_s": 0.0, "real_time_ok": True}
