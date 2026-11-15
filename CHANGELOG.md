@@ -38,6 +38,13 @@ shipping pipeline, documentation.
   Start worker / Stop worker run the local queue's worker; the queue shows each spec's
   progress, with Cancel and its folder.
 
+- **A benchmark spec on a GPU box, and `headless_run exec`.** `tools/ci/bench_run.sh`
+  runs a spec as a runner does: the same `run_spec.py` you run locally, under the sim-session
+  lock, with a fresh headless sim and Mission Control around it when the spec drives the
+  sim (the new `python3 -m headless_run exec -- <command>`). `run_spec.py` gains
+  `--results DIR` and `--print-spec`. The new `missions-extensive` preset (acceleration,
+  skidpad and autocross, 5 noisy starts per track) is the suite for the weekly season run.
+
 - **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
   checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
   for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that

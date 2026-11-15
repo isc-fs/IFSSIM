@@ -1,8 +1,10 @@
-# tools/ci: the sim check
+# tools/ci: the sim check and bench runs
 
-The scripts behind `.github/workflows/sim-pr.yml`. The workflow only checks the
-code out and calls them, so the same commands run the check on your own Linux
-machine with an NVIDIA GPU, or on the next box that takes over from `gpu-1080`.
+The scripts behind `.github/workflows/sim-pr.yml` (the sim check), and
+`bench_run.sh`, which runs a benchmark spec on a GPU box. The workflow only
+checks the code out and calls them, so the same commands run on your own
+Linux machine with an NVIDIA GPU, or on the next box that takes over from
+`gpu-1080`.
 
 | Script | Does |
 |---|---|
@@ -11,6 +13,26 @@ machine with an NVIDIA GPU, or on the next box that takes over from `gpu-1080`.
 | `sim_report.py`, `sim_plot.py`, `sim_failures.py` | The report, compared with the last `dev` run's, and a map per mission. |
 | `sim_publish.py` | Posts the report on the PR and in the `sim-report` issue (CI only). |
 | `gen_tracks.py`, `track_geometry.py` | The random autocross tracks. |
+| `bench_run.sh` | Runs a benchmark spec (`tools/sim_benchmark/run_spec.py`) with a fresh headless sim and Mission Control around it when the spec drives the sim (`python3 -m headless_run exec`); holds the same sim-session lock as the check. |
+
+## Running a benchmark spec as a runner does
+
+Benchmarks on a runner, the weekly season run included, go through the benchweb
+and its runner agent, not Actions; the agent runs a spec the way `bench_run.sh`
+does. On your own machine:
+
+```bash
+# with your sim and Mission Control already open: run_spec.py alone drives them
+python3 tools/sim_benchmark/run_spec.py missions-basic
+
+# or as a runner does: a fresh headless sim around the spec, under the lock
+IFSSIM_BUILD=$CI_HOME/builds/dev/IFSSIM.sh IFSSIM_DV_IMAGE=ifssim-dv_pipeline_stack:local \
+RESULTS=$CI_HOME/runs/$(date +%Y%m%d_%H%M%S) \
+  tools/ci/bench_run.sh missions-extensive
+```
+
+`MC_UP=0 MC_URL=...` uses a backend that is already running instead of starting
+one. A spec with only bag benchmarks (`sim-bag`) starts no sim.
 
 ## Where things live: `CI_HOME`
 
