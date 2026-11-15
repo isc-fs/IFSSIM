@@ -74,6 +74,13 @@ shipping pipeline, documentation.
   GitHub user who launched it), the host, and in GitHub Actions the run, the
   runner and a link to its logs.
 
+- **A host script for the GPU runner's box.** `tools/ci/setup_bench_host.sh` sets up a
+  clean Ubuntu 24.04 for the runner: the held NVIDIA driver, Docker CE with the NVIDIA
+  Container Toolkit, Vulkan, `gh`, Tailscale, a `runner` user without sudo, `CI_HOME`,
+  and the Actions runner (checksum-checked, org-registered with only its own labels, as
+  a service). Steps run on their own or again; `--dry-run` prints them. The bench PC's
+  rig descriptor is `rigs/bench-pc.yaml`.
+
 ### Fixed
 - **`/imu` no longer loses samples on a busy machine.** The bridge handed sensor frames from its receive thread to its publish thread through a single slot that a newer frame overwrote. Since every frame carries its own 400 Hz IMU sample, a capture on the GPU box was missing about 6 % of them, with gaps up to 12.5 ms (the car's /imu has none). The handoff is now a FIFO holding 1 s of frames; if the publisher falls further behind, the oldest are dropped and the bridge logs how many.
 
