@@ -334,20 +334,29 @@ void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 	// UNIT TRAP: settings carry the WHEEL rate in N/m; the Chaos property is
 	// that / 100 (FillSuspensionSetup applies MToCm, and the solver force is
 	// cm x rate in 0.01 N units — see FSDSWheelFront.cpp).
-	struct FAxle { UChaosVehicleWheel* CDO; float RateNpm; float Zeta; float MassKg; const TCHAR* Name; };
+	//
+	// Droop travel follows the rate: a softer spring sags further at rest, so
+	// SuspensionMaxDrop = (static wheel offset) + (static corner load / rate)
+	// keeps the static wheel position, i.e. the ride height, where it has
+	// always been (offsets 2.53 cm front / 2.05 cm rear: the old 3.5 cm travel
+	// minus the old static compression; see FSDSWheelFront/Rear.cpp). Bump
+	// travel from rest stays SuspensionMaxRaise.
+	struct FAxle { UChaosVehicleWheel* CDO; float RateNpm; float Zeta; float MassKg; float LoadShare; float StaticOffsetCm; const TCHAR* Name; };
 	const FAxle Axles[] = {
-		{ CDOs[0], P.SpringRateFront, P.DampingRatioFront, P.WheelMassFront, TEXT("front") },
-		{ CDOs[1], P.SpringRateRear,  P.DampingRatioRear,  P.WheelMassRear,  TEXT("rear") },
+		{ CDOs[0], P.SpringRateFront, P.DampingRatioFront, P.WheelMassFront, P.WeightDistFront,        2.53f, TEXT("front") },
+		{ CDOs[1], P.SpringRateRear,  P.DampingRatioRear,  P.WheelMassRear,  1.f - P.WeightDistFront,  2.05f, TEXT("rear") },
 	};
 	for (const FAxle& A : Axles)
 	{
-		if (!A.CDO) continue;
+		if (!A.CDO || A.RateNpm <= 0.f) continue;
+		const float CornerLoadN = P.Mass * 9.81f * A.LoadShare * 0.5f;
 		A.CDO->SpringRate = A.RateNpm / 100.f;
+		A.CDO->SuspensionMaxDrop = A.StaticOffsetCm + 100.f * CornerLoadN / A.RateNpm;
 		A.CDO->SuspensionDampingRatio = A.Zeta;
 		A.CDO->WheelMass = A.MassKg;
 		UE_LOG(LogTemp, Log,
-			TEXT("FSDS: %s wheel CDO — wheel rate %.0f N/m (SpringRate %.1f), damping ratio %.3f, wheel mass %.2f kg"),
-			A.Name, A.RateNpm, A.CDO->SpringRate, A.Zeta, A.MassKg);
+			TEXT("FSDS: %s wheel CDO — wheel rate %.0f N/m (SpringRate %.1f), static sag %.2f cm, MaxDrop %.2f cm, damping ratio %.3f, wheel mass %.2f kg"),
+			A.Name, A.RateNpm, A.CDO->SpringRate, 100.f * CornerLoadN / A.RateNpm, A.CDO->SuspensionMaxDrop, A.Zeta, A.MassKg);
 	}
 }
 
@@ -710,9 +719,24 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->RangeNoiseRangeCoeffCm = SensorPair.Value.RangeNoiseRangeCoeff * 100.f;
 				LidarSensor->RangeNoiseRefReflectance = SensorPair.Value.RangeNoiseRefReflectance;
 				LidarSensor->RangeNoiseReflectanceExp = SensorPair.Value.RangeNoiseReflectanceExp;
-				LidarSensor->EdgeOutlierRate = SensorPair.Value.EdgeOutlierRate;
+				LidarSensor->EdgeSwapRate = SensorPair.Value.EdgeSwapRate;
+				LidarSensor->EdgeDropRate = SensorPair.Value.EdgeDropRate;
 				LidarSensor->IntensityNoise = SensorPair.Value.IntensityNoise;
+				LidarSensor->IntensityScale = SensorPair.Value.IntensityScale;
+				LidarSensor->IntensityRangeExp = SensorPair.Value.IntensityRangeExp;
+				LidarSensor->IntensityIncidenceExp = SensorPair.Value.IntensityIncidenceExp;
+				LidarSensor->IntensityMax = SensorPair.Value.IntensityMax;
+				LidarSensor->LuminanceReflectanceGain = SensorPair.Value.LuminanceReflectanceGain;
+				LidarSensor->WorldLuminanceReflectanceGain = SensorPair.Value.WorldLuminanceReflectanceGain;
+				LidarSensor->SweepDurationMs = SensorPair.Value.SweepDurationMs;
+				LidarSensor->bSweepAlternate = SensorPair.Value.bSweepAlternate;
+				LidarSensor->bIntensityRound = SensorPair.Value.bIntensityRound;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
+				LidarSensor->DropoutWeakRate = SensorPair.Value.DropoutWeakRate;
+				LidarSensor->DropoutWeakExp = SensorPair.Value.DropoutWeakExp;
+				LidarSensor->DropoutWeakMax = SensorPair.Value.DropoutWeakMax;
+				LidarSensor->DropoutBurstScans = SensorPair.Value.DropoutBurstScans;
+				LidarSensor->DropoutBurstIidShare = SensorPair.Value.DropoutBurstIidShare;
 
 				// Per-channel max-range (#223 tune): convert metres → cm
 				// to match the global MaxRange units the sensor stores.
@@ -723,6 +747,9 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				{
 					LidarSensor->PerChannelMaxRangeCm.Add(Rm * 100.f);
 				}
+				LidarSensor->ChannelElevationsDeg = SensorPair.Value.ChannelElevationsDeg;
+				LidarSensor->bPointsInSensorFrame = SensorPair.Value.PointFrame.Equals(TEXT("sensor"), ESearchCase::IgnoreCase);
+				LidarSensor->ChannelRingIds = SensorPair.Value.ChannelRingIds;
 
 				// #223: select CPU (legacy ParallelFor + Chaos line traces)
 				// vs GPU (depth render + compute decode). Unknown values
@@ -795,6 +822,15 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroLsb = SensorPair.Value.GyroLsb;
 				ImuSensor->AccelRange = SensorPair.Value.AccelRange * 100.f;
 				ImuSensor->GyroRange = SensorPair.Value.GyroRange;
+				ImuSensor->VibrationAccelRms = SensorPair.Value.VibrationAccelRms * 100.f;
+				ImuSensor->VibrationAccelHz = SensorPair.Value.VibrationAccelHz;
+				ImuSensor->VibrationAccelQ = SensorPair.Value.VibrationAccelQ;
+				ImuSensor->VibrationGyroRms = SensorPair.Value.VibrationGyroRms;
+				ImuSensor->VibrationGyroHz = SensorPair.Value.VibrationGyroHz;
+				ImuSensor->VibrationGyroQ = SensorPair.Value.VibrationGyroQ;
+				ImuSensor->VibrationRefSpeed = SensorPair.Value.VibrationRefSpeed;
+				ImuSensor->VibrationSpeedExp = SensorPair.Value.VibrationSpeedExp;
+				ImuSensor->VibrationOnSpeed = SensorPair.Value.VibrationOnSpeed;
 				break;
 			}
 		}

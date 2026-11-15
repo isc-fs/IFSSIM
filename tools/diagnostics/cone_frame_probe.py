@@ -61,17 +61,25 @@ class Probe(Node):
         self.create_timer(1.0, self._report)
 
     def _lidar_cb(self, msg: PointCloud2) -> None:
-        fpp = msg.point_step // 4
         n = msg.width * msg.height
         if n == 0:
             self.lidar_n = 0
             self.lidar_xrange = (math.nan, math.nan)
             self.close_stats = None
             return
-        raw = np.frombuffer(msg.data, dtype=np.float32).reshape(n, fpp)
-        xs = raw[:, 0]
-        ys = raw[:, 1]
-        zs = raw[:, 2]
+        # By field offset: the cloud may be the packed 26-byte Hesai layout,
+        # whose no-return beams are (0, 0, 0).
+        raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, msg.point_step)
+        off = {f.name: f.offset for f in msg.fields}
+        xs, ys, zs = (raw[:, off[k]:off[k] + 4].copy().view(np.float32).reshape(n) for k in ("x", "y", "z"))
+        hit = (xs != 0) | (ys != 0) | (zs != 0)
+        xs, ys, zs = xs[hit], ys[hit], zs[hit]
+        n = int(hit.sum())
+        if n == 0:
+            self.lidar_n = 0
+            self.lidar_xrange = (math.nan, math.nan)
+            self.close_stats = None
+            return
         self.lidar_n = n
         self.lidar_xrange = (float(xs.min()), float(xs.max()))
         # Analyze the closest forward returns (x in 1.8-2.5m band).

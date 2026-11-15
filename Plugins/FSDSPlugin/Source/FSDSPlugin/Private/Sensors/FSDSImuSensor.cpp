@@ -73,6 +73,7 @@ void UFSDSImuSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActorC
 
 	const FQuat TickOrientation = Owner->GetActorQuat();
 	PreviousVelocity = Owner->GetVelocity();   // kept for the reset-spike guard
+	VibSpeedMps = PreviousVelocity.Size() / 100.0;  // cm/s -> m/s
 
 	UWorld* World = GetWorld();
 	const double NowSec = World ? World->GetTimeSeconds() : 0.0;
@@ -202,6 +203,15 @@ void UFSDSImuSensor::EmitSample(double SampleTimeSec, const FVector& TrueAccelCm
 		}
 	}
 
+	// On-car vibration: stepped every sample (it is part of the motion the
+	// sensor sees), so the accel hold samples it like the car's ODR does.
+	FVector VibAccelCm = FVector::ZeroVector;
+	FVector VibGyro = FVector::ZeroVector;
+	if (SampleRateHz > 0.f)
+	{
+		StepVibration(VibAccelCm, VibGyro);
+	}
+
 	FImuOutput Output;
 	Output.Timestamp = FPlatformTime::Cycles64();
 	Output.SimTimeSec = SampleTimeSec;
@@ -210,7 +220,7 @@ void UFSDSImuSensor::EmitSample(double SampleTimeSec, const FVector& TrueAccelCm
 	// Gyro: every sample. Per-axis σ are magnitudes, so the UE/REP-103 sign
 	// flips between the two conventions do not change which σ goes where.
 	const FVector GyroSigma = GyroNoiseStdXYZ.IsNearlyZero() ? FVector(GyroNoiseStd) : GyroNoiseStdXYZ;
-	const FVector GyroNoisy = TrueGyro + GyroBias + GyroTurnOnBias + FVector(
+	const FVector GyroNoisy = TrueGyro + VibGyro + GyroBias + GyroTurnOnBias + FVector(
 		GyroSigma.X * RandStandardNormal(ImuStream),
 		GyroSigma.Y * RandStandardNormal(ImuStream),
 		GyroSigma.Z * RandStandardNormal(ImuStream));
@@ -224,7 +234,7 @@ void UFSDSImuSensor::EmitSample(double SampleTimeSec, const FVector& TrueAccelCm
 	{
 		const FVector AccelSigmaCm =
 			(AccelNoiseStdXYZ.IsNearlyZero() ? FVector(AccelNoiseStd) : AccelNoiseStdXYZ) * AccelMToCm;
-		const FVector AccelNoisyCm = TrueAccelCm + AccelBias + AccelTurnOnBias + FVector(
+		const FVector AccelNoisyCm = TrueAccelCm + VibAccelCm + AccelBias + AccelTurnOnBias + FVector(
 			AccelSigmaCm.X * RandStandardNormal(ImuStream),
 			AccelSigmaCm.Y * RandStandardNormal(ImuStream),
 			AccelSigmaCm.Z * RandStandardNormal(ImuStream));
@@ -245,6 +255,76 @@ void UFSDSImuSensor::EmitSample(double SampleTimeSec, const FVector& TrueAccelCm
 		PendingSamples.RemoveAt(0, PendingSamples.Num() - MaxPending + 1, EAllowShrinking::No);
 	}
 	PendingSamples.Add(Output);
+}
+
+void UFSDSImuSensor::ConfigureVibration()
+{
+	bVibConfigured = true;
+	bVibActive = false;
+	const double Fs = SampleRateHz;
+	const FVector Rms[2] = {VibrationAccelRms, VibrationGyroRms};
+	const FVector Hz[2] = {VibrationAccelHz, VibrationGyroHz};
+	const FVector Qs[2] = {VibrationAccelQ, VibrationGyroQ};
+	for (int32 C = 0; C < 6; ++C)
+	{
+		FVibChannel& Ch = Vib[C];
+		Ch = FVibChannel();
+		const int32 G = C / 3, A = C % 3;
+		const double R = Rms[G][A], F0 = Hz[G][A], Q = Qs[G][A];
+		if (Fs <= 0.0 || R <= 0.0 || F0 <= 0.0 || Q <= 0.0 || F0 >= 0.5 * Fs) continue;
+		// RBJ bandpass, 0 dB at f0.
+		const double W0 = 2.0 * PI * F0 / Fs;
+		const double Alpha = FMath::Sin(W0) / (2.0 * Q);
+		const double A0 = 1.0 + Alpha;
+		Ch.B0 = Alpha / A0;
+		Ch.B2 = -Alpha / A0;
+		Ch.A1 = -2.0 * FMath::Cos(W0) / A0;
+		Ch.A2 = (1.0 - Alpha) / A0;
+		// Output variance for unit white input = sum of h^2 (impulse response).
+		FVibChannel Probe = Ch;
+		double SumH2 = 0.0;
+		for (int32 N = 0; N < 20000; ++N)
+		{
+			const double H = Probe.Step(N == 0 ? 1.0 : 0.0);
+			SumH2 += H * H;
+		}
+		Ch.InputScale = SumH2 > 0.0 ? R / FMath::Sqrt(SumH2) : 0.0;
+		bVibActive |= Ch.InputScale > 0.0;
+	}
+}
+
+void UFSDSImuSensor::StepVibration(FVector& OutAccelCm, FVector& OutGyro)
+{
+	if (!bVibConfigured) ConfigureVibration();
+	OutAccelCm = FVector::ZeroVector;
+	OutGyro = FVector::ZeroVector;
+	if (!bVibActive) return;
+
+	const uint32 Gen = FSDSRandom::GetGeneration();
+	if (VibStreamGeneration != Gen)
+	{
+		// Same re-seed rule as Noise(): a repeat run restarts the sequence.
+		VibStream = FSDSRandom::MakeStream(TEXT("Imu.vibration"));
+		VibStreamGeneration = Gen;
+		for (FVibChannel& Ch : Vib) { Ch.Z1 = Ch.Z2 = 0.0; }
+	}
+
+	const double V = FMath::Max(VibSpeedMps, 0.0);
+	const double On = FMath::Max<double>(VibrationOnSpeed, 1e-3);
+	const double Ref = FMath::Max<double>(VibrationRefSpeed, 1e-3);
+	const double Scale = FMath::Min(V / On, 1.0) * FMath::Pow(FMath::Max(V, On) / Ref, double(VibrationSpeedExp));
+
+	double Out[6];
+	for (int32 C = 0; C < 6; ++C)
+	{
+		FVibChannel& Ch = Vib[C];
+		// Draw for every channel each sample, active or not, so turning one
+		// axis off does not shift the others' sequences.
+		const double W = RandStandardNormal(VibStream);
+		Out[C] = Ch.InputScale > 0.0 ? Ch.Step(W * Ch.InputScale * Scale) : 0.0;
+	}
+	OutAccelCm = FVector(Out[0], Out[1], Out[2]);
+	OutGyro = FVector(Out[3], Out[4], Out[5]);
 }
 
 FRandomStream& UFSDSImuSensor::Noise()

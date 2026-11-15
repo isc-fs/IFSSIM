@@ -64,7 +64,9 @@ except ImportError as exc:  # pragma: no cover
 
 def _scan_to_array(msg: PointCloud2) -> np.ndarray:
     """Decode a PointCloud2 into an (N, 3) float32 array."""
-    pts = list(pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True))
+    # The Hesai layout keeps no-return beams as (0, 0, 0); drop them.
+    pts = [p for p in pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
+           if p[0] != 0.0 or p[1] != 0.0 or p[2] != 0.0]
     if not pts:
         return np.zeros((0, 3), dtype=np.float32)
     return np.asarray([(float(p[0]), float(p[1]), float(p[2])) for p in pts],
