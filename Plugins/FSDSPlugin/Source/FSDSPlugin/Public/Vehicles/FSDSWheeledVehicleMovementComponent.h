@@ -106,7 +106,8 @@ public:
 	 * cannot grep for a value that is never written.
 	 *
 	 * Two of them are physically significant and neither was a decision:
-	 *   RollbarScaling      0.15  — a live anti-roll bar
+	 *   RollbarScaling      0.15  — a live anti-roll bar (now set to 0 in
+	 *                       FSDSWheelFront/Rear, from the car's measured roll)
 	 *   MaxHandBrakeTorque  3000 N.m/wheel — and the handbrake channel IS the
 	 *                       EBS on this car, so this is the number the entire
 	 *                       emergency-braking case rests on
