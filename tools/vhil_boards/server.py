@@ -131,6 +131,8 @@ class Panel:
         self.phase_t = 0
         self.armed = False
         self.res_byte = None
+        self.asms = False           # the ASMS lever, as the operator last left it
+        self.restart = False        # the operator went OFF after a run: power the car down and up
         self.fed_at = -1e9          # virtual us of the last refresh of the pipeline's side
         self.sent: dict[str, int] = {}
         self.brake = None
@@ -154,8 +156,14 @@ class Panel:
         raw = b.r("g_telemetry_as_state")
         # RES: bit0 = not e-stop, bit2 = GO
         self._res((0x00 if self.estop else 0x01) | (0x04 if self.intent >= 2 and not self.estop else 0))
+        # The operator's OFF powers the whole car down: the next autonomous mission starts from AS Off,
+        # the ECU out of its DV latch, the AIRs open and the tractive system to be precharged again.
+        # The emulation is restarted from power-on (about a second), which is that, exactly.
+        if self.intent == 0 and self.phase != "idle":
+            self.restart = True
+            return AS_OFF
         if self.intent >= 1 and self.phase == "idle":
-            b.udv.set_voltage("PF9", 3.0)                                           # ASMS
+            b.udv.set_voltage("PF9", 3.0); self.asms = True                         # ASMS
             b.udv.set_voltage("PC0", TANK_BAR / 11); b.udv.set_voltage("PF10", TANK_BAR / 11)   # tanks
             b.ecu.set_voltage("PF7", BRAKE_HELD_COUNTS * COUNTS_TO_V)               # brake line held
             self.phase, self.phase_t = ("ams_ok" if b.has_ts else "ts"), self._now()
@@ -170,7 +178,7 @@ class Panel:
             b.ams.set_input(GPIOF, DASH_CHG, False); self.phase, self.phase_t = "ts", self._now()
         elif self.phase == "ts" and self._now() - self.phase_t > 200_000 and b.r("g_telemetry_ts_active"):
             self.phase = "armed"; self.armed = True
-        if self.armed and self.mission >= 0 and self.sent.get("mission") != self.mission:
+        if self.armed and self.asms and self.mission >= 0 and self.sent.get("mission") != self.mission:
             b.w32("g_can_mission_id", self.mission); b.w8("g_set_mission_ready", 1)
             self.sent["mission"] = self.mission
         # the brake: held until the car drives, back on when it stops being driven
@@ -259,7 +267,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--system", default="ecu-ams-udv")
     ap.add_argument("--port", type=int, default=47800)
-    ap.add_argument("--slice-ms", type=float, default=40.0)
+    ap.add_argument("--slice-ms", type=float, default=80.0)
     ap.add_argument("--quantum-us", type=int, default=1000, help="500 (the gate's) or 1000 (faster)")
     ap.add_argument("--fw", action="append", default=[], metavar="BOARD=ELF", help="a firmware image (repeat)")
     a = ap.parse_args(argv)
@@ -274,6 +282,16 @@ def main(argv=None) -> int:
         for msg in link.take():
             running = apply(panel, boards, msg, wall) and running
         raw = panel.step(wall)
+        if panel.restart:
+            old = panel
+            boards.sim.stop()
+            boards = Boards(a.system, fw, a.quantum_us)
+            panel = Panel(boards)
+            panel.mission, panel.estop, panel.intent = old.mission, old.estop, old.intent
+            panel.dv_status, panel.dv_at, panel.throttle, panel.steer, panel.ctrl_at = old.dv_status, old.dv_at, old.throttle, old.steer, old.ctrl_at
+            v0, w0 = boards.sim.now_us(), time.monotonic()
+            print("vhil-boards: restarted from power-on (operator OFF)", flush=True)
+            continue
         boards.run(a.slice_ms)
         virt = (boards.sim.now_us() - v0) / 1e6
         ahead = virt - (time.monotonic() - w0)         # > 0: the emulation is ahead of the wall clock
@@ -283,12 +301,15 @@ def main(argv=None) -> int:
         if boards.sim.now_us() - extra_at >= 250_000:
             extra_at = boards.sim.now_us()
             extra = {"mission": boards.r("g_can_mission_id", 4), "ecu_state": boards.sim.read_symbol("ecu", "g_last_ctrl_state"),
-                     "ams_state": boards.sim.read_symbol("ams", "g_state_telemetry"), "ts_active": boards.r("g_telemetry_ts_active")}
+                     "ams_state": boards.sim.read_symbol("ams", "g_state_telemetry"), "ts_active": boards.r("g_telemetry_ts_active"),
+                     "udv": {"ebs_init": boards.r("g_telemetry_ebs_init_state"), "asms": boards.r("g_telemetry_asms_on"),
+                             "abs_ok": boards.r("g_telemetry_abs_checks_ok"), "brakes": boards.r("g_telemetry_brakes_engaged"),
+                             "r2d": boards.r("g_telemetry_r2d"), "sdc_res_open": boards.r("g_telemetry_sdc_res_open")}}
             extra["mission"] -= (1 << 32) if extra["mission"] >= 1 << 31 else 0
         state = {
             "t": round(boards.sim.now_us() / 1e6, 3), "rtf": round(virt / max(time.monotonic() - w0, 1e-6), 3),
             "lag_s": round(lag, 3), "as_raw": raw, "assi": ASSI.get(raw, 0),
-            **extra, "torque_nm": boards.inv.torque_nm, "armed": panel.armed, "inv_rpm": round(boards.inv.rpm),
+            **extra, "torque_nm": boards.inv.torque_nm, "armed": panel.armed, "phase": panel.phase, "inv_rpm": round(boards.inv.rpm),
             "inv_state": boards.inv.state,
         }
         link.send(state)

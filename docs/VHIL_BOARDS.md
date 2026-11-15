@@ -18,7 +18,7 @@ Docker, the IFS-vHIL checkout or its image is missing (`launch/rig.py`, part `vh
 | | |
 |---|---|
 | **Firmware** | built by IFS-vHIL's recipe at the spec's refs (`boards.firmware: {udv: feat/x}`), cached in the Docker volume `vhil-data` |
-| **Boards container** | `tools/vhil_boards/server.py` in the IFS-vHIL image, on the host network: it boots `systems/ecu-ams-udv.yaml`, steps it in 40 ms slices and never lets it run ahead of the wall clock (about 1.0×, measured on this PC), answering on `127.0.0.1:47800` |
+| **Boards container** | `tools/vhil_boards/server.py` in the IFS-vHIL image, on the host network: it boots `systems/ecu-ams-udv.yaml`, steps it in 80 ms slices and never lets it run ahead of the wall clock (about 1.0×, measured on this PC), answering on `127.0.0.1:47800` |
 | **Stack** | `sim_supervisor_node` reads `IFSSIM_VHIL_BOARDS` and, when set, publishes what the firmware says (`/assi/state`, `/ami/mission`) and hands the firmware what the pipeline sent (`/dv/status`, `/ctrl/cmd`) and the operator panel (`/sim/*`): `sim_supervisor/vhil_link.py` |
 | **Start / stop** | `tools/sim_benchmark/launch/boards.py`, called by `launch/run.py` around each job; the same steps for the sim's Local target and any runner |
 
@@ -39,11 +39,19 @@ tractive system (TSMS, RST_EXT and the precharge press that the operator does on
 car), the ASMS level, the EBS tanks, the brake line, the RES on the DV bus (GO, e-stop),
 and the inverter, whose speed is the sim's `/motor_rpm`.
 
+## Between missions
+
+The operator's OFF (`/sim/intent` 0) powers the car down, as on the car: the emulation is
+restarted from power-on (about a second), so the next mission starts from AS Off with the
+ECU out of its DV latch and the tractive system precharged again. `run_mission_benchmark`
+does this between missions without any change.
+
 ## Limits
 
 - Only `ecu-ams-udv`: the sim's uDV node needs the car's three boards.
 - The emulated uDV's own IMU is a static BMI088 (its `vehicle_standstill` is always true);
   the pipeline still gets the sim's IMU. Steering and wheel-speed CAN are not fed.
 - Not deterministic (wall-clock paced), unlike vHIL's lock-step runs: compare repeats.
-- If the PC cannot hold 1.0× the boards fall behind; `boards.log` in the job's folder
+- Beside the sim and a full pipeline the boards ran at 0.89x on this PC (a worst lag of 15 s over a
+  9-minute job), the sim at 1.0x. If the PC cannot hold 1.0× the boards fall behind; `boards.log` in the job's folder
   records the real-time factor and the worst lag.

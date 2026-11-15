@@ -217,7 +217,9 @@ def start(
     images = build_firmware(repo, image, system, dict(boards.get("firmware") or {}), log, run)
     _docker(["rm", "-f", CONTAINER], 60, run)
     cmd = [
-        "run", "-d", "--name", CONTAINER, "--network", "host",
+        # --cpu-shares: the sim and the pipeline compete for the same cores, and the boards must
+        # keep real time (without it they ran at 0.89x beside a full benchmark stack)
+        "run", "-d", "--name", CONTAINER, "--network", "host", "--cpu-shares", "8192",
         "-v", f"{repo}:/work:ro", "-v", f"{server}:/boards:ro", "-v", f"{VOLUME}:/vhil",
         "-e", "PYTHONPATH=/work", "-e", "VHIL_MODELS_CACHE=/vhil/renode-models", "-w", "/work",
         image, "python", "/boards/server.py", "--system", system, "--port", str(port),
