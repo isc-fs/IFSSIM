@@ -144,6 +144,7 @@ shipping pipeline, documentation.
   sits next to the run's results.
 
 ### Changed
+- **LiDAR mount pitch 8.77° (was 8.6°).** A 60-scan ground fit of the 2026-09-20 car bag puts the Hesai at 8.77° nose-down.
 
 - **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
   `tools/ci/sim_build.sh` and `sim_pr_check.sh` take one folder, `CI_HOME`
