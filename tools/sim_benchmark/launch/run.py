@@ -108,7 +108,7 @@ def execute(
         if board_spec.get("mode") == "vhil":
             # emulated boards (IFS-vHIL) in place of the sim's fake uDV, for this job only
             emulated = bd.start(
-                m.root, board_spec, log_path=workdir / "boards.log",
+                m.root, board_spec, log_path=workdir / "boards.log", manifest_boards=m.boards,
                 log=lambda t: out.write(f"[boards] {t}\n") if out else print(t, file=sys.stderr),
             )
             full_env.update(emulated.env)

@@ -13,6 +13,21 @@ python3 tools/sim_benchmark/run_spec.py missions-basic \
 The Benchmarks page's vHIL box does the same on Local. It is grey, with the reason, when
 Docker, the IFS-vHIL checkout or its image is missing (`launch/rig.py`, part `vhil`).
 
+## Choosing each board's firmware
+
+`boards.firmware: {ecu: <ref>, ams: <ref>, udv: <ref>}`, or the page's per-board box ("branch,
+#PR or commit", with a Pick button), takes a branch, a tag, `#123` (a pull request's head), or a
+commit id (the full 40 characters, or a short one that is a branch head). Without one, a board
+is built at the default in `bench.yaml` (`dev`). Every ref is resolved to a full commit first
+(`launch/boards.resolve_ref`, `git ls-remote`) and the firmware is built at that commit, so a
+commit that is on no branch works too and the run records what it used: `boards.json` next to
+the job's `spec.json` has each board's ref, commit and repository. A board named in the spec
+whose repository is not in `bench.yaml` is refused, not built at the default.
+
+The page offers the boxes only once "Emulated (vHIL)" can be chosen, which needs the rig check
+(`run_spec.py --rig`, run by the sim from the checkout it was started from) to say vHIL is ready:
+that checkout must have this code. Real boards (HIL) stay greyed until a bench is wired.
+
 ## What runs where
 
 | | |

@@ -123,6 +123,74 @@ def ensure_image(repo: Path, log: Callable[[str], None], run: Run = _run) -> str
     return local
 
 
+PR_REF = re.compile(r"(?:#|pr[/#-]?|pull/)(\d+)(?:/head)?", re.I)
+SHA_FULL = re.compile(r"[0-9a-f]{40}")
+SHA_SHORT = re.compile(r"[0-9a-f]{7,39}")
+
+
+def _remote_sha(repo: str, patterns: list[str], run: Run) -> str | None:
+    """The first of ``patterns`` (refs) that ``repo`` has on GitHub, as a full commit id."""
+    r = run(["git", "-c", "credential.helper=", "ls-remote", f"https://github.com/{repo}", *patterns], 60)
+    if r.returncode != 0:
+        raise BoardsError(f"cannot ask GitHub about {repo}: {(r.stderr or r.stdout).strip()[:200]}")
+    found = {}
+    for line in (r.stdout or "").splitlines():
+        sha, _, ref = line.partition("\t")
+        found[ref.strip()] = sha.strip()
+    for pat in patterns:                       # an annotated tag's own line (^{}) is its commit
+        sha = found.get(pat + "^{}") or found.get(pat)
+        if sha:
+            return sha
+    return None
+
+
+def resolve_ref(repo: str, ref: str, run: Run = _run) -> tuple[str, str]:
+    """A spec's firmware ref (a branch, a tag, ``#123`` or ``pr/123`` for a pull request, a commit
+    id, short or full) as ``(label, full commit id)``. The label is what vHIL names the build by."""
+    ref = ref.strip()
+    m = PR_REF.fullmatch(ref)
+    if m:
+        sha = _remote_sha(repo, [f"refs/pull/{m.group(1)}/head"], run)
+        if not sha:
+            raise BoardsError(f"{repo}: no pull request #{m.group(1)}")
+        return f"pr-{m.group(1)}", sha
+    if re.fullmatch(r"[A-Za-z0-9._/+-]{1,100}", ref) and not SHA_FULL.fullmatch(ref):
+        sha = _remote_sha(repo, [f"refs/heads/{ref}", f"refs/tags/{ref}"], run)
+        if sha:
+            return ref, sha
+    if SHA_FULL.fullmatch(ref):
+        return f"commit-{ref[:12]}", ref
+    if SHA_SHORT.fullmatch(ref):
+        r = run(["git", "-c", "credential.helper=", "ls-remote", f"https://github.com/{repo}"], 60)
+        full = sorted({line.split("\t")[0] for line in (r.stdout or "").splitlines() if line.startswith(ref)})
+        if len(full) == 1:
+            return f"commit-{full[0][:12]}", full[0]
+        raise BoardsError(
+            f"{repo}: {ref!r} is a short commit id that is not a branch or tag head; give the full 40 characters"
+            if not full else f"{repo}: {ref!r} matches {len(full)} refs; give the full commit id"
+        )
+    raise BoardsError(f"{repo}: no branch, tag, pull request or commit {ref!r}")
+
+
+def resolve_firmware(
+    system_boards: list[str], refs: dict[str, str], firmware: dict, run: Run = _run
+) -> dict[str, dict]:
+    """For each board of the system: ``{ref, label, commit, repo}``. The spec's ref, else the
+    manifest's default for the board; every one pinned to the commit it names now, so the build and
+    the run's record say what ran."""
+    out = {}
+    for board in system_boards:
+        info = (firmware or {}).get(board) or {}
+        repo, ref = info.get("repo"), (refs.get(board) or info.get("default") or "").strip()
+        if not repo or not ref:
+            if refs.get(board):                       # never drop a choice silently
+                raise BoardsError(f"firmware for {board}: bench.yaml boards.firmware has no repository for it")
+            continue                                  # not a board the manifest knows: vHIL's catalogue ref
+        label, sha = resolve_ref(repo, ref, run)
+        out[board] = {"ref": ref, "label": label, "commit": sha, "repo": repo}
+    return out
+
+
 def parse_images(text: str) -> dict[str, str]:
     """``board=/path.elf`` lines of ``python -m vhil.system build``."""
     out = {}
@@ -134,13 +202,15 @@ def parse_images(text: str) -> dict[str, str]:
 
 
 def build_firmware(
-    repo: Path, image: str, system: str, refs: dict[str, str], log: Callable[[str], None], run: Run = _run
+    repo: Path, image: str, system: str, pinned: dict[str, dict], log: Callable[[str], None], run: Run = _run
 ) -> dict[str, str]:
-    """The system's firmware images (inside the container) at the refs the spec names."""
+    """The system's firmware images (inside the container), each board at the commit its ref names
+    (``resolve_firmware``); a board with none is built at vHIL's catalogue ref."""
     cmd = ["python", "-m", "vhil.system", "build", f"systems/{system}.yaml", "--workdir", "/vhil/fw"]
-    for board, ref in sorted(refs.items()):
-        cmd += ["--ref", f"{board}={ref}"]
-    log(f"building the firmware ({', '.join(f'{b}@{r}' for b, r in sorted(refs.items())) or 'catalogue refs'})")
+    for board, p in sorted(pinned.items()):
+        cmd += ["--ref", f"{board}={p['label']}", "--commit", f"{board}={p['commit']}"]
+    log("building the firmware (" + (", ".join(f"{b}@{p['commit'][:10]} ({p['ref']})" for b, p in sorted(pinned.items()))
+                                     or "catalogue refs") + ")")
     r = _docker(
         ["run", "--rm", "-v", f"{repo}:/work", "-v", f"{VOLUME}:/vhil", "-e", "PYTHONPATH=/work",
          "-w", "/work", image, "bash", "-c", "mkdir -p /vhil/fw && " + shlex.join(cmd)],
@@ -158,6 +228,8 @@ class Boards:
     """Running emulated boards. ``env`` is what the benchmark's stack needs."""
 
     port: int
+    system: str = ""
+    firmware: dict = field(default_factory=dict)   # board -> {ref, label, commit, repo}, what was built
     log_path: Path | None = None
     env: dict[str, str] = field(default_factory=dict)
     run: Run = _run
@@ -192,6 +264,12 @@ class Boards:
             except OSError:
                 pass
         _docker(["rm", "-f", CONTAINER], 60, self.run)
+        if self.log_path is not None:
+            try:       # what ran, next to the job's spec.json
+                (self.log_path.parent / "boards.json").write_text(json.dumps(
+                    {"system": self.system, "firmware": self.firmware, **summary}, indent=2, default=str))
+            except OSError:
+                pass
         if summary:
             print(f"vhil boards stopped: rtf {summary['rtf']}, worst lag {summary['max_lag_s']:.2f} s", file=sys.stderr)
 
@@ -204,6 +282,7 @@ def start(
     log: Callable[[str], None] = lambda s: print(s, file=sys.stderr),
     port: int = PORT,
     run: Run = _run,
+    manifest_boards: dict | None = None,
 ) -> Boards:
     """Start the emulated boards for one job; raise ``BoardsError`` with the reason if it can't."""
     system = boards.get("system")
@@ -216,7 +295,10 @@ def start(
     if not (server / "server.py").is_file():
         raise BoardsError("tools/vhil_boards/server.py is missing from this checkout")
     image = ensure_image(repo, log, run)
-    images = build_firmware(repo, image, system, dict(boards.get("firmware") or {}), log, run)
+    mb = manifest_boards or {}
+    in_system = (mb.get("vhil") or {}).get(system) or ["ecu", "ams", "udv"]
+    pinned = resolve_firmware(in_system, dict(boards.get("firmware") or {}), mb.get("firmware") or {}, run)
+    images = build_firmware(repo, image, system, pinned, log, run)
     _docker(["rm", "-f", CONTAINER], 60, run)
     cmd = [
         # --cpu-shares: the sim and the pipeline compete for the same cores, and the boards must
@@ -231,7 +313,7 @@ def start(
     r = _docker(cmd, 120, run)
     if r.returncode != 0:
         raise BoardsError(f"cannot start the boards container: {(r.stderr or r.stdout).strip()[:300]}")
-    started = Boards(port, log_path, {ENV_BOARDS: f"127.0.0.1:{port}"}, run)
+    started = Boards(port, system, pinned, log_path, {ENV_BOARDS: f"127.0.0.1:{port}"}, run)
     deadline = time.monotonic() + START_TIMEOUT_S
     while time.monotonic() < deadline:
         if READY in started.logs():
