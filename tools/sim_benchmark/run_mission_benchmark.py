@@ -99,7 +99,9 @@ POLL_S = 1.0
 # both in /api/event/state as as_state / dv_status.
 AS_EMERGENCY, AS_DRIVING = 1, 3
 DV_EMERGENCY = 5
-MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
+# the UI; see the docstring. $IFSSIM_MC_URL names the backend directly (http://127.0.0.1:8000)
+# where the UI's container isn't up.
+MC_URL = os.environ.get("IFSSIM_MC_URL", "http://127.0.0.1:3000")
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
 # finish. This many times timeout_s of real time still ends the run, in case the sim
@@ -658,6 +660,8 @@ class Stack:
             f"IFSSIM_PORT={self.sim_port}",
             "-e",
             f"ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '0')}",
+            # emulated boards (IFS-vHIL), when the run spec asks for them (launch/boards.py)
+            *[a for v in ("IFSSIM_VHIL_BOARDS", "IFSSIM_VHIL_TORQUE") if v in os.environ for a in ("-e", f"{v}={os.environ[v]}")],
             "-e",
             "NUMBA_CACHE_DIR=/numba_cache",
             "-v",
