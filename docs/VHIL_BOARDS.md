@@ -94,6 +94,7 @@ Approximated, to hold 1.0x beside the sim (each measured unpaced beside the live
 | plants step every 20 ms (not 10 ms) | the inverter's state and speed in a report, the AIR contacts and the shutdown circuit react up to 20 ms late | 1.17x instead of 0.89x |
 | the micro-ROS downlink written into the firmware's variables | the message callbacks do not run; the STOPPING debounce and the clamp of `/ctrl/cmd` are mirrored | USB is not modelled |
 | the operator, the AMI box, the RES, the EBS tanks and the brake line are stand-ins | what the car's electrics do around the boards | needed to arm the car |
+| the pack, the tractive system and the inverter are vHIL's models, not the sim's electrical FMU | the AMS's cells and current are vHIL's | the sim's FMU is not coupled to the boards |
 
 ## Whether a run was real time
 
@@ -107,8 +108,11 @@ the car with slowed boards, not a run of the car.
 ## Limits
 
 - Only `ecu-ams-udv`: the sim's uDV node needs the car's three boards.
-- The emulated uDV's own IMU is a static BMI088 (its `vehicle_standstill` is always true);
-  the pipeline still gets the sim's IMU. Steering and wheel-speed CAN are not fed.
+- What the sim feeds the uDV: its BMI088 follows the sim's IMU averaged over 40 ms (milli-g and
+  degrees per second in the car's body frame; the 15-50 Hz vibration is not reproduced), and the ECU's
+  motor-rpm frame (0x506) follows the sim's motor speed, which is where the firmware takes its
+  standstill from. Steering: the firmware reads its steering sensor on FDCAN3, which is unconnected
+  on the MicroDV2 (IFS09-DV-uDV#6) and so is on no bus in vHIL; nothing is fed, as on the car.
 - Not deterministic (wall-clock paced), unlike vHIL's lock-step runs: compare repeats.
 - The boards held 1.0x beside the sim and a full pipeline on this PC (worst lag 0.5 s over a 9-minute
   job; their plants step every 20 ms, 10 ms costs about 20 % of the speed). If a PC cannot hold 1.0× the boards fall behind; `boards.log` in the job's folder

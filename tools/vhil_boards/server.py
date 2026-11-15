@@ -29,6 +29,7 @@ Wire protocol (newline-delimited JSON on 127.0.0.1:<port>)::
     client -> server   {"cmd": "dv_status", "v": 0..7} | {"cmd": "ctrl", "throttle": f, "steer": f}
                        {"cmd": "mission", "idx": n} | {"cmd": "intent", "v": 0|1|2}
                        {"cmd": "estop", "v": bool} | {"cmd": "motor_rpm", "v": mech rpm}
+                       {"cmd": "imu", "acc_mg": [x, y, z], "gyr_dps": [x, y, z]}  the sim's IMU, for the uDV's BMI088
                        {"cmd": "quit"}
 """
 from __future__ import annotations
@@ -165,6 +166,8 @@ class Panel:
         self.asms = False           # the ASMS lever, as the operator last left it
         self.restart = False        # the operator went OFF after a run: power the car down and up
         self.used = False           # a mission has been asked for since power-on
+        self.imu = None             # the sim's IMU: (mg x y z, dps x y z), set by the node
+        self.imu_sent = None
         self.streak = 0             # consecutive STOPPING messages, as the firmware counts them
         self.fed_at = -1e9          # virtual us of the last refresh of the pipeline's side
         self.sent: dict[str, int] = {}
@@ -187,6 +190,12 @@ class Panel:
     def step(self, wall: float):
         b = self.b
         raw = b.r("g_telemetry_as_state")
+        if self.imu is not None and self.imu != self.imu_sent:
+            # the uDV's own MainLite BMI088 (systems/ecu-ams-udv.yaml `udv_imu`), as the sim's IMU
+            (ax, ay, az), (gx, gy, gz) = self.imu
+            b.sim.call("sysbus.i2c2_h7.udv_imu_acc", "SetAcceleration", round(ax), round(ay), round(az), board="udv")
+            b.sim.call("sysbus.i2c2_h7.udv_imu_gyr", "SetAngularRate", round(gx, 2), round(gy, 2), round(gz, 2), board="udv")
+            self.imu_sent = self.imu
         # RES: bit0 = not e-stop, bit2 = GO
         if self.intent >= 1:
             self._res((0x00 if self.estop else 0x01) | (0x04 if self.intent >= 2 and not self.estop else 0))
@@ -271,17 +280,28 @@ class Link(threading.Thread):
 
     def run(self):
         while True:
-            conn, _ = self.srv.accept()
+            try:
+                conn, _ = self.srv.accept()
+            except OSError:
+                continue
             with self.lock:
                 self.conn = conn
-            for line in conn.makefile("r"):
+            try:
+                for line in conn.makefile("r"):
+                    try:
+                        with self.lock:
+                            self.inbox.append(json.loads(line))
+                    except ValueError:
+                        pass
+            except OSError:        # the client went away mid-line: wait for the next one
+                pass
+            finally:
+                with self.lock:
+                    self.conn = None
                 try:
-                    with self.lock:
-                        self.inbox.append(json.loads(line))
-                except ValueError:
+                    conn.close()
+                except OSError:
                     pass
-            with self.lock:
-                self.conn = None
 
     def take(self) -> list[dict]:
         with self.lock:
@@ -310,6 +330,8 @@ def apply(panel: Panel, boards: Boards, msg: dict, wall: float) -> bool:
         panel.intent = int(msg["v"])
     elif c == "estop":
         panel.estop = bool(msg["v"])
+    elif c == "imu":
+        panel.imu = (tuple(float(x) for x in msg["acc_mg"]), tuple(float(x) for x in msg["gyr_dps"]))
     elif c == "motor_rpm":
         boards.inv.target_rpm = float(msg["v"]) * POLE_PAIRS
     elif c == "quit":

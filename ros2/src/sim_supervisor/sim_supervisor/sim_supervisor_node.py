@@ -34,6 +34,7 @@ OdometryFilter, dormant by default when odometry_filter_node owns /odom).
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -130,6 +131,9 @@ DV_STATUS_STALE_S: float = 0.4
 # The torque request at 100 % (0x362 = -(pct*240/95 - 1200/95) Nm, IFS08-CE-ECU inverter.cpp),
 # what a full throttle means when the car follows the emulated ECU's torque.
 ECU_MAX_TORQUE_NM: float = 240.0
+# how often the sim's IMU is handed to the emulated uDV's BMI088, and g
+IMU_FEED_S: float = 0.04
+STANDARD_GRAVITY: float = 9.80665
 CTRL_CMD_STALE_S: float = 0.5
 
 
@@ -189,6 +193,11 @@ class SimSupervisorNode(LifecycleNode):
         # "ecu": the car's throttle is the torque the emulated ECU asks for;
         # "cmd": the pipeline's /ctrl/cmd (the uDV's AS state still gates it).
         self._vhil_torque = os.environ.get("IFSSIM_VHIL_TORQUE", "ecu")
+
+        # The sim's IMU, averaged between feeds to the emulated uDV's BMI088 (vhil_link.py)
+        self._imu_sum = [0.0] * 6
+        self._imu_n = 0
+        self._imu_feed_timer = None
 
         # IMU sample counter, modulo IMU_DECIMATION.
         self._imu_sample_idx: int = 0
@@ -343,6 +352,15 @@ class SimSupervisorNode(LifecycleNode):
                 1.0 / ODOM_PUBLISH_HZ, self._publish_odom,
                 callback_group=self._cb_group)
         elif self._vhil is not None:
+            # the emulated uDV's IMU (BMI088) is the sim's, not a static one
+            self._sub_imu = self.create_subscription(
+                Imu, "/imu", self._on_imu,
+                QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                           history=QoSHistoryPolicy.KEEP_LAST, depth=2000,
+                           durability=DurabilityPolicy.VOLATILE),
+                callback_group=self._cb_group)
+            self._imu_feed_timer = self.create_timer(
+                IMU_FEED_S, self._feed_imu, callback_group=self._cb_group)
             # the emulated inverter reports the car's motor speed to the ECU
             self._sub_rpm = self.create_subscription(
                 Float32, "/motor_rpm", self._on_rpm,
@@ -589,6 +607,11 @@ class SimSupervisorNode(LifecycleNode):
         unused samples flow through DDS at zero cost to us; we just skip
         the np.array construction + push_imu call for the dropped 3 of 4.
         """
+        if self._vhil is not None:
+            a, w = msg.linear_acceleration, msg.angular_velocity
+            for i, v in enumerate((a.x, a.y, a.z, w.x, w.y, w.z)):
+                self._imu_sum[i] += v
+            self._imu_n += 1
         if self._odom_filter is None:
             return
         self._imu_sample_idx += 1
@@ -606,6 +629,23 @@ class SimSupervisorNode(LifecycleNode):
             msg.angular_velocity.z,
         ])
         self._odom_filter.push_imu(t, accel, gyro)
+
+    def _feed_imu(self) -> None:
+        """The sim's IMU, averaged since the last feed, as the BMI088 model's values: milli-g and
+        degrees per second, in the car's body frame (the frame /imu has on the car too: the uDV
+        publishes it unrotated). The model returns the value set until the next feed; the uDV samples
+        it at 400 Hz, so what reaches it is the sim's motion at the feed rate, not its 15-50 Hz
+        vibration."""
+        if self._vhil is None or self._imu_n == 0:
+            return
+        n = self._imu_n
+        a = [v / n for v in self._imu_sum]
+        self._imu_sum, self._imu_n = [0.0] * 6, 0
+        self._vhil.send(
+            cmd="imu",
+            acc_mg=[x / STANDARD_GRAVITY * 1000.0 for x in a[:3]],
+            gyr_dps=[math.degrees(x) for x in a[3:]],
+        )
 
     def _on_rpm(self, msg: Float32) -> None:
         """Drive the filter's correction step."""
