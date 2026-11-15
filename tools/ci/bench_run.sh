@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Runs a benchmark spec on a GPU box (.github/workflows/nightly.yml, and the
-# benchweb's runner agent): the same tools/sim_benchmark/run_spec.py a laptop runs, with a fresh headless sim
-# and Mission Control's backend around it when the spec drives the sim (the mission
-# benchmark). Bag benchmarks need no sim and run straight away.
+# Runs a benchmark spec on a GPU box, as the benchweb's runner agent will: the same
+# tools/sim_benchmark/run_spec.py a laptop runs, with a fresh headless sim and Mission
+# Control's backend around it when the spec drives the sim (the mission benchmark). Bag benchmarks need no sim and run straight away.
 #
 #   tools/ci/bench_run.sh missions-basic                         # a preset (tools/sim_benchmark/specs)
 #   tools/ci/bench_run.sh my-spec.json --set benchmarks.missions.repeats=3
