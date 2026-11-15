@@ -248,8 +248,13 @@ Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric lo
 #### Aerodynamics
 
 Applied per-tick using `AddForce` on the vehicle mesh:
-- **Drag:** `F_drag = 0.5 · ρ · CdA · v²` (opposing velocity), `CdA = 0.9 m²`.
-- **Downforce:** `F_down = 0.5 · ρ · ClA · v²` distributed front/rear per `AeroBalanceFront`, `ClA = 1.8 m²`, `AeroBalanceFront = 0.45`.
+- **Drag:** `F_drag = 0.5 · ρ · CdA · v²` (opposing velocity), `CdA = 1.2 m²`.
+- **Downforce:** `F_down = 0.5 · ρ · ClA · v²` distributed front/rear per `AeroBalanceFront`, `ClA = 2.8 m²`, `AeroBalanceFront = 0.50`.
+
+Source: coarse CFD of the IFS-08 KIN CAD (OpenFOAM k-ω SST, 2 M cells, 20 m/s, moving ground, rotating wheels,
+no radiators): ClA 2.75–2.88, CdA 1.30, 50 % front. CdA is set to 1.2 to allow for the coarse mesh over-predicting
+drag. No mesh-independence study yet; validate CdA with a coast-down test on the real car. The values come from
+the IFS08_KIN model pipeline (`vehicle_params.json` → `generators/ifssim.py`), not edited here by hand.
 
 Air density ρ = 1.225 kg/m³.
 

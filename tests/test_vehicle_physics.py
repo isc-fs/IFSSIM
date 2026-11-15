@@ -27,8 +27,8 @@ EXPECTED = {
     "gear_ratio": 2.909,
     "tire_radius": 0.2002,  # m
     "tire_mu": 1.678,
-    "CdA": 0.9,
-    "ClA": 1.8,
+    "CdA": 1.2,            # settings.json (coarse CFD)
+    "ClA": 2.8,
     # Derived expectations
     "max_speed_ms": 35.0,      # ~126 km/h power-limited (estimated)
     "accel_75m_s": 5.0,        # seconds for 0-75m (estimated)
