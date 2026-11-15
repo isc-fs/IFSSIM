@@ -197,10 +197,22 @@ struct FFSDSVehiclePhysics
 	float TrackRear = 1.190f;            // m
 	float RollCenterFront = 0.040f;      // m
 	float RollCenterRear = 0.060f;       // m
-	float RollStiffnessFront = 27000.f;  // Nm/rad
-	float RollStiffnessRear = 22000.f;   // Nm/rad
-	float HeaveStiffness = 227600.f;     // N/m (sum of 4 wheel rates)
-	float PitchStiffness = 155600.f;     // Nm/rad
+	float RollStiffnessFront = 15021.f;  // Nm/rad, springs only (no bar)
+	float RollStiffnessRear = 14291.f;   // Nm/rad, springs only (no bar)
+	float HeaveStiffness = 80736.f;      // N/m (sum of 4 wheel rates)
+	float PitchStiffness = 54250.f;      // Nm/rad, 2 x wheel rate x (lf^2 + lr^2)
+
+	// Road roughness on the level floor (AFSDSVehiclePawn::ApplyRoadRoughness,
+	// FFSDSRoadRoughness). ISO 8608 displacement PSD level at 0.1 cycle/m in
+	// m^3; 0 = off. CutoffWavelength (m) rolls the profile off so it does not
+	// wander; Footprint (m) is the tyre contact length it is averaged over;
+	// TyreStiffness (N/m) the vertical tyre spring between road and wheel.
+	// Off on a track's world (Montmeló has its own surface) unless OnTrackWorld.
+	float RoadRoughnessGd0 = 0.f;
+	float RoadRoughnessCutoffWavelength = 20.f;
+	float RoadRoughnessFootprint = 0.15f;
+	float RoadRoughnessTyreStiffness = 100000.f;   // N/m, tyre vertical stiffness the road passes through
+	bool bRoadRoughnessOnTrackWorld = false;
 
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.

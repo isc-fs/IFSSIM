@@ -256,6 +256,14 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollStiffnessRear"), DblVal)) P.RollStiffnessRear = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("HeaveStiffness"), DblVal)) P.HeaveStiffness = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("PitchStiffness"), DblVal)) P.PitchStiffness = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessGd0"), DblVal)) P.RoadRoughnessGd0 = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessCutoffWavelength"), DblVal)) P.RoadRoughnessCutoffWavelength = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessFootprint"), DblVal)) P.RoadRoughnessFootprint = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessTyreStiffness"), DblVal)) P.RoadRoughnessTyreStiffness = DblVal;
+		{
+			bool B = false;
+			if ((*PhysicsObj)->TryGetBoolField(TEXT("RoadRoughnessOnTrackWorld"), B)) P.bRoadRoughnessOnTrackWorld = B;
+		}
 
 		// Motor torque curve arrays
 		const TArray<TSharedPtr<FJsonValue>>* RPMArr;

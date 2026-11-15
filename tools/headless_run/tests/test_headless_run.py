@@ -17,7 +17,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent))
 
-from headless_run.orchestrate import RunConfig, exit_code, run_loop, run_once  # noqa: E402
+from headless_run.orchestrate import RunConfig, exit_code, run_command, run_loop, run_once  # noqa: E402
 from headless_run.simproc import SimCommand, SimError, SimProcess, port_open, resolve_command  # noqa: E402
 
 
@@ -277,3 +277,53 @@ def test_the_sims_cpu_weight_is_raised_only_when_asked():
 
     # a failed update never fails the run: it is recorded
     assert "No such container" in raise_sim_cpu_weight({"IFSSIM_SIM_CPU_SHARES": "8192"}, fails)
+
+
+# --- exec: any command around a fresh sim (tools/ci/bench_run.sh runs a spec this way)
+def _cmd(code: str) -> list:
+    return [sys.executable, "-c", code]
+
+
+def test_exec_runs_the_command_with_the_sim_up_and_passes_its_exit_code(tmp_path, backend):
+    port = free_port()
+    out = tmp_path / "seen.txt"
+    code = (
+        "import os, socket, sys; host, port = os.environ['IFSSIM_SIM_ADDR'].split(':');"
+        "socket.create_connection((host, int(port)), 2).close();"
+        f"open({str(out)!r}, 'w').write(os.environ['IFSSIM_MC_URL']); sys.exit(5)"
+    )
+    rc = run_command(cfg(tmp_path, port, backend), _cmd(code), log=quiet)
+    assert rc == 5
+    assert out.read_text() == backend
+    rec = json.loads(next((tmp_path / "headless").glob("*_exec/run.json")).read_text())
+    assert rec["outcome"] == "command_failed" and rec["command_exit"] == 5
+    assert not port_open("127.0.0.1", port)
+
+
+def test_exec_a_finished_command_is_0(tmp_path, backend):
+    assert run_command(cfg(tmp_path, free_port(), backend), _cmd("pass"), log=quiet) == 0
+
+
+def test_exec_a_sim_that_never_comes_up_is_a_machine_failure(tmp_path, backend):
+    out = tmp_path / "ran"
+    rc = run_command(cfg(tmp_path, free_port(), backend, sim_args=[-1]),
+                     _cmd(f"open({str(out)!r}, 'w')"), log=quiet)
+    assert rc == 3 and not out.exists()
+
+
+def test_exec_a_sim_crash_stops_the_command(tmp_path, backend):
+    t = time.monotonic()
+    rc = run_command(cfg(tmp_path, free_port(), backend, sim_args=[1.5]),
+                     _cmd("import time; time.sleep(60)"), log=quiet)
+    assert rc == 3 and time.monotonic() - t < 20
+    rec = json.loads(next((tmp_path / "headless").glob("*_exec/run.json")).read_text())
+    assert rec["outcome"] == "sim_crashed"
+
+
+def test_exec_without_a_backend_is_a_machine_failure(tmp_path):
+    assert run_command(cfg(tmp_path, free_port(), "http://127.0.0.1:9"), _cmd("pass"), log=quiet) == 3
+
+
+def test_exec_needs_a_command():
+    from headless_run.__main__ import main
+    assert main(["exec", "--sim", "attach"]) == 2

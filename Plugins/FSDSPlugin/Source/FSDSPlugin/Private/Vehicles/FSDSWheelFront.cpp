@@ -49,9 +49,14 @@ UFSDSWheelFront::UFSDSWheelFront()
 	// physics).
 	WheelMass = 10.f;
 
-	// IFS-08: 35mm ride height, 350 lbs/in front springs
-	SuspensionMaxRaise = 3.5f;  // 35mm
-	SuspensionMaxDrop = 3.5f;
+	// Travel. Chaos measures spring compression from full droop, so a softer
+	// spring sits further into its travel at rest. MaxDrop is sized to keep
+	// the static wheel position (and so the ride height and the LiDAR's
+	// height above the ground) where it was with the old 61 kN/m rate:
+	// static compression 590.8 N / 20184 N/m = 2.93 cm, was 0.96 cm, so
+	// MaxDrop 3.5 + 1.96 = 5.46 cm. Bump travel from rest is unchanged.
+	SuspensionMaxRaise = 3.5f;  // cm
+	SuspensionMaxDrop = 5.46f;  // cm
 	SuspensionDampingRatio = 1.5f;
 
 	// Wheel rate. UNITS ARE A TRAP: the UPROPERTY is documented "N/m" but
@@ -62,31 +67,34 @@ UFSDSWheelFront::UFSDSWheelFront()
 	//
 	//     property value x 100 = wheel rate in N/m
 	//
-	// 350 lb/in = 61294 N/m -> property 612.9.
+	// 20184 N/m per corner -> property 201.84. This is the plant spec's
+	// wheel rate (matlab/spec/cars/ifs08.m on dev-manual: HeaveStiffness
+	// 80737 N/m from the recorded 2.9-3.0 Hz ride frequency), and the car
+	// agrees: in the 2026-09-20 manual bag the LiDAR ground plane gives
+	// ~0.6-0.8 deg of pitch per g and ~1.5-1.8 deg of roll per g. The old
+	// rate, 350 lb/in = 61294 N/m, was the workbook's SPRING rate taken as a
+	// wheel rate (the hardpoints give a motion ratio of 0.83, so even as a
+	// spring it would be a 42 kN/m wheel rate). It made a 5 Hz ride and a
+	// car about 2x too stiff in pitch and 4x too stiff in roll (0.30 and
+	// 0.36 deg/g).
 	//
-	// This was never set, so Chaos ran on its engine default of 250, i.e.
-	// 25 kN/m per wheel. Meanwhile ComputeTireLoadsParametric was using
-	// FFSDSVehicleSettings::HeaveStiffness = 227600 N/m ("sum of 4 wheel
-	// rates") = 56.9 kN/m per corner. The car had TWO different suspension
-	// stiffnesses depending on which model you asked, differing by 2.3x.
-	//
-	// Cross-check that 612.9 is right rather than merely plausible:
-	//   2 x 61294 (front, 350 lb/in) + 2 x 52538 (rear, 300 lb/in)
-	//     = 227665 N/m ~= the declared HeaveStiffness of 227600.
-	// The lb/in figures and HeaveStiffness are independent declarations in
-	// this repo and they agree to 0.03%, so these are true WHEEL rates with
-	// the motion ratio already folded in — not spring rates that would still
-	// need multiplying by MR^2.
-	//
-	// Sanity: sprung mass ~59 kg/corner gives a 5.1 Hz ride frequency (FS
-	// cars with aero run 3-5 Hz) and 1.2 cm static deflection out of 7 cm of
-	// travel. The old 250 gave 3.3 Hz and 2.7 cm.
+	// Same rate front and rear: the spec only fixes the total, and the
+	// measured pitch and roll cannot split it.
 	//
 	// Set HERE, in the wheel class constructor, because Chaos builds its
 	// physics wheels from the CLASS DEFAULT OBJECT in CreateVehicle() before
 	// BeginPlay. Pushing suspension to a live vehicle instead is what
 	// launched the car into the air upside down on an earlier attempt.
-	SpringRate = 612.9f;
+	SpringRate = 201.84f;
+
+	// Chaos's anti-roll bar: each axle adds RollbarScaling x (left - right
+	// spring force) to one side and takes it off the other
+	// (ChaosWheeledVehicleMovementComponent.cpp:705), so axle roll stiffness
+	// = springs x (1 + 2 x RollbarScaling). The engine default 0.15 was never
+	// chosen. The springs alone give 15.0 / 14.3 kN*m/rad front/rear and
+	// 1.6 deg of roll per g, which is what the car shows, so no bar. Read
+	// from the wheel class of the axle, so it is set on both.
+	RollbarScaling = 0.f;
 
 	// See FSDSWheelRear.cpp for rationale — use real per-wheel Fz, not
 	// Chaos's default 50/50 blend with resting load.
