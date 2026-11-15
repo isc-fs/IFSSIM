@@ -97,6 +97,14 @@ public:
 	bool VerifyAllWheelConfigsApplied(float Tolerance = 0.5f) const;
 
 	/**
+	 * The suspension the solver actually runs for one wheel: spring rate in
+	 * N/m, compression damping in N*s/m (Chaos derives it from the damping
+	 * ratio and the sprung mass, SetupSuspension), and the wheel's resting
+	 * position in the body frame (cm). False until the vehicle exists.
+	 */
+	bool GetSolverSuspension(int32 WheelIndex, float& OutSpringRate, float& OutDamping, FVector& OutLocalPosition) const;
+
+	/**
 	 * Log every wheel parameter this project never explicitly chose.
 	 *
 	 * Chaos's wheel class ships twelve tuning fields that FSDSWheelFront/Rear

@@ -242,6 +242,15 @@ Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric lo
 
 Chaos takes the springs per axle from `settings.json` (`SpringRateFront/Rear` wheel rates, `DampingRatioFront/Rear`, `WheelMassFront/Rear`), pushed into the wheel class defaults by `ApplyTireModelToWheelCDOs` before the vehicle is created. The values come from the KIN CAD (spring × motion ratio² from the kinematic sweep): 15,204 N/m front, 21,217 N/m rear, no anti-roll bar (`RollbarScaling = 0`). Droop travel is recomputed from the rate (static wheel offset 2.53 / 2.05 cm + static sag) so the ride height does not move; bump travel is 3.5 cm from rest. That is a 2.7 / 3.1 Hz ride (plant spec 2.9–3.0 Hz), about 0.66° of pitch and 1.1° of roll per g driverless, ~1.5° with a driver aboard; the real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° and 1.5–1.8° per g. The wheel-class literals (20,184 N/m, the plant spec's wheel rate) are only the fallback when `settings.json` has no rates. The shadow values above follow the same springs: roll = rate × track² / 2 per axle, pitch = 2 × (kF·lf² + kR·lr²).
 
+**Road roughness.** The level floor is perfectly flat, so on its own it gives the body almost no motion below 15 Hz. `AFSDSVehiclePawn::ApplyRoadRoughness` adds a random road: an ISO 8608 profile per wheel track (`RoadRoughnessGd0` m³ at 0.1 cycle/m, rolled off past `RoadRoughnessCutoffWavelength`, averaged over `RoadRoughnessFootprint`), with the rear wheels a wheelbase behind the front ones. Each corner runs a small quarter car, road → tyre spring (`RoadRoughnessTyreStiffness`) → wheel → strut, and the strut force from the wheel's motion is applied to the body at the wheel, using the solver's own spring and damper. The profile is drawn from the scenario seed (`Road.profile`), so a same-seed reset drives the same road. It is off on a track world such as Montmeló unless `RoadRoughnessOnTrackWorld`. The tyres' grip load does not see the road.
+
+| Parameter | Value | Unit | Source |
+|---|---|---|---|
+| Road level Gd0 (ISO class B/C boundary) | 2.25e-4 | m³ | `RoadRoughnessGd0` |
+| Cutoff wavelength | 20 | m | `RoadRoughnessCutoffWavelength` |
+| Tyre footprint | 0.15 | m | `RoadRoughnessFootprint` |
+| Tyre vertical stiffness | 100,000 | N/m | `RoadRoughnessTyreStiffness` |
+
 #### Wheels
 
 - **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.2002 m` from settings at runtime), 19 mm width, max steer 18.2° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
