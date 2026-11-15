@@ -70,7 +70,7 @@ def _sim_vehicle_physics() -> dict:
 
 _VP = _sim_vehicle_physics()
 # Fallbacks (Docker without settings.json) must match settings.json; tools/tests/test_constants_guard.py checks them.
-WHEELBASE_M = float(_VP.get("Wheelbase", 1.627))
+WHEELBASE_M = float(_VP.get("Wheelbase", 1.6244))
 MAX_STEER_DEG = float(_VP.get("MaxSteerAngle", 18.2))
 LOOP_HZ = 20
 # 0 = no time limit; benchmark sessions end on lap completion at the gate.

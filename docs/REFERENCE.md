@@ -143,12 +143,12 @@ The default vehicle (`FSCar`) is modelled after ISC Racing Team's IFS-08 car. Al
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Mass | 275 | kg | `Mass` |
+| Mass | 220 | kg | `Mass` |
 | Drivetrain | RWD | — | `Drivetrain` |
-| Wheel radius | 0.202 | m | `WheelRadius` |
+| Wheel radius | 0.2002 | m | `WheelRadius` |
 | Wheel width | 0.190 | m | `WheelWidth` |
 | Max steer angle | 18.2 | ° | `MaxSteerAngle` |
-| Wheelbase | 1.627 | m | `Wheelbase` |
+| Wheelbase | 1.6244 | m | `Wheelbase` |
 | Front track | 1.220 | m | `TrackFront` |
 | Rear track | 1.190 | m | `TrackRear` |
 | Weight distribution front | 43.8 | % | `WeightDistFront` |
@@ -240,7 +240,7 @@ The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWh
 
 Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric load-transfer model (lateral + longitudinal weight transfer routed to per-wheel Fz inputs of the Pacejka fit).
 
-Chaos itself takes the suspension from the wheel classes, not from these fields: a wheel rate of 20,184 N/m per corner (`SpringRate = 201.84`, the property is ×100 into N/m), no anti-roll bar (`RollbarScaling = 0`), 3.5 cm bump and 5.46 / 5.81 cm droop travel front / rear (sized so the static ride height did not move when the rate was lowered). That is a 2.9–3.0 Hz ride, about 0.86° of pitch and 1.6° of roll per g. The real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° and 1.5–1.8° per g. The shadow values above are derived from the same rate: roll = rate × track² / 2 per axle, pitch = 2 × rate × (lf² + lr²).
+Chaos takes the springs per axle from `settings.json` (`SpringRateFront/Rear` wheel rates, `DampingRatioFront/Rear`, `WheelMassFront/Rear`), pushed into the wheel class defaults by `ApplyTireModelToWheelCDOs` before the vehicle is created. The values come from the KIN CAD (spring × motion ratio² from the kinematic sweep): 15,204 N/m front, 21,217 N/m rear, no anti-roll bar (`RollbarScaling = 0`). Droop travel is recomputed from the rate (static wheel offset 2.53 / 2.05 cm + static sag) so the ride height does not move; bump travel is 3.5 cm from rest. That is a 2.7 / 3.1 Hz ride (plant spec 2.9–3.0 Hz), about 0.66° of pitch and 1.1° of roll per g driverless, ~1.5° with a driver aboard; the real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° and 1.5–1.8° per g. The wheel-class literals (20,184 N/m, the plant spec's wheel rate) are only the fallback when `settings.json` has no rates. The shadow values above follow the same springs: roll = rate × track² / 2 per axle, pitch = 2 × (kF·lf² + kR·lr²).
 
 **Road roughness.** The level floor is perfectly flat, so on its own it gives the body almost no motion below 15 Hz. `AFSDSVehiclePawn::ApplyRoadRoughness` adds a random road: an ISO 8608 profile per wheel track (`RoadRoughnessGd0` m³ at 0.1 cycle/m, rolled off past `RoadRoughnessCutoffWavelength`, averaged over `RoadRoughnessFootprint`), with the rear wheels a wheelbase behind the front ones. Each corner runs a small quarter car, road → tyre spring (`RoadRoughnessTyreStiffness`) → wheel → strut, and the strut force from the wheel's motion is applied to the body at the wheel, using the solver's own spring and damper. The profile is drawn from the scenario seed (`Road.profile`), so a same-seed reset drives the same road. It is off on a track world such as Montmeló unless `RoadRoughnessOnTrackWorld`. The tyres' grip load does not see the road.
 
@@ -253,14 +253,19 @@ Chaos itself takes the suspension from the wheel classes, not from these fields:
 
 #### Wheels
 
-- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.202 m` from settings at runtime), 19 mm width, max steer 18.2° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
+- **Front (`UFSDSWheelFront`):** Hoosier R20 16.0×7.5-10 (200 mm class radius — overridden by `WheelRadius=0.2002 m` from settings at runtime), 19 mm width, max steer 18.2° (clamped to the tyre’s peak-grip angle — see `FSDSWheelFront.cpp`), no service brake (`MaxBrakeTorque=0`), pneumatic EBS via handbrake channel.
 - **Rear (`UFSDSWheelRear`):** Same tire, no steering, drive wheels (motor torque injected via `SetDriveTorque` with `Additive` combine method), `MaxBrakeTorque` sized at `BeginPlay` to `MaxRegenTorque · GearRatio · DrivetrainEfficiency / 2` per wheel so the brake input channel saturates correctly against the regen ceiling.
 
 #### Aerodynamics
 
 Applied per-tick using `AddForce` on the vehicle mesh:
-- **Drag:** `F_drag = 0.5 · ρ · CdA · v²` (opposing velocity), `CdA = 0.9 m²`.
-- **Downforce:** `F_down = 0.5 · ρ · ClA · v²` distributed front/rear per `AeroBalanceFront`, `ClA = 1.8 m²`, `AeroBalanceFront = 0.45`.
+- **Drag:** `F_drag = 0.5 · ρ · CdA · v²` (opposing velocity), `CdA = 1.2 m²`.
+- **Downforce:** `F_down = 0.5 · ρ · ClA · v²` distributed front/rear per `AeroBalanceFront`, `ClA = 2.8 m²`, `AeroBalanceFront = 0.50`.
+
+Source: coarse CFD of the IFS-08 KIN CAD (OpenFOAM k-ω SST, 2 M cells, 20 m/s, moving ground, rotating wheels,
+no radiators): ClA 2.75–2.88, CdA 1.30, 50 % front. CdA is set to 1.2 to allow for the coarse mesh over-predicting
+drag. No mesh-independence study yet; validate CdA with a coast-down test on the real car. The values come from
+the IFS08_KIN model pipeline (`vehicle_params.json` → `generators/ifssim.py`), not edited here by hand.
 
 Air density ρ = 1.225 kg/m³.
 

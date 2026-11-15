@@ -328,6 +328,38 @@ void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")
 		TEXT("lat B=%.2f C=%.2f E=%.2f, peak mu=%.2f. settings.json tire model is now live."),
 		P.Pacejka.LatB, P.Pacejka.LatC, P.Pacejka.LatE, P.TireMu);
+
+	// Springs, damping and wheel spin inertia per axle, by the same route and
+	// for the same reason as the tyre curve: CreateVehicle() reads the CDO,
+	// and a live InitializeSuspension re-seeds solver state.
+	//
+	// UNIT TRAP: settings carry the WHEEL rate in N/m; the Chaos property is
+	// that / 100 (FillSuspensionSetup applies MToCm, and the solver force is
+	// cm x rate in 0.01 N units — see FSDSWheelFront.cpp).
+	//
+	// Droop travel follows the rate: a softer spring sags further at rest, so
+	// SuspensionMaxDrop = (static wheel offset) + (static corner load / rate)
+	// keeps the static wheel position, i.e. the ride height, where it has
+	// always been (offsets 2.53 cm front / 2.05 cm rear: the old 3.5 cm travel
+	// minus the old static compression; see FSDSWheelFront/Rear.cpp). Bump
+	// travel from rest stays SuspensionMaxRaise.
+	struct FAxle { UChaosVehicleWheel* CDO; float RateNpm; float Zeta; float MassKg; float LoadShare; float StaticOffsetCm; const TCHAR* Name; };
+	const FAxle Axles[] = {
+		{ CDOs[0], P.SpringRateFront, P.DampingRatioFront, P.WheelMassFront, P.WeightDistFront,        2.53f, TEXT("front") },
+		{ CDOs[1], P.SpringRateRear,  P.DampingRatioRear,  P.WheelMassRear,  1.f - P.WeightDistFront,  2.05f, TEXT("rear") },
+	};
+	for (const FAxle& A : Axles)
+	{
+		if (!A.CDO || A.RateNpm <= 0.f) continue;
+		const float CornerLoadN = P.Mass * 9.81f * A.LoadShare * 0.5f;
+		A.CDO->SpringRate = A.RateNpm / 100.f;
+		A.CDO->SuspensionMaxDrop = A.StaticOffsetCm + 100.f * CornerLoadN / A.RateNpm;
+		A.CDO->SuspensionDampingRatio = A.Zeta;
+		A.CDO->WheelMass = A.MassKg;
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS: %s wheel CDO — wheel rate %.0f N/m (SpringRate %.1f), static sag %.2f cm, MaxDrop %.2f cm, damping ratio %.3f, wheel mass %.2f kg"),
+			A.Name, A.RateNpm, A.CDO->SpringRate, 100.f * CornerLoadN / A.RateNpm, A.CDO->SuspensionMaxDrop, A.Zeta, A.MassKg);
+	}
 }
 
 void AFSDSVehiclePawn::SetupVehicleMovement()
