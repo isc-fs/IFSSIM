@@ -1056,8 +1056,17 @@ def boards_pace(start: datetime, end: datetime, run=subprocess.run) -> dict | No
 
 
 def boards_pace_of(rows: list[dict]) -> dict | None:
+    """The pace over the longest stretch of the log where the emulation's clock only went forward:
+    the server restarts the emulated car when the operator goes OFF (the end of a run, which a
+    window's padding can include), and its clock starts again from zero there."""
     rows = sorted(rows, key=lambda d: d["wall"])
-    if len(rows) < 2 or rows[-1]["wall"] <= rows[0]["wall"] or rows[-1]["t"] < rows[0]["t"]:
+    stretches: list[list[dict]] = [[]]
+    for d in rows:
+        if stretches[-1] and d["t"] < stretches[-1][-1]["t"]:
+            stretches.append([])
+        stretches[-1].append(d)
+    rows = max(stretches, key=lambda st: st[-1]["wall"] - st[0]["wall"])
+    if len(rows) < 2 or rows[-1]["wall"] <= rows[0]["wall"]:
         return None
     rtf = (rows[-1]["t"] - rows[0]["t"]) / (rows[-1]["wall"] - rows[0]["wall"])
     lag = max(float(d.get("lag_s", 0.0)) for d in rows)
