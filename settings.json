@@ -61,6 +61,12 @@
         "RollStiffnessRear": 14291.0,
         "HeaveStiffness": 80736.0,
         "PitchStiffness": 54250.0,
+        "_comment_road": "Road roughness on the level floor every generated track sits on (off on a track world such as Montmeló, which has its own surface). A random ISO 8608 road profile per wheel track (displacement PSD Gd0 x (n/0.1)^-2, rolled off past CutoffWavelength), averaged over the tyre Footprint, drives each corner through the tyre's vertical stiffness to the wheel, and the strut passes the wheel's motion to the body with the solver's own spring and damper. Gd0 2.5e-5 m^3 is ISO class A (smooth tarmac), fitted to the 2026-09-20 manual bag at 3-15 Hz: car vertical accel 0.67/0.45/0.33 m/s^2 at 3-6/6-10/10-15 Hz and 3-6 m/s, against 0.14/0.13/0.19 on the flat floor before. The tyre grip load does not see the road. Gd0 0 turns it off.",
+        "RoadRoughnessGd0": 2.5e-5,
+        "RoadRoughnessCutoffWavelength": 20.0,
+        "RoadRoughnessFootprint": 0.15,
+        "RoadRoughnessTyreStiffness": 100000.0,
+        "RoadRoughnessOnTrackWorld": false,
         "Pacejka": {
           "LatB": 10.0,
           "LatC": 1.4,

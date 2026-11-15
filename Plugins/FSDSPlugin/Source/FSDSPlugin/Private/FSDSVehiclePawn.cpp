@@ -6,6 +6,8 @@
 #include "UI/FSDSHud.h"
 #include "GameFramework/PlayerController.h"
 #include "FSDSRandom.h"
+#include "Environment/FSDSWorldActor.h"
+#include "EngineUtils.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Plant/FSDSChaosPlant.h"
 #include "Plant/FSDSFmuPlant.h"
@@ -919,6 +921,14 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		HeaveStiffness = P.HeaveStiffness;
 		PitchStiffness = P.PitchStiffness;
 
+		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint);
+		bRoadOnTrackWorld = P.bRoadRoughnessOnTrackWorld;
+		RoadTyreStiffness = P.RoadRoughnessTyreStiffness;
+		bRoadSeeded = false;
+		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, footprint %.2f m, tyre %.0f N/m)%s"),
+			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
+			Road.IsActive() ? (bRoadOnTrackWorld ? TEXT(", also on track worlds") : TEXT(", level floor only")) : TEXT(" - off"));
+
 		// Size the rear-wheel brake torque to the max motor regen
 		// referred to the wheel. Brake input (0-1) then represents a
 		// fraction of max motor regen; the Tick caps further by
@@ -1469,6 +1479,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	{
 		ApplyAeroForces();
 		ApplyRollingResistance();
+		ApplyRoadRoughness(DeltaTime);
 	}
 
 	// Apply controls
@@ -1724,6 +1735,77 @@ void AFSDSVehiclePawn::ApplyRollingResistance()
 	const float Frr = RollingResistance * Fz * Ramp;   // N
 
 	VehicleMesh->AddForce(-Velocity.GetSafeNormal() * Frr * 100.f, NAME_None, false);   // N -> UE
+}
+
+void AFSDSVehiclePawn::ApplyRoadRoughness(float DeltaTime)
+{
+	if (!Road.IsActive() || DeltaTime <= 0.f || !VehicleMovement) return;
+	USkeletalMeshComponent* VehicleMesh = GetMesh();
+	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
+
+	// A track's world (Montmeló) brings its own surface; checked once a second.
+	RoadWorldCheckTimer -= DeltaTime;
+	if (RoadWorldCheckTimer <= 0.f)
+	{
+		RoadWorldCheckTimer = 1.f;
+		bool bWorldBuilt = false;
+		if (UWorld* W = GetWorld())
+		{
+			for (TActorIterator<AFSDSWorldActor> It(W); It; ++It)
+			{
+				if (It->IsBuilt()) { bWorldBuilt = true; break; }
+			}
+		}
+		bRoadSuppressedByWorld = bWorldBuilt && !bRoadOnTrackWorld;
+	}
+	if (bRoadSuppressedByWorld) return;
+
+	// A new profile per scenario generation, so a same-seed reset drives the
+	// same road again.
+	const uint32 Gen = FSDSRandom::GetGeneration();
+	if (!bRoadSeeded || RoadGeneration != Gen)
+	{
+		Road.Reset(FSDSRandom::MakeStream(TEXT("Road.profile")));
+		RoadGeneration = Gen;
+		bRoadSeeded = true;
+		bRoadPrevValid = false;
+		RoadDistance = 0.0;
+	}
+
+	FVector Velocity = GetVehicleVelocityUe();   // cm/s
+	Velocity.Z = 0.f;
+	RoadDistance += Velocity.Size() / 100.0 * DeltaTime;
+
+	const FTransform Body = VehicleMesh->GetComponentTransform();
+	const FVector Up = Body.GetUnitAxis(EAxis::Z);
+	const int32 NumWheels = FMath::Min(VehicleMovement->Wheels.Num(), 4);
+	for (int32 i = 0; i < NumWheels; ++i)
+	{
+		float K = 0.f, C = 0.f;
+		FVector Local;
+		if (!VehicleMovement->GetSolverSuspension(i, K, C, Local)) return;
+
+		// Front wheels are ahead of the body origin (the centre of mass); the
+		// rear ones drive over the same track a wheelbase later. UE +Y is right.
+		const int32 Track = (Local.Y < 0.f) ? 0 : 1;
+		const double S = (Local.X > 0.f) ? RoadDistance : RoadDistance - Wheelbase;
+		const double H = Road.Height(Track, S);                       // m
+		if (!bRoadPrevValid)
+		{
+			RoadCorner[i].Reset(H);
+			RoadPrevHeight[i] = H;
+		}
+		const double Ms = Mass * ((Local.X > 0.f) ? WeightDistFront : (1.f - WeightDistFront)) / 2.0;
+		const UChaosVehicleWheel* Wheel = VehicleMovement->Wheels[i];
+		const double Mu = Wheel ? FMath::Max(1.f, Wheel->WheelMass) : 10.0;
+		RoadCorner[i].Advance(RoadPrevHeight[i], H, DeltaTime, Ms, Mu, K, C, RoadTyreStiffness);
+		RoadPrevHeight[i] = H;
+
+		const double F = RoadCorner[i].Force(K, C);                     // N
+		VehicleMesh->AddForceAtLocation(Up * (F * 100.0), Body.TransformPosition(Local), NAME_None);   // N -> UE
+	}
+	bRoadPrevValid = true;
+	Road.TrimBefore(RoadDistance - Wheelbase);
 }
 
 void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)

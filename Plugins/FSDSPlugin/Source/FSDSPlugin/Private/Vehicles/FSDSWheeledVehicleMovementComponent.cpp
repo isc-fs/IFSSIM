@@ -160,6 +160,24 @@ bool UFSDSWheeledVehicleMovementComponent::VerifyWheelConfigApplied(int32 WheelI
 	return bOk;
 }
 
+bool UFSDSWheeledVehicleMovementComponent::GetSolverSuspension(
+	int32 WheelIndex, float& OutSpringRate, float& OutDamping, FVector& OutLocalPosition) const
+{
+	if (!VehicleSimulationPT || !VehicleSimulationPT->PVehicle
+		|| !VehicleSimulationPT->PVehicle->Suspension.IsValidIndex(WheelIndex))
+	{
+		return false;
+	}
+	const Chaos::FSimpleSuspensionSim& S = VehicleSimulationPT->PVehicle->Suspension[WheelIndex];
+	// Chaos runs in cm and kg*cm/s^2, so a spring rate in (kg*cm/s^2)/cm is
+	// kg/s^2 = N/m and a damping in (kg*cm/s^2)/(cm/s) is kg/s = N*s/m: the
+	// numbers carry over unchanged.
+	OutSpringRate = S.Setup().SpringRate;
+	OutDamping = S.Setup().CompressionDamping;
+	OutLocalPosition = S.GetLocalRestingPosition();
+	return true;
+}
+
 bool UFSDSWheeledVehicleMovementComponent::VerifyAllWheelConfigsApplied(float Tolerance) const
 {
 	bool bAllOk = true;
