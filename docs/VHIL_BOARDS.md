@@ -53,6 +53,14 @@ restarted from power-on (about a second), so the next mission starts from AS Off
 ECU out of its DV latch and the tractive system precharged again. `run_mission_benchmark`
 does this between missions without any change.
 
+## Comparing times with and without boards
+
+The referee starts acceleration's clock when the event is set, not at a start line (autocross
+starts it at the first line crossing), so an acceleration time includes everything before the car
+moves. Compare `race/drive_time_s` (from the car's first motion to the finish), not
+`race/total_time_s`. Five jobs each on this PC: referee time 12.10 s without boards, 16.44 s with
+(the car first moves at 4.72 s and 8.87 s); drive time 7.48 s and 7.74 s (sd 0.10 s each).
+
 ## Fidelity: what is exact and what is approximated
 
 Exact: the firmware images (the ones the car runs, bootloader included), the boards' CAN

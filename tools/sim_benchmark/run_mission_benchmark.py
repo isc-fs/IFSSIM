@@ -94,6 +94,13 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+# The referee starts acceleration's clock when the event is set, not when the car crosses a line
+# (FSDSReferee.cpp, "Acceleration starts it when the event is set"), so its time includes arming
+# and the start sequence; "race/drive_time_s" counts from the car's first motion instead. The run
+# is polled this fast until the car moves and for FINE_POLL_FOR_S after, to place that moment.
+SET_OFF_MPS = 0.5
+FINE_POLL_S = 0.2
+FINE_POLL_FOR_S = 60.0
 # FS-Rules T14.9 AS state bytes on /assi/state, and the pipeline's /dv/status
 # DV_EMERGENCY (mission_control.interface_contract). Mission Control reports
 # both in /api/event/state as as_state / dv_status.
@@ -856,6 +863,7 @@ class RunResult:
     emergency_at: float | None = None  # seconds into the run (sim time when reported) the car went to AS Emergency
     cpu_wait: float | None = None  # share of the run some task waited for a CPU (Linux CPU pressure)
     load1: float | None = None  # the machine's 1-minute load average at the end of the run
+    set_off: float | None = None  # seconds into the run the car first moved (speed above SET_OFF_MPS)
 
 
 class Progress:
@@ -944,6 +952,7 @@ def run_one(
     seen_driving = False
     limit = float(m["timeout_s"])
     sim_now = sim0
+    set_off: float | None = None
 
     def elapsed() -> float:
         return time.monotonic() - t0 if sim0 is None else sim_now - sim0
@@ -963,6 +972,8 @@ def run_one(
                     "steering": (st.get("controls") or {}).get("steering"),
                 }
             )
+        if set_off is None and isinstance(st.get("speed"), (int, float)) and st["speed"] > SET_OFF_MPS:
+            set_off = t
         laps, need = (
             int(ref.get("laps") or 0),
             max(1, int(ref.get("required_laps") or m["laps"])),
@@ -985,7 +996,8 @@ def run_one(
                 f"(/assi/state {as_state}, /dv/status {dv_status}), ending the run"
             )
             break
-        time.sleep(poll_s)
+        fine = set_off is None or t - set_off < FINE_POLL_FOR_S
+        time.sleep(min(poll_s, FINE_POLL_S) if fine else poll_s)
         if sim0 is not None:
             sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
     seconds = time.monotonic() - t0
@@ -1004,6 +1016,7 @@ def run_one(
         emergency_at=emergency_at,
         cpu_wait=None if p0 is None or p1 is None or seconds <= 0 else min(1.0, (p1 - p0) / 1e6 / seconds),
         load1=os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
+        set_off=set_off,
     )
 
 
@@ -1070,6 +1083,11 @@ def race_metrics(res: RunResult) -> dict[str, float]:
             out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
     if res.speed_factor is not None:
         out["race/speed_factor"] = res.speed_factor
+    if res.set_off is not None:
+        # from the car's first motion to the finish: what the drive took, whatever the start
+        # sequence before it (arming, the EKF's calibration, an ECU's ready-to-drive delay)
+        out["race/set_off_s"] = round(res.set_off, 2)
+        out["race/drive_time_s"] = round(res.seconds - res.set_off, 2)
     if res.cpu_wait is not None:
         out["box/cpu_wait"] = round(res.cpu_wait, 3)
     if res.load1 is not None:
