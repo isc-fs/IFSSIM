@@ -422,6 +422,14 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 					StreamViz(ClientSocket);
 					return;
 				}
+				if (Request == TEXT("streamLidar2"))
+				{
+					// Organised cloud in the car's Hesai layout, 48-byte
+					// header. Older bridges never send this and keep the
+					// streamLidar format below.
+					StreamLidar(ClientSocket, /*bOrganised=*/true);
+					return;
+				}
 				if (Request == TEXT("streamLidar"))
 				{
 					// PR-#482: TCP LiDAR re-introduced. See StreamLidar
@@ -1268,6 +1276,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 		FString Name = Parts[1];
 		FVector UeOffsetCm(0.f, 0.f, 0.f);
+		FQuat UeMount = FQuat::Identity;
+		bool bSensorFrame = false;
 		bool bFound = false;
 
 		if (Name.Equals(TEXT("lidar"), ESearchCase::IgnoreCase))
@@ -1275,6 +1285,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (VehiclePawn->LidarSensor)
 			{
 				UeOffsetCm = VehiclePawn->LidarSensor->SensorOffset;
+				UeMount = VehiclePawn->LidarSensor->MountRotation.Quaternion();
+				bSensorFrame = VehiclePawn->LidarSensor->bPointsInSensorFrame;
 				bFound = true;
 			}
 		}
@@ -1285,7 +1297,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const float X = UeOffsetCm.X / 100.f;
 		const float Y = -UeOffsetCm.Y / 100.f;
 		const float Z = UeOffsetCm.Z / 100.f;
-		return FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}"), X, Y, Z);
+		// Mount rotation in the ROS body frame: mirroring Y maps the UE
+		// quaternion (w, x, y, z) to (w, -x, y, -z). "points" says which frame
+		// the sensor's data is in: "sensor" (relative to this mount, so the
+		// TF base_link -> sensor is this pose) or "vehicle" (identity TF).
+		return FString::Printf(
+			TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f,\"points\":\"%s\"}"),
+			X, Y, Z, UeMount.W, -UeMount.X, UeMount.Y, -UeMount.Z,
+			bSensorFrame ? TEXT("sensor") : TEXT("vehicle"));
 	}
 	else if (Method == TEXT("simGetGroundTruthKinematics"))
 	{
@@ -2561,9 +2580,9 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 // short-sleep loop polling GetTimestamp() and emit a frame whenever
 // it advances. Loop sleep is 1 ms — well below the 100 ms scan
 // interval, gives the kernel plenty of game-thread slack.
-void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
+void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket, bool bOrganised)
 {
-	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started"));
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started%s"), bOrganised ? TEXT(" (organised, V2 header)") : TEXT(""));
 
 	// Send "OK\n" to confirm streaming mode (same handshake the
 	// sensor stream uses; bridge's openStreamSocket reads exactly 3
@@ -2620,7 +2639,15 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		// LastTimestamp AFTER PointCloudBuffer is fully written, so
 		// the ordering is safe — if we observed a newer timestamp
 		// then the cloud we read here corresponds to that scan).
-		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
+		TArray<float> Points;
+		int32 OrgChannels = 0, OrgSlots = 0;
+		float OrgSweepS = 0.f;
+		const bool bSendOrganised = bOrganised
+			&& VehiclePawn->LidarSensor->GetOrganisedPointCloud(Points, OrgChannels, OrgSlots, OrgSweepS);
+		if (!bSendOrganised)
+		{
+			Points = VehiclePawn->LidarSensor->GetPointCloud();
+		}
 		const int32 TotalPoints = Points.Num() / 4;
 		if (TotalPoints <= 0)
 		{
@@ -2664,11 +2691,28 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		// AND avoids the bridge needing two recvs (the bridge's
 		// readExact already handles partial-recv internally).
 		const int32 PayloadBytes = TotalPoints * 4 * (int32)sizeof(float);
-		const int32 WireBytes = (int32)sizeof(FFSDSLidarStreamHeader) + PayloadBytes;
+		const int32 HeaderBytes = bOrganised ? (int32)sizeof(FFSDSLidarStreamHeaderV2) : (int32)sizeof(FFSDSLidarStreamHeader);
+		const int32 WireBytes = HeaderBytes + PayloadBytes;
 		WireBuf.SetNumUninitialized(WireBytes, EAllowShrinking::No);
-		FMemory::Memcpy(WireBuf.GetData(), &Header, sizeof(FFSDSLidarStreamHeader));
+		if (bOrganised)
+		{
+			FFSDSLidarStreamHeaderV2 Header2;
+			Header2.FrameID         = Header.FrameID;
+			Header2.Channels        = bSendOrganised ? OrgChannels : Header.Channels;
+			Header2.TotalPoints     = TotalPoints;
+			Header2.LagNs           = Header.LagNs;
+			Header2.SimCaptureNs    = Header.SimCaptureNs;
+			Header2.SweepDurationNs = bSendOrganised ? (int64)((double)OrgSweepS * 1e9) : 0;
+			Header2.Slots           = bSendOrganised ? OrgSlots : 0;
+			Header2.Flags           = bSendOrganised ? 1u : 0u;
+			FMemory::Memcpy(WireBuf.GetData(), &Header2, sizeof(Header2));
+		}
+		else
+		{
+			FMemory::Memcpy(WireBuf.GetData(), &Header, sizeof(FFSDSLidarStreamHeader));
+		}
 		FMemory::Memcpy(
-			WireBuf.GetData() + sizeof(FFSDSLidarStreamHeader),
+			WireBuf.GetData() + HeaderBytes,
 			Points.GetData(),
 			PayloadBytes);
 

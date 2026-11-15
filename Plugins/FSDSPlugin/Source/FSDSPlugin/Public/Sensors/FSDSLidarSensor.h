@@ -53,6 +53,13 @@ public:
 	/** Get point count (number of 3D points, not floats) */
 	int32 GetPointCount() const;
 
+	/** The last GPU scan as the car's Hesai lays it out: every ray, slots in
+	 *  firing order (reversed when the sweep ran the other way), rings top
+	 *  first within a slot, [x,y,z,intensity] per ray with intensity -1 for
+	 *  no return. OutSweepS is the time from the first slot to the last.
+	 *  False (and empty) when there is no organised scan (CPU path). */
+	bool GetOrganisedPointCloud(TArray<float>& OutPoints, int32& OutChannels, int32& OutSlots, float& OutSweepS) const;
+
 	/** Get wall-clock (Cycles64) timestamp of last scan */
 	uint64 GetTimestamp() const { return LastTimestamp; }
 
@@ -116,6 +123,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	FRotator MountRotation = FRotator::ZeroRotator;
 
+	/** Points in the sensor's own frame (origin at the sensor, axes tilted
+	 *  with MountRotation), like the car's Hesai driver, instead of the
+	 *  vehicle frame. settings.json PointFrame "sensor" / "vehicle". The
+	 *  bridge publishes the matching base_link -> hesai_lidar TF. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bPointsInSensorFrame = false;
+
 	/** Draw debug points in editor */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	bool bDrawDebugPoints = false;
@@ -130,6 +144,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float DropoutRate = 0.0f;
 
+	/** Weak-return dropout: P(no return) = DropoutWeakRate · I^-DropoutWeakExp,
+	 *  capped at DropoutWeakMax, with I the hit's noiseless intensity in output
+	 *  units (0-255 on the car's scale). The car's Hesai loses ~20 % of returns
+	 *  at I 0-2 and ~1 % at I 32-64. A drop lasts several scans of the same
+	 *  sweep direction: each beam gets its own run length, log-uniform from 2 to
+	 *  DropoutBurstScans (0 = a fresh draw every scan), and DropoutBurstIidShare
+	 *  of the probability stays a one-scan draw. GPU path only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutWeakRate = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutWeakExp = 0.77f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutWeakMax = 0.3f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutBurstScans = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float DropoutBurstIidShare = 0.15f;
+
 	/** Range-dependent noise: σ grows by this · range_m², in cm per m² (0 = flat σ). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float RangeNoiseRangeCoeffCm = 0.0f;
@@ -141,13 +173,68 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float RangeNoiseReflectanceExp = 0.0f;
 
-	/** Probability of a mixed return (between the hit and the background) at a >30 cm depth edge. GPU path only. */
+	/** Depth edges: where a neighbouring beam (left or right, same channel)
+	 *  ranges more than 30 cm away, the return comes back from that other
+	 *  surface with probability EdgeSwapRate, or not at all with probability
+	 *  EdgeDropRate. The car's Hesai does both at cone silhouettes: objects
+	 *  grow into the beams beside them and edge beams flicker. GPU path only. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
-	float EdgeOutlierRate = 0.0f;
+	float EdgeSwapRate = 0.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
+	float EdgeDropRate = 0.0f;
 
 	/** Relative σ of scan-to-scan intensity jitter (0 = none). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR Noise")
 	float IntensityNoise = 0.0f;
+
+	/** Intensity law: I = IntensityScale · ρ · cos(θ_inc)^IntensityIncidenceExp
+	 *  · range_m^-IntensityRangeExp · jitter, clamped to [0, IntensityMax] and
+	 *  rounded to whole numbers when bIntensityRound. The car's Hesai reports
+	 *  0-255 whole numbers that fall as r^-1.29 and don't depend on incidence.
+	 *  IntensityScale < 0 keeps the old law: ρ · cos · (R_ref / r)², 0..1, with
+	 *  R_ref 5 m on the GPU path and 1 m on the CPU path. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityScale = -1.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityRangeExp = 2.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityIncidenceExp = 1.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float IntensityMax = 1.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bIntensityRound = false;
+
+	/** GPU path: ρ for hits with no reflectance-LUT entry (ground, paint,
+	 *  scenery) is clamp(gain · scene luminance, 0, 1). Visible luminance
+	 *  is darker than 905 nm reflectance (asphalt renders at ~0.04); the
+	 *  shipped gain is fitted so the ground matches the car. Also feeds the
+	 *  reflectance term of the range noise. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float LuminanceReflectanceGain = 1.0f;
+
+	/** LuminanceReflectanceGain while a track's world (Montmeló) is built.
+	 *  A world brings photo-matched colours and hides the level's floor,
+	 *  which renders darker than asphalt. < 0 = use LuminanceReflectanceGain. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float WorldLuminanceReflectanceGain = -1.0f;
+
+	/** Mirror sweep. The car's Hesai stamps a scan at its first point and
+	 *  measures the rest over the next ~90 ms, linearly in azimuth, without
+	 *  motion correction; the sweep direction alternates every scan. The sim
+	 *  captures a scan in one instant, so each point is moved by the car's
+	 *  motion over its delay: p' = p - tau (v + w x p), tau = SweepDurationMs
+	 *  times the azimuth's fraction of the FOV (1 - fraction on reversed
+	 *  scans). 0 = no sweep (one instant). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	float SweepDurationMs = 0.0f;
+	/** Reverse the sweep direction every scan, like the car's mirror. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	bool bSweepAlternate = true;
+
+private:
+	/** -1 unknown, 0 level floor, 1 a world is built: logs the gain on change. */
+	int8 LastWorldGainState = -1;
+public:
 
 	/** Per-channel max-range overrides in CENTIMETRES (vehicle units),
 	 *  one entry per channel indexed by VIdx (0 = lowest V angle, last
@@ -160,6 +247,22 @@ public:
 	 *  FSDSVehiclePawn does the m→cm conversion when wiring through. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
 	TArray<float> PerChannelMaxRangeCm;
+
+	/** Per-channel elevation in DEGREES (sensor frame), one per channel,
+	 *  from settings.json ChannelElevationsDeg. Empty = the uniform
+	 *  VerticalFOVLower..Upper grid. With NumberOfChannels entries,
+	 *  OnSettingsApplied sorts a copy lowest first (channel 0 = lowest)
+	 *  and sets VerticalFOVLower/Upper to its ends so the GPU capture
+	 *  covers every beam. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	TArray<float> ChannelElevationsDeg;
+
+	/** The car's ring number for each ChannelElevationsDeg entry (same
+	 *  order). The car's Hesai numbers its beams in two interleaved banks,
+	 *  not by elevation; the organised cloud puts each beam at its ring.
+	 *  Empty or invalid = rings by elevation, top first. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS LiDAR")
+	TArray<int32> ChannelRingIds;
 
 	/** Ray-cast backend selection. Driven by settings.json LidarPath
 	 *  ("cpu" | "gpu"); see #223. Switching at runtime requires a PIE
@@ -175,6 +278,14 @@ public:
 	void OnSettingsApplied();
 
 private:
+	/** The elevations both back-ends use, degrees, sorted lowest first:
+	 *  ChannelElevationsDeg when it has NumberOfChannels entries, else the
+	 *  uniform grid. Rebuilt by OnSettingsApplied; the input array is left
+	 *  as given so a later re-apply sees the same input. */
+	TArray<float> EffectiveElevationsDeg;
+	// Organised cloud: ring r -> shader channel (lowest = 0). Built in OnSettingsApplied.
+	TArray<int32> RingToChannel;
+
 	// --- GPU path (#223) state. All null/zero when LidarPath==CPU. ---
 
 	UPROPERTY() USceneCaptureComponent2D* GPUDepthCapture = nullptr;
@@ -260,6 +371,9 @@ private:
 		// CaptureCycles64, becomes LastTimestampSimNs at consume. This is
 		// the value the bridge stamps header.stamp from under use_sim_time.
 		uint64 CaptureSimNs = 0;
+		// Sweep of this scan, for the organised cloud's slot order and times.
+		bool  bSweepReversed = false;
+		float SweepDurationS = 0.f;
 	};
 	static constexpr int32 ReadbackQueueDepth = 2;
 	FReadbackSlot ReadbackSlots[ReadbackQueueDepth];
@@ -272,6 +386,14 @@ private:
 	FTransform GPUPendingOwnerTransform;
 	FVector    GPUPendingSensorWorldPos = FVector::ZeroVector;
 	FQuat      GPUPendingOwnerRotation  = FQuat::Identity;
+	// Vehicle velocity (m/s) and angular velocity (rad/s) in the vehicle's UE
+	// frame at capture time, for the sweep smear.
+	FVector    GPUPendingVelLocalMps    = FVector::ZeroVector;
+	FVector    GPUPendingOmegaLocal     = FVector::ZeroVector;
+	// The same for the CPU path, snapshot on the game thread before the async scan.
+	FVector    CpuSweepVelLocalMps      = FVector::ZeroVector;
+	FVector    CpuSweepOmegaLocal       = FVector::ZeroVector;
+	uint32     CpuSweepCounter          = 0;
 
 	// Diagnostic latency tracking — emitted on first successful
 	// readback and every 50th thereafter. Per-slot enqueue time lives
@@ -323,6 +445,11 @@ private:
 
 	TArray<float> PointCloudBuffer;
 	int32 CachedPointCount = 0;
+	// Organised twin of PointCloudBuffer (GetOrganisedPointCloud), GPU path only.
+	TArray<float> OrganisedBuffer;
+	int32 OrganisedChannels = 0;
+	int32 OrganisedSlots = 0;
+	float OrganisedSweepS = 0.f;
 	uint64 LastTimestamp = 0;       // wall-clock (Cycles64) at capture
 	uint64 LastTimestampSimNs = 0;  // UE game/sim time at capture, ns
 	float CurrentHorizontalAngle = 0.f;
@@ -341,6 +468,8 @@ private:
 	// counter runs monotonically from editor start and a repeat scenario draws
 	// different GPU noise than the run it is meant to reproduce.
 	uint32 GpuScanCounterGeneration = 0;
+	/** Per-beam dropout-burst seed, drawn on the first scan of each seed generation. */
+	uint32 GpuDropoutCellSeed = 0;
 	FRandomStream NoiseStream;
 	// Generation this stream was seeded for. A scenario reset bumps the
 	// generation, which forces a re-seed so a repeat run genuinely restarts

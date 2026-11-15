@@ -282,15 +282,24 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 | Channels | 116 | ✓ | `NumberOfChannels` |
 | Points per second | 1,740,000 | ✓ | `PointsPerSecond` |
 | Rotations per second | 10 Hz | ✓ | `RotationsPerSecond` |
-| Vertical FOV upper | +5.9° | ✓ | `VerticalFOVUpper` |
-| Vertical FOV lower | −12.4° | ✓ | `VerticalFOVLower` |
+| Channel elevations | measured from the car, −12.8° to +5.8° | ✓ | `ChannelElevationsDeg` |
+| Vertical FOV upper (no table) | +5.9° | ✓ | `VerticalFOVUpper` |
+| Vertical FOV lower (no table) | −12.4° | ✓ | `VerticalFOVLower` |
 | Horizontal FOV | −60° to +60° (120°) | ✓ | `HorizontalFOVStart/End` |
 | Max range (global) | 30 m | ✓ | `MaxRange` |
 | Per-channel max range | 25–30 m (datasheet shape) | ✓ | `PerChannelMaxRangeM` |
 | Range noise std (Gaussian) | 0.03 m | ✓ | `RangeNoiseStd` |
-| Point dropout rate | 1% | ✓ | `DropoutRate` |
+| Point dropout | 20% at I≈1 → 1% at I≈48, bursty | ✓ | `DropoutWeakRate`, `DropoutWeakExp`, `DropoutWeakMax`, `DropoutBurstScans`, `DropoutBurstIidShare` (GPU path); flat `DropoutRate` 0 |
+| Depth-edge swap / drop | 15% / 18% | ✓ | `EdgeSwapRate`, `EdgeDropRate` (GPU path) |
 | Mount position (X, Y, Z) | (0.0, 0.0, 1.10) m | ✓ | `X`, `Y`, `Z` |
 | Ray-cast back-end | `gpu` | ✓ | `LidarPath` |
+| Mirror sweep (motion smear) | 89.8 ms, alternating | ✓ | `SweepDurationMs`, `SweepAlternate` |
+| Intensity law | car fit: 1460 · ρ · r^−1.29, rounded, 0–255 | ✓ | `IntensityScale`, `IntensityRangeExp`, `IntensityIncidenceExp`, `IntensityMax`, `IntensityRound` |
+| Luminance → ρ gain (non-LUT hits) | 3.2 on the level floor, 1 on a track's world | ✓ | `LuminanceReflectanceGain`, `WorldLuminanceReflectanceGain` |
+
+**Channel elevations.** The car's Hesai spaces its 116 beams unevenly: about 0.1° apart from −4° to +2.9°, 0.2° from −9° to −4° and from +2.9° to +4.6°, and 0.4° at the top and bottom. `ChannelElevationsDeg` gives one elevation per channel in the sensor frame, measured from a parked car bag; the sensor sorts it lowest first and takes its vertical FOV from its ends. Without it, the channels are spread evenly from `VerticalFOVLower` to `VerticalFOVUpper`. A length other than `NumberOfChannels` logs a warning and falls back to the even grid. Honoured by both back-ends.
+
+**Mirror sweep.** The car's Hesai stamps a scan at its first point and measures the rest over the next 89.8 ms, linearly in azimuth (44.6 ms ± 0.74 ms/deg), with every ring at the same time. The direction reverses every scan. The driver doesn't correct for the car's motion, so at speed a cone at the edge of the FOV is measured up to 90 ms after the stamp, and in the opposite order on the next scan: static cones jump about 31 cm from scan to scan at 6–13 m/s. The sim captures a scan in one instant, so `SweepDurationMs` moves each point by the car's motion over its delay, p′ = p − τ·(v + ω × p), with τ = `SweepDurationMs` × the azimuth's fraction of the FOV (1 − fraction on reversed scans) and v, ω the car's velocity and angular velocity when the scan was captured. `SweepAlternate` reverses the direction every scan. 0 captures in one instant. Honoured by both back-ends.
 
 **Per-channel max range.** Real Hesai ATX_S01 has per-beam laser-power variance (datasheet App. A.1.1) — outer rings reach less far than central beams (60 m bottom, 198 m centre, 90 m top on the real sensor). The sim uses a 116-element array linearly remapped from the datasheet's 60-198 m envelope into the 25–30 m simulator range budget, preserving the relative shape. Length must equal `NumberOfChannels`; mismatch logs a warning and falls back to the global `MaxRange`. Honoured by both back-ends.
 
@@ -298,20 +307,27 @@ All sensors are attached to the vehicle pawn and configured via `settings.json`.
 
 **Mount.** `(X=0.0, Y=0.0, Z=1.10)` corresponds to the IFS-08's main hoop crossbar height, CoG-aligned, centred. Pre-2026 settings used a hood-mount approximation (`X=0.5, Z=0.9`); cone-detection cluster-height thresholds were rebaselined when the mount moved.
 
-**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 4 floats `(x, y, z, intensity)` — xyz in metres, intensity in [0, 1]. Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
+**Wire format.** Point cloud is output as a flat `float[]` array in sensor-local frame (X forward, Y left, Z up — UE5/ENU). Each point is 4 floats `(x, y, z, intensity)` — xyz in metres, intensity in [0, `IntensityMax`] (whole numbers 0–255 with the shipped settings, like the car). Sensor packs only emit *hits*, so the wire rate is roughly 65% of attempted rays (e.g. ~1.14 M valid returns at 1.74 M attempted).
 
-**Intensity model (#255).** Mirrors the Hesai ATX-S01 working principle:
+**Intensity model.** The shipped settings use the law fitted to the car's Hesai:
 ```
-intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
+intensity = round(min(IntensityScale × ρ_905 × cos(θ_inc)^IntensityIncidenceExp × range^−IntensityRangeExp, IntensityMax))
 ```
+with `IntensityScale` 1460, `IntensityRangeExp` 1.29, `IntensityIncidenceExp` 0, `IntensityMax` 255 and `IntensityRound` true. The car reports whole numbers 0–255 that fall as r^−1.29 (cone faces: about 28 at 4 m, 11 at 10 m, 4–5 at 16–18 m) and do not depend on the angle of incidence (on the ground, once the range law is divided out, what is left goes as cos^0.08). The scale puts the sim's blue cones (LUT ρ 0.15) at I·r^1.29 ≈ 215, near the car's median cone-like object (179), and the yellow ones (ρ 0.5) at ≈ 700, near its top decile (688); the car bag carries no cone colours to check them one by one. Surfaces without a LUT entry (asphalt, paint, scenery) take ρ from scene luminance times `LuminanceReflectanceGain`, clamped to 1. The level's own floor renders at a luminance of about 0.04, darker than asphalt, so the gain of 3.2 lifts it to the car's I·r^1.29 median of 183. A track's world (Montmeló) hides that floor and brings photo-matched colours, so while one is built the sensor uses `WorldLuminanceReflectanceGain` instead (1: its asphalt lands at about 160; at 3.2 it was 515). The log says which gain is in use when it changes. A fixed reflectance for the floor was not an option: the stencil encoder does not compare depths, so a stencil on the floor would bleed onto every untagged object standing on it. This ρ also sets the reflectance term of the range noise. The pipeline's cone detection does not read intensity today.
+
+Leave `IntensityScale` out (or negative) for the original model of #255, described below: ρ_905 × cos(θ_inc) × (R_ref / range)², clamped to [0, 1].
 - **ρ_905** — surface reflectance at 905 nm. Two-stage rollout:
   - **Phase 1 (current).** The decode shader holds a 16-entry `ReflectanceLUT[]` pre-populated with datasheet ρ_905 values (blue ≈ 0.15, yellow ≈ 0.50, orange ≈ 0.65, white-stripe slot reserved). The cone spawner (`FSDSConeSpawner::SpawnStaticMeshCone`) tags each cone mesh with a `CustomDepthStencilValue` (1=blue, 2=yellow, 3=big-orange, 4=small-orange) so the LUT can be looked up by stencil. `r.CustomDepth=3` is enabled in `DefaultEngine.ini` to render the depth+stencil pass. **The LUT is inert by default** (`UseReflectanceLUT=0`); the shader still uses `FinalColorLDR` Rec.709 luminance for every hit. This stage ships the foundation so Phase 2 is a flip-the-flag change.
   - **Phase 2.** `M_LiDARStencilEncoder.uasset`, a post-process material on `GPUColorCapture`, writes `stencil_id / 255` into R and Rec.709 luminance into G of `FinalColorLDR`; the shader reads R → stencil ID → LUT, falling back to G for any hit whose stencil is 0 or whose LUT slot is unset. On by default (`fsds.LidarGPU.StencilEncoder 1`); the sensor reads it once, at startup, so turn it off with `-ini:Engine:[ConsoleVariables]:fsds.LidarGPU.StencilEncoder=0`, not `-ExecCmds`. Off, the colour capture never renders and intensity carries no material information; that is the fallback if the faint viewport stippling of #488 shows in a packaged build. The colour capture then persists its rendering state: UE only applies a post-process material to a view with a view state, so without it the encoder never ran (#698). `fsds.LidarGPU.DebugColorChannel 1`/`2` reports raw R/G as the intensity, to check what the encoder writes.
 - **cos(θ_inc)** — angle of incidence between the ray and the surface normal at the hit. GPU path computes the normal in-shader from depth-buffer central differences (cross-product of neighbour-texel deltas, then mapped from view to world space using the sensor's world rotation rows passed as shader parameters). CPU path uses `FHitResult::ImpactNormal`.
 - **(R_ref / range)²** — Lambert inverse-square term. `R_ref = 5 m` so cone-distance hits land in a useful intensity range — surfaces closer than 5 m saturate to ρ·cos(θ), surfaces farther fall off quadratically. (`R_ref = 1 m` was tried first and squashed 75% of the dynamic range to zero.)
-- Output clamped to [0, 1]. Wire format encodes `intensity < 0` as the "no-hit" sentinel before the bridge filters; valid points carry `intensity ≥ 0`. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
+- Output clamped to [0, 1] in the original model. Wire format encodes `intensity < 0` as the "no-hit" sentinel before the bridge filters; valid points carry `intensity ≥ 0`. The CPU fallback uses a placeholder ρ = 0.5 (no per-material lookup).
 
 **Noise model.** Gaussian range noise applied per point in metres. Independent Bernoulli dropout per point.
+
+**Depth edges.** Where the neighbouring beam to the left or right (same channel) ranges more than 30 cm away, a return comes back from that other surface with probability `EdgeSwapRate`, or not at all with probability `EdgeDropRate`. The neighbours are the real beam directions projected into the depth capture. On the car (parked, 4–12 m), about 15% of returns at such an edge come from the other surface, almost none land in between, and edge beams return on about 73% of scans against about 90% inside a surface: objects grow into the beams beside them and their silhouettes flicker. GPU path only.
+
+**Dropout.** Weak returns go missing. A hit's chance of no return is `DropoutWeakRate · I^-DropoutWeakExp`, capped at `DropoutWeakMax`, where I is its intensity before jitter (0–255 on the car's scale). On the car, parked, ground cells return on 80% of scans at intensity 0–2, 92% at 2–8, 97–98% at 8–32 and 99% above. A missing beam tends to stay missing: on cells that drop 2–20% of the time, a missing beam is missing again 1, 2, 4 and 16 scans later (same sweep direction) 65%, 58%, 50% and 30% of the time, against 13% if scans were independent. Each beam therefore draws once per K scans of one direction, with K log-uniform between 2 and `DropoutBurstScans` and a random phase per beam; `DropoutBurstIidShare` of the chance is drawn fresh each scan. With 64 and 0.15 this gives 67%, 53%, 36% and 12%: right over the first few scans, short of the car's slow tail. `DropoutRate` adds a flat per-ray rate on top; it is 0 now. GPU path only; the CPU path keeps the flat rate.
 
 ### 4.2 IMU
 
@@ -332,6 +348,11 @@ intensity = ρ_905 × cos(θ_inc) × (R_ref / range)²
 | Accelerometer / gyroscope bias correlation time τ | 100 s | ✓ | `AccelBiasTau`, `GyroBiasTau` |
 | Resolution | 1.796 mm/s² (±6 g), 1.064 mrad/s (±2000 °/s) | ✓ | `AccelLsb`, `GyroLsb` |
 | Full scale | 58.84 m/s², 34.907 rad/s | ✓ | `AccelRange`, `GyroRange` |
+| On-car vibration, x/y/z rms at 7.5 m/s | accel 0.254 / 0.453 / 1.347 m/s², gyro 0.0595 / 0.0243 / 0.0071 rad/s | ✓ | `VibrationAccelRms`, `VibrationGyroRms` |
+| Vibration bandpass centre / Q, x/y/z | accel 12 / 19 / 23 Hz, Q 1.5 / 1.5 / 4; gyro 21 / 22.5 / 12 Hz, Q 2.75 / 4 / 1.5 | ✓ | `VibrationAccelHz`, `VibrationAccelQ`, `VibrationGyroHz`, `VibrationGyroQ` |
+| Vibration speed law | ramps in to 3 m/s, then × (v / 7.5 m/s)^0.25 | ✓ | `VibrationOnSpeed`, `VibrationRefSpeed`, `VibrationSpeedExp` |
+
+**Vibration.** The sim's physics ticks at ~60 Hz, so its chassis cannot produce what the car's IMU sees from 15 to 50 Hz: a resonance near 23 Hz in a_z and roll rate, and broader content in a_x / a_y. Each axis adds white noise through a second-order bandpass, scaled to the configured rms, stepped every 400 Hz sample before the accel hold, and zero when parked. It is fitted to the car's manual bag (2026-09-20, 3–12.5 m/s, parked spectrum removed) and matches it within 20–40 % per band from 10 to 50 Hz. Below 10 Hz the sim's own chassis motion is left as it is. Set an axis's rms to 0 to turn it off.
 
 **Where the numbers come from.** Range, rates and resolution are the uDV firmware's BMI088 configuration. White noise is fitted (Allan deviation) from raw BMI088 logs: accel 2.03/2.78/2.75 mm/s²/√Hz and gyro 0.32/0.39/0.15 mrad/s/√Hz, turned into per-sample σ for the 40 Hz accel and 116 Hz gyro filters; the gyro x/y values match the car's parked `/imu`. The car's `/imu` is not bias-corrected (uDV uses its boot calibration only for its own attitude filter), and the turn-on gyro offset differed by several mrad/s between the logs and a car bag, hence a fresh draw per session. The logs are too short to fit in-run drift, so the Ornstein–Uhlenbeck parameters are unchanged.
 
@@ -450,7 +471,7 @@ response = s.recv(1024)  # b"true"
 | `getSettingsString` | JSON string | Full contents of settings.json |
 | `reset` | `true` | Reload current level (full state reset) — note: the server-info advert no longer lists this command, but the handler is still wired up for legacy clients |
 | `listCameras` | `["cam1","cam2",...]` | List configured camera names |
-| `getSensorOffset <name>` | `x, y, z, roll, pitch, yaw` (m / rad) | Static body-frame offset of a sensor as configured in settings.json. The ROS 2 bridge calls this on init to publish accurate static TFs instead of hardcoding values. |
+| `getSensorOffset <name>` | `{x, y, z, qw, qx, qy, qz, points}` (m, quaternion) | Static mount of a sensor as configured in settings.json, REP-103 body frame. `points` is `"sensor"` when the sensor's data is in its own frame (the TF `base_link → sensor` is this pose) or `"vehicle"` (data already in `base_link`, identity TF). The ROS 2 bridge calls this on init to publish the static TFs. |
 
 #### Vehicle State
 
@@ -619,7 +640,7 @@ LiDAR transport is hard-wired to UDP since #322. Earlier versions exposed a `lid
 | `imu` | `sensor_msgs/Imu` | ~100 Hz | `frame_id=fsds/IMU`. Covariances from `AccelNoiseStd`, `GyroNoiseStd`. |
 | `gss` | `geometry_msgs/TwistWithCovarianceStamped` | ~100 Hz | `frame_id=fsds/GSS`. Body-frame velocity. |
 | `motor_rpm` | `std_msgs/Float32` | ~100 Hz | Motor RPM (post-gearbox shaft side). |
-| `lidar/Lidar1` | `sensor_msgs/PointCloud2` | up to 10 Hz | `frame_id=fsds/Lidar`. See section 4.1 for actual rates by transport. |
+| `lidar_points` | `sensor_msgs/PointCloud2` | up to 10 Hz | `frame_id=hesai_lidar`. Default layout matches the car's Hesai driver: one row of 1500 slots × 116 rings in firing order (the order reverses with the sweep direction), ring 0 = top beam, 26-byte packed points `x, y, z, intensity` (float32), `ring` (uint16, offset 16), `timestamp` (float64 absolute seconds when the slot fired, offset 18); points are in the sensor's own frame, tilted with the mount (settings.json `PointFrame: "sensor"`, as on the car), and the bridge publishes `base_link → hesai_lidar` as the mount pose; `PointFrame: "vehicle"` gives levelled points at `base_link` with an identity TF; a beam with no return is (0, 0, 0) with intensity 0, `is_dense` false. `lidar_cloud_format:=compact` (env `LIDAR_CLOUD_FORMAT=compact`) gives valid hits only, x/y/z/intensity, 16 bytes. The Hesai layout needs a plugin with `streamLidar2` (GPU LiDAR path); otherwise the bridge falls back to compact. See section 4.1 for actual rates by transport. |
 | `lidar/Lidar1/viz` | `sensor_msgs/PointCloud2` | up to 10 Hz | **Opt-in subsampled cloud** for browser-based visualisers. Created only when `lidar_viz_decimation` parameter (or `LIDAR_VIZ_DECIMATION` env var) is ≥ 2; published as every-Nth-point of `/lidar/Lidar1` with identical header. Off by default — autonomy stack should always subscribe to `/lidar/Lidar1`. Foxglove web tab CPU drops from ~35 % to ~10 % at decimation=4 with no perceptible difference for "is SLAM seeing the cones I expect" debugging. |
 | `camera/<name>/compressed` | `sensor_msgs/CompressedImage` | `camera_hz` (default 10) | One topic per configured camera; PNG-compressed. |
 | `tire_loads` | `std_msgs/Float32MultiArray` | ~100 Hz | Per-wheel Fz from `ComputeTireLoadsParametric`, order FL/FR/RL/RR. |
