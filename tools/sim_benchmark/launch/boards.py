@@ -84,7 +84,9 @@ def image_ref(repo: Path, run: Run = _run) -> tuple[str, str] | None:
 
 def image_present(repo: Path, run: Run = _run) -> bool:
     refs = image_ref(repo, run)
-    return bool(refs) and run(["docker", "image", "inspect", refs[0]], 20).returncode == 0
+    # The local tag, or the published one: the message tells the user to `docker pull` the
+    # published ref, and ensure_image tags it locally when a run starts.
+    return bool(refs) and any(run(["docker", "image", "inspect", r], 20).returncode == 0 for r in refs)
 
 
 def availability(root: Path, run: Run = _run) -> tuple[bool, str]:

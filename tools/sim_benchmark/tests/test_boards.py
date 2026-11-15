@@ -109,3 +109,14 @@ def test_the_summary_reports_the_worst_lag_of_the_run(tree):
     boards = bd.start(tree, {"system": "ecu-ams-udv"}, run=d, log=lambda s: None)
     d.log += json.dumps({"lag_s": 1.5, "rtf": 0.9}) + "\n"
     assert boards.summary()["max_lag_s"] == 1.5 and boards.summary()["rtf"] == 0.9
+
+
+def test_the_image_counts_as_present_under_the_published_tag_too(tmp_path, monkeypatch):
+    """The page says `docker pull <published>`; that alone must make the part ready."""
+    monkeypatch.setattr(bd, "image_ref", lambda repo, run=None: ("ifs-vhil:k", "ghcr.io/isc-fs/ifs-vhil:k"))
+
+    def run(cmd, timeout=60.0):
+        have = cmd[-1] == "ghcr.io/isc-fs/ifs-vhil:k"
+        return subprocess.CompletedProcess(cmd, 0 if have else 1, "", "")
+
+    assert bd.image_present(tmp_path, run)
