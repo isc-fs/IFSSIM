@@ -1,7 +1,7 @@
 # tools/ci: the sim check and bench runs
 
 The scripts behind `.github/workflows/sim-pr.yml` (the sim check) and
-`bench.yml` / `nightly.yml` (benchmark specs on the GPU runner). The workflows
+`nightly.yml` (the nightly benchmark suites on the GPU runner). The workflows
 only check the code out and call them, so the same commands run on your own
 Linux machine with an NVIDIA GPU, or on the next box that takes over from
 `gpu-1080`.
@@ -14,19 +14,19 @@ Linux machine with an NVIDIA GPU, or on the next box that takes over from
 | `sim_publish.py` | Posts the report on the PR and in the `sim-report` issue (CI only). |
 | `gen_tracks.py`, `track_geometry.py` | The random autocross tracks. |
 | `bench_run.sh` | Runs a benchmark spec (`tools/sim_benchmark/run_spec.py`) with a fresh headless sim and Mission Control around it when the spec drives the sim (`python3 -m headless_run exec`); holds the same sim-session lock as the check. |
-| `bench_resolve.py` | Which IFSSIM commit a `bench.yml` run tests: the `ifssim` input or the spec's `code.ifssim` (branch, same-repo PR, commit). |
 
 ## Running a benchmark spec as the runner does
 
-`bench.yml` runs one spec: from the Run workflow form (a preset name, or the
-spec as JSON), from Mission Control's Benchmarks tab (Target: Runner), or from
-`nightly.yml`. On your own machine:
+`nightly.yml` runs two specs through `bench_run.sh` every night on `dev`
+(`missions-extensive`, then trackdrive). Benchmarks you launch yourself on a
+runner go through the benchweb and its runner agent, not Actions. On your own
+machine:
 
 ```bash
 # with your sim and Mission Control already open: run_spec.py alone drives them
 python3 tools/sim_benchmark/run_spec.py missions-basic
 
-# or as the runner does: a fresh headless sim around the spec
+# or as the nightly does: a fresh headless sim around the spec
 IFSSIM_BUILD=$CI_HOME/builds/dev/IFSSIM.sh IFSSIM_DV_IMAGE=ifssim-dv_pipeline_stack:local \
 RESULTS=$CI_HOME/runs/$(date +%Y%m%d_%H%M%S) \
   tools/ci/bench_run.sh missions-extensive

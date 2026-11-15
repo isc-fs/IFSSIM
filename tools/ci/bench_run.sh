@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs a benchmark spec as the bench PC's runner does (.github/workflows/bench.yml):
-# the same tools/sim_benchmark/run_spec.py a laptop runs, with a fresh headless sim
+# Runs a benchmark spec on a GPU box (.github/workflows/nightly.yml, and the
+# benchweb's runner agent): the same tools/sim_benchmark/run_spec.py a laptop runs, with a fresh headless sim
 # and Mission Control's backend around it when the spec drives the sim (the mission
 # benchmark). Bag benchmarks need no sim and run straight away.
 #

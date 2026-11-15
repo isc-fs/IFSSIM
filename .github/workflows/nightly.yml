@@ -3,11 +3,15 @@ name: Nightly benchmarks
 # The suites too long for a PR, every night on dev, report-only: the extensive
 # mission benchmark (tools/sim_benchmark/specs/missions-extensive.yaml: acceleration,
 # skidpad and autocross, 5 noisy starts per track), then trackdrive once per track.
-# Each is one bench.yml run on the GPU runner; their results are the
-# bench-nightly-* artifacts and each job's summary.
+# Both run on the GPU runner through tools/ci/bench_run.sh, the same run_spec.py
+# anyone runs on their own machine, with a fresh headless sim around it. Their
+# results are the nightly-* artifact and the job summary.
+#
+# Benchmarks you launch yourself go through the benchweb and its runner agent, not
+# Actions; Actions keeps the PR checks, this nightly and the releases.
 #
 # GitHub starts scheduled workflows from the default branch (main), so this runs
-# once it is on main; it always tests dev (`ifssim: dev`).
+# once it is on main; it always tests dev.
 
 on:
   schedule:
@@ -16,23 +20,76 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+
+concurrency:
+  group: nightly-benchmarks
+  cancel-in-progress: false
 
 jobs:
-  extensive:
-    uses: ./.github/workflows/bench.yml
-    with:
-      spec: missions-extensive
-      name: "nightly: extensive"
-      id: nightly-extensive-${{ github.run_id }}
-      ifssim: dev
+  nightly:
+    runs-on: [self-hosted, Linux, X64, gpu]
+    timeout-minutes: 720
+    env:
+      COMPOSE_PROJECT_NAME: ifssim-ci
+      DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+      IFSSIM_DV_IMAGE: ifssim-ci-dv_pipeline_stack:latest
+      STAGE: ${{ github.workspace }}/Saved/StagedBuildsCI
+      BENCH_TRIGGER: nightly
+      BENCH_REQUESTED_BY: ${{ github.triggering_actor }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: dev
+          # as in sim-pr.yml: LFS after checkout, and keep Intermediate/ and Saved/
+          lfs: false
+          submodules: true
+          clean: false
 
-  trackdrive:
-    needs: extensive
-    if: always()
-    uses: ./.github/workflows/bench.yml
-    with:
-      spec: '{"name": "nightly: trackdrive", "benchmarks": {"missions": {"settings": {"missions": "trackdrive"}}}}'
-      name: "nightly: trackdrive"
-      id: nightly-trackdrive-${{ github.run_id }}
-      ifssim: dev
+      - name: Fetch LFS files
+        run: git lfs pull
+
+      # The box's paths come from the runner's environment (CI_HOME, UE5_ROOT), with
+      # gpu-1080's layout as the default.
+      - name: Box paths
+        run: |
+          ci_home="${CI_HOME:-/build/ifssim-ci}"
+          { echo "UE5_ROOT=${UE5_ROOT:-$ci_home/UE_5.8}"; echo "UE-LocalDataCachePath=$ci_home/ddc"
+            echo "RESULTS_ROOT=$ci_home/runs/nightly-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"; } >> "$GITHUB_ENV"
+
+      - name: Pick or package the sim
+        env:
+          PUBLISH: "false"
+        run: tools/ci/sim_build.sh
+
+      - name: Build the pipeline images
+        run: |
+          docker build -f docker/dv_pipeline_stack/Dockerfile -t "$DV_IMAGE" .
+          docker compose build mission_control_backend
+
+      - name: Extensive missions
+        env:
+          RESULTS: ${{ env.RESULTS_ROOT }}/extensive
+        run: tools/ci/bench_run.sh missions-extensive
+
+      - name: Trackdrive
+        if: ${{ !cancelled() }}
+        env:
+          RESULTS: ${{ env.RESULTS_ROOT }}/trackdrive
+        run: >-
+          tools/ci/bench_run.sh missions-basic
+          --set "name=nightly trackdrive"
+          --set benchmarks.missions.settings.missions=trackdrive
+
+      - name: Upload the results
+        if: always() && env.RESULTS_ROOT != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          # the measurements, not the bags (the free plan's artifact quota)
+          path: |
+            ${{ env.RESULTS_ROOT }}/**/*.json
+            ${{ env.RESULTS_ROOT }}/**/*.csv
+            ${{ env.RESULTS_ROOT }}/**/*.log
+            !${{ env.RESULTS_ROOT }}/**/sim.log
+          retention-days: 14
+          if-no-files-found: ignore
