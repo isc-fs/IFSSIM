@@ -45,7 +45,7 @@ from pathlib import Path
 from vhil import elf
 from vhil.cosim import Port
 from vhil.plant_ts import make_plants
-from vhil.plants import COUNTS_TO_V, Inverter
+from vhil.plants import COUNTS_TO_V, Inverter, _e2e
 from vhil.sim import Sim
 from vhil.system import REPO
 
@@ -59,6 +59,7 @@ BRAKE_FREE_COUNTS = 700       # released, below the R2D arm level (750)
 TANK_BAR = 8.0                # both EBS tanks, above the firmware's storage threshold
 GPIOF = "sysbus.gpioPortF"
 DASH_CHG = 10                 # AMS PF10, as tests/sim/test_plant_ts.py presses it
+DV_STOPPING = 7             # dv_interface.h DV_STATUS_STOPPING
 STALE_S = 0.5                 # how long a command from the sim stays fresh
 
 
@@ -71,16 +72,46 @@ class Silent:
 
 
 class DrivenInverter(Inverter):
-    """vhil's inverter state machine and frames, with the motor's speed given
-    by the sim (the car's real wheels) instead of the placeholder model."""
+    """vhil's inverter state machine and frames, with the motor's speed given by the sim (the
+    car's real wheels) instead of the placeholder model.
+
+    The inverter reports every 10 ms (0x461 state, 0x463 speed). The plants are stepped every
+    20 ms to keep the emulation in real time, so the reports are not sent from step() (that would
+    halve their rate): each step hands the emulation the next ticks' frames (Port.schedule) and
+    the emulation sends them every 10 ms itself, as the car's inverter does. What changes between
+    steps is the 4-bit E2E counter, which is in the schedule; the state and the speed are the
+    step's, so they lag the commands by up to one step instead of one tick."""
+
+    LOOKAHEAD = 6          # ticks scheduled ahead: more than a step, replaced by the next one
+    PERIOD_US = 10_000
 
     def __init__(self):
         super().__init__(dc_link=Silent(), vdc_signal="v_link", gain_rpm_per_nm_s=0.0, drag_per_s=0.0)
         self.target_rpm = 0.0
+        self.scheduled = False
 
     def step(self, port, t_us):
+        for f in port.received("inv_cmd"):
+            if len(f.data) >= 3:
+                self._command(f.data[2] & 0x7F, t_us)
+        for f in port.received("inv_torque"):
+            if len(f.data) >= 4:
+                self.torque_nm = int.from_bytes(f.data[2:4], "little", signed=True)
         self.rpm = self.target_rpm
-        super().step(port, t_us)
+        if port.step_ms <= self.period_ms:       # stepped at the report rate: the plain way
+            return super().step(port, t_us)
+        ticks = port.ticks("inv_state")
+        first = ticks[0] if ticks else t_us + self.PERIOD_US
+        k0 = max(0, -(-(t_us + 1 - first) // self.PERIOD_US))
+        raw = int(round(self.rpm)) & 0xFFFFF
+        speed = bytes([0, 0, 0, 0, 0, (raw & 0x0F) << 4, (raw >> 4) & 0xFF, (raw >> 12) & 0xFF])
+        state, rpm = [], []
+        for k in range(k0, k0 + self.LOOKAHEAD):
+            at = first + k * self.PERIOD_US
+            state.append((at, _e2e(7, k & 0x0F, lambda b: b.__setitem__(4, self.state & 0x7F))))
+            rpm.append((at, speed))
+        port.schedule("inv_state", state, self.PERIOD_US / 1000)
+        port.schedule("inv_rpm", rpm, self.PERIOD_US / 1000)
 
 
 class Boards:
@@ -134,6 +165,7 @@ class Panel:
         self.asms = False           # the ASMS lever, as the operator last left it
         self.restart = False        # the operator went OFF after a run: power the car down and up
         self.used = False           # a mission has been asked for since power-on
+        self.streak = 0             # consecutive STOPPING messages, as the firmware counts them
         self.fed_at = -1e9          # virtual us of the last refresh of the pipeline's side
         self.sent: dict[str, int] = {}
         self.brake = None
@@ -200,13 +232,21 @@ class Panel:
             self.fed_at = self._now()
             tick = b.r("xTickCount", 4)
             if wall - self.dv_at < STALE_S:
+                # ros_set_dv_status (ros_globals.cpp): one call per /dv/status message, and the uDV's
+                # debounce counts consecutive STOPPING messages (issue #176); this refresh is one
+                # message per 100 ms, the pipeline's 10 Hz.
+                streak = min(255, self.streak + 1) if self.dv_status == DV_STOPPING else 0
+                if streak != self.streak:
+                    b.w8("g_dv_stopping_streak", streak); self.streak = streak
                 if self.sent.get("dv") != self.dv_status:
                     b.w8("g_dv_status", self.dv_status); self.sent["dv"] = self.dv_status
                 b.w32("g_dv_status_stamp_ms", tick)
             if wall - self.ctrl_at < STALE_S:
-                key = (round(self.throttle, 3), round(self.steer, 3))
+                # ros_set_ctrl_cmd_norm: never trust the wire, clamp to the normalised range
+                thr, steer = (max(-1.0, min(1.0, v)) for v in (self.throttle, self.steer))
+                key = (round(thr, 3), round(steer, 3))
                 if self.sent.get("ctrl") != key:
-                    b.wf("g_accel_cmd", self.throttle); b.wf("g_steer_cmd", self.steer); self.sent["ctrl"] = key
+                    b.wf("g_accel_cmd", thr); b.wf("g_steer_cmd", steer); self.sent["ctrl"] = key
                 b.w32("g_ctrl_cmd_stamp_ms", tick)
         return raw
 

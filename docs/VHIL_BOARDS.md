@@ -53,6 +53,22 @@ restarted from power-on (about a second), so the next mission starts from AS Off
 ECU out of its DV latch and the tractive system precharged again. `run_mission_benchmark`
 does this between missions without any change.
 
+## Fidelity: what is exact and what is approximated
+
+Exact: the firmware images (the ones the car runs, bootloader included), the boards' CAN
+buses (arbitration and load in virtual time), the AS state machine, the EBS initialisation,
+the ECU's R2D and torque path, the AMS precharge, and the inverter's reports every 10 ms
+(the emulation sends them itself, ±4 µs).
+
+Approximated, to hold 1.0x beside the sim (each measured unpaced beside the live sim):
+
+| approximation | what it costs the boards' view | what it buys |
+|---|---|---|
+| 1 ms sync quantum (vHIL's opt-in, not the gate's 0.5 ms) | a board sees another's frame up to 1 ms late | 1.17x instead of 1.05x |
+| plants step every 20 ms (not 10 ms) | the inverter's state and speed in a report, the AIR contacts and the shutdown circuit react up to 20 ms late | 1.17x instead of 0.89x |
+| the micro-ROS downlink written into the firmware's variables | the message callbacks do not run; the STOPPING debounce and the clamp of `/ctrl/cmd` are mirrored | USB is not modelled |
+| the operator, the AMI box, the RES, the EBS tanks and the brake line are stand-ins | what the car's electrics do around the boards | needed to arm the car |
+
 ## Limits
 
 - Only `ecu-ams-udv`: the sim's uDV node needs the car's three boards.
