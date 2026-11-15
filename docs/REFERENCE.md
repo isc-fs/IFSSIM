@@ -246,7 +246,7 @@ Chaos itself takes the suspension from the wheel classes, not from these fields:
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Road level Gd0 (ISO class A) | 2.5e-5 | m³ | `RoadRoughnessGd0` |
+| Road level Gd0 (ISO class B/C boundary) | 2.25e-4 | m³ | `RoadRoughnessGd0` |
 | Cutoff wavelength | 20 | m | `RoadRoughnessCutoffWavelength` |
 | Tyre footprint | 0.15 | m | `RoadRoughnessFootprint` |
 | Tyre vertical stiffness | 100,000 | N/m | `RoadRoughnessTyreStiffness` |
