@@ -97,8 +97,13 @@ POLL_S = 1.0
 # FS-Rules T14.9 AS state bytes on /assi/state, and the pipeline's /dv/status
 # DV_EMERGENCY (mission_control.interface_contract). Mission Control reports
 # both in /api/event/state as as_state / dv_status.
-AS_EMERGENCY, AS_DRIVING = 1, 3
-DV_EMERGENCY = 5
+AS_EMERGENCY, AS_DRIVING, AS_FINISHED = 1, 3, 4
+DV_EMERGENCY, DV_FINISHED = 5, 4
+# The pipeline says the mission is over (AS Finished) while the referee hasn't
+# seen the finish: a premature stop (the stop latch on false big oranges, the
+# roadmap's P2a failure). Held this many polls, so a real finish the referee
+# reports a moment late isn't counted.
+STOPPED_EARLY_POLLS = 3
 MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
@@ -839,7 +844,7 @@ def offset_pose(gate: dict, pose: dict, seed: int) -> tuple[dict, dict]:
 @dataclass
 class RunResult:
     run: PlannedRun
-    outcome: str  # finished | emergency | timeout | error
+    outcome: str  # finished | emergency | stopped_early | timeout | error
     started: datetime
     seconds: float
     referee: dict = field(default_factory=dict)
@@ -938,6 +943,7 @@ def run_one(
     # state latches, so a value left over from the previous run must not end
     # this one. DV_EMERGENCY comes from the running pipeline's own heartbeat.
     seen_driving = False
+    finished_polls = 0
     limit = float(m["timeout_s"])
     sim_now = sim0
 
@@ -971,6 +977,17 @@ def run_one(
             break
         as_state, dv_status = ref.get("as_state"), ref.get("dv_status")
         seen_driving = seen_driving or as_state == AS_DRIVING
+        if seen_driving and (as_state == AS_FINISHED or dv_status == DV_FINISHED):
+            finished_polls += 1
+            if finished_polls >= STOPPED_EARLY_POLLS:
+                outcome = "stopped_early"
+                log(
+                    f"{where}: the pipeline finished the mission {elapsed():.1f} s in, "
+                    f"the referee didn't (lap {laps}/{need}): stopped early, ending the run"
+                )
+                break
+        else:
+            finished_polls = 0
         if dv_status == DV_EMERGENCY or (seen_driving and as_state == AS_EMERGENCY):
             # EBS fired: the car stays stopped, so waiting out timeout_s
             # (2400 s for trackdrive) only burns the bench's time.
@@ -1054,6 +1071,7 @@ def race_metrics(res: RunResult) -> dict[str, float]:
         "race/penalty_s": doo * DOO_PENALTY_S + oc * OC_PENALTY_S,
         "race/run_time_s": res.seconds,
         "race/emergency": 1 if res.outcome == "emergency" else 0,
+        "race/stopped_early": 1 if res.outcome == "stopped_early" else 0,
     }
     if res.emergency_at is not None:
         out["race/emergency_at_s"] = res.emergency_at

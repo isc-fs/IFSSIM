@@ -1,0 +1,15 @@
+# Roadmap P2a reproduction (docs/ENVIRONMENT_ROADMAP.md): autocross with timekeeping light barriers on both sides of the timing line (where the stop latch looks).
+# 5 environment seeds (clutter_tripod_e1..e5, tools/envgen/clutter.py) x 5 runs each (scenario seeds 0-4)
+# = 25 runs. The props load without Environment.Enabled (a clutter_* sidecar), so no settings change.
+# Compare with clutter-control: python3 tools/sim_benchmark/clutter_report.py
+#   python3 tools/sim_benchmark/run_spec.py clutter-tripod
+schema: 1
+name: clutter, tripod
+notes: P2a reproduction. Outcome stopped_early = the pipeline declared the mission finished before the finish line.
+benchmarks:
+  missions:
+    repeats: 1
+    settings:
+      missions: autocross
+      repeats: 5          # per track, repeat i resets with scenario seed i
+      tracks: clutter_tripod_e1.csv,clutter_tripod_e2.csv,clutter_tripod_e3.csv,clutter_tripod_e4.csv,clutter_tripod_e5.csv

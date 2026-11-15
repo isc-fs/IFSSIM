@@ -136,6 +136,25 @@ def _env(args) -> int:
     return 0
 
 
+def _clutter(args) -> int:
+    from .clutter import build, check  # shapely, like env
+
+    tracks_dir = Path(args.tracks) if args.tracks else Path(__file__).resolve().parents[2] / "Content" / "tracks"
+    if args.out:
+        out = Path(args.out)
+        files = build(tracks_dir)
+        for fn, data in files.items():
+            (out / fn).write_bytes(data)
+        print(f"wrote {len(files)} clutter files to {out}")
+        return 0
+    problems = check(tracks_dir)
+    for fn, why in problems:
+        print(f"{fn}: {why}")
+    print("clutter tracks: " + ("up to date" if not problems else f"{len(problems)} out of date "
+                                "(python3 -m envgen clutter -o ../Content/tracks)"))
+    return 1 if problems else 0
+
+
 def _venue(args) -> int:
     from .venue import build  # shapely, like env
     return build(args.venue, args.tracks, check_only=args.check)
@@ -168,9 +187,12 @@ def main(argv=None) -> int:
     v.add_argument("venue", help="the venue file, Content/tracks/venues/<venue>.venue.json")
     v.add_argument("--tracks", help="where its <venue>__*.csv tracks are (default: the folder above venues/)")
     v.add_argument("--check", action="store_true", help="report only, write nothing")
+    cl = sub.add_parser("clutter", help="the clutter experiment's tracks (roadmap P2a, specs/clutter-*.yaml)")
+    cl.add_argument("-o", "--out", help="directory to write them into (omit to only check the committed ones)")
+    cl.add_argument("--tracks", help="where the base track is (default: Content/tracks)")
     args = ap.parse_args(argv)
     return {"create": _create, "startpose": _startpose, "stress": _stress,
-            "env": _env, "venue": _venue}[args.cmd](args)
+            "env": _env, "venue": _venue, "clutter": _clutter}[args.cmd](args)
 
 
 if __name__ == "__main__":

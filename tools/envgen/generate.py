@@ -15,6 +15,7 @@ track gets fewer props, never a prop in the wrong place.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import math
@@ -175,6 +176,8 @@ def place(pl: _Placer, prof, seed: int) -> List[Dict]:
     # Walls first: they need the most room.
     for name in sorted(prof.per_100m, key=lambda n: (not CLASSES[n].along_boundary, n)):
         cls, rng = CLASSES[name], Stream(seed, f"Env.Props.{name}")
+        if getattr(prof, "bands", None) and name in prof.bands:
+            cls = dataclasses.replace(cls, band_m=tuple(prof.bands[name]))
         for _ in range(int(round(prof.per_100m[name] * length_100m))):
             prop = _place_along_boundary(pl, cls, rng)
             if prop:

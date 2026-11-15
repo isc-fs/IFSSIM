@@ -237,6 +237,25 @@ into the copy mounted into the stack, and recorded in each run's `manifest.json`
 **Which code ran:** each run records where the pipeline ran and how its commit is known: this
 checkout's (`--stack own`), the latte panda's (`--panda-sha`), or unsure (`--stack running`).
 
+### The clutter experiment (roadmap P2a)
+
+Does trackside clutter make the pipeline stop early? Four specs drive autocross on copies of one
+track that differ only in their props (`tools/envgen/clutter.py`, `Content/tracks/clutter_*`):
+`clutter-control` (none), `clutter-narrow` (cone-sized bollards and bins near the cone line),
+`clutter-tripod` (light barriers at the timing line) and `clutter-tyrewall` (0.6 m tyre walls 0.5 m
+behind it). 5 environment seeds × 5 scenario seeds = 25 runs each. A `clutter_*` sidecar loads its
+props without `Environment.Enabled`, so nothing in `settings.json` changes.
+
+```bash
+python3 tools/sim_benchmark/run_spec.py clutter-control clutter-narrow clutter-tripod clutter-tyrewall
+python3 tools/sim_benchmark/clutter_report.py
+```
+
+A run whose pipeline declares the mission finished before the referee sees the finish ends at once
+with outcome `stopped_early` (`race/stopped_early` 1): the stop latch firing on false big oranges.
+The report counts them per kind against the control, with a one-sided Fisher exact p, and says
+whether P2a's acceptance holds (≥ 3 of 25 early stops, 0 of 25 in the control).
+
 ## Running from a spec (`run_spec.py`)
 
 A **run spec** is a YAML file that says which benchmarks to run, on which bags, with which

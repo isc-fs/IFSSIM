@@ -771,6 +771,43 @@ def test_a_finish_beats_the_emergency_brake_that_follows_it(tmp_path):
     assert rc == 0 and _result(tmp_path)["race/finished"] == 1
 
 
+def test_the_pipeline_finishing_before_the_referee_is_a_stop_early(tmp_path):
+    # driving, then the pipeline declares the mission over (AS 4, DV 4) with no finish seen:
+    # the premature stop latch the clutter experiments look for; ended at once, not timed out
+    w = FakeWorld(never_finishes=True, sim_step=1.0, assi=[(3, 3), (3, 3), (4, 4)])
+    rc, logs = _run(tmp_path, w, timeout_s=240.0)
+    res = _result(tmp_path)
+    assert rc == 1 and any(": stopped_early" in x for x in logs)
+    assert any("stopped early" in x and "ending the run" in x for x in logs)
+    assert res["race/stopped_early"] == 1 and res["race/finished"] == 0 and res["race/emergency"] == 0
+    assert res["race/run_sim_time_s"] < 20.0
+
+
+def test_a_finish_the_pipeline_reports_first_is_not_a_stop_early(tmp_path):
+    # AS Finished on one poll, the referee's finish on the next (fewer polls than the hold)
+    class LateReferee(FakeWorld):
+        def referee(self):
+            out = super().referee()
+            if out.get("as_state") == 4:
+                self.finished_seen = getattr(self, "finished_seen", 0) + 1
+                if self.finished_seen >= 2:
+                    out |= {"finished": True, "laps": self.required}
+            return out
+
+    w = LateReferee(never_finishes=True, sim_step=1.0, assi=[(3, 3), (4, 4)])
+    rc, _ = _run(tmp_path, w, timeout_s=60.0)
+    res = _result(tmp_path)
+    assert rc == 0 and res["race/finished"] == 1 and res["race/stopped_early"] == 0
+
+
+def test_never_driving_then_finished_is_not_a_stop_early(tmp_path):
+    # AS Finished left from the last run, never seen driving: not this run's finish
+    w = FakeWorld(never_finishes=True, sim_step=1.0, assi=[(4, 4)])
+    rc, logs = _run(tmp_path, w, timeout_s=5.0)
+    assert rc == 1 and any(": timeout" in x for x in logs)
+    assert _result(tmp_path)["race/stopped_early"] == 0
+
+
 # ------------------------------------------------------------------ where the sim is
 def test_a_given_sim_address_is_used_as_is(monkeypatch):
     monkeypatch.setattr(rmb, "wsl_windows_host", lambda: pytest.fail("no lookup"))
