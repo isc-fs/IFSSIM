@@ -1,0 +1,15 @@
+# Roadmap P2a reproduction (docs/ENVIRONMENT_ROADMAP.md): autocross with cone-sized bollards and bins 0.5-2.5 m outside the cone line (the false big orange).
+# 5 environment seeds (clutter_narrow_e1..e5, tools/envgen/clutter.py) x 5 runs each (scenario seeds 0-4)
+# = 25 runs. The props load without Environment.Enabled (a clutter_* sidecar), so no settings change.
+# Compare with clutter-control: python3 tools/sim_benchmark/clutter_report.py
+#   python3 tools/sim_benchmark/run_spec.py clutter-narrow
+schema: 1
+name: clutter, narrow
+notes: P2a reproduction. Outcome stopped_early = the pipeline declared the mission finished before the finish line.
+benchmarks:
+  missions:
+    repeats: 1
+    settings:
+      missions: autocross
+      repeats: 5          # per track, repeat i resets with scenario seed i
+      tracks: clutter_narrow_e1.csv,clutter_narrow_e2.csv,clutter_narrow_e3.csv,clutter_narrow_e4.csv,clutter_narrow_e5.csv

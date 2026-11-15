@@ -17,7 +17,7 @@ The classes are the roadmap's worst perception stressors (P2a):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,8 @@ class Profile:
     per_100m: Dict[str, float]
     # Tripods per timing line (a cluster of big orange cones), at most two lines.
     tripods_per_line: int = 0
+    # Per class, a band (gap to the track area, m) other than the class's own.
+    bands: Optional[Dict[str, Tuple[float, float]]] = None
 
 
 PROFILES: Dict[str, Profile] = {p.name: p for p in (
@@ -91,4 +93,18 @@ PROFILES: Dict[str, Profile] = {p.name: p for p in (
     # what an event sets up around a course drawn in a parking lot.
     Profile("venue_clutter", per_100m={"tyre_wall": 2.0, "bollard": 2.0, "bin": 1.0, "cone_stack": 1.0},
             tripods_per_line=2),
+    # The roadmap's P2a reproduction (tools/sim_benchmark/specs/clutter-*.yaml):
+    # one stressor per profile, so a premature stop latch or a run of false big
+    # oranges points at one prop class. clutter_control has no props but is
+    # the same experiment otherwise (environment loaded, same tracks, seeds).
+    # A clutter_* sidecar loads its props without Environment.Enabled, like a
+    # venue's (FSDSConeSpawner.cpp), so the specs need no settings change.
+    Profile("clutter_control", per_100m={}),
+    # Cone-sized posts close to the cone line: the false big orange.
+    Profile("clutter_narrow", per_100m={"bollard": 6.0, "bin": 3.0},
+            bands={"bollard": (0.5, 2.0), "bin": (0.8, 2.5)}),
+    # Light barriers at both timing lines, where the stop latch looks.
+    Profile("clutter_tripod", per_100m={}, tripods_per_line=2),
+    # 0.6 m tyre walls 0.5-0.6 m behind the cone line.
+    Profile("clutter_tyrewall", per_100m={"tyre_wall": 4.0}, bands={"tyre_wall": (0.5, 0.6)}),
 )}
