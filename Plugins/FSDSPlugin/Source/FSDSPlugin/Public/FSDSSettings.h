@@ -197,10 +197,10 @@ struct FFSDSVehiclePhysics
 	float TrackRear = 1.190f;            // m
 	float RollCenterFront = 0.040f;      // m
 	float RollCenterRear = 0.060f;       // m
-	float RollStiffnessFront = 27000.f;  // Nm/rad
-	float RollStiffnessRear = 22000.f;   // Nm/rad
-	float HeaveStiffness = 227600.f;     // N/m (sum of 4 wheel rates)
-	float PitchStiffness = 155600.f;     // Nm/rad
+	float RollStiffnessFront = 15021.f;  // Nm/rad, springs only (no bar)
+	float RollStiffnessRear = 14291.f;   // Nm/rad, springs only (no bar)
+	float HeaveStiffness = 80736.f;      // N/m (sum of 4 wheel rates)
+	float PitchStiffness = 54250.f;      // Nm/rad, 2 x wheel rate x (lf^2 + lr^2)
 
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.
