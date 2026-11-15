@@ -220,9 +220,16 @@ class Panel:
         if self.armed and self.asms and self.mission >= 0 and self.sent.get("mission") != self.mission:
             b.w32("g_can_mission_id", self.mission); b.w8("g_set_mission_ready", 1)
             self.sent["mission"] = self.mission
-        # the brake: held until the car drives, back on when it stops being driven
-        brake = (BRAKE_FREE_COUNTS if raw == AS_DRIVING else
-                 BRAKE_HELD_COUNTS if (raw in (AS_EMERGENCY, AS_FINISHED) and self.phase == "armed") else self.brake)
+        # The brake: held until the car drives, and then until the ECU has confirmed ready-to-drive
+        # (0x511, which the uDV mirrors in g_telemetry_r2d). The ECU takes the uDV's request (0x510) only
+        # while the brake is over its limit, so releasing it as soon as the uDV is in AS Driving raced
+        # that request and now and then left the ECU in WaitStartBrake with no torque for ever.
+        # Back on when the run is over.
+        brake = self.brake
+        if raw == AS_DRIVING and self.brake != BRAKE_FREE_COUNTS and b.r("g_telemetry_r2d"):
+            brake = BRAKE_FREE_COUNTS
+        elif raw in (AS_EMERGENCY, AS_FINISHED) and self.phase == "armed":
+            brake = BRAKE_HELD_COUNTS
         if brake is not None and brake != self.brake:
             b.ecu.set_voltage("PF7", brake * COUNTS_TO_V)
         self.brake = brake if brake is not None else self.brake
