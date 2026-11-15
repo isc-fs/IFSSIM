@@ -33,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include "frame_fifo.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -163,11 +164,14 @@ private:
     // "topic does not appear to be published" for 10 s. Move publishes
     // to a dedicated thread; recv thread now only pushes the latest
     // SensorFrame into a single-slot buffer and immediately re-enters
-    // recv. Frame drops are acceptable: at 400 Hz a missed sample is
-    // 2.5 ms of IMU.
+    // recv. Since #875 every frame carries a distinct 400 Hz IMU sample, so
+    // the handoff is a FIFO, not a single overwrite slot: the slot lost ~6 %
+    // of the samples on a loaded box (gaps up to 12.5 ms; the car has none).
+    // It holds 1 s of frames; past that the oldest are dropped and counted.
+    static constexpr size_t kSensorFifoFrames = 400;
     std::mutex sensor_pub_mutex_;
     std::condition_variable sensor_pub_cv_;
-    std::optional<SensorFrame> sensor_pending_;
+    ifssim_bridge::FrameFifo<SensorFrame> sensor_fifo_{kSensorFifoFrames};
     std::thread sensor_pub_thread_;
 
     // LiDAR producer-consumer split. The recv thread used to call

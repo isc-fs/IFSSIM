@@ -712,15 +712,14 @@ void IFSSIMRosWrapper::sensorStreamThread()
             continue;
         }
 
-        // Hand off to the publish thread. Single-slot buffer with
-        // drop-oldest semantics — if the consumer hasn't yet drained the
-        // previous frame, we overwrite it. The mutex is held only long
-        // enough to swap the std::optional; publish() runs entirely
-        // outside the lock on the consumer side. See the header comment
-        // for the failure mode this prevents.
+        // Hand off to the publish thread through a bounded FIFO: every
+        // frame carries its own IMU sample, so none is overwritten unless
+        // the publisher is a full second behind (then the oldest go, and
+        // are counted). The mutex is held only for the push; publish()
+        // runs outside it. See the header comment.
         {
             std::lock_guard<std::mutex> lock(sensor_pub_mutex_);
-            sensor_pending_ = frame;
+            sensor_fifo_.push(frame);
         }
         sensor_pub_cv_.notify_one();
     }
@@ -730,23 +729,36 @@ void IFSSIMRosWrapper::sensorPublishThread()
 {
     RCLCPP_INFO(node_->get_logger(), "Sensor publish thread started");
 
+    std::vector<SensorFrame> batch;
+    uint64_t reported_drops = 0;
+    auto last_report = std::chrono::steady_clock::now();
     while (streaming_) {
-        SensorFrame frame;
+        uint64_t drops = 0;
         {
             std::unique_lock<std::mutex> lock(sensor_pub_mutex_);
             sensor_pub_cv_.wait(lock, [this] {
-                return !streaming_ || sensor_pending_.has_value();
+                return !streaming_ || !sensor_fifo_.empty();
             });
             if (!streaming_) break;
-            frame = *sensor_pending_;
-            sensor_pending_.reset();
+            sensor_fifo_.drain(batch);
+            drops = sensor_fifo_.dropped();
         }
 
         // publish() runs OUTSIDE the lock so the recv thread can keep
         // pushing new frames. Whatever time DDS / subscriber back-
         // pressure costs is purely consumer-side; the recv loop never
-        // sees it.
-        onSensorFrame(frame);
+        // sees it. Frames go out oldest first, one /imu sample each.
+        for (const auto& frame : batch) onSensorFrame(frame);
+
+        const auto now = std::chrono::steady_clock::now();
+        if (drops != reported_drops && now - last_report > std::chrono::seconds(10)) {
+            RCLCPP_WARN(node_->get_logger(),
+                "Sensor publish fell more than %zu frames behind: %llu frames (IMU samples) "
+                "dropped so far", kSensorFifoFrames,
+                static_cast<unsigned long long>(drops));
+            reported_drops = drops;
+            last_report = now;
+        }
     }
 
     RCLCPP_INFO(node_->get_logger(), "Sensor publish thread exiting");
