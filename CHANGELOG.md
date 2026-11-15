@@ -82,6 +82,7 @@ shipping pipeline, documentation.
   rig descriptor is `rigs/bench-pc.yaml`.
 
 ### Fixed
+- **Loading the committed autocross tracks no longer modifies them.** `track_20260404_013723`, `…013725` and `…013726` were committed with the generator's start gate at the origin, so the backend recentred them on their first load and left them changed in the working tree. They are now committed centred, exactly as that load wrote them, so the sim and every run see the same cones as before. A test fails if a committed track other than the built-in ones is off-centre.
 - **`/imu` no longer loses samples on a busy machine.** The bridge handed sensor frames from its receive thread to its publish thread through a single slot that a newer frame overwrote. Since every frame carries its own 400 Hz IMU sample, a capture on the GPU box was missing about 6 % of them, with gaps up to 12.5 ms (the car's /imu has none). The handoff is now a FIFO holding 1 s of frames; if the publisher falls further behind, the oldest are dropped and the bridge logs how many.
 
 - **LiDAR intensity on Montmeló.** The 3.2 luminance gain from #912 matched the level's floor to the car but put Montmeló's photo-matched asphalt at about 3× the car's ground. While a track's world is built the sensor now uses `WorldLuminanceReflectanceGain` (1), and both grounds land near the car's.
