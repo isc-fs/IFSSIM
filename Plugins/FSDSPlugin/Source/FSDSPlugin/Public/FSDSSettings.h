@@ -94,6 +94,16 @@ struct FFSDSSensorSettings
 	float GyroLsb = 0.f;              // rad/s; 0 = no quantisation
 	float AccelRange = 0.f;           // m/s² full scale; 0 = unlimited
 	float GyroRange = 0.f;            // rad/s full scale; 0 = unlimited
+	// IMU on-car vibration (see FSDSImuSensor.h). Rms 0 = off.
+	FVector VibrationAccelRms = FVector::ZeroVector;  // m/s² at VibrationRefSpeed
+	FVector VibrationAccelHz = FVector(20.f);
+	FVector VibrationAccelQ = FVector(2.f);
+	FVector VibrationGyroRms = FVector::ZeroVector;   // rad/s at VibrationRefSpeed
+	FVector VibrationGyroHz = FVector(20.f);
+	FVector VibrationGyroQ = FVector(2.f);
+	float VibrationRefSpeed = 7.5f;   // m/s
+	float VibrationSpeedExp = 0.25f;
+	float VibrationOnSpeed = 3.f;     // m/s
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)

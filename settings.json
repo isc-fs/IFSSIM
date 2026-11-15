@@ -88,7 +88,17 @@
           "AccelLsb": 0.0017961,
           "GyroLsb": 0.0010642,
           "AccelRange": 58.84,
-          "GyroRange": 34.907
+          "GyroRange": 34.907,
+          "_comment_vibration": "On-car vibration, fitted to the car's /imu (manual bag 2026-09-20, 166 s at 3-12.5 m/s, minus the parked spectrum). The sim's physics ticks at ~60 Hz, so its chassis cannot make the car's 15-50 Hz content: a resonance near 23 Hz in a_z (1.35 m/s2 rms) and roll rate (0.06 rad/s), broader content in a_x / a_y. Per axis (REP-103 x/y/z): white noise through a bandpass at Hz / Q, scaled to Rms at VibrationRefSpeed, times min(v/VibrationOnSpeed, 1) * (max(v, OnSpeed)/RefSpeed)^VibrationSpeedExp (car: 10-45 Hz a_z 1.20 / 1.18 / 1.49 m/s2 at 3-6 / 6-9 / 9-12.5 m/s). The fit matches the car within 20-40 % per band from 10 to 50 Hz; below 10 Hz the sim's own chassis motion is left alone. Rms 0 = off.",
+          "VibrationAccelRms": [0.254, 0.453, 1.347],
+          "VibrationAccelHz": [12.0, 19.0, 23.0],
+          "VibrationAccelQ": [1.5, 1.5, 4.0],
+          "VibrationGyroRms": [0.0595, 0.0243, 0.0071],
+          "VibrationGyroHz": [21.0, 22.5, 12.0],
+          "VibrationGyroQ": [2.75, 4.0, 1.5],
+          "VibrationRefSpeed": 7.5,
+          "VibrationSpeedExp": 0.25,
+          "VibrationOnSpeed": 3.0
         },
         "Gps": {
           "SensorType": 3, "Enabled": true,
