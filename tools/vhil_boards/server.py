@@ -374,6 +374,7 @@ def main(argv=None) -> int:
             panel.mission, panel.estop, panel.intent = old.mission, old.estop, old.intent
             panel.dv_status, panel.dv_at, panel.throttle, panel.steer, panel.ctrl_at = old.dv_status, old.dv_at, old.throttle, old.steer, old.ctrl_at
             v0, w0 = boards.sim.now_us(), time.monotonic()
+            extra_at, extra = -1e9, {}          # the new car's own readings, not the last car's
             print("vhil-boards: restarted from power-on (operator OFF)", flush=True)
             continue
         boards.run(a.slice_ms)
