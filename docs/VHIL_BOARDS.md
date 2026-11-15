@@ -43,15 +43,18 @@ and the inverter, whose speed is the sim's `/motor_rpm`.
 
 The car is made ready before the mission starts, as the team does: the server brings up the
 tractive system, the ASMS and the EBS check at power-on, so the uDV waits in AS Off for a
-mission (`/sim/mission`) and READY (`/sim/intent`). From READY the ECU's own ready-to-drive
-sequence takes about 4 s before the car moves; an acceleration lap time includes it (+3.8 s
-against the fake uDV, which has none).
+mission (`/sim/mission`) and READY (`/sim/intent`). From READY to the first torque is about 7 s, all of it the firmware's own (measured with
+`tools/vhil_boards/timeline.py`, virtual time, from the operator's GO):
 
+| after GO | what |
+|---|---|
+| 0 s | the uDV was in AS Ready; its GO is refused until it has been there 5 s (`READY_DWELL_MS`, "FS-Rules AS-Ready dwell", IFS09-DV-uDV `app_task.cpp`) |
+| +4.8 s | AS Driving; the uDV sends its R2D request (0x510); the ECU enters R2dDelay and confirms (0x511, +0.09 s) |
+| +6.8 s | after the ECU's 2 s ready-to-drive sound it sends the inverter Ready (0x04) and TorqueEnable (0x06) words, and the first torque (0x362) 10 ms later |
 
-The operator's OFF (`/sim/intent` 0) powers the car down, as on the car: the emulation is
-restarted from power-on (about a second), so the next mission starts from AS Off with the
-ECU out of its DV latch and the tractive system precharged again. `run_mission_benchmark`
-does this between missions without any change.
+The fake uDV has neither wait, so the car moves later with boards, and an acceleration referee
+time (whose clock starts when the event is set) reads slower for it. The pipeline's own 3 s
+calibration after AS Driving overlaps the ECU's 2 s sound.
 
 ## Comparing times with and without boards
 
