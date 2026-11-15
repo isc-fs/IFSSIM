@@ -133,11 +133,12 @@ class Panel:
         self.res_byte = None
         self.asms = False           # the ASMS lever, as the operator last left it
         self.restart = False        # the operator went OFF after a run: power the car down and up
+        self.used = False           # a mission has been asked for since power-on
         self.fed_at = -1e9          # virtual us of the last refresh of the pipeline's side
         self.sent: dict[str, int] = {}
         self.brake = None
-        # the RES box is on the DV bus from power-on, not-in-e-stop, no GO
-        self._res(0x01)
+        # The RES box joins the DV bus when the operator asks for READY (step), so that a car made
+        # ready before the mission does not go to AS Ready before one is selected.
 
     def _res(self, byte0):
         if byte0 == self.res_byte:
@@ -155,14 +156,20 @@ class Panel:
         b = self.b
         raw = b.r("g_telemetry_as_state")
         # RES: bit0 = not e-stop, bit2 = GO
-        self._res((0x00 if self.estop else 0x01) | (0x04 if self.intent >= 2 and not self.estop else 0))
+        if self.intent >= 1:
+            self._res((0x00 if self.estop else 0x01) | (0x04 if self.intent >= 2 and not self.estop else 0))
         # The operator's OFF powers the whole car down: the next autonomous mission starts from AS Off,
         # the ECU out of its DV latch, the AIRs open and the tractive system to be precharged again.
         # The emulation is restarted from power-on (about a second), which is that, exactly.
-        if self.intent == 0 and self.phase != "idle":
+        if self.intent >= 1:
+            self.used = True
+        if self.intent == 0 and self.used:
             self.restart = True
             return AS_OFF
-        if self.intent >= 1 and self.phase == "idle":
+        # The car is made ready before the mission starts, as the team does: tractive system on, ASMS
+        # on, the EBS checked. The uDV then sits in AS Off until a mission is selected (the AMI box)
+        # and the operator asks for READY, which is what /sim/mission and /sim/intent do.
+        if self.phase == "idle":
             b.udv.set_voltage("PF9", 3.0); self.asms = True                         # ASMS
             b.udv.set_voltage("PC0", TANK_BAR / 11); b.udv.set_voltage("PF10", TANK_BAR / 11)   # tanks
             b.ecu.set_voltage("PF7", BRAKE_HELD_COUNTS * COUNTS_TO_V)               # brake line held
@@ -268,11 +275,16 @@ def main(argv=None) -> int:
     ap.add_argument("--system", default="ecu-ams-udv")
     ap.add_argument("--port", type=int, default=47800)
     ap.add_argument("--slice-ms", type=float, default=80.0)
+    ap.add_argument("--no-pace", action="store_true", help="run flat out (to measure the emulation's speed)")
+    ap.add_argument("--plant-step-ms", type=float, default=20.0, help="the plants' step (the system file's port: step_ms, 10): 20 gives the emulation about 20%% more speed")
     ap.add_argument("--quantum-us", type=int, default=1000, help="500 (the gate's) or 1000 (faster)")
     ap.add_argument("--fw", action="append", default=[], metavar="BOARD=ELF", help="a firmware image (repeat)")
     a = ap.parse_args(argv)
     fw = dict(x.split("=", 1) for x in a.fw)
     boards = Boards(a.system, fw, a.quantum_us)
+    if a.plant_step_ms:
+        boards.port.step_ms = a.plant_step_ms
+        boards.inv.period_ms = a.plant_step_ms
     panel, link = Panel(boards), Link(a.port)
     print(f"vhil-boards ready on 127.0.0.1:{a.port} ({a.system}, quantum {a.quantum_us} us)", flush=True)
     v0, w0 = boards.sim.now_us(), time.monotonic()
@@ -286,6 +298,9 @@ def main(argv=None) -> int:
             old = panel
             boards.sim.stop()
             boards = Boards(a.system, fw, a.quantum_us)
+            if a.plant_step_ms:
+                boards.port.step_ms = a.plant_step_ms
+                boards.inv.period_ms = a.plant_step_ms
             panel = Panel(boards)
             panel.mission, panel.estop, panel.intent = old.mission, old.estop, old.intent
             panel.dv_status, panel.dv_at, panel.throttle, panel.steer, panel.ctrl_at = old.dv_status, old.dv_at, old.throttle, old.steer, old.ctrl_at
@@ -295,7 +310,7 @@ def main(argv=None) -> int:
         boards.run(a.slice_ms)
         virt = (boards.sim.now_us() - v0) / 1e6
         ahead = virt - (time.monotonic() - w0)         # > 0: the emulation is ahead of the wall clock
-        if ahead > 0:
+        if ahead > 0 and not a.no_pace:
             time.sleep(ahead)
         lag = max(0.0, -ahead)
         if boards.sim.now_us() - extra_at >= 250_000:
