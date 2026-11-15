@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 import yaml
 
+from . import boards as bd
 from . import manifest as mf
 from . import spec as sp
 
@@ -101,7 +102,16 @@ def execute(
     cmd = command(m, rec, workdir)
     full_env = {**os.environ, **(env or {}), ENV_SPEC: str(workdir / "spec.json")}
     out = log.open("a") if log else None
+    emulated = None
     try:
+        board_spec = (rec.get("spec") or {}).get("boards") or {}
+        if board_spec.get("mode") == "vhil":
+            # emulated boards (IFS-vHIL) in place of the sim's fake uDV, for this job only
+            emulated = bd.start(
+                m.root, board_spec, log_path=workdir / "boards.log",
+                log=lambda t: out.write(f"[boards] {t}\n") if out else print(t, file=sys.stderr),
+            )
+            full_env.update(emulated.env)
         if out:
             out.write(f"$ {shlex.join(cmd)}\n")
             out.flush()
@@ -114,7 +124,14 @@ def execute(
             stderr=subprocess.STDOUT if out else None,
         )
         return _wait(proc, timeout_of(m, rec), should_stop)
+    except bd.BoardsError as e:
+        if out:
+            out.write(f"[boards] {e}\n")
+        print(f"emulated boards: {e}", file=sys.stderr)
+        return 3
     finally:
+        if emulated is not None:
+            emulated.stop()
         if out:
             out.close()
 

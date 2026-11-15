@@ -34,6 +34,7 @@ OdometryFilter, dormant by default when odometry_filter_node owns /odom).
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -62,6 +63,8 @@ from std_srvs.srv import SetBool
 from tf2_ros import TransformBroadcaster
 
 from fs_msgs.msg import ControlCommand
+
+from sim_supervisor.vhil_link import VhilLink, address_from_env
 
 from mission_control.interface_contract import (
     AS_DRIVING,
@@ -124,6 +127,9 @@ DV_STATUS_STALE_S: float = 0.4
 
 # /ctrl/cmd liveness, the firmware's DV_CTRL_CMD_STALE_MS: while Driving, a
 # command stream older than this is zeroed rather than held.
+# The torque request at 100 % (0x362 = -(pct*240/95 - 1200/95) Nm, IFS08-CE-ECU inverter.cpp),
+# what a full throttle means when the car follows the emulated ECU's torque.
+ECU_MAX_TORQUE_NM: float = 240.0
 CTRL_CMD_STALE_S: float = 0.5
 
 
@@ -174,6 +180,15 @@ class SimSupervisorNode(LifecycleNode):
         self._last_cmd_stamp: float = 0.0
         self._cmd_zeroed: bool = True
         self._cmd_lock = threading.Lock()
+
+        # Emulated boards (IFS-vHIL), when IFSSIM_VHIL_BOARDS is set: the AS state,
+        # the mission and the ECU's torque come from the real firmware, not from
+        # next_as_state() below. See vhil_link.py.
+        addr = address_from_env()
+        self._vhil: VhilLink | None = VhilLink(addr) if addr else None
+        # "ecu": the car's throttle is the torque the emulated ECU asks for;
+        # "cmd": the pipeline's /ctrl/cmd (the uDV's AS state still gates it).
+        self._vhil_torque = os.environ.get("IFSSIM_VHIL_TORQUE", "ecu")
 
         # IMU sample counter, modulo IMU_DECIMATION.
         self._imu_sample_idx: int = 0
@@ -327,6 +342,14 @@ class SimSupervisorNode(LifecycleNode):
             self._odom_pub_timer = self.create_timer(
                 1.0 / ODOM_PUBLISH_HZ, self._publish_odom,
                 callback_group=self._cb_group)
+        elif self._vhil is not None:
+            # the emulated inverter reports the car's motor speed to the ECU
+            self._sub_rpm = self.create_subscription(
+                Float32, "/motor_rpm", self._on_rpm,
+                QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                           history=QoSHistoryPolicy.KEEP_LAST, depth=10,
+                           durability=DurabilityPolicy.VOLATILE),
+                callback_group=self._cb_group)
 
         # LifecyclePublisher.publish() is a silent no-op until the base
         # class on_activate() enables the node's managed publishers, so
@@ -403,19 +426,27 @@ class SimSupervisorNode(LifecycleNode):
     def _on_dv_status(self, msg: UInt8) -> None:
         self._dv_status = int(msg.data)
         self._dv_status_stamp = time.monotonic()
+        if self._vhil is not None:
+            self._vhil.send(cmd="dv_status", v=self._dv_status)
 
     def _on_sim_mission(self, msg: Int32) -> None:
         if int(msg.data) != self._mission_index:
             self.get_logger().info(f"/sim/mission → {msg.data}")
         self._mission_index = int(msg.data)
+        if self._vhil is not None:
+            self._vhil.send(cmd="mission", idx=self._mission_index)
 
     def _on_sim_intent(self, msg: UInt8) -> None:
         if int(msg.data) != self._operator_intent:
             self.get_logger().info(f"/sim/intent → {msg.data}")
         self._operator_intent = int(msg.data)
+        if self._vhil is not None:
+            self._vhil.send(cmd="intent", v=self._operator_intent)
 
     def _on_sim_estop(self, msg: Bool) -> None:
         self._estop = bool(msg.data)
+        if self._vhil is not None:
+            self._vhil.send(cmd="estop", v=self._estop)
         if self._estop:
             self.get_logger().warn("/sim/estop asserted")
 
@@ -449,14 +480,19 @@ class SimSupervisorNode(LifecycleNode):
         """Advance the AS state machine + publish /assi/state + /ami/mission."""
         mission_runnable = ami_index_to_mission_id(self._mission_index) > 0
         dv_fresh = self._dv_fresh()
-        new_state = next_as_state(
-            self._as_state,
-            self._operator_intent,
-            self._estop,
-            self._effective_dv_status(),
-            mission_runnable,
-            dv_fresh=dv_fresh,
-        )
+        if self._vhil is not None:
+            # the firmware's AS state machine decides; silent boards read as AS Off
+            emulated = self._vhil.assi()
+            new_state = AS_OFF if emulated is None else emulated
+        else:
+            new_state = next_as_state(
+                self._as_state,
+                self._operator_intent,
+                self._estop,
+                self._effective_dv_status(),
+                mission_runnable,
+                dv_fresh=dv_fresh,
+            )
         with self._cmd_lock:
             old_state = self._as_state
             if new_state != old_state:
@@ -499,6 +535,9 @@ class SimSupervisorNode(LifecycleNode):
         ControlCommand directly (no scaling — that's the uDV's job on the
         real car).
         """
+        if self._vhil is not None:
+            # the micro-ROS downlink, as the firmware receives it: its own setters
+            self._vhil.send(cmd="ctrl", throttle=float(msg.linear.x), steer=float(msg.angular.z))
         with self._cmd_lock:
             if self._as_state != AS_DRIVING or self._control_pub is None:
                 return
@@ -519,6 +558,11 @@ class SimSupervisorNode(LifecycleNode):
         cmd.throttle = max(0.0, v)
         cmd.brake = max(0.0, -v)
         cmd.steering = float(msg.angular.z)
+        if self._vhil is not None and self._vhil_torque == "ecu":
+            # the ECU's own answer to the uDV's request: the inverter's torque setpoint
+            # (0x362, negative = forward, 240 Nm at the 100 % request), caps included.
+            nm = self._vhil.torque_nm()
+            cmd.throttle = 0.0 if nm is None else min(1.0, max(0.0, -nm / ECU_MAX_TORQUE_NM))
         self._control_pub.publish(cmd)
         self._last_cmd_stamp = time.monotonic()
         self._cmd_zeroed = False
@@ -565,6 +609,8 @@ class SimSupervisorNode(LifecycleNode):
 
     def _on_rpm(self, msg: Float32) -> None:
         """Drive the filter's correction step."""
+        if self._vhil is not None:
+            self._vhil.send(cmd="motor_rpm", v=float(msg.data))
         if self._odom_filter is None:
             return
         # Wall-clock timestamp — the bridge publishes Float32 with no
