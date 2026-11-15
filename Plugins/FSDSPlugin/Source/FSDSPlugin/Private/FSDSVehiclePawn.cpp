@@ -790,6 +790,15 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroLsb = SensorPair.Value.GyroLsb;
 				ImuSensor->AccelRange = SensorPair.Value.AccelRange * 100.f;
 				ImuSensor->GyroRange = SensorPair.Value.GyroRange;
+				ImuSensor->VibrationAccelRms = SensorPair.Value.VibrationAccelRms * 100.f;
+				ImuSensor->VibrationAccelHz = SensorPair.Value.VibrationAccelHz;
+				ImuSensor->VibrationAccelQ = SensorPair.Value.VibrationAccelQ;
+				ImuSensor->VibrationGyroRms = SensorPair.Value.VibrationGyroRms;
+				ImuSensor->VibrationGyroHz = SensorPair.Value.VibrationGyroHz;
+				ImuSensor->VibrationGyroQ = SensorPair.Value.VibrationGyroQ;
+				ImuSensor->VibrationRefSpeed = SensorPair.Value.VibrationRefSpeed;
+				ImuSensor->VibrationSpeedExp = SensorPair.Value.VibrationSpeedExp;
+				ImuSensor->VibrationOnSpeed = SensorPair.Value.VibrationOnSpeed;
 				break;
 			}
 		}

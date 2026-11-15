@@ -421,7 +421,16 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 		};
 		ReadXYZ(TEXT("AccelNoiseStdXYZ"), Sensor.AccelNoiseStdXYZ);
 		ReadXYZ(TEXT("GyroNoiseStdXYZ"), Sensor.GyroNoiseStdXYZ);
+		ReadXYZ(TEXT("VibrationAccelRms"), Sensor.VibrationAccelRms);
+		ReadXYZ(TEXT("VibrationAccelHz"), Sensor.VibrationAccelHz);
+		ReadXYZ(TEXT("VibrationAccelQ"), Sensor.VibrationAccelQ);
+		ReadXYZ(TEXT("VibrationGyroRms"), Sensor.VibrationGyroRms);
+		ReadXYZ(TEXT("VibrationGyroHz"), Sensor.VibrationGyroHz);
+		ReadXYZ(TEXT("VibrationGyroQ"), Sensor.VibrationGyroQ);
 	}
+	if (SensorObj->TryGetNumberField(TEXT("VibrationRefSpeed"), DblVal)) Sensor.VibrationRefSpeed = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("VibrationSpeedExp"), DblVal)) Sensor.VibrationSpeedExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("VibrationOnSpeed"), DblVal)) Sensor.VibrationOnSpeed = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("VelocityNoiseStd"), DblVal)) Sensor.VelocityNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseStd"), DblVal)) Sensor.RangeNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakRate"), DblVal)) Sensor.DropoutWeakRate = DblVal;

@@ -348,6 +348,11 @@ Leave `IntensityScale` out (or negative) for the original model of #255, describ
 | Accelerometer / gyroscope bias correlation time τ | 100 s | ✓ | `AccelBiasTau`, `GyroBiasTau` |
 | Resolution | 1.796 mm/s² (±6 g), 1.064 mrad/s (±2000 °/s) | ✓ | `AccelLsb`, `GyroLsb` |
 | Full scale | 58.84 m/s², 34.907 rad/s | ✓ | `AccelRange`, `GyroRange` |
+| On-car vibration, x/y/z rms at 7.5 m/s | accel 0.254 / 0.453 / 1.347 m/s², gyro 0.0595 / 0.0243 / 0.0071 rad/s | ✓ | `VibrationAccelRms`, `VibrationGyroRms` |
+| Vibration bandpass centre / Q, x/y/z | accel 12 / 19 / 23 Hz, Q 1.5 / 1.5 / 4; gyro 21 / 22.5 / 12 Hz, Q 2.75 / 4 / 1.5 | ✓ | `VibrationAccelHz`, `VibrationAccelQ`, `VibrationGyroHz`, `VibrationGyroQ` |
+| Vibration speed law | ramps in to 3 m/s, then × (v / 7.5 m/s)^0.25 | ✓ | `VibrationOnSpeed`, `VibrationRefSpeed`, `VibrationSpeedExp` |
+
+**Vibration.** The sim's physics ticks at ~60 Hz, so its chassis cannot produce what the car's IMU sees from 15 to 50 Hz: a resonance near 23 Hz in a_z and roll rate, and broader content in a_x / a_y. Each axis adds white noise through a second-order bandpass, scaled to the configured rms, stepped every 400 Hz sample before the accel hold, and zero when parked. It is fitted to the car's manual bag (2026-09-20, 3–12.5 m/s, parked spectrum removed) and matches it within 20–40 % per band from 10 to 50 Hz. Below 10 Hz the sim's own chassis motion is left as it is. Set an axis's rms to 0 to turn it off.
 
 **Where the numbers come from.** Range, rates and resolution are the uDV firmware's BMI088 configuration. White noise is fitted (Allan deviation) from raw BMI088 logs: accel 2.03/2.78/2.75 mm/s²/√Hz and gyro 0.32/0.39/0.15 mrad/s/√Hz, turned into per-sample σ for the 40 Hz accel and 116 Hz gyro filters; the gyro x/y values match the car's parked `/imu`. The car's `/imu` is not bias-corrected (uDV uses its boot calibration only for its own attitude filter), and the turn-on gyro offset differed by several mrad/s between the logs and a car bag, hence a fresh draw per session. The logs are too short to fit in-run drift, so the Ornstein–Uhlenbeck parameters are unchanged.
 
