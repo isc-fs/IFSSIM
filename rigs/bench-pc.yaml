@@ -1,7 +1,8 @@
-# The bench PC's rig descriptor (tools/sim_benchmark/launch/rig.py): what it has, so
-# Mission Control's component boxes know what a Runner run can use. The runner points
-# IFSSIM_RIG here (its .env, written by tools/ci/setup_bench_host.sh); your own machine's
-# descriptor is ~/.config/ifssim/rig.yaml.
+# The bench PC's rig descriptor (tools/sim_benchmark/launch/rig.py): where its LattePanda
+# and HIL bench are, so rig.py's checks can find them. The Actions runner and the
+# benchweb's runner agent (which reuses those checks for its capabilities) read it
+# through IFSSIM_RIG (the runner's .env, written by tools/ci/setup_bench_host.sh); your
+# own machine's descriptor is ~/.config/ifssim/rig.yaml.
 #
 # Until handover (roadmap Phase 1) the PC has no LattePanda and no HIL bench, so both
 # stay out and their boxes are grey. At handover, the LattePanda goes on enp5s0's

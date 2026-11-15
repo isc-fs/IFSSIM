@@ -217,7 +217,7 @@ step_runner() {
     rm -f /tmp/actions-runner.tgz
     "$dir/bin/installdependencies.sh"
   fi
-  # what the workflows read from the runner's environment (bench.yml, sim_build.sh, sim_pr_check.sh)
+  # what the workflows read from the runner's environment (nightly.yml, sim_build.sh, sim_pr_check.sh)
   write "$dir/.env" "CI_HOME=$CI_HOME
 UE5_ROOT=$UE5_ROOT
 IFSSIM_RIG=$dir/_work/IFSSIM/IFSSIM/rigs/bench-pc.yaml

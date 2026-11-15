@@ -86,3 +86,7 @@ sudo RUNNER_TOKEN=<token> tools/ci/setup_bench_host.sh runner
 Unreal Engine is built by hand (it needs an Epic-linked GitHub account) into
 `$CI_HOME/UE_5.8`, the `UE5_ROOT` the runner's `.env` names. The bench PC's rig
 descriptor is `rigs/bench-pc.yaml`.
+
+The Actions runner here takes the PR sim checks and the nightly. Benchmarks you
+launch on the box go through the benchweb's runner agent instead; its install
+step joins this script later (Benchweb v1, T16).
