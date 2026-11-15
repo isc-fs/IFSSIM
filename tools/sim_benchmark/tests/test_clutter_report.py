@@ -42,6 +42,34 @@ def test_fisher_exact():
     assert abs(cr.fisher_greater(3, 25, 0, 25) - 2300 / 19600) < 1e-12
 
 
+def _telemetry(d: Path, stop_at_s: float | None):
+    """5 m/s along x from t=0, standing still from stop_at_s, to t=60."""
+    rows, x = ["t,x,y,speed,throttle,steering"], 0.0
+    for i in range(601):
+        t = i * 0.1
+        v = 0.0 if stop_at_s is not None and t >= stop_at_s else 5.0
+        x += v * 0.1
+        rows.append(f"{t:.1f},{x:.3f},0.0,{v},0.0,0.0")
+    (d / "telemetry.csv").write_text("\n".join(rows))
+
+
+def test_a_car_parked_short_of_the_finish_stopped_early_whatever_the_benchmark_said(tmp_path):
+    _runs(tmp_path, "narrow", ["timeout", "timeout", "emergency"])
+    seeds = sorted((tmp_path / "mission").rglob("seed*"))
+    _telemetry(seeds[0], 6.0)      # 30 m, then parked: stopped early
+    _telemetry(seeds[1], None)     # drove to the timeout: a timeout
+    _telemetry(seeds[2], 1.0)      # 5 m, then still: never really left, not an early stop
+    rs = sorted(cr.load(tmp_path)["narrow"], key=lambda r: r["seed"])
+    assert [r["outcome"] for r in rs] == ["stopped_early", "timeout", "emergency"]
+    assert rs[0]["benchmark_outcome"] == "timeout" and abs(rs[0]["stall"]["travelled_m"] - 30.0) <= 0.5
+    assert cr.standstill(tmp_path / "missing.csv") is None
+
+
+def test_runs_under_headless_run_folders_are_found(tmp_path):
+    _runs(tmp_path / "narrow" / "headless" / "20261115_212323", "narrow", ["finished"] * 2)
+    assert len(cr.load(tmp_path)["narrow"]) == 2
+
+
 def test_the_newest_commit_wins_unless_one_is_given(tmp_path):
     _runs(tmp_path, "narrow", ["finished"] * 5, commit="old0000")
     _runs(tmp_path, "narrow", ["stopped_early"] * 5, commit="new1111")

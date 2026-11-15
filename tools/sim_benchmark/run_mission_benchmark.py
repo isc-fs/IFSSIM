@@ -104,6 +104,9 @@ DV_EMERGENCY, DV_FINISHED = 5, 4
 # roadmap's P2a failure). Held this many polls, so a real finish the referee
 # reports a moment late isn't counted.
 STOPPED_EARLY_POLLS = 3
+# A car that drove PARKED_MOVED_M and then stood under PARKED_V m/s for PARKED_S of sim time, the
+# referee not having seen the finish, stopped early too (clutter_report.standstill() uses 10 s).
+PARKED_S, PARKED_MOVED_M, PARKED_V = 30.0, 10.0, 0.2
 MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
@@ -944,6 +947,7 @@ def run_one(
     # this one. DV_EMERGENCY comes from the running pipeline's own heartbeat.
     seen_driving = False
     finished_polls = 0
+    travelled, last_xy, parked_since = 0.0, None, None
     limit = float(m["timeout_s"])
     sim_now = sim0
 
@@ -988,6 +992,24 @@ def run_one(
                 break
         else:
             finished_polls = 0
+        # Parked short of the finish: in autocross the stop latch can fire early (false big oranges)
+        # without the pipeline declaring the mission finished; the car brakes and waits there.
+        x, y, v = st.get("x"), st.get("y"), st.get("speed")
+        if all(isinstance(q, (int, float)) for q in (x, y, v)):
+            if last_xy is not None:
+                travelled += math.hypot(x - last_xy[0], y - last_xy[1])
+            last_xy = (x, y)
+            if seen_driving and travelled >= PARKED_MOVED_M and v < PARKED_V:
+                parked_since = elapsed() if parked_since is None else parked_since
+                if elapsed() - parked_since >= PARKED_S:
+                    outcome = "stopped_early"
+                    log(
+                        f"{where}: parked {PARKED_S:.0f} s after {travelled:.0f} m, short of the finish "
+                        f"(lap {laps}/{need}): stopped early, ending the run"
+                    )
+                    break
+            else:
+                parked_since = None
         if dv_status == DV_EMERGENCY or (seen_driving and as_state == AS_EMERGENCY):
             # EBS fired: the car stays stopped, so waiting out timeout_s
             # (2400 s for trackdrive) only burns the bench's time.

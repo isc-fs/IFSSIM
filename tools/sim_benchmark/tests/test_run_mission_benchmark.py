@@ -44,6 +44,10 @@ class FakeWorld:
         self.start_fails = start_fails
         self.never_finishes = never_finishes
 
+    def vehicle(self):
+        """/api/vehicle/state: a car holding 3.5 m/s at one spot (the parked check needs it to move)."""
+        return {"x": 1.0, "y": 2.0, "speed": 3.5, "controls": {"throttle": 0.2, "steering": 0.0}}
+
     def referee(self):
         if self.running and not self.never_finishes:
             self.laps = min(self.required, self.laps + self.laps_per_poll)
@@ -85,15 +89,7 @@ def serve_mc(world: FakeWorld) -> str:
             if self.path == "/api/event/state":
                 return self._send(200, world.referee())
             if self.path == "/api/vehicle/state":
-                return self._send(
-                    200,
-                    {
-                        "x": 1.0,
-                        "y": 2.0,
-                        "speed": 3.5,
-                        "controls": {"throttle": 0.2, "steering": 0.0},
-                    },
-                )
+                return self._send(200, world.vehicle())
             return self._send(404, {})
 
         def do_POST(self):
@@ -798,6 +794,36 @@ def test_a_finish_the_pipeline_reports_first_is_not_a_stop_early(tmp_path):
     rc, _ = _run(tmp_path, w, timeout_s=60.0)
     res = _result(tmp_path)
     assert rc == 0 and res["race/finished"] == 1 and res["race/stopped_early"] == 0
+
+
+class ParkingWorld(FakeWorld):
+    """Drives 5 m per poll for `drive` polls, then stands still; the referee never sees the finish."""
+
+    def __init__(self, drive, **kw):
+        super().__init__(never_finishes=True, sim_step=1.0, assi=[(3, 3)], **kw)
+        self.drive, self.polls = drive, 0
+
+    def vehicle(self):
+        self.polls += 1
+        moving = self.polls <= self.drive
+        return {"x": 5.0 * min(self.polls, self.drive), "y": 0.0, "speed": 5.0 if moving else 0.0,
+                "controls": {"throttle": 0.2 if moving else 0.0, "steering": 0.0}}
+
+
+def test_a_car_parked_short_of_the_finish_stopped_early(tmp_path):
+    # the autocross stop latch firing on false big oranges: the car brakes and waits, AS stays Driving
+    rc, logs = _run(tmp_path, ParkingWorld(drive=6), timeout_s=240.0)
+    res = _result(tmp_path)
+    assert rc == 1 and any(": stopped_early" in x for x in logs)
+    assert any("parked 30 s after" in x and "short of the finish" in x for x in logs)
+    assert res["race/stopped_early"] == 1 and res["race/finished"] == 0
+    assert 30.0 <= res["race/run_sim_time_s"] < 45.0          # not the 240 s timeout
+
+
+def test_a_car_that_never_left_the_line_is_not_parked_early(tmp_path):
+    # 5 m and stopped (under the 10 m it must cover first): a start problem, left to the timeout
+    rc, logs = _run(tmp_path, ParkingWorld(drive=1), timeout_s=40.0)
+    assert rc == 1 and any(": timeout" in x for x in logs) and _result(tmp_path)["race/stopped_early"] == 0
 
 
 def test_never_driving_then_finished_is_not_a_stop_early(tmp_path):

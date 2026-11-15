@@ -6,7 +6,11 @@ Reads the mission benchmark's runs of specs/clutter-*.yaml
 kind, counts the outcomes. A run is a premature stop when the pipeline declared
 the mission finished before the referee saw the finish (outcome stopped_early,
 run_mission_benchmark.py): the stop latch firing on false big oranges, the
-failure the roadmap wants reproduced before the 2027 track tests.
+failure the roadmap wants reproduced before the 2027 track tests. In autocross the
+pipeline need not declare the mission finished when the latch fires early: the car
+brakes to the latch's anchor and waits there until the benchmark's timeout. So a run
+that didn't finish and whose car stood still for 10 s after moving 10 m (telemetry.csv,
+standstill()) counts as stopped early too; benchmark_outcome keeps the benchmark's word.
 
     python3 tools/sim_benchmark/clutter_report.py [--results DIR] [--commit SHA] [--json]
 
@@ -29,12 +33,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DIR_RE = re.compile(r"^autocross_clutter_(?P<kind>[a-z]+)_e(?P<env>\d+)$")
 MIN_STOPS, CONTROL = 3, "control"
+STALL_MOVED_M, STALL_S, STALL_V = 10.0, 10.0, 0.2   # standstill(): moved this far, then this long under this speed
 
 
 def load(results: Path, commit: str | None = None) -> dict[str, list[dict]]:
     """{kind: [run]}; run = {env, seed, commit, outcome, doo, time_s}. The newest commit per track unless given."""
     runs: dict[str, list[dict]] = defaultdict(list)
-    for track_dir in sorted((results / "mission").glob("autocross_clutter_*")):
+    # results/mission/<track>, or the same under headless_run's results/**/headless/<stamp>/mission
+    track_dirs = sorted(p for p in results.rglob("autocross_clutter_*") if p.is_dir() and p.parent.name == "mission")
+    for track_dir in track_dirs:
         m = DIR_RE.match(track_dir.name)
         if not m:
             continue
@@ -50,15 +57,48 @@ def load(results: Path, commit: str | None = None) -> dict[str, list[dict]]:
                 res = json.loads((seed_dir / "results.json").read_text())
             except (OSError, ValueError):
                 continue
+            outcome = man.get("outcome", "unknown")
+            stall = standstill(seed_dir / "telemetry.csv") if outcome not in ("finished", "stopped_early") else None
             runs[m["kind"]].append({
                 "env": int(m["env"]),
                 "seed": seed_dir.name,
                 "commit": newest.name,
-                "outcome": man.get("outcome", "unknown"),
+                # a car parked short of the finish is a premature stop whatever ended the run
+                "outcome": "stopped_early" if stall else outcome,
+                "benchmark_outcome": outcome,
+                "stall": stall,
                 "doo": int(res.get("race/n_doo") or 0),
                 "time_s": res.get("race/run_sim_time_s", res.get("race/run_time_s")),
             })
     return runs
+
+
+def standstill(telemetry: Path, moved_m: float = STALL_MOVED_M, still_s: float = STALL_S,
+               v_still: float = STALL_V) -> dict | None:
+    """The first stop of at least still_s at under v_still m/s after the car moved moved_m, or None.
+
+    In autocross the pipeline need not declare the mission finished when its stop latch fires
+    early (the car brakes to the latch's anchor and waits there), so the benchmark scores the run
+    a timeout. The referee never saw the finish, so a car parked this long short of it stopped
+    early. telemetry.csv: t,x,y,speed,... (run_mission_benchmark.py)."""
+    try:
+        rows = [ln.split(",") for ln in telemetry.read_text().splitlines()[1:] if ln.strip()]
+        pts = [(float(r[0]), float(r[1]), float(r[2]), float(r[3])) for r in rows]
+    except (OSError, ValueError, IndexError):
+        return None
+    travelled, since, prev = 0.0, None, None
+    for t, x, y, v in pts:
+        if prev:
+            travelled += math.hypot(x - prev[0], y - prev[1])
+        prev = (x, y)
+        if v < v_still and travelled >= moved_m:
+            since = since or (t, travelled, x, y)
+            if t - since[0] >= still_s:
+                return {"t_s": round(since[0], 1), "travelled_m": round(since[1], 1),
+                        "x": round(since[2], 2), "y": round(since[3], 2)}
+        else:
+            since = None
+    return None
 
 
 def fisher_greater(a: int, n1: int, c: int, n2: int) -> float:
