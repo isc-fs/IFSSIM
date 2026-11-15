@@ -78,7 +78,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -864,6 +864,7 @@ class RunResult:
     cpu_wait: float | None = None  # share of the run some task waited for a CPU (Linux CPU pressure)
     load1: float | None = None  # the machine's 1-minute load average at the end of the run
     set_off: float | None = None  # seconds into the run the car first moved (speed above SET_OFF_MPS)
+    boards: dict | None = None  # the emulated boards' pace over the run (boards_pace), when they ran
 
 
 class Progress:
@@ -1017,7 +1018,50 @@ def run_one(
         cpu_wait=None if p0 is None or p1 is None or seconds <= 0 else min(1.0, (p1 - p0) / 1e6 / seconds),
         load1=os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
         set_off=set_off,
+        boards=boards_pace(started, datetime.now(timezone.utc)),
     )
+
+
+# ------------------------------------------------------------------ the emulated boards' pace
+BOARDS_CONTAINER = "ifssim-vhil-boards"  # launch/boards.py CONTAINER
+BOARDS_MAX_LAG_S = 2.0  # a run whose boards fell further behind the wall clock than this was not real time
+BOARDS_MIN_RTF = 0.97
+
+
+def boards_pace(start: datetime, end: datetime, run=subprocess.run) -> dict | None:
+    """How the emulated boards (IFS-vHIL, tools/vhil_boards/server.py) kept up with the wall clock
+    between ``start`` and ``end``: their real-time factor over the window, the furthest they were
+    behind the wall clock in it, and whether that counts as real time. None when no boards ran
+    (``IFSSIM_VHIL_BOARDS`` unset) or their log has too few lines in the window."""
+    if not os.environ.get("IFSSIM_VHIL_BOARDS"):
+        return None
+    pad = timedelta(seconds=3)
+    try:
+        r = run(
+            ["docker", "logs", "--since", (start - pad).isoformat(), "--until", (end + pad).isoformat(), BOARDS_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = []
+    for line in ((r.stdout or "") + (r.stderr or "")).splitlines():
+        if line.startswith("{"):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if "wall" in d and start.timestamp() - 3 <= d["wall"] <= end.timestamp() + 3:
+                rows.append(d)
+    return boards_pace_of(rows)
+
+
+def boards_pace_of(rows: list[dict]) -> dict | None:
+    rows = sorted(rows, key=lambda d: d["wall"])
+    if len(rows) < 2 or rows[-1]["wall"] <= rows[0]["wall"] or rows[-1]["t"] < rows[0]["t"]:
+        return None
+    rtf = (rows[-1]["t"] - rows[0]["t"]) / (rows[-1]["wall"] - rows[0]["wall"])
+    lag = max(float(d.get("lag_s", 0.0)) for d in rows)
+    return {"rtf": round(rtf, 3), "max_lag_s": round(lag, 2), "real_time_ok": rtf >= BOARDS_MIN_RTF and lag <= BOARDS_MAX_LAG_S}
 
 
 # ------------------------------------------------------------------ writing a run
@@ -1083,6 +1127,11 @@ def race_metrics(res: RunResult) -> dict[str, float]:
             out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
     if res.speed_factor is not None:
         out["race/speed_factor"] = res.speed_factor
+    if res.boards is not None:
+        # the emulated boards' own pace: a run they could not keep up with is not a real-time run of the car
+        out["box/boards_rtf"] = res.boards["rtf"]
+        out["box/boards_max_lag_s"] = res.boards["max_lag_s"]
+        out["race/boards_real_time_ok"] = 1 if res.boards["real_time_ok"] else 0
     if res.set_off is not None:
         # from the car's first motion to the finish: what the drive took, whatever the start
         # sequence before it (arming, the EKF's calibration, an ECU's ready-to-drive delay)
