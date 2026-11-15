@@ -103,6 +103,8 @@ struct LidarChunkHeader
 
 static constexpr uint32_t SENSOR_MAGIC = 0x49465353; // "IFSS"
 static constexpr uint32_t LIDAR_MAGIC  = 0x4C494452; // "LIDR"
+// streamLidar2: 48-byte header (plugin FFSDSLidarStreamHeaderV2), TCP only.
+static constexpr uint32_t LIDAR2_MAGIC = 0x4C494432; // "LID2"
 
 /**
  * UDP Receiver — listens for sensor and LiDAR broadcasts from the IFSSIM UE5 plugin.

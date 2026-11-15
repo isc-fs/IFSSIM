@@ -687,9 +687,24 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->RangeNoiseRangeCoeffCm = SensorPair.Value.RangeNoiseRangeCoeff * 100.f;
 				LidarSensor->RangeNoiseRefReflectance = SensorPair.Value.RangeNoiseRefReflectance;
 				LidarSensor->RangeNoiseReflectanceExp = SensorPair.Value.RangeNoiseReflectanceExp;
-				LidarSensor->EdgeOutlierRate = SensorPair.Value.EdgeOutlierRate;
+				LidarSensor->EdgeSwapRate = SensorPair.Value.EdgeSwapRate;
+				LidarSensor->EdgeDropRate = SensorPair.Value.EdgeDropRate;
 				LidarSensor->IntensityNoise = SensorPair.Value.IntensityNoise;
+				LidarSensor->IntensityScale = SensorPair.Value.IntensityScale;
+				LidarSensor->IntensityRangeExp = SensorPair.Value.IntensityRangeExp;
+				LidarSensor->IntensityIncidenceExp = SensorPair.Value.IntensityIncidenceExp;
+				LidarSensor->IntensityMax = SensorPair.Value.IntensityMax;
+				LidarSensor->LuminanceReflectanceGain = SensorPair.Value.LuminanceReflectanceGain;
+				LidarSensor->WorldLuminanceReflectanceGain = SensorPair.Value.WorldLuminanceReflectanceGain;
+				LidarSensor->SweepDurationMs = SensorPair.Value.SweepDurationMs;
+				LidarSensor->bSweepAlternate = SensorPair.Value.bSweepAlternate;
+				LidarSensor->bIntensityRound = SensorPair.Value.bIntensityRound;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
+				LidarSensor->DropoutWeakRate = SensorPair.Value.DropoutWeakRate;
+				LidarSensor->DropoutWeakExp = SensorPair.Value.DropoutWeakExp;
+				LidarSensor->DropoutWeakMax = SensorPair.Value.DropoutWeakMax;
+				LidarSensor->DropoutBurstScans = SensorPair.Value.DropoutBurstScans;
+				LidarSensor->DropoutBurstIidShare = SensorPair.Value.DropoutBurstIidShare;
 
 				// Per-channel max-range (#223 tune): convert metres → cm
 				// to match the global MaxRange units the sensor stores.
@@ -700,6 +715,9 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				{
 					LidarSensor->PerChannelMaxRangeCm.Add(Rm * 100.f);
 				}
+				LidarSensor->ChannelElevationsDeg = SensorPair.Value.ChannelElevationsDeg;
+				LidarSensor->bPointsInSensorFrame = SensorPair.Value.PointFrame.Equals(TEXT("sensor"), ESearchCase::IgnoreCase);
+				LidarSensor->ChannelRingIds = SensorPair.Value.ChannelRingIds;
 
 				// #223: select CPU (legacy ParallelFor + Chaos line traces)
 				// vs GPU (depth render + compute decode). Unknown values
@@ -772,6 +790,15 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroLsb = SensorPair.Value.GyroLsb;
 				ImuSensor->AccelRange = SensorPair.Value.AccelRange * 100.f;
 				ImuSensor->GyroRange = SensorPair.Value.GyroRange;
+				ImuSensor->VibrationAccelRms = SensorPair.Value.VibrationAccelRms * 100.f;
+				ImuSensor->VibrationAccelHz = SensorPair.Value.VibrationAccelHz;
+				ImuSensor->VibrationAccelQ = SensorPair.Value.VibrationAccelQ;
+				ImuSensor->VibrationGyroRms = SensorPair.Value.VibrationGyroRms;
+				ImuSensor->VibrationGyroHz = SensorPair.Value.VibrationGyroHz;
+				ImuSensor->VibrationGyroQ = SensorPair.Value.VibrationGyroQ;
+				ImuSensor->VibrationRefSpeed = SensorPair.Value.VibrationRefSpeed;
+				ImuSensor->VibrationSpeedExp = SensorPair.Value.VibrationSpeedExp;
+				ImuSensor->VibrationOnSpeed = SensorPair.Value.VibrationOnSpeed;
 				break;
 			}
 		}

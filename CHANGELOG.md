@@ -13,6 +13,18 @@ shipping pipeline, documentation.
 ## [Unreleased]
 
 ### Added
+- **The sim's IMU vibrates like the car's.** The car's /imu carries 15–50 Hz vibration (a resonance near 23 Hz: a_z ~1.3 m/s² rms, roll rate ~3.4 °/s) that the sim's ~60 Hz physics cannot produce; the sim had a quarter of it above 15 Hz. Nine `Vibration*` IMU settings add it per axis as band-passed noise that grows with speed and is off when parked, fitted to the car's manual bag. Rms 0 turns an axis off.
+- **`/lidar_points` in the LiDAR's own frame, like the car's.** The car's Hesai driver publishes points relative to the sensor, tilted with its 8.6° nose-down mount; the sim levelled them and moved them to `base_link`, with an identity `base_link → hesai_lidar` TF. `PointFrame: "sensor"` (the new `settings.json` value) keeps them in the sensor frame, `getSensorOffset` now returns the mount rotation (`qw, qx, qy, qz`) and which frame the points are in, and the bridge publishes the real mount pose as the TF. The pipeline levels the cloud by its own ground fit, so it needs no change. `PointFrame: "vehicle"` (or an older plugin) keeps the old frame and identity TF.
+- **`/lidar_points` in the car's Hesai layout.** The bridge publishes the sim's LiDAR the way the car's driver does: every ray (1500 slots × 116 rings in firing order, ring 0 = top), 26-byte points with `ring` (uint16) and a per-point `timestamp` (float64, when the slot fired), no-returns as zeros. The plugin sends it on a new `streamLidar2` stream with a 48-byte header; older bridges keep `streamLidar` and the compact cloud, and a new bridge falls back to compact against an older plugin. `LIDAR_CLOUD_FORMAT=compact` keeps the old 16-byte valid-hits cloud. A scan grows from ~2.6 MB to ~4.5 MB.
+- **LiDAR dropout follows return strength and comes in bursts, like the car's.** The sim dropped 1% of rays at random. The car's Hesai loses weak returns (about 20% at intensity 0–2, 1% above 32) and a missing beam usually stays missing for several scans. `DropoutWeakRate` (0.2), `DropoutWeakExp` (0.77), `DropoutWeakMax` (0.3), `DropoutBurstScans` (64) and `DropoutBurstIidShare` (0.15) model that on the GPU path, and `DropoutRate` drops to 0.
+
+- **LiDAR depth edges behave like the car's.** `EdgeOutlierRate` placed a few returns at cone silhouettes uniformly between the cone and the background. The car does something else: at an edge, about 15% of returns come from the other surface and edge beams drop out more often, so objects grow into the beams beside them and flicker. `EdgeSwapRate` (0.15) and `EdgeDropRate` (0.18) replace it, tested against the neighbouring beams rather than adjacent texels. **`EdgeOutlierRate` is no longer read.**
+
+- **LiDAR scans smear with the car's motion, like the car's.** The car's Hesai measures a scan over 90 ms, alternating direction, and doesn't correct for motion, so at speed its cones jump about 30 cm from scan to scan. The sim captured each scan in one instant. `SweepDurationMs` (89.8) and `SweepAlternate` now move each point by the car's motion over its delay.
+
+- **LiDAR intensity on the car's scale.** The sim reported intensity as 0–1 falling with the square of the range and with the angle of incidence. The car's Hesai reports whole numbers 0–255 that fall as r^−1.29 and ignore the angle. Five new LiDAR settings (`IntensityScale`, `IntensityRangeExp`, `IntensityIncidenceExp`, `IntensityMax`, `IntensityRound`) set the law, and `settings.json` ships the car's fit, scaled so the cones match. `LuminanceReflectanceGain` (3.2) brightens surfaces that take their reflectance from their rendered colour, so the asphalt matches the car's ground too; that also lowers the range noise on the ground, which the dark asphalt had pushed to its cap. Remove `IntensityScale` to get the old law.
+
+- **LiDAR beams at the car's elevations.** The sim's 116 LiDAR channels were spread evenly over −12.4…+5.9° (0.16° apart). The car's Hesai spaces them unevenly: about 0.1° around the horizon and 0.2–0.4° at the top and bottom. With the −8.6° mount, cones beyond about 10 m fall in the sparse top beams, so the sim put 1.6–1.8× the car's beams on them. `settings.json` now has `ChannelElevationsDeg`, the 116 elevations measured from the 2026-09-20 car bag, and both LiDAR back-ends use it. Remove the array to get the old even grid.
 
 - **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
   replay recorded bags), the missions, tracks (each mission's own are listed), runs per
@@ -63,6 +75,9 @@ shipping pipeline, documentation.
   rig descriptor is `rigs/bench-pc.yaml`.
 
 ### Fixed
+- **`/imu` no longer loses samples on a busy machine.** The bridge handed sensor frames from its receive thread to its publish thread through a single slot that a newer frame overwrote. Since every frame carries its own 400 Hz IMU sample, a capture on the GPU box was missing about 6 % of them, with gaps up to 12.5 ms (the car's /imu has none). The handoff is now a FIFO holding 1 s of frames; if the publisher falls further behind, the oldest are dropped and the bridge logs how many.
+
+- **LiDAR intensity on Montmeló.** The 3.2 luminance gain from #912 matched the level's floor to the car but put Montmeló's photo-matched asphalt at about 3× the car's ground. While a track's world is built the sensor now uses `WorldLuminanceReflectanceGain` (1), and both grounds land near the car's.
 
 - **Mission benchmarks build the sim bridge from the checkout, not the image.** The
   benchmark's stack rebuilt `pipeline/` from the checkout but kept the bridge baked into
@@ -138,6 +153,7 @@ shipping pipeline, documentation.
   sits next to the run's results.
 
 ### Changed
+- **LiDAR mount pitch 8.77° (was 8.6°).** A 60-scan ground fit of the 2026-09-20 car bag puts the Hesai at 8.77° nose-down.
 
 - **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
   `tools/ci/sim_build.sh` and `sim_pr_check.sh` take one folder, `CI_HOME`

@@ -124,6 +124,34 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Noise")
 	float GyroBiasTau = 100.0f;
 
+	/**
+	 * On-car vibration, added to the truth at every sample (SampleRateHz > 0
+	 * only). The sim's physics ticks at ~60 Hz, so the chassis cannot produce
+	 * the car's 15-50 Hz content (structure/drivetrain resonance near 23 Hz in
+	 * a_z and roll rate). Per axis: white noise through a 2nd-order bandpass at
+	 * Hz / Q, scaled to Rms (total, at VibrationRefSpeed). Scales with speed as
+	 * min(v / OnSpeed, 1) * (max(v, OnSpeed) / RefSpeed)^SpeedExp; 0 when parked.
+	 * Rms 0 on an axis = off. Accel Rms in cm/s² (the pawn scales m/s² by 100).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	FVector VibrationAccelRms = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	FVector VibrationAccelHz = FVector(20.f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	FVector VibrationAccelQ = FVector(2.f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	FVector VibrationGyroRms = FVector::ZeroVector;   // rad/s
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	FVector VibrationGyroHz = FVector(20.f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	FVector VibrationGyroQ = FVector(2.f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	float VibrationRefSpeed = 7.5f;    // m/s
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	float VibrationSpeedExp = 0.25f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FSDS IMU Vibration")
+	float VibrationOnSpeed = 3.f;      // m/s; ramps in linearly from standstill
+
 private:
 	/** Noise, bias, quantisation and the accel hold for one sample; queues it. */
 	void EmitSample(double SampleTimeSec, const FVector& TrueAccelCm, const FVector& TrueGyro,
@@ -160,6 +188,31 @@ private:
 	// generation, which forces a re-seed so a repeat run genuinely restarts
 	// the sequence instead of continuing the previous one.
 	uint32 NoiseStreamGeneration = 0;
+	// Vibration: one bandpass biquad per channel (accel x/y/z, gyro x/y/z),
+	// its own random stream so the base noise sequence is unchanged by it.
+	struct FVibChannel
+	{
+		double B0 = 0.0, B2 = 0.0, A1 = 0.0, A2 = 0.0;  // normalised, b1 = 0
+		double Z1 = 0.0, Z2 = 0.0;
+		double InputScale = 0.0;  // white-noise σ that gives the target Rms
+		double Step(double X)
+		{
+			const double Y = B0 * X + Z1;
+			Z1 = -A1 * Y + Z2;
+			Z2 = -B0 * X - A2 * Y;   // b2 = -b0 for the bandpass
+			return Y;
+		}
+	};
+	FVibChannel Vib[6];
+	bool bVibConfigured = false;
+	bool bVibActive = false;
+	FRandomStream VibStream;
+	uint32 VibStreamGeneration = 0;
+	double VibSpeedMps = 0.0;   // set per tick, used by the tick's samples
+	void ConfigureVibration();
+	/** Steps all six channels; returns accel (cm/s²) and gyro (rad/s) vibration. */
+	void StepVibration(FVector& OutAccelCm, FVector& OutGyro);
+
 	// Determinism probe counter — see Noise() in the .cpp.
 	int32 ProbeDrawsLogged = 0;
 	FRandomStream& Noise();
