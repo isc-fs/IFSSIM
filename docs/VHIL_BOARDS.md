@@ -105,6 +105,25 @@ logs its pace every 2 s; a mission benchmark reads that log for the run's window
 `race/boards_real_time_ok` 1: a PC that cannot hold it (the Windows PC does not) gives a run of
 the car with slowed boards, not a run of the car.
 
+## Keeping the boards in real time: CPU pinning
+
+On a hybrid CPU (this PC's i7-13700: CPUs 0-15 are the fast cores, 16-23 the efficiency cores) the
+emulator's threads can land on slow cores when the sim and the pipeline load the fast ones, and the
+boards then run at 0.94-0.98x. `IFSSIM_VHIL_CPUSET=0-15` pins the boards' container to the fast
+cores (docker `--cpuset-cpus`): measured on real autocross runs, 1.001x and 0.3 s worst lag pinned,
+0.97x and 5 s lag not. `race/boards_real_time_ok` in the results says which a run was.
+
+## Known issue: the uDV sometimes never asks the ECU to drive
+
+In about one in three or four jobs the uDV reaches AS Driving and streams its torque request, but the ECU stays
+in WaitStartBrake and no torque flows until the run times out. When the server sees it (AS Driving with
+the ECU still in state 2 for 8 s) it logs `vhil-boards: STUCK {...}`: the uDV never sends its ready-to-drive request
+(0x510: none in 2 s), although `g_can_r2d` is false, the pipeline mission (which requests it) is bound,
+`/dv/status` is fresh at RUNNING and the ECU's brake input is over its limit. The uDV's CAN-2 transmit
+queue is empty and error-free, so the frame is not being refused by the bus: the firmware does not call
+`sendR2dRequest`. The run's timeline up to AS Driving is the same as in a healthy run. Not explained;
+a worthwhile case for the uDV team: reproduce with `tools/sim_benchmark/run_spec.py` on one autocross track with boards.
+
 ## Limits
 
 - Only `ecu-ams-udv`: the sim's uDV node needs the car's three boards.
