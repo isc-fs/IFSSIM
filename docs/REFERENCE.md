@@ -233,12 +233,14 @@ The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWh
 | Suspension damping ratio | 1.5 | — | `SuspensionDamping` |
 | Roll centre height, front | 0.040 | m | `RollCenterFront` |
 | Roll centre height, rear | 0.060 | m | `RollCenterRear` |
-| Roll stiffness, front | 27,000 | Nm/rad | `RollStiffnessFront` |
-| Roll stiffness, rear | 22,000 | Nm/rad | `RollStiffnessRear` |
-| Heave stiffness | 227,600 | N/m | `HeaveStiffness` |
-| Pitch stiffness | 155,600 | Nm/rad | `PitchStiffness` |
+| Roll stiffness, front | 15,021 | Nm/rad | `RollStiffnessFront` |
+| Roll stiffness, rear | 14,291 | Nm/rad | `RollStiffnessRear` |
+| Heave stiffness | 80,736 | N/m | `HeaveStiffness` |
+| Pitch stiffness | 54,250 | Nm/rad | `PitchStiffness` |
 
 Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric load-transfer model (lateral + longitudinal weight transfer routed to per-wheel Fz inputs of the Pacejka fit).
+
+Chaos itself takes the suspension from the wheel classes, not from these fields: a wheel rate of 20,184 N/m per corner (`SpringRate = 201.84`, the property is ×100 into N/m), no anti-roll bar (`RollbarScaling = 0`), 3.5 cm bump and 5.46 / 5.81 cm droop travel front / rear (sized so the static ride height did not move when the rate was lowered). That is a 2.9–3.0 Hz ride, about 0.86° of pitch and 1.6° of roll per g. The real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° and 1.5–1.8° per g. The shadow values above are derived from the same rate: roll = rate × track² / 2 per axle, pitch = 2 × rate × (lf² + lr²).
 
 #### Wheels
 

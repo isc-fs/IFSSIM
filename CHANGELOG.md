@@ -38,6 +38,13 @@ shipping pipeline, documentation.
   Start worker / Stop worker run the local queue's worker; the queue shows each spec's
   progress, with Cancel and its folder.
 
+- **A benchmark spec on a GPU box, and `headless_run exec`.** `tools/ci/bench_run.sh`
+  runs a spec as a runner does: the same `run_spec.py` you run locally, under the sim-session
+  lock, with a fresh headless sim and Mission Control around it when the spec drives the
+  sim (the new `python3 -m headless_run exec -- <command>`). `run_spec.py` gains
+  `--results DIR` and `--print-spec`. The new `missions-extensive` preset (acceleration,
+  skidpad and autocross, 5 noisy starts per track) is the suite for the weekly season run.
+
 - **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
   checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
   for the run (`$BENCH_PIPELINE_DIR`), and the benchmarks build, mount and record that
@@ -153,6 +160,8 @@ shipping pipeline, documentation.
   sits next to the run's results.
 
 ### Changed
+
+- **Sim suspension softened to the car's.** The wheels now run 20.2 kN/m per corner, the plant spec's rate from the recorded 2.9–3.0 Hz ride frequency, with no anti-roll bar. Before, they ran 61.3 / 52.5 kN/m front/rear, the workbook's spring rates taken as wheel rates (a 5 Hz ride), plus Chaos's default anti-roll bar that nobody chose. The sim car pitched 0.30° and rolled 0.36° per g. The real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° of pitch and 1.5–1.8° of roll per g; the new suspension gives 0.86° and 1.6°. Droop travel is lengthened so the static ride height, and the LiDAR's height above the ground, stay where they were. The shadow load-transfer stiffnesses in `settings.json` follow the same rate.
 - **LiDAR mount pitch 8.77° (was 8.6°).** A 60-scan ground fit of the 2026-09-20 car bag puts the Hesai at 8.77° nose-down.
 
 - **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
