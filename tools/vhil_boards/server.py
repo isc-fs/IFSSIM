@@ -29,6 +29,7 @@ Wire protocol (newline-delimited JSON on 127.0.0.1:<port>)::
     client -> server   {"cmd": "dv_status", "v": 0..7} | {"cmd": "ctrl", "throttle": f, "steer": f}
                        {"cmd": "mission", "idx": n} | {"cmd": "intent", "v": 0|1|2}
                        {"cmd": "estop", "v": bool} | {"cmd": "motor_rpm", "v": mech rpm}
+                       {"cmd": "imu", "acc_mg": [x, y, z], "gyr_dps": [x, y, z]}  the sim's IMU, for the uDV's BMI088
                        {"cmd": "quit"}
 """
 from __future__ import annotations
@@ -149,6 +150,35 @@ class Boards:
     def run(self, ms):
         self.port.run(self.plants, ms)
 
+    def diagnose(self) -> dict:
+        """What the ECU and the uDV last said to each other, for a run where the uDV drives and the
+        ECU never enters ready-to-drive: the last frames of the contract, and how old they are."""
+        now = self.sim.now_us()
+        out = {"now_us": now}
+        for name, cid in (("0x510_udv_r2d_request", 0x510), ("0x511_ecu_r2d_confirm", 0x511), ("0x507_udv_torque", 0x507),
+                          ("0x505_ecu_brake_over", 0x505), ("0x504_ecu_ts_active", 0x504), ("0x506_ecu_rpm", 0x506)):
+            f = self.sim.can("can_acu").last(cid, now - 5_000_000)
+            out[name] = None if f is None else {"data": f.data.hex(), "age_ms": round((now - f.t_us) / 1000)}
+        out["ecu_state"] = self.sim.read_symbol("ecu", "g_last_ctrl_state")
+        out["inv_state"] = self.inv.state
+        for sym, n in (("g_can_r2d", 1), ("g_can_brake_over_limit", 1), ("g_can_mission_id", 4), ("g_set_mission_ready", 1),
+                       ("g_dv_status", 1), ("g_dv_status_stamp_ms", 4), ("g_ctrl_cmd_stamp_ms", 4), ("xTickCount", 4),
+                       ("g_telemetry_mission_selected", 1), ("g_telemetry_as_state", 1)):
+            try:
+                out["udv." + sym] = self.r(sym, n)
+            except Exception as e:                      # a symbol this firmware does not have
+                out["udv." + sym] = f"?{type(e).__name__}"
+        # the uDV's FDCAN2 (the ACU bus; STM32H733 RM0468): error counters, protocol status, TX FIFO
+        # status (TFQF, bit 21 = full), as sendR2dRequest silently drops a frame it cannot queue
+        for name, off in (("ECR", 0x40), ("PSR", 0x44), ("TXFQS", 0xC4), ("TXBRP", 0xCC)):
+            try:
+                out["fdcan2." + name] = self.sim.monitor(f"sysbus ReadDoubleWord {0x4000A400 + off:#x}", board="udv").strip()
+            except Exception as e:
+                out["fdcan2." + name] = f"?{type(e).__name__}"
+        out["count_0x510_last_2s"] = self.sim.can("can_acu").count([0x510], now - 2_000_000)
+        out["count_0x507_last_2s"] = self.sim.can("can_acu").count([0x507], now - 2_000_000)
+        return out
+
 
 class Panel:
     """What the operator, the AMI box, the RES and the EBS plumbing do."""
@@ -165,6 +195,8 @@ class Panel:
         self.asms = False           # the ASMS lever, as the operator last left it
         self.restart = False        # the operator went OFF after a run: power the car down and up
         self.used = False           # a mission has been asked for since power-on
+        self.imu = None             # the sim's IMU: (mg x y z, dps x y z), set by the node
+        self.imu_sent = None
         self.streak = 0             # consecutive STOPPING messages, as the firmware counts them
         self.fed_at = -1e9          # virtual us of the last refresh of the pipeline's side
         self.sent: dict[str, int] = {}
@@ -187,6 +219,12 @@ class Panel:
     def step(self, wall: float):
         b = self.b
         raw = b.r("g_telemetry_as_state")
+        if self.imu is not None and self.imu != self.imu_sent:
+            # the uDV's own MainLite BMI088 (systems/ecu-ams-udv.yaml `udv_imu`), as the sim's IMU
+            (ax, ay, az), (gx, gy, gz) = self.imu
+            b.sim.call("sysbus.i2c2_h7.udv_imu_acc", "SetAcceleration", round(ax), round(ay), round(az), board="udv")
+            b.sim.call("sysbus.i2c2_h7.udv_imu_gyr", "SetAngularRate", round(gx, 2), round(gy, 2), round(gz, 2), board="udv")
+            self.imu_sent = self.imu
         # RES: bit0 = not e-stop, bit2 = GO
         if self.intent >= 1:
             self._res((0x00 if self.estop else 0x01) | (0x04 if self.intent >= 2 and not self.estop else 0))
@@ -271,17 +309,28 @@ class Link(threading.Thread):
 
     def run(self):
         while True:
-            conn, _ = self.srv.accept()
+            try:
+                conn, _ = self.srv.accept()
+            except OSError:
+                continue
             with self.lock:
                 self.conn = conn
-            for line in conn.makefile("r"):
+            try:
+                for line in conn.makefile("r"):
+                    try:
+                        with self.lock:
+                            self.inbox.append(json.loads(line))
+                    except ValueError:
+                        pass
+            except OSError:        # the client went away mid-line: wait for the next one
+                pass
+            finally:
+                with self.lock:
+                    self.conn = None
                 try:
-                    with self.lock:
-                        self.inbox.append(json.loads(line))
-                except ValueError:
+                    conn.close()
+                except OSError:
                     pass
-            with self.lock:
-                self.conn = None
 
     def take(self) -> list[dict]:
         with self.lock:
@@ -310,6 +359,8 @@ def apply(panel: Panel, boards: Boards, msg: dict, wall: float) -> bool:
         panel.intent = int(msg["v"])
     elif c == "estop":
         panel.estop = bool(msg["v"])
+    elif c == "imu":
+        panel.imu = (tuple(float(x) for x in msg["acc_mg"]), tuple(float(x) for x in msg["gyr_dps"]))
     elif c == "motor_rpm":
         boards.inv.target_rpm = float(msg["v"]) * POLE_PAIRS
     elif c == "quit":
@@ -336,6 +387,7 @@ def main(argv=None) -> int:
     print(f"vhil-boards ready on 127.0.0.1:{a.port} ({a.system}, quantum {a.quantum_us} us)", flush=True)
     v0, w0 = boards.sim.now_us(), time.monotonic()
     last_log, running, extra_at, extra = 0.0, True, -1e9, {}
+    stuck_since, last_dump = None, -1e9
     while running:
         wall = time.monotonic()
         for msg in link.take():
@@ -352,6 +404,7 @@ def main(argv=None) -> int:
             panel.mission, panel.estop, panel.intent = old.mission, old.estop, old.intent
             panel.dv_status, panel.dv_at, panel.throttle, panel.steer, panel.ctrl_at = old.dv_status, old.dv_at, old.throttle, old.steer, old.ctrl_at
             v0, w0 = boards.sim.now_us(), time.monotonic()
+            extra_at, extra = -1e9, {}          # the new car's own readings, not the last car's
             print("vhil-boards: restarted from power-on (operator OFF)", flush=True)
             continue
         boards.run(a.slice_ms)
@@ -368,12 +421,22 @@ def main(argv=None) -> int:
                              "abs_ok": boards.r("g_telemetry_abs_checks_ok"), "brakes": boards.r("g_telemetry_brakes_engaged"),
                              "r2d": boards.r("g_telemetry_r2d"), "sdc_res_open": boards.r("g_telemetry_sdc_res_open")}}
             extra["mission"] -= (1 << 32) if extra["mission"] >= 1 << 31 else 0
+        stuck = None
+        if raw == AS_DRIVING and extra.get("ecu_state") == 2:
+            stuck_since = stuck_since if stuck_since is not None else boards.sim.now_us()
+            if boards.sim.now_us() - stuck_since > 8_000_000 and boards.sim.now_us() - last_dump > 10_000_000:
+                last_dump = boards.sim.now_us()          # the uDV drives, the ECU never took its R2D request
+                stuck = boards.diagnose()
+                print("vhil-boards: STUCK " + json.dumps(stuck), flush=True)
+        else:
+            stuck_since = None
         state = {
             "wall": round(time.time(), 2),          # epoch s: which run a log line belongs to (launch/boards.py)
             "t": round(boards.sim.now_us() / 1e6, 3), "rtf": round(virt / max(time.monotonic() - w0, 1e-6), 3),
             "lag_s": round(lag, 3), "as_raw": raw, "assi": ASSI.get(raw, 0),
             **extra, "torque_nm": boards.inv.torque_nm, "armed": panel.armed, "phase": panel.phase, "inv_rpm": round(boards.inv.rpm),
             "inv_state": boards.inv.state,
+            **({"stuck": stuck} if stuck else {}),
         }
         link.send(state)
         if wall - last_log > 2:

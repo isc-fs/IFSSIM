@@ -34,6 +34,7 @@ from typing import Callable
 ENV_REPO = "IFSSIM_VHIL_REPO"
 ENV_BOARDS = "IFSSIM_VHIL_BOARDS"
 ENV_TORQUE = "IFSSIM_VHIL_TORQUE"
+ENV_CPUSET = "IFSSIM_VHIL_CPUSET"  # docker --cpuset-cpus for the boards, e.g. 0-15: the fast cores of a hybrid CPU
 CONTAINER = "ifssim-vhil-boards"
 VOLUME = os.environ.get("IFSSIM_VHIL_VOLUME", "vhil-data")  # IFS-vHIL's own firmware cache
 REPO_URL = "https://github.com/isc-fs/IFS-vHIL"
@@ -308,6 +309,8 @@ def start(
         "-e", "PYTHONPATH=/work", "-e", "VHIL_MODELS_CACHE=/vhil/renode-models", "-w", "/work",
         image, "python", "/boards/server.py", "--system", system, "--port", str(port),
     ]
+    if os.environ.get(ENV_CPUSET):
+        cmd[cmd.index("--cpu-shares"):cmd.index("--cpu-shares")] = ["--cpuset-cpus", os.environ[ENV_CPUSET]]
     for b, p in sorted(images.items()):
         cmd += ["--fw", f"{b}={p}"]
     r = _docker(cmd, 120, run)

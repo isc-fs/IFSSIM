@@ -94,6 +94,7 @@ Approximated, to hold 1.0x beside the sim (each measured unpaced beside the live
 | plants step every 20 ms (not 10 ms) | the inverter's state and speed in a report, the AIR contacts and the shutdown circuit react up to 20 ms late | 1.17x instead of 0.89x |
 | the micro-ROS downlink written into the firmware's variables | the message callbacks do not run; the STOPPING debounce and the clamp of `/ctrl/cmd` are mirrored | USB is not modelled |
 | the operator, the AMI box, the RES, the EBS tanks and the brake line are stand-ins | what the car's electrics do around the boards | needed to arm the car |
+| the pack, the tractive system and the inverter are vHIL's models, not the sim's electrical FMU | the AMS's cells and current are vHIL's | the sim's FMU is not coupled to the boards |
 
 ## Whether a run was real time
 
@@ -104,11 +105,33 @@ logs its pace every 2 s; a mission benchmark reads that log for the run's window
 `race/boards_real_time_ok` 1: a PC that cannot hold it (the Windows PC does not) gives a run of
 the car with slowed boards, not a run of the car.
 
+## Keeping the boards in real time: CPU pinning
+
+On a hybrid CPU (this PC's i7-13700: CPUs 0-15 are the fast cores, 16-23 the efficiency cores) the
+emulator's threads can land on slow cores when the sim and the pipeline load the fast ones, and the
+boards then run at 0.94-0.98x. `IFSSIM_VHIL_CPUSET=0-15` pins the boards' container to the fast
+cores (docker `--cpuset-cpus`): measured on real autocross runs, 1.001x and 0.3 s worst lag pinned,
+0.97x and 5 s lag not. `race/boards_real_time_ok` in the results says which a run was.
+
+## Known issue: the uDV sometimes never asks the ECU to drive
+
+In about one in three or four jobs the uDV reaches AS Driving and streams its torque request, but the ECU stays
+in WaitStartBrake and no torque flows until the run times out. When the server sees it (AS Driving with
+the ECU still in state 2 for 8 s) it logs `vhil-boards: STUCK {...}`: the uDV never sends its ready-to-drive request
+(0x510: none in 2 s), although `g_can_r2d` is false, the pipeline mission (which requests it) is bound,
+`/dv/status` is fresh at RUNNING and the ECU's brake input is over its limit. The uDV's CAN-2 transmit
+queue is empty and error-free, so the frame is not being refused by the bus: the firmware does not call
+`sendR2dRequest`. The run's timeline up to AS Driving is the same as in a healthy run. Not explained;
+a worthwhile case for the uDV team: reproduce with `tools/sim_benchmark/run_spec.py` on one autocross track with boards.
+
 ## Limits
 
 - Only `ecu-ams-udv`: the sim's uDV node needs the car's three boards.
-- The emulated uDV's own IMU is a static BMI088 (its `vehicle_standstill` is always true);
-  the pipeline still gets the sim's IMU. Steering and wheel-speed CAN are not fed.
+- What the sim feeds the uDV: its BMI088 follows the sim's IMU averaged over 40 ms (milli-g and
+  degrees per second in the car's body frame; the 15-50 Hz vibration is not reproduced), and the ECU's
+  motor-rpm frame (0x506) follows the sim's motor speed, which is where the firmware takes its
+  standstill from. Steering: the firmware reads its steering sensor on FDCAN3, which is unconnected
+  on the MicroDV2 (IFS09-DV-uDV#6) and so is on no bus in vHIL; nothing is fed, as on the car.
 - Not deterministic (wall-clock paced), unlike vHIL's lock-step runs: compare repeats.
 - The boards held 1.0x beside the sim and a full pipeline on this PC (worst lag 0.5 s over a 9-minute
   job; their plants step every 20 ms, 10 ms costs about 20 % of the speed). If a PC cannot hold 1.0× the boards fall behind; `boards.log` in the job's folder
