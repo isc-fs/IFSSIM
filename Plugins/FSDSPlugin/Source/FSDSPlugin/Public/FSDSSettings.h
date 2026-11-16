@@ -207,12 +207,14 @@ struct FFSDSVehiclePhysics
 	// m^3; 0 = off. CutoffWavelength (m) rolls the profile off so it does not
 	// wander; Footprint (m) is the tyre contact length it is averaged over;
 	// TyreStiffness (N/m) the vertical tyre spring between road and wheel.
-	// Off on a track's world (Montmeló has its own surface) unless OnTrackWorld.
+	// Also on a track's world: Montmeló's asphalt is a smooth fitted surface
+	// (tools/worldgen), so the road model supplies its roughness there too.
+	// OnTrackWorld false turns it off on worlds.
 	float RoadRoughnessGd0 = 0.f;
 	float RoadRoughnessCutoffWavelength = 20.f;
 	float RoadRoughnessFootprint = 0.15f;
 	float RoadRoughnessTyreStiffness = 100000.f;   // N/m, tyre vertical stiffness the road passes through
-	bool bRoadRoughnessOnTrackWorld = false;
+	bool bRoadRoughnessOnTrackWorld = true;
 
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.

@@ -52,6 +52,18 @@ CELL = 1.0
 DETAIL = (-100.0, 300.0)   # the 400 m modelled in full detail
 
 GROUND_CLASSES = (2, 8)    # ICGC: ground, and ground model key points
+# Heights in mm: the track surface is smooth, and cm steps would put a 1 cm
+# ledge in it every few metres. The terrain spans -23..+15 m, inside int16.
+Z_UNIT_M = 0.001
+# The asphalt is written as a smooth surface (smooth_track): one metre past
+# each edge, so the draped track samples only it, and smoothed along x over
+# this Gaussian sigma.
+TRACK_PAD_M = 1.0
+TRACK_SIGMA_M = 4.0
+# Kept clear of the straight's ends, where the asphalt still curves off the
+# band, and blended in over TRACK_RAMP_M.
+TRACK_END_M = 25.0
+TRACK_RAMP_M = 10.0
 
 
 def s_to_x(s: float) -> float:
@@ -246,6 +258,46 @@ def ground_grid(x, y, z, c, z0: float):
     return h, nx, ny
 
 
+def smooth_track(h):
+    """The asphalt as a smooth surface, in place of its 1 m cell means.
+
+    The cell means scatter ~1 cm about the road (scanner noise over ~11 points
+    a cell), and a wheel crosses a cell every metre: at 5-12 m/s that shook
+    the car at 5-12 Hz, and it tilted the parked car ~0.4 deg past the road.
+    The raw points lie on one plane across the track (2.2-2.5 % towards the
+    pits on the accel zone, no crown), so each column across the track is fit
+    with a line (height and crossfall), and both are smoothed along x.
+    Roughness below the LiDAR's noise comes from the car's road model.
+    """
+    import numpy as np
+    ny, nx = h.shape
+    ys = Y0 + np.arange(ny) * CELL
+    xs = X0 + np.arange(nx) * CELL
+    # Fit on cells wholly on the asphalt; write the band out to the pad.
+    fit = (ys - CELL / 2 >= TRACK_Y[0]) & (ys + CELL / 2 <= TRACK_Y[1])
+    band = (ys >= TRACK_Y[0] - TRACK_PAD_M) & (ys <= TRACK_Y[1] + TRACK_PAD_M)
+    xa, xb = s_to_x(TRACK_END_M), s_to_x(math.dist(A, B) - TRACK_END_M)
+    cols = (xs >= xa) & (xs <= xb)
+    yc = ys[fit].mean()
+    dy = ys[fit] - yc
+    z = h[fit, :]
+    level = z.mean(axis=0)
+    fall = (dy[:, None] * z).sum(axis=0) / (dy ** 2).sum()
+    r = int(math.ceil(3 * TRACK_SIGMA_M / CELL))
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) * CELL / TRACK_SIGMA_M) ** 2)
+    k /= k.sum()
+    idx = np.flatnonzero(cols)
+    def smooth(v):
+        seg = np.pad(v[idx], r, mode="reflect")
+        return np.convolve(seg, k, mode="valid")
+    surf = smooth(level)[None, :] + (ys[band] - yc)[:, None] * smooth(fall)[None, :]
+    w = np.clip(np.minimum(xs[idx] - xa, xb - xs[idx]) / TRACK_RAMP_M, 0.0, 1.0)[None, :]
+    out = h.copy()
+    raw = h[np.ix_(band, idx)]
+    out[np.ix_(band, idx)] = raw + w * (surf - raw)
+    return out
+
+
 def pct(x, y, z, c, x_rng, y_rng, q: float, z0: float, classes=None) -> float:
     """The q-th percentile height (relative to z0) of the points in a box."""
     import numpy as np
@@ -266,7 +318,8 @@ def build(cache: Path, out_dir: Path) -> Dict:
     near = gm & (np.abs(x) < 5.0) & (np.abs(y) < 1.0)
     z0 = float(np.median(z[near]))
     h, nx, ny = ground_grid(x, y, z, c, z0)
-    units = np.clip(np.rint(h / 0.01), -32768, 32767).astype("<i2")
+    h = smooth_track(h)
+    units = np.clip(np.rint(h / Z_UNIT_M), -32768, 32767).astype("<i2")
 
     sx = s_to_x
     # Measured from the LiDAR (points above the stands, relative to z0).
@@ -317,7 +370,7 @@ def build(cache: Path, out_dir: Path) -> Dict:
                   "origin_z": round(z0, 2),
                   "x_bearing_deg": round(bearing_deg(), 2)},
         "terrain": {"file": W.TERRAIN_FILE, "x0": X0, "y0": Y0, "cell_m": CELL,
-                    "nx": nx, "ny": ny, "z_unit_m": 0.01},
+                    "nx": nx, "ny": ny, "z_unit_m": Z_UNIT_M},
         "detail": {"x_min": DETAIL[0], "x_max": DETAIL[1]},
         # Rubber on the racing line: the asphalt's brightness across the track.
         "wear": wear_entry,

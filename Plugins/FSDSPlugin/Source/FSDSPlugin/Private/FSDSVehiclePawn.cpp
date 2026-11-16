@@ -1743,7 +1743,8 @@ void AFSDSVehiclePawn::ApplyRoadRoughness(float DeltaTime)
 	USkeletalMeshComponent* VehicleMesh = GetMesh();
 	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
 
-	// A track's world (Montmeló) brings its own surface; checked once a second.
+	// Off on a track's world (Montmeló) if RoadRoughnessOnTrackWorld is false;
+	// checked once a second.
 	RoadWorldCheckTimer -= DeltaTime;
 	if (RoadWorldCheckTimer <= 0.f)
 	{
