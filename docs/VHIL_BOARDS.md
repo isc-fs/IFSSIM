@@ -95,6 +95,15 @@ Approximated, to hold 1.0x beside the sim (each measured unpaced beside the live
 | the micro-ROS downlink written into the firmware's variables | the message callbacks do not run; the STOPPING debounce and the clamp of `/ctrl/cmd` are mirrored | USB is not modelled |
 | the operator, the AMI box, the RES, the EBS tanks and the brake line are stand-ins | what the car's electrics do around the boards | needed to arm the car |
 
+## Whether a run was real time
+
+The boards must not fall behind the wall clock, or the firmware sees time slowed. The server
+logs its pace every 2 s; a mission benchmark reads that log for the run's window and puts
+`box/boards_rtf`, `box/boards_max_lag_s` and `race/boards_real_time_ok` in `results.json`
+(real time = 0.97x or more and never more than 2 s behind). Compare only runs with
+`race/boards_real_time_ok` 1: a PC that cannot hold it (the Windows PC does not) gives a run of
+the car with slowed boards, not a run of the car.
+
 ## Limits
 
 - Only `ecu-ams-udv`: the sim's uDV node needs the car's three boards.

@@ -369,13 +369,14 @@ def main(argv=None) -> int:
                              "r2d": boards.r("g_telemetry_r2d"), "sdc_res_open": boards.r("g_telemetry_sdc_res_open")}}
             extra["mission"] -= (1 << 32) if extra["mission"] >= 1 << 31 else 0
         state = {
+            "wall": round(time.time(), 2),          # epoch s: which run a log line belongs to (launch/boards.py)
             "t": round(boards.sim.now_us() / 1e6, 3), "rtf": round(virt / max(time.monotonic() - w0, 1e-6), 3),
             "lag_s": round(lag, 3), "as_raw": raw, "assi": ASSI.get(raw, 0),
             **extra, "torque_nm": boards.inv.torque_nm, "armed": panel.armed, "phase": panel.phase, "inv_rpm": round(boards.inv.rpm),
             "inv_state": boards.inv.state,
         }
         link.send(state)
-        if wall - last_log > 5:
+        if wall - last_log > 2:
             print(json.dumps(state), flush=True)
             last_log = wall
     boards.sim.stop()
