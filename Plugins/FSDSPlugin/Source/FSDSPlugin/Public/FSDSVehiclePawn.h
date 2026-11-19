@@ -521,7 +521,7 @@ private:
 	uint32 RoadGeneration = 0;
 	bool bRoadSeeded = false;
 	bool bRoadPrevValid = false;
-	bool bRoadOnTrackWorld = false;
+	bool bRoadOnTrackWorld = true;
 	bool bRoadSuppressedByWorld = false;
 	float RoadWorldCheckTimer = 0.f;
 	double RoadDistance = 0.0;             // m driven on this profile

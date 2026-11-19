@@ -61,7 +61,7 @@ The world frame is in metres: `+x` along the place's main axis, `+y` to its left
 | `format`, `name`, `title` | `"ifssim-world/1"`, the folder name, a display name. |
 | `attribution` | Every data source and its licence (non-empty list). |
 | `frame` | Provenance: `crs`, `origin_e`, `origin_n`, `origin_z` (the source CRS coordinates of the origin) and `x_bearing_deg`. |
-| `terrain` | `file` (`terrain.i16`), `x0`, `y0` (first sample), `cell_m`, `nx`, `ny`, `z_unit_m` (0.01: heights in cm). At most 2,000,000 cells. |
+| `terrain` | `file` (`terrain.i16`), `x0`, `y0` (first sample), `cell_m`, `nx`, `ny`, `z_unit_m` (heights in this unit; Montmeló uses 0.001, mm). At most 2,000,000 cells. |
 | `detail` | Optional `x_min`, `x_max`: where the terrain is drawn at full resolution. |
 | `wear` | Optional: `file` (`wear.u8`), `x0`, `y0` (first node), `dx_m`, `dy_m` (node spacing, 0.05 to 10 m), `nx`, `ny`. At most 2,000,000 nodes. Applies to `asphalt` surfaces that lie wholly inside it; outside it the asphalt is as scanned. |
 | `surfaces` | Boxes of `asphalt`, `asphalt_light`, `concrete` or `grass`: `material`, `x_min`, `x_max`, `y_min`, `y_max`. |
@@ -87,6 +87,7 @@ Measured along the straight (EPSG:25831, 1049 m, bearing 212.7°):
 
 - The painted start line is 365.3 m from the north-east end; OSM's start node agrees to 0.1 m.
 - The ground falls 2.8 m over the first 225 m, is flat to within 5 cm from 225 m to 525 m (the acceleration zone), then falls 7 m to turn 1.
+- Across the track the asphalt falls 2.2-2.5 % towards the pits on the acceleration zone, as one plane with no crown. The LiDAR's 1 m cell means scatter about 1 cm around that plane (scanner noise), which a car would feel as a bump every metre, so the generator writes the asphalt (and 1 m past each edge) as a fitted surface: a line across each 1 m column, smoothed along x over a 4 m Gaussian, kept 25 m clear of the straight's curved ends. It matches the raw points' cross-fall to 0.03 %. The road's own roughness comes from the car's road model (`RoadRoughness*` in `settings.json`).
 - The track is 13.35 m of asphalt (y = −7.3 to 6.05 m), white edge lines at −7.0 and 5.69 m, with about 2% cross-fall towards the pits. The 3 to 4 m beyond each edge line is dry grass, not asphalt.
 - Painted across the track: the start line (x = 0), the finish line (x = −127.0), and two more full-width lines at −197.7 and 32.4 m. The grid's 28 slots (white brackets, each with a yellow mark to the middle) run back to x = −208 in two lanes, 7.38 m staggered.
 - Pit lane: a white line along the wall at y = −13.06, a red band with white borders at y = −17.5, and green on the verge at two places. The pit wall ends at x = 224 m; the exit lane runs between a green-painted wedge and a white line, and joins the track at x = 316 m.

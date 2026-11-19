@@ -921,12 +921,13 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		HeaveStiffness = P.HeaveStiffness;
 		PitchStiffness = P.PitchStiffness;
 
-		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint);
+		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessCrossWavelength);
 		bRoadOnTrackWorld = P.bRoadRoughnessOnTrackWorld;
 		RoadTyreStiffness = P.RoadRoughnessTyreStiffness;
 		bRoadSeeded = false;
-		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, footprint %.2f m, tyre %.0f N/m)%s"),
-			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
+		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, left-right below %.1f m, footprint %.2f m, tyre %.0f N/m)%s"),
+			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessCrossWavelength,
+			P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
 			Road.IsActive() ? (bRoadOnTrackWorld ? TEXT(", also on track worlds") : TEXT(", level floor only")) : TEXT(" - off"));
 
 		// Size the rear-wheel brake torque to the max motor regen
@@ -1743,7 +1744,8 @@ void AFSDSVehiclePawn::ApplyRoadRoughness(float DeltaTime)
 	USkeletalMeshComponent* VehicleMesh = GetMesh();
 	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
 
-	// A track's world (Montmeló) brings its own surface; checked once a second.
+	// Off on a track's world (Montmeló) if RoadRoughnessOnTrackWorld is false;
+	// checked once a second.
 	RoadWorldCheckTimer -= DeltaTime;
 	if (RoadWorldCheckTimer <= 0.f)
 	{

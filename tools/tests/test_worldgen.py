@@ -145,6 +145,20 @@ class MontmeloTest(unittest.TestCase):
         for x in range(-100, 160, 10):
             self.assertAlmostEqual(W.height_at(self.w, self.h, x, 0.0), 0.0, delta=0.15, msg=f"x={x}")
 
+    def test_the_asphalt_is_one_smooth_plane_across(self):
+        # Survey: 2.2-2.5 % towards the pits (y < 0) on the acceleration zone,
+        # no crown; the generator writes it smooth (tools/worldgen/montmelo.py).
+        hat = lambda x, y: W.height_at(self.w, self.h, x, y)
+        for x in range(0, 110, 10):
+            fall = (hat(x, 5.0) - hat(x, -6.0)) / 11.0
+            self.assertTrue(0.021 < fall < 0.026, f"x={x}: cross-fall {fall * 100:.2f} %")
+            mid = (hat(x, 5.0) + hat(x, -6.0)) / 2
+            self.assertAlmostEqual(hat(x, -0.5), mid, delta=0.002, msg=f"x={x}: crowned")
+        # No bump every metre along a wheel track.
+        zs = [hat(x / 4.0, -0.6) for x in range(0, 400)]
+        bumps = max(abs(zs[i - 1] - 2 * zs[i] + zs[i + 1]) for i in range(1, len(zs) - 1))
+        self.assertLess(bumps, 0.0005)
+
     def test_the_straight_falls_towards_turn_1(self):
         self.assertLess(W.height_at(self.w, self.h, 600.0, 0.0), -5.0)
 

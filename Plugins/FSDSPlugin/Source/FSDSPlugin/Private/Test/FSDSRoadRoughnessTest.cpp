@@ -14,9 +14,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFSDSRoadProfileTest, "FSDS.Road.Profile",
 
 bool FFSDSRoadProfileTest::RunTest(const FString& Parameters)
 {
-	// Unsmoothed profile: its spread is the analytic Sigma of the OU process.
+	// Unsmoothed profile: its spread is the analytic Sigma of the two OU parts.
 	FFSDSRoadRoughness Road;
-	Road.Configure(2.5e-5, 20.0, 0.0);
+	Road.Configure(2.5e-5, 20.0, 0.0, 3.0);
 	TestTrue(TEXT("active"), Road.IsActive());
 	Road.Reset(FRandomStream(42));
 
@@ -35,16 +35,52 @@ bool FFSDSRoadProfileTest::RunTest(const FString& Parameters)
 
 	// Same stream, same road; the two tracks differ.
 	FFSDSRoadRoughness A, B;
-	A.Configure(2.5e-5, 20.0, 0.15);
-	B.Configure(2.5e-5, 20.0, 0.15);
+	A.Configure(2.5e-5, 20.0, 0.15, 3.0);
+	B.Configure(2.5e-5, 20.0, 0.15, 3.0);
 	A.Reset(FRandomStream(7));
 	B.Reset(FRandomStream(7));
 	TestEqual(TEXT("same seed, same height"), A.Height(1, 37.3), B.Height(1, 37.3));
 	TestNotEqual(TEXT("left and right tracks differ"), A.Height(0, 37.3), A.Height(1, 37.3));
 
+	// Long waves are common to both tracks, short ones are not: the 10 m means
+	// of left and right move together, their 0.5 m steps barely do.
+	{
+		FFSDSRoadRoughness Two;
+		Two.Configure(2.5e-5, 20.0, 0.0, 3.0);
+		Two.Reset(FRandomStream(11));
+		TArray<double> L10, R10, LStep, RStep;
+		double SL = 0.0, SR = 0.0;
+		int32 N = 0;
+		double PrevL = Two.Height(0, 0.0), PrevR = Two.Height(1, 0.0);
+		for (double S = 0.5; S < 4000.0; S += 0.5)
+		{
+			const double HL = Two.Height(0, S), HR = Two.Height(1, S);
+			LStep.Add(HL - PrevL); RStep.Add(HR - PrevR);
+			PrevL = HL; PrevR = HR;
+			SL += HL; SR += HR;
+			if (++N == 20) { L10.Add(SL / N); R10.Add(SR / N); SL = SR = 0.0; N = 0; }
+			Two.TrimBefore(S);
+		}
+		auto Corr = [](const TArray<double>& X, const TArray<double>& Y)
+		{
+			double Mx = 0, My = 0;
+			for (int32 i = 0; i < X.Num(); ++i) { Mx += X[i]; My += Y[i]; }
+			Mx /= X.Num(); My /= Y.Num();
+			double Sxy = 0, Sxx = 0, Syy = 0;
+			for (int32 i = 0; i < X.Num(); ++i)
+			{
+				Sxy += (X[i] - Mx) * (Y[i] - My); Sxx += (X[i] - Mx) * (X[i] - Mx); Syy += (Y[i] - My) * (Y[i] - My);
+			}
+			return Sxy / FMath::Sqrt(Sxx * Syy);
+		};
+		const double RLong = Corr(L10, R10), RShort = Corr(LStep, RStep);
+		TestTrue(FString::Printf(TEXT("10 m means move together (r %.2f)"), RLong), RLong > 0.85);
+		TestTrue(FString::Printf(TEXT("0.5 m steps barely do (r %.2f)"), RShort), RShort < 0.4);
+	}
+
 	// Off at zero level.
 	FFSDSRoadRoughness Off;
-	Off.Configure(0.0, 20.0, 0.15);
+	Off.Configure(0.0, 20.0, 0.15, 3.0);
 	TestFalse(TEXT("Gd0 0 is off"), Off.IsActive());
 	return true;
 }

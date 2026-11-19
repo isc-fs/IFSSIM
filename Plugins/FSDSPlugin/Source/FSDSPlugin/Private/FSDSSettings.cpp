@@ -259,6 +259,7 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessGd0"), DblVal)) P.RoadRoughnessGd0 = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessCutoffWavelength"), DblVal)) P.RoadRoughnessCutoffWavelength = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessFootprint"), DblVal)) P.RoadRoughnessFootprint = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessCrossWavelength"), DblVal)) P.RoadRoughnessCrossWavelength = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessTyreStiffness"), DblVal)) P.RoadRoughnessTyreStiffness = DblVal;
 		{
 			bool B = false;
