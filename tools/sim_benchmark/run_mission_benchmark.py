@@ -769,6 +769,30 @@ class Stack:
             time.sleep(poll_s)
         log(f"pipeline stack up ({time.monotonic() - t0:.0f} s)")
 
+    def remove_work_copy(self, log, as_root: bool) -> None:
+        """Delete the copy of the pipeline and the bridge (``self.tmp``). The stack's container
+        ran as root and left root-owned files (``__pycache__``) anywhere under both ``pipeline/``
+        and ``ros2/``, which the user can't delete: so everything inside goes from a container,
+        as root, and the folder itself (ours) after. Best effort: it never hides the run's own
+        result, and if something stays it says where and how to remove it."""
+        tmp, self.tmp = self.tmp, None
+        if tmp is None or not tmp.exists():
+            return
+        wipe = ["run", "--rm", "--entrypoint", "find", "-v", f"{tmp}:/copy", self.image,
+                "/copy", "-mindepth", "1", "-delete"]
+        if as_root:
+            try:
+                r = docker(*wipe, timeout=300)
+                if r.returncode != 0:
+                    log(f"warning: removing the stack's work copy as root failed: "
+                        f"{(r.stderr or r.stdout).strip()[:200]}")
+            except BenchmarkError as e:
+                log(f"warning: removing the stack's work copy as root failed: {e}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp.exists():
+            log(f"warning: the stack's work copy {tmp} is still there (root-owned files); remove it with: "
+                f"docker {' '.join(wipe)} && rmdir {tmp}")
+
     def reach_sim(self) -> None:
         """Whether the stack's container can reach the sim. Its entrypoint says it is up before
         the bridge connects, so an unreachable sim would otherwise only show as missions that
@@ -788,6 +812,7 @@ class Stack:
         if not self.started:
             for name in self.stopped:  # stopped, then failed before our stack ran
                 docker("start", name)
+            self.remove_work_copy(log, as_root=False)  # made, then failed before the container ran
             return
         if results is not None:
             logs = docker("logs", CONTAINER, timeout=60)
@@ -803,20 +828,7 @@ class Stack:
         for name in self.stopped:
             log(f"starting {name} again")
             docker("start", name)
-        if self.tmp is not None:
-            # the stack ran as root and left root-owned files (__pycache__) in the copy
-            docker(
-                "run",
-                "--rm",
-                "--entrypoint",
-                "rm",
-                "-v",
-                f"{self.tmp}:/copy",
-                self.image,
-                "-rf",
-                "/copy/pipeline",
-            )
-            shutil.rmtree(self.tmp, ignore_errors=True)
+        self.remove_work_copy(log, as_root=True)
 
 
 # ------------------------------------------------------------------ one run
