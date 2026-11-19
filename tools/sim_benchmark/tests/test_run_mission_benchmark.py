@@ -229,11 +229,18 @@ class FakeDocker:
         )
         self.image_id = ""  # what `docker image inspect` reports ("" = it fails)
         self.volumes: list[str] = []  # named volumes that exist
+        self.wipe_fails = False  # the container that deletes the root-owned files fails ...
+        self.wipe_raises = False  # ... or docker itself can't run it
 
     def __call__(self, *args, timeout=120.0):
         self.calls.append(list(args))
-        out, code = "", 0
-        if args[0] == "ps":
+        out, code, err = "", 0, ""
+        if args[:4] == ("run", "--rm", "--entrypoint", "find"):  # the work copy's wipe, as root
+            if self.wipe_raises:
+                raise rmb.BenchmarkError("docker run: timed out")
+            if self.wipe_fails:
+                code, err = 1, "docker: no such image"
+        elif args[0] == "ps":
             out = "\n".join(["mission_control", *self.others])
         elif args[0] == "stop":
             self.others.remove(args[1])
@@ -260,7 +267,7 @@ class FakeDocker:
             )
         elif args[0] == "run" and "/dev/tcp/" in args[-1]:
             code = 0 if self.sim_reachable else 1
-        return subprocess.CompletedProcess(["docker", *args], code, out, "")
+        return subprocess.CompletedProcess(["docker", *args], code, out, err)
 
     def run_args(self):
         [r] = [c for c in self.calls if c[0] == "run" and "--rm" not in c]
@@ -463,8 +470,13 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     # mounts as an empty folder
     assert all(h.is_relative_to((tmp_path / "results").resolve()) for h in hosts)
     assert ["rm", "-f", rmb.CONTAINER] in docker.calls
-    # root-owned files in the copy are removed from a container, as root
-    assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
+    # root-owned files anywhere in the copy (pipeline/ and ros2/ both) are removed from a
+    # container, as root: everything inside the copy's folder, not just one subfolder
+    copy = hosts[-1].parent.parent
+    assert docker.calls[-1] == [
+        "run", "--rm", "--entrypoint", "find", "-v", f"{copy}:/copy", "ifssim-dv:abc1234",
+        "/copy", "-mindepth", "1", "-delete",
+    ]
     assert list((tmp_path / "results" / "mission").glob("stack_*.log"))
     assert not hosts[-1].exists()  # the copy is cleaned up
 
@@ -853,3 +865,43 @@ def test_cpu_pressure_is_read_from_the_some_line(tmp_path, monkeypatch):
     assert rmb.cpu_pressure_us() == 14420655869.0
     monkeypatch.setattr(rmb, "CPU_PRESSURE", tmp_path / "missing")
     assert rmb.cpu_pressure_us() is None  # not Linux, or an old kernel: nothing recorded
+
+
+# ------------------------------------------------------------------ the stack's work copy is always cleaned up
+def _copies(tmp_path):
+    return list((tmp_path / "results").glob("bench-dv-stack-*"))
+
+
+def test_a_failing_wipe_never_hides_the_runs_result(tmp_path, world, docker):
+    docker.wipe_fails = True
+    rc, logs = _run(tmp_path, world)
+    assert rc == 0  # the run's own result
+    assert any("removing the stack's work copy as root failed: docker: no such image" in m for m in logs)
+    assert _copies(tmp_path) == []  # what we own is removed anyway
+
+
+def test_docker_failing_to_run_the_wipe_is_a_warning_too(tmp_path, world, docker):
+    docker.wipe_raises = True
+    rc, logs = _run(tmp_path, world)
+    assert rc == 0
+    assert any("removing the stack's work copy as root failed: docker run: timed out" in m for m in logs)
+
+
+def test_what_stays_is_named_with_the_command_that_removes_it(tmp_path, world, docker, monkeypatch):
+    monkeypatch.setattr(rmb.shutil, "rmtree", lambda *a, **k: None)  # as if root-owned files stayed
+    rc, logs = _run(tmp_path, world)
+    assert rc == 0
+    [left] = _copies(tmp_path)
+    [warning] = [m for m in logs if "is still there" in m]
+    assert str(left) in warning and "docker run --rm --entrypoint find" in warning
+
+
+def test_a_copy_made_before_the_container_ran_is_removed_without_root(tmp_path, docker):
+    work = tmp_path / "bench-dv-stack-abc"
+    (work / "pipeline").mkdir(parents=True)
+    (work / "pipeline" / "x.py").write_text("")
+    stack = rmb.Stack("own", "bench_pc", "img", tmp_path)
+    stack.tmp = work
+    stack.down(lambda m: None)  # never started: a failure before `docker run`
+    assert not work.exists() and stack.tmp is None
+    assert not any(c[:4] == ["run", "--rm", "--entrypoint", "find"] for c in docker.calls)
