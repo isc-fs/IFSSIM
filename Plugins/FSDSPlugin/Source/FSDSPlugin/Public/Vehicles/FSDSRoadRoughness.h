@@ -21,8 +21,18 @@
  * Gd0 (n0/n)^2 for wavelengths well under the cutoff.
  *
  * A tyre does not follow features shorter than its footprint, so Height()
- * averages the profile over Footprint metres. Left and right tracks are
- * independent; the rear wheels read the same track Wheelbase metres back.
+ * averages the profile over Footprint metres. The rear wheels read the same
+ * track Wheelbase metres back.
+ *
+ * Left and right: a real road's long waves span both wheel tracks, and only
+ * its short ones differ between them. Drawn independently, the two tracks
+ * rolled the car at 0.5-3 Hz at 11 m/s twice as much as the car rolls
+ * (2026-09-20 manual bag) and threw the pipeline off a straight. So each
+ * track is C +/- D/2: C a profile common to both, D a left-right difference
+ * whose cutoff is CrossWavelength (a few metres), each carrying half of the
+ * short-wave level. Short waves are as rough and as uncorrelated as before
+ * (each track's PSD is still Gd0 (n0/n)^2 well under CrossWavelength); waves
+ * longer than CrossWavelength lift both sides together instead of rolling.
  *
  * Kept as a window: samples more than KeepBehind metres behind the newest
  * query are dropped, so a long run does not grow it.
@@ -34,30 +44,40 @@ public:
 	static constexpr double N0 = 0.1;          // ISO 8608 reference spatial frequency, cycle/m
 	static constexpr double KeepBehind = 10.0; // m of profile kept behind the furthest query
 
-	void Configure(double InGd0, double InCutoffWavelength, double InFootprint)
+	void Configure(double InGd0, double InCutoffWavelength, double InFootprint, double InCrossWavelength)
 	{
 		Gd0 = FMath::Max(0.0, InGd0);
 		const double Cutoff = FMath::Max(1.0, InCutoffWavelength);
-		const double A = 2.0 * PI / Cutoff;
-		Decay = FMath::Exp(-A * Dx);
-		Sigma = FMath::Sqrt(PI * PI * Gd0 * N0 * N0 / A);
-		Innov = Sigma * FMath::Sqrt(1.0 - Decay * Decay);
+		const double Cross = FMath::Clamp(InCrossWavelength, 0.1, Cutoff);
+		// A part with spread s and rate a has the short-wave level s^2 a. The
+		// common part and half the difference carry half of the ISO level
+		// pi^2 Gd0 n0^2 each.
+		const double Level = PI * PI * Gd0 * N0 * N0;
+		const double Ac = 2.0 * PI / Cutoff, Ad = 2.0 * PI / Cross;
+		SigmaCommon = FMath::Sqrt(0.5 * Level / Ac);
+		SigmaDiff = FMath::Sqrt(2.0 * Level / Ad);
+		DecayCommon = FMath::Exp(-Ac * Dx);
+		DecayDiff = FMath::Exp(-Ad * Dx);
+		InnovCommon = SigmaCommon * FMath::Sqrt(1.0 - DecayCommon * DecayCommon);
+		InnovDiff = SigmaDiff * FMath::Sqrt(1.0 - DecayDiff * DecayDiff);
+		Sigma = FMath::Sqrt(SigmaCommon * SigmaCommon + 0.25 * SigmaDiff * SigmaDiff);
 		HalfWindow = FMath::Max(0, FMath::RoundToInt(0.5 * FMath::Max(0.0, InFootprint) / Dx));
 	}
 
 	bool IsActive() const { return Gd0 > 0.0; }
+	/** Spread of one track's profile (before the footprint average), m. */
 	double GetSigma() const { return Sigma; }
 
 	/** Start a new profile at distance 0 from this stream. */
 	void Reset(const FRandomStream& InStream)
 	{
 		Stream = InStream;
-		for (int32 T = 0; T < 2; ++T)
-		{
-			Z[T].Reset();
-			// Start in the stationary distribution, so the first metres are as rough as the rest.
-			Z[T].Add(Sigma * FSDSRandom::StandardNormal(Stream));
-		}
+		// Start in the stationary distribution, so the first metres are as rough as the rest.
+		Common = SigmaCommon * FSDSRandom::StandardNormal(Stream);
+		Diff = SigmaDiff * FSDSRandom::StandardNormal(Stream);
+		for (int32 T = 0; T < 2; ++T) { Z[T].Reset(); }
+		Z[0].Add(Common + 0.5 * Diff);
+		Z[1].Add(Common - 0.5 * Diff);
 		Base = -2.0;   // grid index 0 sits two metres behind the start, for the rear wheels
 		ExtendTo(0.0);
 	}
@@ -98,17 +118,18 @@ private:
 	void ExtendTo(double S)
 	{
 		const int32 Need = FMath::CeilToInt((S - Base) / Dx) + HalfWindow + 2;
-		for (int32 T = 0; T < 2; ++T)
+		while (Z[0].Num() < Need)
 		{
-			TArray<double>& P = Z[T];
-			while (P.Num() < Need)
-			{
-				P.Add(P.Last() * Decay + Innov * FSDSRandom::StandardNormal(Stream));
-			}
+			Common = Common * DecayCommon + InnovCommon * FSDSRandom::StandardNormal(Stream);
+			Diff = Diff * DecayDiff + InnovDiff * FSDSRandom::StandardNormal(Stream);
+			Z[0].Add(Common + 0.5 * Diff);
+			Z[1].Add(Common - 0.5 * Diff);
 		}
 	}
 
-	double Gd0 = 0.0, Sigma = 0.0, Decay = 1.0, Innov = 0.0;
+	double Gd0 = 0.0, Sigma = 0.0;
+	double SigmaCommon = 0.0, DecayCommon = 1.0, InnovCommon = 0.0, Common = 0.0;
+	double SigmaDiff = 0.0, DecayDiff = 1.0, InnovDiff = 0.0, Diff = 0.0;
 	int32 HalfWindow = 0;
 	double Base = 0.0;
 	TArray<double> Z[2];

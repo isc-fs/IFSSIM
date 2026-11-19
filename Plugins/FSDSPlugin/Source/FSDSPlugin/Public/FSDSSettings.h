@@ -213,6 +213,7 @@ struct FFSDSVehiclePhysics
 	float RoadRoughnessGd0 = 0.f;
 	float RoadRoughnessCutoffWavelength = 20.f;
 	float RoadRoughnessFootprint = 0.15f;
+	float RoadRoughnessCrossWavelength = 3.f;      // m: waves longer than this are common to both wheel tracks
 	float RoadRoughnessTyreStiffness = 100000.f;   // N/m, tyre vertical stiffness the road passes through
 	bool bRoadRoughnessOnTrackWorld = true;
 
