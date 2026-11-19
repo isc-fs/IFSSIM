@@ -230,7 +230,7 @@ The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWh
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Suspension damping ratio | 1.5 | — | `SuspensionDamping` |
+| Suspension damping ratio (assumed, never measured) | 1.5 | — | `SuspensionDamping` |
 | Roll centre height, front | 0.040 | m | `RollCenterFront` |
 | Roll centre height, rear | 0.060 | m | `RollCenterRear` |
 | Roll stiffness, front | 15,021 | Nm/rad | `RollStiffnessFront` |
