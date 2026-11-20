@@ -183,6 +183,8 @@ struct FFSDSVehiclePhysics
 	float WeightDistFront = 0.438f;
 	float CoGHeight = 0.344f;        // meters
 	float SuspensionDamping = 1.5f;
+	float SuspensionDampingLowSpeedRatio = 1.f;   // damper slope below the knee / above it (1 = linear)
+	float SuspensionDampingKnee = 0.05f;         // m/s at the wheel where the damper turns digressive
 	TArray<float> MotorRPM;          // RPM points
 	TArray<float> MotorTorque;       // Nm at motor for each RPM
 

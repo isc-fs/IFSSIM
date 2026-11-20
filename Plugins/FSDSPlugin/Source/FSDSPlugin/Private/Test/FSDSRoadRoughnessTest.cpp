@@ -108,6 +108,18 @@ bool FFSDSRoadCornerTest::RunTest(const FString& Parameters)
 	Corner.Reset(0.0);
 	for (int32 i = 0; i < 30; ++i) { Corner.Advance(0.0, 0.002, 0.1, Ms, Mu, K, C, Kt); }
 	TestTrue(TEXT("finite after long frames"), FMath::IsFinite(Corner.Zu) && FMath::Abs(Corner.Zu) < 0.01);
+
+	// Digressive damper: slope LowRatio*C below the knee, C above it; ratio 1 is linear.
+	TestTrue(TEXT("linear at ratio 1"), FMath::IsNearlyEqual(FFSDSRoadCorner::Damper(C, 0.3, 1.0, 0.05), C * 0.3));
+	TestTrue(TEXT("steep below the knee"), FMath::IsNearlyEqual(FFSDSRoadCorner::Damper(C, 0.02, 2.0, 0.05), 2.0 * C * 0.02));
+	TestTrue(TEXT("C above the knee"), FMath::IsNearlyEqual(FFSDSRoadCorner::Damper(C, -0.3, 2.0, 0.05), -C * 0.3 - C * 0.05));
+	// The extra force acts on the strut's velocity: a body moving with the wheel gets none.
+	Corner.Reset(0.0);
+	Corner.Vu = 0.01;
+	TestTrue(TEXT("no low-speed force without strut motion"),
+		FMath::IsNearlyEqual(Corner.Force(K, C, 0.01, 2.0, 0.05), Corner.Force(K, C)));
+	TestTrue(TEXT("low-speed force on strut motion"),
+		FMath::IsNearlyEqual(Corner.Force(K, C, 0.0, 2.0, 0.05), Corner.Force(K, C) + C * 0.01));
 	return true;
 }
 

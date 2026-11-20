@@ -231,6 +231,8 @@ The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWh
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
 | Suspension damping ratio (fitted to the car's IMU; Chaos caps it at 1.0) | 0.7 | — | `SuspensionDamping` |
+| Damper slope below the knee / above it (1 = linear; acts through the road model) | 1.0 | — | `SuspensionDampingLowSpeedRatio` |
+| Damper knee, strut velocity at the wheel | 0.05 | m/s | `SuspensionDampingKnee` |
 | Roll centre height, front | 0.040 | m | `RollCenterFront` |
 | Roll centre height, rear | 0.060 | m | `RollCenterRear` |
 | Roll stiffness, front | 15,021 | Nm/rad | `RollStiffnessFront` |

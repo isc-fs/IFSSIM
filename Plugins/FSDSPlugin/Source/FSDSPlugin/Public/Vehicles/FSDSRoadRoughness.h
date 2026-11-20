@@ -150,6 +150,13 @@ private:
  *
  * Integrated in 1 ms RK4 sub-steps (the wheel's fastest pole is ~C/Mu =
  * 350 rad/s), with the road taken as linear across the frame.
+ *
+ * The strut's damper may be digressive, as a race car's usually is: stiffer
+ * below a knee velocity than above it. Damper() is C*v plus (LowRatio - 1)*C*v
+ * clamped to the knee, so its slope is LowRatio*C below the knee and C above.
+ * Chaos's own strut is linear (C), so Force() adds the low-speed part on the
+ * strut's actual velocity (wheel minus body) next to the road's K*Zu + C*Vu.
+ * LowRatio 1 is the linear damper.
  */
 struct FFSDSRoadCorner
 {
@@ -157,14 +164,20 @@ struct FFSDSRoadCorner
 
 	void Reset(double Zr) { Zs = Zr; Zu = Zr; Vs = 0.0; Vu = 0.0; }
 
-	void Advance(double Zr0, double Zr1, double Dt, double Ms, double Mu, double K, double C, double Kt)
+	static double Damper(double C, double V, double LowRatio, double Knee)
+	{
+		return C * V + (LowRatio - 1.0) * C * FMath::Clamp(V, -Knee, Knee);
+	}
+
+	void Advance(double Zr0, double Zr1, double Dt, double Ms, double Mu, double K, double C, double Kt,
+	             double LowRatio = 1.0, double Knee = 0.0)
 	{
 		if (Dt <= 0.0 || Ms <= 0.0 || Mu <= 0.0) return;
 		const int32 N = FMath::Max(1, FMath::CeilToInt(Dt / 0.001));
 		const double H = Dt / N;
 		auto Acc = [&](double zs, double vs, double zu, double vu, double zr, double& As, double& Au)
 		{
-			const double Fs = K * (zu - zs) + C * (vu - vs);
+			const double Fs = K * (zu - zs) + Damper(C, vu - vs, LowRatio, Knee);
 			As = Fs / Ms;
 			Au = (Kt * (zr - zu) - Fs) / Mu;
 		};
@@ -189,6 +202,14 @@ struct FFSDSRoadCorner
 		}
 	}
 
-	/** Force the strut passes to the body from the road, N. */
-	double Force(double K, double C) const { return K * Zu + C * Vu; }
+	/**
+	 * Force to add at the corner, N: what the road passes through the strut
+	 * (K*Zu + C*Vu), plus the damper's low-speed part on the strut's velocity
+	 * (this wheel's Vu minus VBody, the body corner's vertical velocity over
+	 * the ground, m/s), which Chaos's linear strut does not have.
+	 */
+	double Force(double K, double C, double VBody = 0.0, double LowRatio = 1.0, double Knee = 0.0) const
+	{
+		return K * Zu + C * Vu + (LowRatio - 1.0) * C * FMath::Clamp(Vu - VBody, -Knee, Knee);
+	}
 };

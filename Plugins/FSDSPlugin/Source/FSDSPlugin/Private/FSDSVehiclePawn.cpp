@@ -946,7 +946,11 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessCrossWavelength);
 		bRoadOnTrackWorld = P.bRoadRoughnessOnTrackWorld;
 		RoadTyreStiffness = P.RoadRoughnessTyreStiffness;
+		DampingLowSpeedRatio = FMath::Clamp(P.SuspensionDampingLowSpeedRatio, 0.2f, 6.f);
+		DampingKnee = FMath::Clamp(P.SuspensionDampingKnee, 0.f, 1.f);
 		bRoadSeeded = false;
+		UE_LOG(LogTemp, Log, TEXT("FSDS: strut damper %s (slope below %.3f m/s is %.2fx the slope above; through the road model)"),
+			FMath::IsNearlyEqual(DampingLowSpeedRatio, 1.f) ? TEXT("linear") : TEXT("digressive"), DampingKnee, DampingLowSpeedRatio);
 		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, left-right below %.1f m, footprint %.2f m, tyre %.0f N/m)%s"),
 			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessCrossWavelength,
 			P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
@@ -1814,18 +1818,25 @@ void AFSDSVehiclePawn::ApplyRoadRoughness(float DeltaTime)
 		const int32 Track = (Local.Y < 0.f) ? 0 : 1;
 		const double S = (Local.X > 0.f) ? RoadDistance : RoadDistance - Wheelbase;
 		const double H = Road.Height(Track, S);                       // m
+		// Chaos's suspension offset (cm, + compressed) is the body corner's
+		// height over the ground under the wheel, so its rate is the body's
+		// vertical velocity over the ground, whatever the slope.
+		const double SuspOffset = VehicleMovement->GetSuspensionOffset(i);
 		if (!bRoadPrevValid)
 		{
 			RoadCorner[i].Reset(H);
 			RoadPrevHeight[i] = H;
+			RoadPrevSuspOffset[i] = SuspOffset;
 		}
+		const double VBody = -(SuspOffset - RoadPrevSuspOffset[i]) / 100.0 / DeltaTime;   // m/s, + up
+		RoadPrevSuspOffset[i] = SuspOffset;
 		const double Ms = Mass * ((Local.X > 0.f) ? WeightDistFront : (1.f - WeightDistFront)) / 2.0;
 		const UChaosVehicleWheel* Wheel = VehicleMovement->Wheels[i];
 		const double Mu = Wheel ? FMath::Max(1.f, Wheel->WheelMass) : 10.0;
-		RoadCorner[i].Advance(RoadPrevHeight[i], H, DeltaTime, Ms, Mu, K, C, RoadTyreStiffness);
+		RoadCorner[i].Advance(RoadPrevHeight[i], H, DeltaTime, Ms, Mu, K, C, RoadTyreStiffness, DampingLowSpeedRatio, DampingKnee);
 		RoadPrevHeight[i] = H;
 
-		const double F = RoadCorner[i].Force(K, C);                     // N
+		const double F = RoadCorner[i].Force(K, C, VBody, DampingLowSpeedRatio, DampingKnee);   // N
 		VehicleMesh->AddForceAtLocation(Up * (F * 100.0), Body.TransformPosition(Local), NAME_None);   // N -> UE
 	}
 	bRoadPrevValid = true;

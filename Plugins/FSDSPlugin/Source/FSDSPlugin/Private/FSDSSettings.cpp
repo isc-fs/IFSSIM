@@ -244,6 +244,8 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("WeightDistFront"), DblVal)) P.WeightDistFront = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("CoGHeight"), DblVal)) P.CoGHeight = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("SuspensionDamping"), DblVal)) P.SuspensionDamping = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("SuspensionDampingLowSpeedRatio"), DblVal)) P.SuspensionDampingLowSpeedRatio = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("SuspensionDampingKnee"), DblVal)) P.SuspensionDampingKnee = DblVal;
 
 		// Vehicle dynamics fields consumed by ComputeTireLoadsParametric.
 		// All optional — defaults in FFSDSVehiclePhysics are the IFS-08 numbers.

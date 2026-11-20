@@ -528,4 +528,7 @@ private:
 	double RoadPrevHeight[4] = {0.0, 0.0, 0.0, 0.0};
 	FFSDSRoadCorner RoadCorner[4];
 	float RoadTyreStiffness = 100000.f;   // N/m
+	double RoadPrevSuspOffset[4] = {0.0, 0.0, 0.0, 0.0};   // cm, Chaos suspension offset last frame
+	float DampingLowSpeedRatio = 1.f;     // damper slope below the knee / above it (1 = linear)
+	float DampingKnee = 0.05f;            // m/s at the wheel
 };
