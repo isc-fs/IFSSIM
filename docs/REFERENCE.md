@@ -230,7 +230,7 @@ The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWh
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Suspension damping ratio (assumed, never measured) | 1.5 | — | `SuspensionDamping` |
+| Suspension damping ratio (fitted to the car's IMU; Chaos caps it at 1.0) | 0.7 | — | `SuspensionDamping` |
 | Roll centre height, front | 0.040 | m | `RollCenterFront` |
 | Roll centre height, rear | 0.060 | m | `RollCenterRear` |
 | Roll stiffness, front | 15,021 | Nm/rad | `RollStiffnessFront` |
@@ -246,7 +246,7 @@ Chaos itself takes the suspension from the wheel classes, not from these fields:
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Road level Gd0 (ISO class B/C boundary) | 2.25e-4 | m³ | `RoadRoughnessGd0` |
+| Road level Gd0 (ISO class C, fitted with the damping) | 4.5e-4 | m³ | `RoadRoughnessGd0` |
 | Cutoff wavelength | 20 | m | `RoadRoughnessCutoffWavelength` |
 | Tyre footprint | 0.15 | m | `RoadRoughnessFootprint` |
 | Left-right wavelength: longer waves are common to both wheel tracks | 3 | m | `RoadRoughnessCrossWavelength` |
