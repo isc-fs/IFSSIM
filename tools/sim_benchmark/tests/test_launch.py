@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -393,3 +394,61 @@ def test_ifssim_presets_are_valid_specs() -> None:
             sp.validate(sp.load_file(m.preset(name)), m)
         except sp.SpecError as e:
             assert all("bags" in line for line in str(e).splitlines()), f"{name}: {e}"
+
+
+# ------------------------------------------------------------------ code refs and B8's fields
+def test_code_takes_a_branch_pr_commit_or_snapshot(repo: Path) -> None:
+    m = mf.load(repo)
+    base = {"benchmarks": {"sim_bag": {"bags": ["bag_a"]}}}
+    for ref in ("dev", "#88", "pr/88", "4f1c2ab", "refs/bench/alice/k3x9", "refs/bench/alice/k3x9@4f1c2ab",
+                "feat/x@" + "a" * 40, None, ""):
+        sp.validate(base | {"code": {"pipeline": ref, "ifssim": ref, "image": "auto"}}, m)
+    for bad, want in (
+        ("refs/heads/dev", "only refs a spec may name are snapshots"),
+        ("a b", "is not a branch"),
+        (88, "code.pipeline: a branch, #PR"),
+        ({"pr": 88}, "code.pipeline: a branch, #PR"),
+        ("4f1c2ab@1234567", "disagree"),
+    ):
+        with pytest.raises(sp.SpecError, match=want):
+            sp.validate(base | {"code": {"pipeline": bad}}, m)
+    with pytest.raises(sp.SpecError, match="code.image"):
+        sp.validate(base | {"code": {"image": 3}}, m)
+
+
+def test_parse_ref_kinds() -> None:
+    assert sp.parse_ref("dev") == sp.CodeRef("branch", "dev")
+    assert sp.parse_ref(" #88 ") == sp.CodeRef("pr", "88")
+    assert sp.parse_ref("pull/88").refspec == "pull/88/head"
+    assert sp.parse_ref("4F1C2AB") == sp.CodeRef("commit", "4f1c2ab")
+    snap = sp.parse_ref("refs/bench/alice/k3x9@4F1C2AB")
+    assert snap == sp.CodeRef("snapshot", "refs/bench/alice/k3x9", "4f1c2ab")
+    assert snap.refspec == "refs/bench/alice/k3x9" and snap.label == "snapshot refs/bench/alice/k3x9 at 4f1c2ab"
+    assert sp.parse_ref("4f1c2ab@4f1c2abdef") == sp.CodeRef("commit", "4f1c2ab")
+    for bad in ("dev..x", "x.lock", "-x", "refs/bench/alice", "dev@4f1c2ab@4f1c2ab"):
+        with pytest.raises(sp.SpecError):
+            sp.parse_ref(bad)
+
+
+def test_hil_bench_and_lattepanda_deploy_are_accepted_and_checked(repo: Path) -> None:
+    m = dataclasses.replace(
+        mf.load(repo),
+        boards={"firmware": {"ecu": {"repo": "isc-fs/ecu", "default": "dev"}}, "hil": ["ecu"], "vhil": {"ecu": ["ecu"]}},
+    )
+    base = {"benchmarks": {"sim_bag": {"bags": ["bag_a"]}}}
+    out = sp.validate(base | {"boards": {"mode": "hil", "bench": "bench-01"}, "lattepanda": {"deploy": True}}, m)
+    assert out["boards"]["bench"] == "bench-01" and out["lattepanda"] == {"deploy": True}
+    for doc, want in (
+        ({"boards": {"mode": "vhil", "system": "ecu", "bench": "bench-01"}}, "boards.bench: only with real boards"),
+        ({"boards": {"mode": "hil", "bench": "bench 01"}}, "boards.bench: a HIL bench id"),
+        ({"boards": {"mode": "hil", "wires": 3}}, "boards.wires: unknown key"),
+        ({"lattepanda": {"deploy": "yes"}}, "lattepanda.deploy: true or false"),
+        ({"lattepanda": {"host": "x"}}, "lattepanda.host: unknown key"),
+        ({"lattepanda": True}, "lattepanda: a mapping"),
+    ):
+        with pytest.raises(sp.SpecError, match=want):
+            sp.validate(base | doc, m)
+    # neither changes what is measured
+    a = sp.expand(sp.validate(base, m), m)[0].spec_id
+    b = sp.expand(sp.validate(base | {"lattepanda": {"deploy": False}}, m), m)[0].spec_id
+    assert a == b == sp.DEFAULT_ID

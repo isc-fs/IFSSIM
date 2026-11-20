@@ -7,7 +7,7 @@ docs/history/2026-09-28_benchmark-launcher-design.md §3. A spec, as YAML::
     schema: 1
     name: loop-closure gate retune
     notes: after #88
-    code: {ifssim: dev, pipeline: feat/88-loop-closure, image: auto}
+    code: {ifssim: dev, pipeline: feat/88-loop-closure, image: auto}   # see parse_ref
     benchmarks:
       sim_bag:
         bags: [trackdrive_track_20260404_013721_20260617_202851]   # or: all
@@ -26,6 +26,9 @@ replaced): a preset, uploaded files, then single values (the form, or
 benchmark, bag and repeat. Each job has a ``spec_id``: the hash of what
 changes the measurement besides the code (settings, parts, overrides), or
 ``default`` when it sets none of them.
+
+``schema.py`` turns these definitions and the manifest into the JSON Schema the
+benchweb's form is generated from (``run_spec.py --print-schema``).
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import copy
 import hashlib
 import itertools
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,18 +59,92 @@ TOP = {
     "sweep",
     "experiment",
     "boards",
+    "lattepanda",
 }
 BOARD_MODES = ("hil", "vhil")
+BOARD_KEYS = {"mode", "system", "firmware", "bench"}
+# lattepanda.deploy: the runner checks code.pipeline out on the LattePanda, builds it and
+# applies the pipeline: overrides there with IFS09's deploy/bench scripts (plan B8, task
+# T12), instead of the panda_* commands. Accepted now; the rig refuses it until T12.
+LATTEPANDA_KEYS = {"deploy"}
 # scratch: tried out, never a baseline, purged after a while; official: kept (PR and merge runs).
 # Not part of spec_id: the same settings run as scratch or official are the same run of the code.
 EXPERIMENTS = ("scratch", "official")
 DEFAULT_EXPERIMENT = "scratch"
 PER_BENCHMARK = {"bags", "only", "repeats", "settings", "timeout_s"}
 ALL_BAGS = "all"
+CODE_IMAGE = "image"  # code.image: "auto" or an image tag, not a repository
+
+# What code.<repo> takes, as IFS-DV-BENCHWEB's runner agent reads it (agent/ifs_runner/
+# gitcache.py): a branch, a PR, a commit, or a snapshot ``ifsbench snapshot`` pushed for a
+# working copy (plan decision B5); ``<any of them>@<commit>`` pins a commit on it.
+HEX = re.compile(r"[0-9a-f]{7,40}")
+SNAPSHOT = re.compile(r"refs/bench/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/+-]{0,199}")
+PR = re.compile(r"(?:#|pr/|pull/)(\d{1,7})")
+REF_KINDS = ("branch", "pr", "commit", "snapshot")
+REF_HELP = "a branch, #PR, commit or snapshot (refs/bench/<user>/<id>); <ref>@<commit> pins a commit"
 
 
 class SpecError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class CodeRef:
+    kind: str  # branch | pr | commit | snapshot
+    value: str  # the branch, the PR number, the commit or the snapshot ref
+    pin: str | None = None  # a commit that must be on it
+
+    @property
+    def refspec(self) -> str | None:
+        """What ``git fetch origin`` takes for it (None: a commit, fetched only if missing)."""
+        return {
+            "branch": self.value,
+            "pr": f"pull/{self.value}/head",
+            "snapshot": self.value,
+        }.get(self.kind)
+
+    @property
+    def label(self) -> str:
+        what = {"branch": f"branch {self.value}", "pr": f"PR #{self.value}",
+                "commit": f"commit {self.value}", "snapshot": f"snapshot {self.value}"}[self.kind]
+        return f"{what} at {self.pin}" if self.pin else what
+
+
+def _branch_ok(name: str) -> bool:
+    return (bool(BRANCH.fullmatch(name)) and ".." not in name and "//" not in name and "@{" not in name
+            and not name.endswith((".lock", "/", ".")) and not name.startswith("refs/"))
+
+
+def parse_ref(value: Any, where: str = "code") -> CodeRef:
+    """One ``code.<repo>`` value: ``dev``, ``#88`` (or ``pr/88``, ``pull/88``), ``4f1c2ab``,
+    ``refs/bench/alberto/k3x9``, or any of them with ``@<commit>``."""
+    if not isinstance(value, str) or not value.strip():
+        raise SpecError(f"{where}: {REF_HELP}")
+    s = value.strip()
+    base, at, pin = s.rpartition("@")
+    if at and base and HEX.fullmatch(pin.lower()):
+        ref = parse_ref(base, where)
+        if ref.pin:
+            raise SpecError(f"{where}: {s}: one @<commit> at most")
+        if ref.kind == "commit":
+            if not (ref.value.startswith(pin.lower()) or pin.lower().startswith(ref.value)):
+                raise SpecError(f"{where}: commits {ref.value} and {pin} disagree")
+            return ref
+        return CodeRef(ref.kind, ref.value, pin.lower())
+    if s.startswith("refs/"):
+        if SNAPSHOT.fullmatch(s):
+            return CodeRef("snapshot", s)
+        raise SpecError(f"{where}: {s}: the only refs a spec may name are snapshots, refs/bench/<user>/<id>")
+    m = PR.fullmatch(s)
+    if m:
+        return CodeRef("pr", m.group(1))
+    if HEX.fullmatch(s.lower()):
+        return CodeRef("commit", s.lower())
+    if _branch_ok(s):
+        return CodeRef("branch", s)
+    raise SpecError(f"{where}: {s!r} is not {REF_HELP}")
 
 
 # ------------------------------------------------------------------ sources
@@ -139,10 +217,19 @@ def validate(spec: dict[str, Any], m: Manifest) -> dict[str, Any]:
     if not isinstance(code, dict):
         errors.append("code: a mapping of repository to branch, PR or commit")
         code = {}
-    for k in sorted(set(code) - set(m.repos) - {"image"}):
+    for k in sorted(set(code) - set(m.repos) - {CODE_IMAGE}):
         errors.append(
             f"code.{k}: not a repository in the manifest ({', '.join(m.repos)})"
         )
+    for k in sorted(set(code) & set(m.repos)):
+        if code[k] is None or code[k] == "":  # unset: the checkout's own
+            continue
+        try:
+            parse_ref(code[k], f"code.{k}")
+        except SpecError as e:
+            errors.append(str(e))
+    if code.get(CODE_IMAGE) is not None and not isinstance(code[CODE_IMAGE], str):
+        errors.append("code.image: auto, or an image tag")
 
     benches = s.get("benchmarks")
     if not isinstance(benches, dict) or not benches:
@@ -251,6 +338,16 @@ def validate(spec: dict[str, Any], m: Manifest) -> dict[str, Any]:
     if boards:
         errors += _board_errors(boards, m)
 
+    panda = s.get("lattepanda")
+    if panda is not None:
+        if not isinstance(panda, dict):
+            errors.append("lattepanda: a mapping (deploy)")
+        else:
+            for k in sorted(set(panda) - LATTEPANDA_KEYS):
+                errors.append(f"lattepanda.{k}: unknown key (known: {', '.join(sorted(LATTEPANDA_KEYS))})")
+            if "deploy" in panda and not isinstance(panda["deploy"], bool):
+                errors.append("lattepanda.deploy: true or false")
+
     sweep = s.get("sweep") or {}
     if not isinstance(sweep, dict):
         errors.append("sweep: a mapping of key.path to a list of values")
@@ -268,7 +365,8 @@ def validate(spec: dict[str, Any], m: Manifest) -> dict[str, Any]:
 
 
 def _board_errors(b: Any, m: Manifest) -> list[str]:
-    """``boards: {mode: hil|vhil, system: <vhil system>, firmware: {board: ref}}``."""
+    """``boards: {mode: hil|vhil, system: <vhil system>, firmware: {board: ref}}``; with
+    real boards, ``bench`` names the HIL bench (IFS_HIL's descriptor id; default: the rig's)."""
     if not isinstance(b, dict):
         return ["boards: a mapping (mode, system, firmware)"]
     known = m.boards or {}
@@ -276,6 +374,14 @@ def _board_errors(b: Any, m: Manifest) -> list[str]:
     mode = b.get("mode")
     if mode not in BOARD_MODES:
         return [f"boards.mode: one of {', '.join(BOARD_MODES)}"]
+    for k in sorted(set(b) - BOARD_KEYS):
+        errors.append(f"boards.{k}: unknown key (known: {', '.join(sorted(BOARD_KEYS))})")
+    bench = b.get("bench")
+    if bench is not None:
+        if mode != "hil":
+            errors.append("boards.bench: only with real boards (mode hil)")
+        elif not isinstance(bench, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", bench):
+            errors.append("boards.bench: a HIL bench id, e.g. bench-01")
     if mode == "vhil":
         systems = known.get("vhil") or {}
         if b.get("system") not in systems:
