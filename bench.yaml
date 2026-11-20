@@ -12,6 +12,7 @@ repos: # what a spec's `code:` can pin; `default` is where the web form starts
   ifssim:
     path: .
     default: dev
+    url: https://github.com/isc-fs/IFSSIM # its branches and PRs, for the picker on a runner target
   pipeline: # a submodule: by default, the commit IFSSIM pins
     path: pipeline
     url: https://github.com/isc-fs/IFS09-DV-PIPELINE # its branches and PRs, for Mission Control's picker

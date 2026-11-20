@@ -125,6 +125,9 @@ def check(rig: dict[str, Any] | None = None, run: Runner = _run) -> dict[str, An
             else _part(UNAVAILABLE, f"LattePanda {host} not answering: {_first_line(r)}", host=host)
         )
 
+    # lattepanda.deploy in a spec: IFS09's deploy/bench scripts on the LattePanda (plan B8, T12)
+    parts["latte_panda_deploy"] = _part(ABSENT, "deploying the pipeline on the LattePanda isn't wired yet")
+
     hil = rig.get("hil")
     parts["hil"] = (
         _part(ABSENT, "no HIL bench on this rig")
@@ -156,6 +159,9 @@ def needs(spec: dict[str, Any]) -> list[str]:
         settings = (b or {}).get("settings") or {}
         where = settings.get("pipeline_on", "bench_pc")
         out.append("latte_panda" if where == "latte_panda" else "pipeline_bench_pc")
+    panda = spec.get("lattepanda")
+    if isinstance(panda, dict) and panda.get("deploy"):
+        out.append("latte_panda_deploy")
     mode = (spec.get("boards") or {}).get("mode") if isinstance(spec.get("boards"), dict) else None
     if mode in ("hil", "vhil"):
         out.append(mode)
