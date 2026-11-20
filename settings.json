@@ -48,6 +48,7 @@
         "EbsFillTime": 0.0,
         "WeightDistFront": 0.438,
         "CoGHeight": 0.300,
+        "_comment_damping": "SuspensionDamping is the strut's damping ratio; Chaos turns it into a damping coefficient (N*s/m) from the spring rate and sprung mass when it builds the car, and the sim log prints the result per wheel ('strut in the solver'). 1.5 is ASSUMED, never measured on the car, and well above the 0.3-0.7 usual for a race car; it was not applied at all before (the wheel classes hard-coded 1.5).",
         "SuspensionDamping": 1.5,
         "MotorRPM": [0, 1000, 2000, 3000, 4000, 5000, 6000, 6500],
         "MotorTorque": [230, 240, 240, 240, 240, 240, 200, 180],

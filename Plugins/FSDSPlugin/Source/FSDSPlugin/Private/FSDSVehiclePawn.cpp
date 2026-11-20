@@ -263,6 +263,19 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 	VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
 	VehicleMovement->VerifyAllWheelConfigsApplied();
 
+	// The strut as the solver has it: spring rate and damping coefficient
+	// come from the wheel CDOs (SpringRate, SuspensionDampingRatio), so this
+	// is where to see what settings.json's SuspensionDamping became.
+	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); ++i)
+	{
+		float K = 0.f, C = 0.f;
+		FVector Local;
+		if (VehicleMovement->GetSolverSuspension(i, K, C, Local))
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS: wheel %d strut in the solver: spring %.0f N/m, damping %.0f N*s/m"), i, K, C);
+		}
+	}
+
 	// Verification above only covers fields this project actually sets.
 	// The complement — what it never set, and therefore inherited from
 	// Chaos — is invisible by construction: you cannot grep for a value
@@ -318,11 +331,20 @@ void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 		UFSDSWheelRear::StaticClass()->GetDefaultObject<UFSDSWheelRear>()
 	};
 
+	// The damping ratio takes the same route: Chaos turns it into the strut's
+	// damping coefficient (ComputeDamping from the spring rate and sprung
+	// mass) only when it builds the vehicle, and the live setters cannot
+	// reach suspension safely (see ApplyWheelConfigToPhysics). Before this,
+	// settings.json's SuspensionDamping was parsed and read by nothing.
+	const float DampingRatio = FMath::Clamp(P.SuspensionDamping, 0.05f, 5.f);
 	for (UChaosVehicleWheel* CDO : CDOs)
 	{
 		if (!CDO) continue;
 		FSDSPacejka::BakeToWheel(CDO, P.Pacejka, P.TireMu);
+		CDO->SuspensionDampingRatio = DampingRatio;
 	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS: suspension damping ratio %.2f into wheel CDOs (settings.json SuspensionDamping)"),
+		DampingRatio);
 
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")

@@ -36,7 +36,7 @@ UFSDSWheelRear::UFSDSWheelRear()
 	// was 1.44 cm, so MaxDrop 3.5 + 2.31 = 5.81 cm. See FSDSWheelFront.cpp.
 	SuspensionMaxRaise = 3.5f;  // cm
 	SuspensionMaxDrop = 5.81f;  // cm
-	SuspensionDampingRatio = 1.5f;
+	SuspensionDampingRatio = 1.5f;   // overwritten from settings.json SuspensionDamping (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs)
 
 	// Wheel rate 20184 N/m -> property 201.84 (x100 into N/m), the same as
 	// the front. Was 300 lb/in = 52538 N/m, the workbook's spring rate taken
