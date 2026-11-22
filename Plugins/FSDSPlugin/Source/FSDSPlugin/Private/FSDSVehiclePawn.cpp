@@ -263,6 +263,19 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 	VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
 	VehicleMovement->VerifyAllWheelConfigsApplied();
 
+	// The strut as the solver has it: spring rate and damping coefficient
+	// come from the wheel CDOs (SpringRate, SuspensionDampingRatio), so this
+	// is where to see what settings.json's SuspensionDamping became.
+	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); ++i)
+	{
+		float K = 0.f, C = 0.f;
+		FVector Local;
+		if (VehicleMovement->GetSolverSuspension(i, K, C, Local))
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS: wheel %d strut in the solver: spring %.0f N/m, damping %.0f N*s/m"), i, K, C);
+		}
+	}
+
 	// Verification above only covers fields this project actually sets.
 	// The complement — what it never set, and therefore inherited from
 	// Chaos — is invisible by construction: you cannot grep for a value
@@ -318,11 +331,20 @@ void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 		UFSDSWheelRear::StaticClass()->GetDefaultObject<UFSDSWheelRear>()
 	};
 
+	// The damping ratio takes the same route: Chaos turns it into the strut's
+	// damping coefficient (ComputeDamping from the spring rate and sprung
+	// mass) only when it builds the vehicle, and the live setters cannot
+	// reach suspension safely (see ApplyWheelConfigToPhysics). Before this,
+	// settings.json's SuspensionDamping was parsed and read by nothing.
+	const float DampingRatio = FMath::Clamp(P.SuspensionDamping, 0.05f, 5.f);
 	for (UChaosVehicleWheel* CDO : CDOs)
 	{
 		if (!CDO) continue;
 		FSDSPacejka::BakeToWheel(CDO, P.Pacejka, P.TireMu);
+		CDO->SuspensionDampingRatio = DampingRatio;
 	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS: suspension damping ratio %.2f into wheel CDOs (settings.json SuspensionDamping)"),
+		DampingRatio);
 
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")
@@ -354,11 +376,13 @@ void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 		const float CornerLoadN = P.Mass * 9.81f * A.LoadShare * 0.5f;
 		A.CDO->SpringRate = A.RateNpm / 100.f;
 		A.CDO->SuspensionMaxDrop = A.StaticOffsetCm + 100.f * CornerLoadN / A.RateNpm;
-		A.CDO->SuspensionDampingRatio = A.Zeta;
+		// A per-axle ratio wins over SuspensionDamping (set above) only when
+		// settings.json gives one; 0 means it did not.
+		if (A.Zeta > 0.f) A.CDO->SuspensionDampingRatio = FMath::Clamp(A.Zeta, 0.05f, 5.f);
 		A.CDO->WheelMass = A.MassKg;
 		UE_LOG(LogTemp, Log,
 			TEXT("FSDS: %s wheel CDO — wheel rate %.0f N/m (SpringRate %.1f), static sag %.2f cm, MaxDrop %.2f cm, damping ratio %.3f, wheel mass %.2f kg"),
-			A.Name, A.RateNpm, A.CDO->SpringRate, 100.f * CornerLoadN / A.RateNpm, A.CDO->SuspensionMaxDrop, A.Zeta, A.MassKg);
+			A.Name, A.RateNpm, A.CDO->SpringRate, 100.f * CornerLoadN / A.RateNpm, A.CDO->SuspensionMaxDrop, A.CDO->SuspensionDampingRatio, A.MassKg);
 	}
 }
 
@@ -953,12 +977,13 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		HeaveStiffness = P.HeaveStiffness;
 		PitchStiffness = P.PitchStiffness;
 
-		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint);
+		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessCrossWavelength);
 		bRoadOnTrackWorld = P.bRoadRoughnessOnTrackWorld;
 		RoadTyreStiffness = P.RoadRoughnessTyreStiffness;
 		bRoadSeeded = false;
-		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, footprint %.2f m, tyre %.0f N/m)%s"),
-			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
+		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, left-right below %.1f m, footprint %.2f m, tyre %.0f N/m)%s"),
+			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessCrossWavelength,
+			P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
 			Road.IsActive() ? (bRoadOnTrackWorld ? TEXT(", also on track worlds") : TEXT(", level floor only")) : TEXT(" - off"));
 
 		// Size the rear-wheel brake torque to the max motor regen
@@ -1775,7 +1800,8 @@ void AFSDSVehiclePawn::ApplyRoadRoughness(float DeltaTime)
 	USkeletalMeshComponent* VehicleMesh = GetMesh();
 	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
 
-	// A track's world (Montmeló) brings its own surface; checked once a second.
+	// Off on a track's world (Montmeló) if RoadRoughnessOnTrackWorld is false;
+	// checked once a second.
 	RoadWorldCheckTimer -= DeltaTime;
 	if (RoadWorldCheckTimer <= 0.f)
 	{

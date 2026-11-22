@@ -230,7 +230,7 @@ The class-default `FrictionForceMultiplier = 1.65` on `FSDSWheelFront` / `FSDSWh
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Suspension damping ratio | 1.5 | — | `SuspensionDamping` |
+| Suspension damping ratio (fitted to the car's IMU; Chaos caps it at 1.0) | 0.7 | — | `SuspensionDamping` |
 | Roll centre height, front | 0.040 | m | `RollCenterFront` |
 | Roll centre height, rear | 0.060 | m | `RollCenterRear` |
 | Roll stiffness, front | 15,021 | Nm/rad | `RollStiffnessFront` |
@@ -242,13 +242,14 @@ Consumed by `AFSDSVehiclePawn::ComputeTireLoadsParametric` for the parametric lo
 
 Chaos takes the springs per axle from `settings.json` (`SpringRateFront/Rear` wheel rates, `DampingRatioFront/Rear`, `WheelMassFront/Rear`), pushed into the wheel class defaults by `ApplyTireModelToWheelCDOs` before the vehicle is created. The values come from the KIN CAD (spring × motion ratio² from the kinematic sweep): 15,204 N/m front, 21,217 N/m rear, no anti-roll bar (`RollbarScaling = 0`). Droop travel is recomputed from the rate (static wheel offset 2.53 / 2.05 cm + static sag) so the ride height does not move; bump travel is 3.5 cm from rest. That is a 2.7 / 3.1 Hz ride (plant spec 2.9–3.0 Hz), about 0.66° of pitch and 1.1° of roll per g driverless, ~1.5° with a driver aboard; the real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° and 1.5–1.8° per g. The wheel-class literals (20,184 N/m, the plant spec's wheel rate) are only the fallback when `settings.json` has no rates. The shadow values above follow the same springs: roll = rate × track² / 2 per axle, pitch = 2 × (kF·lf² + kR·lr²).
 
-**Road roughness.** The level floor is perfectly flat, so on its own it gives the body almost no motion below 15 Hz. `AFSDSVehiclePawn::ApplyRoadRoughness` adds a random road: an ISO 8608 profile per wheel track (`RoadRoughnessGd0` m³ at 0.1 cycle/m, rolled off past `RoadRoughnessCutoffWavelength`, averaged over `RoadRoughnessFootprint`), with the rear wheels a wheelbase behind the front ones. Each corner runs a small quarter car, road → tyre spring (`RoadRoughnessTyreStiffness`) → wheel → strut, and the strut force from the wheel's motion is applied to the body at the wheel, using the solver's own spring and damper. The profile is drawn from the scenario seed (`Road.profile`), so a same-seed reset drives the same road. It is off on a track world such as Montmeló unless `RoadRoughnessOnTrackWorld`. The tyres' grip load does not see the road.
+**Road roughness.** The level floor is perfectly flat, so on its own it gives the body almost no motion below 15 Hz. `AFSDSVehiclePawn::ApplyRoadRoughness` adds a random road: an ISO 8608 profile per wheel track (`RoadRoughnessGd0` m³ at 0.1 cycle/m, rolled off past `RoadRoughnessCutoffWavelength`, averaged over `RoadRoughnessFootprint`), with the rear wheels a wheelbase behind the front ones. Each track is a common profile plus or minus half a left-right difference whose waves stop at `RoadRoughnessCrossWavelength`, each with half the short-wave level: short waves differ between the tracks as before, and longer ones lift the car instead of rolling it (with independent tracks the car rolled at 0.5–3 Hz at 11 m/s twice as much as the real one). Each corner runs a small quarter car, road → tyre spring (`RoadRoughnessTyreStiffness`) → wheel → strut, and the strut force from the wheel's motion is applied to the body at the wheel, using the solver's own spring and damper. The profile is drawn from the scenario seed (`Road.profile`), so a same-seed reset drives the same road. It also runs on a track world such as Montmeló, whose asphalt is a smooth surface fitted to the survey (`RoadRoughnessOnTrackWorld` false turns it off there). The tyres' grip load does not see the road.
 
 | Parameter | Value | Unit | Source |
 |---|---|---|---|
-| Road level Gd0 (ISO class B/C boundary) | 2.25e-4 | m³ | `RoadRoughnessGd0` |
+| Road level Gd0 (ISO class C, fitted with the damping) | 4.5e-4 | m³ | `RoadRoughnessGd0` |
 | Cutoff wavelength | 20 | m | `RoadRoughnessCutoffWavelength` |
 | Tyre footprint | 0.15 | m | `RoadRoughnessFootprint` |
+| Left-right wavelength: longer waves are common to both wheel tracks | 3 | m | `RoadRoughnessCrossWavelength` |
 | Tyre vertical stiffness | 100,000 | N/m | `RoadRoughnessTyreStiffness` |
 
 #### Wheels

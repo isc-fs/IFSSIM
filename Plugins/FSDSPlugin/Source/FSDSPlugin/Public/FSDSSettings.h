@@ -219,8 +219,10 @@ struct FFSDSVehiclePhysics
 	// unsprung mass; set it as 2 I / r^2 from the real rotating inertia.
 	float SpringRateFront = 20184.f;     // N/m wheel rate (plant spec, = wheel-class fallback)
 	float SpringRateRear = 20184.f;      // N/m wheel rate
-	float DampingRatioFront = 1.5f;      // Chaos SuspensionDampingRatio
-	float DampingRatioRear = 1.5f;
+	// Chaos SuspensionDampingRatio per axle. 0 = not set: the axle takes
+	// SuspensionDamping instead (ApplyTireModelToWheelCDOs).
+	float DampingRatioFront = 0.f;
+	float DampingRatioRear = 0.f;
 	float WheelMassFront = 10.f;         // kg, spin-inertia equivalent
 	float WheelMassRear = 10.f;
 
@@ -229,12 +231,15 @@ struct FFSDSVehiclePhysics
 	// m^3; 0 = off. CutoffWavelength (m) rolls the profile off so it does not
 	// wander; Footprint (m) is the tyre contact length it is averaged over;
 	// TyreStiffness (N/m) the vertical tyre spring between road and wheel.
-	// Off on a track's world (Montmeló has its own surface) unless OnTrackWorld.
+	// Also on a track's world: Montmeló's asphalt is a smooth fitted surface
+	// (tools/worldgen), so the road model supplies its roughness there too.
+	// OnTrackWorld false turns it off on worlds.
 	float RoadRoughnessGd0 = 0.f;
 	float RoadRoughnessCutoffWavelength = 20.f;
 	float RoadRoughnessFootprint = 0.15f;
+	float RoadRoughnessCrossWavelength = 3.f;      // m: waves longer than this are common to both wheel tracks
 	float RoadRoughnessTyreStiffness = 100000.f;   // N/m, tyre vertical stiffness the road passes through
-	bool bRoadRoughnessOnTrackWorld = false;
+	bool bRoadRoughnessOnTrackWorld = true;
 
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.

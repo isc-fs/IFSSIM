@@ -57,7 +57,7 @@ UFSDSWheelFront::UFSDSWheelFront()
 	// MaxDrop 3.5 + 1.96 = 5.46 cm. Bump travel from rest is unchanged.
 	SuspensionMaxRaise = 3.5f;  // cm
 	SuspensionMaxDrop = 5.46f;  // cm
-	SuspensionDampingRatio = 1.5f;
+	SuspensionDampingRatio = 1.5f;   // overwritten from settings.json SuspensionDamping (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs)
 
 	// Wheel rate. UNITS ARE A TRAP: the UPROPERTY is documented "N/m" but
 	// ChaosVehicleWheel.h:392 FillSuspensionSetup does SpringRate =

@@ -369,7 +369,7 @@ def test_a_queued_spec_runs_on_its_code_pipeline_and_cleans_up(piped):
     assert st["state"] == "failed" and "nope" in st["error"]
 
 
-def test_boards_are_checked_against_the_manifest_and_need_car_in_the_loop(m):
+def test_boards_are_checked_against_the_manifest_and_need_the_vhil_part(m):
     boards = {"firmware": {"ecu": {"repo": "isc-fs/ecu", "default": "dev"}, "ams": {"repo": "isc-fs/ams", "default": "dev"}},
               "hil": ["ecu"], "vhil": {"ecu-ams": ["ecu", "ams"]}}
     mb = dataclasses.replace(m, boards=boards)
@@ -384,14 +384,33 @@ def test_boards_are_checked_against_the_manifest_and_need_car_in_the_loop(m):
             run.sp.validate(spec() | {"boards": bad}, mb)
     assert rg.needs(ok)[-1] == "vhil"
     probs = rg.problems(ok, rg.check({"id": "desk"}, run=fake_runner({})))
-    assert {"part": "vhil", "status": "absent", "reason": "car-in-the-loop not wired yet"} in probs
+    # no Docker answering here: the emulated boards wait for it
+    assert {"part": "vhil", "status": "unavailable", "reason": "needs Docker"} in probs
 
 
-def test_vhil_follows_docker_once_car_in_the_loop_is_wired(monkeypatch):
-    docker_up = {"nvidia-smi": (0, "GPU 0: x\n", ""), "docker": (0, "27.0\n", "")}
-    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "absent"
-    monkeypatch.setattr(rg, "CAR_IN_THE_LOOP", True)
-    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]["status"] == "ready"
+def test_vhil_needs_docker_the_vhil_checkout_and_its_image(monkeypatch, tmp_path):
+    root = tmp_path / "IFSSIM"
+    (root / "tools" / "vhil_boards").mkdir(parents=True)
+    (root / "tools" / "vhil_boards" / "server.py").write_text("")
+    monkeypatch.setattr(rg, "ROOT", root)
+    monkeypatch.delenv("IFSSIM_VHIL_REPO", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    docker_up = {"nvidia-smi": (0, "GPU 0: x\n", ""), "docker": (0, "27.0\n", ""),
+                 "bash": (0, "base=abc123\nclean=true\n", "")}
+    # Docker is up but there is no IFS-vHIL next to this repository: grey, with the way out
+    st = rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"]
+    assert st["status"] == "absent" and "IFS-vHIL not found" in st["reason"] and "IFSSIM_VHIL_REPO" in st["reason"]
+    # the checkout is there: ready when the image is local ...
+    (tmp_path / "IFS-vHIL" / "vhil").mkdir(parents=True)
+    (tmp_path / "IFS-vHIL" / "vhil" / "sim.py").write_text("")
+    assert rg.check({"id": "d"}, run=fake_runner(docker_up))["parts"]["vhil"] == {"status": "ready", "reason": ""}
+    # ... and grey, naming the pull command, when it is not
+    def no_image(cmd, timeout):
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 1, "", "No such image")
+        return fake_runner(docker_up)(cmd, timeout)
+    st = rg.check({"id": "d"}, run=no_image)["parts"]["vhil"]
+    assert st["status"] == "absent" and "docker pull ghcr.io/isc-fs/ifs-vhil:abc123" in st["reason"]
     down = rg.check({"id": "d"}, run=fake_runner({"docker": (1, "", "Cannot connect\n")}))
     assert down["parts"]["vhil"] == {"status": "unavailable", "reason": "needs Docker"}
 

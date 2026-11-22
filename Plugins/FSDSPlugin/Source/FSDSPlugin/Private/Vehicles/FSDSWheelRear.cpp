@@ -36,7 +36,7 @@ UFSDSWheelRear::UFSDSWheelRear()
 	// was 1.44 cm, so MaxDrop 3.5 + 2.31 = 5.81 cm. See FSDSWheelFront.cpp.
 	SuspensionMaxRaise = 3.5f;  // cm
 	SuspensionMaxDrop = 5.81f;  // cm
-	SuspensionDampingRatio = 1.5f;
+	SuspensionDampingRatio = 1.5f;   // overwritten from settings.json SuspensionDamping (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs)
 
 	// FALLBACK ONLY. SpringRate, SuspensionDampingRatio, WheelMass and
 	// SuspensionMaxDrop are overwritten from settings.json (SpringRate*,

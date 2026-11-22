@@ -78,7 +78,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -94,12 +94,21 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+# The referee starts acceleration's clock when the event is set, not when the car crosses a line
+# (FSDSReferee.cpp, "Acceleration starts it when the event is set"), so its time includes arming
+# and the start sequence; "race/drive_time_s" counts from the car's first motion instead. The run
+# is polled this fast until the car moves and for FINE_POLL_FOR_S after, to place that moment.
+SET_OFF_MPS = 0.5
+FINE_POLL_S = 0.2
+FINE_POLL_FOR_S = 60.0
 # FS-Rules T14.9 AS state bytes on /assi/state, and the pipeline's /dv/status
 # DV_EMERGENCY (mission_control.interface_contract). Mission Control reports
 # both in /api/event/state as as_state / dv_status.
 AS_EMERGENCY, AS_DRIVING = 1, 3
 DV_EMERGENCY = 5
-MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
+# the UI; see the docstring. $IFSSIM_MC_URL names the backend directly (http://127.0.0.1:8000)
+# where the UI's container isn't up.
+MC_URL = os.environ.get("IFSSIM_MC_URL", "http://127.0.0.1:3000")
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
 # finish. This many times timeout_s of real time still ends the run, in case the sim
@@ -658,6 +667,8 @@ class Stack:
             f"IFSSIM_PORT={self.sim_port}",
             "-e",
             f"ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '0')}",
+            # emulated boards (IFS-vHIL), when the run spec asks for them (launch/boards.py)
+            *[a for v in ("IFSSIM_VHIL_BOARDS", "IFSSIM_VHIL_TORQUE") if v in os.environ for a in ("-e", f"{v}={os.environ[v]}")],
             "-e",
             "NUMBA_CACHE_DIR=/numba_cache",
             "-v",
@@ -758,6 +769,30 @@ class Stack:
             time.sleep(poll_s)
         log(f"pipeline stack up ({time.monotonic() - t0:.0f} s)")
 
+    def remove_work_copy(self, log, as_root: bool) -> None:
+        """Delete the copy of the pipeline and the bridge (``self.tmp``). The stack's container
+        ran as root and left root-owned files (``__pycache__``) anywhere under both ``pipeline/``
+        and ``ros2/``, which the user can't delete: so everything inside goes from a container,
+        as root, and the folder itself (ours) after. Best effort: it never hides the run's own
+        result, and if something stays it says where and how to remove it."""
+        tmp, self.tmp = self.tmp, None
+        if tmp is None or not tmp.exists():
+            return
+        wipe = ["run", "--rm", "--entrypoint", "find", "-v", f"{tmp}:/copy", self.image,
+                "/copy", "-mindepth", "1", "-delete"]
+        if as_root:
+            try:
+                r = docker(*wipe, timeout=300)
+                if r.returncode != 0:
+                    log(f"warning: removing the stack's work copy as root failed: "
+                        f"{(r.stderr or r.stdout).strip()[:200]}")
+            except BenchmarkError as e:
+                log(f"warning: removing the stack's work copy as root failed: {e}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp.exists():
+            log(f"warning: the stack's work copy {tmp} is still there (root-owned files); remove it with: "
+                f"docker {' '.join(wipe)} && rmdir {tmp}")
+
     def reach_sim(self) -> None:
         """Whether the stack's container can reach the sim. Its entrypoint says it is up before
         the bridge connects, so an unreachable sim would otherwise only show as missions that
@@ -777,6 +812,7 @@ class Stack:
         if not self.started:
             for name in self.stopped:  # stopped, then failed before our stack ran
                 docker("start", name)
+            self.remove_work_copy(log, as_root=False)  # made, then failed before the container ran
             return
         if results is not None:
             logs = docker("logs", CONTAINER, timeout=60)
@@ -792,20 +828,7 @@ class Stack:
         for name in self.stopped:
             log(f"starting {name} again")
             docker("start", name)
-        if self.tmp is not None:
-            # the stack ran as root and left root-owned files (__pycache__) in the copy
-            docker(
-                "run",
-                "--rm",
-                "--entrypoint",
-                "rm",
-                "-v",
-                f"{self.tmp}:/copy",
-                self.image,
-                "-rf",
-                "/copy/pipeline",
-            )
-            shutil.rmtree(self.tmp, ignore_errors=True)
+        self.remove_work_copy(log, as_root=True)
 
 
 # ------------------------------------------------------------------ one run
@@ -852,6 +875,8 @@ class RunResult:
     emergency_at: float | None = None  # seconds into the run (sim time when reported) the car went to AS Emergency
     cpu_wait: float | None = None  # share of the run some task waited for a CPU (Linux CPU pressure)
     load1: float | None = None  # the machine's 1-minute load average at the end of the run
+    set_off: float | None = None  # seconds into the run the car first moved (speed above SET_OFF_MPS)
+    boards: dict | None = None  # the emulated boards' pace over the run (boards_pace), when they ran
 
 
 class Progress:
@@ -940,6 +965,7 @@ def run_one(
     seen_driving = False
     limit = float(m["timeout_s"])
     sim_now = sim0
+    set_off: float | None = None
 
     def elapsed() -> float:
         return time.monotonic() - t0 if sim0 is None else sim_now - sim0
@@ -959,6 +985,8 @@ def run_one(
                     "steering": (st.get("controls") or {}).get("steering"),
                 }
             )
+        if set_off is None and isinstance(st.get("speed"), (int, float)) and st["speed"] > SET_OFF_MPS:
+            set_off = t
         laps, need = (
             int(ref.get("laps") or 0),
             max(1, int(ref.get("required_laps") or m["laps"])),
@@ -981,7 +1009,8 @@ def run_one(
                 f"(/assi/state {as_state}, /dv/status {dv_status}), ending the run"
             )
             break
-        time.sleep(poll_s)
+        fine = set_off is None or t - set_off < FINE_POLL_FOR_S
+        time.sleep(min(poll_s, FINE_POLL_S) if fine else poll_s)
         if sim0 is not None:
             sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
     seconds = time.monotonic() - t0
@@ -1000,7 +1029,60 @@ def run_one(
         emergency_at=emergency_at,
         cpu_wait=None if p0 is None or p1 is None or seconds <= 0 else min(1.0, (p1 - p0) / 1e6 / seconds),
         load1=os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
+        set_off=set_off,
+        boards=boards_pace(started, datetime.now(timezone.utc)),
     )
+
+
+# ------------------------------------------------------------------ the emulated boards' pace
+BOARDS_CONTAINER = "ifssim-vhil-boards"  # launch/boards.py CONTAINER
+BOARDS_MAX_LAG_S = 2.0  # a run whose boards fell further behind the wall clock than this was not real time
+BOARDS_MIN_RTF = 0.97
+
+
+def boards_pace(start: datetime, end: datetime, run=subprocess.run) -> dict | None:
+    """How the emulated boards (IFS-vHIL, tools/vhil_boards/server.py) kept up with the wall clock
+    between ``start`` and ``end``: their real-time factor over the window, the furthest they were
+    behind the wall clock in it, and whether that counts as real time. None when no boards ran
+    (``IFSSIM_VHIL_BOARDS`` unset) or their log has too few lines in the window."""
+    if not os.environ.get("IFSSIM_VHIL_BOARDS"):
+        return None
+    pad = timedelta(seconds=3)
+    try:
+        r = run(
+            ["docker", "logs", "--since", (start - pad).isoformat(), "--until", (end + pad).isoformat(), BOARDS_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = []
+    for line in ((r.stdout or "") + (r.stderr or "")).splitlines():
+        if line.startswith("{"):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if "wall" in d and start.timestamp() - 3 <= d["wall"] <= end.timestamp() + 3:
+                rows.append(d)
+    return boards_pace_of(rows)
+
+
+def boards_pace_of(rows: list[dict]) -> dict | None:
+    """The pace over the longest stretch of the log where the emulation's clock only went forward:
+    the server restarts the emulated car when the operator goes OFF (the end of a run, which a
+    window's padding can include), and its clock starts again from zero there."""
+    rows = sorted(rows, key=lambda d: d["wall"])
+    stretches: list[list[dict]] = [[]]
+    for d in rows:
+        if stretches[-1] and d["t"] < stretches[-1][-1]["t"]:
+            stretches.append([])
+        stretches[-1].append(d)
+    rows = max(stretches, key=lambda st: st[-1]["wall"] - st[0]["wall"])
+    if len(rows) < 2 or rows[-1]["wall"] <= rows[0]["wall"]:
+        return None
+    rtf = (rows[-1]["t"] - rows[0]["t"]) / (rows[-1]["wall"] - rows[0]["wall"])
+    lag = max(float(d.get("lag_s", 0.0)) for d in rows)
+    return {"rtf": round(rtf, 3), "max_lag_s": round(lag, 2), "real_time_ok": rtf >= BOARDS_MIN_RTF and lag <= BOARDS_MAX_LAG_S}
 
 
 # ------------------------------------------------------------------ writing a run
@@ -1066,6 +1148,16 @@ def race_metrics(res: RunResult) -> dict[str, float]:
             out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
     if res.speed_factor is not None:
         out["race/speed_factor"] = res.speed_factor
+    if res.boards is not None:
+        # the emulated boards' own pace: a run they could not keep up with is not a real-time run of the car
+        out["box/boards_rtf"] = res.boards["rtf"]
+        out["box/boards_max_lag_s"] = res.boards["max_lag_s"]
+        out["race/boards_real_time_ok"] = 1 if res.boards["real_time_ok"] else 0
+    if res.set_off is not None:
+        # from the car's first motion to the finish: what the drive took, whatever the start
+        # sequence before it (arming, the EKF's calibration, an ECU's ready-to-drive delay)
+        out["race/set_off_s"] = round(res.set_off, 2)
+        out["race/drive_time_s"] = round(res.seconds - res.set_off, 2)
     if res.cpu_wait is not None:
         out["box/cpu_wait"] = round(res.cpu_wait, 3)
     if res.load1 is not None:
