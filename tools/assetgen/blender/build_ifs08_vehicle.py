@@ -64,6 +64,8 @@ ap.add_argument("--rays", type=int, default=256, help="visibility render size / 
 ap.add_argument("--no-bake", action="store_true", help="geometry only: flat grey materials")
 ap.add_argument("--preview", action="store_true", help="render preview PNGs of the result")
 ap.add_argument("--cpu", action="store_true", help="bake on the CPU")
+ap.add_argument("--reuse-visibility", action="store_true",
+                help="read <out>/visibility.json from an earlier run of the same scene instead of rendering")
 args = ap.parse_args(argv)
 OUT = os.path.abspath(args.out)
 os.makedirs(OUT, exist_ok=True)
@@ -532,8 +534,11 @@ def atlas_uv(objs):
                                    selected_editable_objects=objs, object=objs[0]):
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")
+        # correct_aspect=False: it takes the aspect of the material's first
+        # image node, and the livery's is a 3600 x 1 colour LUT, which squashes
+        # every island to a line. The atlas is square.
         bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=0.0015,
-                                 area_weight=0.0, correct_aspect=True, scale_to_bounds=False)
+                                 area_weight=0.0, correct_aspect=False, scale_to_bounds=False)
         bpy.ops.object.mode_set(mode="OBJECT")
     area = 0.0
     for o in objs:
@@ -543,6 +548,23 @@ def atlas_uv(objs):
             area += abs(sum(a[k].x * a[k - 1].y - a[k - 1].x * a[k].y for k in range(len(a)))) / 2
     log(f"  UV: {len(objs)} meshes, {area:.2f} of the atlas covered")
     if area < 0.2:
+        stats = []
+        for o in objs:
+            co = np.empty(len(o.data.vertices) * 3, np.float64)
+            o.data.vertices.foreach_get("co", co)
+            bad = int((~np.isfinite(co)).sum())
+            surf = sum(p.area for p in o.data.polygons)
+            stats.append((bad, surf, o.name, tuple(round(v, 3) for v in o.dimensions),
+                          tuple(round(v, 3) for v in o.matrix_world.to_scale())))
+        for st in sorted(stats, reverse=True)[:8]:
+            log(f"    outlier? non-finite {st[0]}, area {st[1]:.4f} m2, {st[2]}, dims {st[3]}, world scale {st[4]}")
+        for o in objs[:3]:
+            uv = o.data.uv_layers.active.data
+            us = {tuple(round(c, 4) for c in uv[i].uv) for i in range(min(len(uv), 50))}
+            log(f"    {o.name}: {len(o.data.polygons)} faces, mesh users {o.data.users}, "
+                f"scale {tuple(round(v, 3) for v in o.scale)}, dims {tuple(round(v, 3) for v in o.dimensions)}, "
+                f"{len(us)} distinct uv of first 50, mode {o.mode}, sel {o.select_get()}")
+        log(f"    active {vl.objects.active.name if vl.objects.active else None}")
         raise RuntimeError("smart UV project did not unwrap the atlas")
 
 
@@ -787,7 +809,16 @@ def bake_atlas(atlas, lows, highs, all_lows, size):
     """Bake one atlas: lows share its UV space, highs are the full-resolution sources."""
     log(f"atlas {atlas}: {len(lows)} meshes, {sum(tri_count(o.data) for o in lows) / 1e3:.0f}k tris, "
         f"{len(highs)} sources")
+    if not highs:
+        raise RuntimeError(f"bake: atlas {atlas} has no source parts")
     j = joined_copy(lows, f"BAKE_{atlas}")
+    # One source object, not ~1400: selected-to-active casts each texel's ray
+    # against every selected object's BVH in turn, on the CPU, so many sources
+    # cost hours of CPU and leave the GPU idle.
+    sources = highs
+    for h in sources:
+        h.hide_render = True
+    highs = [joined_copy(sources, f"BAKEHI_{atlas}")]
     for o in all_lows:
         o.hide_render = True
     j.hide_render = False
@@ -848,7 +879,10 @@ def bake_atlas(atlas, lows, highs, all_lows, size):
     orm[..., 1] = res["rough"][..., 0]
     orm[..., 2] = res["metal"][..., 0]
     save_png(orm, os.path.join(OUT, f"T_IFS08_{atlas}_ORM.png"), True)
-    bpy.data.objects.remove(j, do_unlink=True)
+    for o in (j, highs[0]):
+        me = o.data
+        bpy.data.objects.remove(o, do_unlink=True)
+        bpy.data.meshes.remove(me)
 
 
 # --- 6. export --------------------------------------------------------------------
@@ -905,7 +939,13 @@ def main():
 
     WHEELS.update(wheels)
     cls = classify(objs, wheels)
-    hits = visibility(objs, ground_z)
+    vis_path = os.path.join(OUT, "visibility.json")
+    if args.reuse_visibility and os.path.exists(vis_path):
+        hits = json.load(open(vis_path))
+        hits = {o.name: hits.get(o.name, 0) for o in objs}
+        log(f"visibility: reused {vis_path}")
+    else:
+        hits = visibility(objs, ground_z)
     json.dump(hits, open(os.path.join(OUT, "visibility.json"), "w"), indent=0)
 
     # Highs: the parts some ray reached (plus the lit parts, always). Lows: copies to decimate.
