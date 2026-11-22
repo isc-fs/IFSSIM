@@ -728,6 +728,17 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	// tilt=0 — see comment in geometry-derivation block above.
 	GPUDepthCapture->SetRelativeRotation(MountRotation);  // camera = sensor axis; tilt=0 in the sensor frame
 	GPUDepthCapture->TextureTarget         = GPUDepthRT;
+	// The car does not see itself, as on the CPU path (AddIgnoredActor on the
+	// owner and its attached actors). Without this the depth render drew the
+	// IFS-08's nose: ~1,500 points a scan 0.9-2 m ahead at cone height, which
+	// the pipeline has no ego crop for. Hiding the actor hides every component
+	// on it (body, drawn wheels, uprights).
+	GPUDepthCapture->HiddenActors.Add(Owner);
+	{
+		TArray<AActor*> Attached;
+		Owner->GetAttachedActors(Attached, /*bResetArray*/ true, /*bRecursivelyIncludeAttachedActors*/ true);
+		for (AActor* A : Attached) GPUDepthCapture->HiddenActors.Add(A);
+	}
 	// Tried SCS_DeviceDepth here as an #488 residual-reduction attempt
 	// — device depth has less pipeline machinery than SceneDepth. It
 	// returns non-linear NDC depth though, and the decode shader
@@ -847,6 +858,7 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUColorCapture->SetRelativeLocation(SensorOffset);
 	GPUColorCapture->SetRelativeRotation(MountRotation);
 	GPUColorCapture->TextureTarget         = GPUColorRT;
+	GPUColorCapture->HiddenActors = GPUDepthCapture->HiddenActors;   // same pixels as the depth
 	GPUColorCapture->CaptureSource         = ESceneCaptureSource::SCS_FinalColorLDR;
 	GPUColorCapture->bCaptureEveryFrame    = false;
 	GPUColorCapture->bCaptureOnMovement    = false;
