@@ -238,21 +238,32 @@ def srgb_to_linear(v):
     return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
 
 
+WHEELS = {}
+
+
 def visibility(objs, ground_z):
     """Pixels each part covers, summed over the viewpoints: an object-ID render.
 
     Workbench, flat object colours, no anti-aliasing and no dither, so every
-    pixel is exactly one part's colour: 16 levels per channel encode the part
-    (4095 ids, 0 = background). scene.ray_cast walks every object's BVH per ray
-    (~1 ms with 2,500 parts); this is one GPU render per view."""
+    pixel is exactly one part's colour. Only GREYS: colour management passes a
+    grey through untouched but mixes the channels of a saturated colour (a gamut
+    conversion), so an id spread over R, G and B decodes to the wrong part. Two
+    renders per view, 64 calibrated grey levels each: 4095 ids, 0 = background.
+    scene.ray_cast walks every object's BVH per ray (~1 ms with 2,500 parts);
+    this is two GPU renders per view."""
+    L = 64
     ids = {}
     for i, o in enumerate(objs):
         code = i + 1
-        if code > 4095:
+        if code >= L * L:
             raise RuntimeError("more than 4095 parts: widen the id encoding")
-        lv = ((code >> 8) & 15, (code >> 4) & 15, code & 15)
-        o.color = (*[srgb_to_linear(l / 15) for l in lv], 1.0)
         ids[code] = o.name
+
+    def paint(digit):
+        for i, o in enumerate(objs):
+            code = i + 1
+            v = srgb_to_linear(((code // L) if digit == 0 else (code % L)) / (L - 1))
+            o.color = (v, v, v, 1.0)
     r = scene.render
     saved = (r.engine, r.resolution_x, r.resolution_y, r.resolution_percentage, r.dither_intensity,
              scene.view_settings.view_transform, scene.view_settings.look, scene.camera, r.filepath)
@@ -281,9 +292,17 @@ def visibility(objs, ground_z):
         scene.world = bpy.data.worlds.new("World")
     scene.world.color = (0, 0, 0)
 
-    lo = Vector((min(world_bbox(o)[0].x for o in objs), min(world_bbox(o)[0].y for o in objs), ground_z))
-    hi = Vector((max(world_bbox(o)[1].x for o in objs), max(world_bbox(o)[1].y for o in objs),
-                 max(world_bbox(o)[1].z for o in objs)))
+    # Frame the car, not every object: anything more than 2.5 m from the
+    # wheels' centroid is not the car (and one stray part shrinks the car to a
+    # corner of every view).
+    wc = sum((Vector(w["centre"]) for w in WHEELS.values()), Vector()) / 4
+    car = [o for o in objs if ((world_bbox(o)[0] + world_bbox(o)[1]) / 2 - wc).length < 2.5]
+    far = [o.name for o in objs if o not in car]
+    if far:
+        log(f"visibility: framing ignores {len(far)} far part(s): {far[:5]}")
+    lo = Vector((min(world_bbox(o)[0].x for o in car), min(world_bbox(o)[0].y for o in car), ground_z))
+    hi = Vector((max(world_bbox(o)[1].x for o in car), max(world_bbox(o)[1].y for o in car),
+                 max(world_bbox(o)[1].z for o in car)))
     centre = (lo + hi) / 2
     radius = (hi - lo).length / 2
     cam = bpy.data.objects.new("VIS_CAM", bpy.data.cameras.new("VIS_CAM"))
@@ -308,24 +327,24 @@ def visibility(objs, ground_z):
     # Calibrate: what each of the 16 levels comes out as, after whatever colour
     # management Workbench applies, from 16 grey quads far above the car.
     quads = []
-    for lv in range(16):
+    for lv in range(L):
         me = bpy.data.meshes.new(f"VIS_Q{lv}")
         x0 = lv * 1.0
         me.from_pydata([(x0, 0, 0), (x0 + 1, 0, 0), (x0 + 1, 1, 0), (x0, 1, 0)], [], [(0, 1, 2, 3)])
         q = bpy.data.objects.new(f"VIS_Q{lv}", me)
         q.location = (0, 0, 500)
-        c = srgb_to_linear(lv / 15)
+        c = srgb_to_linear(lv / (L - 1))
         q.color = (c, c, c, 1)
         scene.collection.objects.link(q)
         quads.append(q)
     cam.data.type = "ORTHO"
-    cam.data.ortho_scale = 16
-    cam.location = (8, 0.5, 520)
+    cam.data.ortho_scale = L
+    cam.location = (L / 2, 0.5, 520)
     cam.rotation_euler = (0, 0, 0)
     rx, ry = r.resolution_x, r.resolution_y
-    r.resolution_x, r.resolution_y = 320, 20
+    r.resolution_x, r.resolution_y = L * 10, 20
     px = render_px()
-    table = np.array([px[10, int((lv + 0.5) * 20), 0] for lv in range(16)])
+    table = np.array([px[10, int((lv + 0.5) * 10), 0] for lv in range(L)])
     r.resolution_x, r.resolution_y = rx, ry
     cam.data.type = "PERSP"
     for q in quads:
@@ -334,7 +353,7 @@ def visibility(objs, ground_z):
         bpy.data.meshes.remove(me)
     gaps = np.diff(table)
     log(f"visibility: level calibration {np.round(table * 255).astype(int).tolist()}")
-    if gaps.min() < 1.5 / 255:
+    if gaps.min() < 1.5 / 255 or np.abs(px[10, :, 0] - px[10, :, 2]).max() > 1e-6:
         raise RuntimeError("visibility: object-colour levels are not distinguishable after colour management")
     mids = (table[1:] + table[:-1]) / 2
 
@@ -344,9 +363,12 @@ def visibility(objs, ground_z):
             quat = (look_at - pos).to_track_quat("-Z", "Y")
         cam.rotation_euler = quat.to_euler()
         cam.data.angle = fov
-        lv = np.searchsorted(mids, render_px().reshape(-1, 3)).astype(np.int64)
-        code = (lv[:, 0] << 8) | (lv[:, 1] << 4) | lv[:, 2]
-        counts[:] += np.bincount(code, minlength=4096)[:4096]
+        digits = []
+        for d in (0, 1):
+            paint(d)
+            digits.append(np.searchsorted(mids, render_px()[..., 0].ravel()).astype(np.int64))
+        code = digits[0] * L + digits[1]
+        counts[:] += np.bincount(code, minlength=L * L)[:4096]
 
     # Exterior: viewpoints on a sphere, none lower than 4 cm (a cone's eye on
     # the ground is the lowest anyone looks from), framing the bounding sphere.
@@ -478,11 +500,23 @@ def split_fx(o):
 
 
 def select_only(objs, active=None):
+    # Objects just linked are not in the view layer's bases until it updates;
+    # select_set on them is silently a no-op, and an operator then sees only
+    # the active object (a multi-object UV unwrap unwraps one mesh).
+    # The scene marks most of the car unselectable (Reference collection), and
+    # copies inherit it; select_set ignores unselectable and hidden objects.
+    vl.update()
     for o in vl.objects:
         o.select_set(False)
     for o in objs:
+        o.hide_select = False
+        o.hide_viewport = False
+        o.hide_set(False)
         o.select_set(True)
     vl.objects.active = active or (objs[0] if objs else None)
+    n = sum(1 for o in objs if o.select_get())
+    if n != len(objs):
+        raise RuntimeError(f"selected {n} of {len(objs)} objects")
 
 
 def atlas_uv(objs):
@@ -867,6 +901,7 @@ def main():
     xf = to_export_frame(origin)
     log(f"ground z {ground_z:.4f}, wheelbase {wheelbase:.4f} m, CoG {cog_y - front_y:.4f} m behind the front axle")
 
+    WHEELS.update(wheels)
     cls = classify(objs, wheels)
     hits = visibility(objs, ground_z)
     json.dump(hits, open(os.path.join(OUT, "visibility.json"), "w"), indent=0)
