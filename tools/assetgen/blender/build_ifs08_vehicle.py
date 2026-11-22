@@ -91,6 +91,7 @@ BAKE_ONLY_RE = re.compile(r"lettering", re.I)
 FX_MAT_RE = re.compile(r"LED die|LED silicone|DISPLAY_SCREEN", re.I)
 GLASS_MAT_RE = re.compile(r"glass|lens", re.I)
 DROP_COLL = {"Environment", "Env Jarama"}
+DROP_NAME_RE = re.compile(r"^Gloss card")   # studio reflection cards in the Scene Collection
 ALWAYS_KEEP_RE = re.compile(r"DISPLAY_SCREEN|TSAL|Shift LED|Brake light|Indicator", re.I)
 
 scene = bpy.context.scene
@@ -125,7 +126,8 @@ def prepare():
     drop = []
     for o in list(bpy.data.objects):
         colls = {c.name for c in o.users_collection}
-        if colls & DROP_COLL or o.type in {"CAMERA", "LIGHT", "LIGHT_PROBE", "SPEAKER"}:
+        if (colls & DROP_COLL or DROP_NAME_RE.search(o.name)
+                or o.type in {"CAMERA", "LIGHT", "LIGHT_PROBE", "SPEAKER"}):
             drop.append(o)
     for o in drop:
         bpy.data.objects.remove(o, do_unlink=True)
@@ -1056,7 +1058,12 @@ def main():
     manifest["meshes"]["SK_IFS08"] = {"tris": tri_count(j.data), "slots": [m.name for m in j.data.materials],
                                       "bounds_cm": [[lo.x * 100, -hi.y * 100, lo.z * 100],
                                                     [hi.x * 100, -lo.y * 100, hi.z * 100]]}
-    log(f"exported SK_IFS08: {tri_count(j.data) / 1e3:.1f}k tris, slots {[m.name for m in j.data.materials]}")
+    log(f"exported SK_IFS08: {tri_count(j.data) / 1e3:.1f}k tris, slots {[m.name for m in j.data.materials]}, "
+        f"bounds {[round(v * 100) for v in lo]}..{[round(v * 100) for v in hi]} cm")
+    # A Formula Student car fits in 3.2 x 1.6 x 1.6 m: anything bigger means a
+    # scene prop (light card, backdrop) went into the body.
+    if (hi - lo).x > 3.2 or (hi - lo).y > 1.6 or hi.z > 1.6:
+        raise RuntimeError(f"SK_IFS08 is {hi - lo} m: a scene prop is in the body; add it to DROP_NAME_RE")
     json.dump(manifest, open(os.path.join(OUT, "manifest.json"), "w"), indent=1)
 
     if args.preview:
