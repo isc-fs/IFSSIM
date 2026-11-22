@@ -249,7 +249,10 @@ The car keeps its keys while the panel is open; Tab or Esc closes it.
 If the backend isn't running, the panel offers **Start stack**, which runs
 `docker compose up -d` in the repo (found by searching upward from the
 project; set `ComposeDir` if it isn't). The panel is off in headless runs
-and with `-NoLauncher`. Settings, all optional:
+and with `-NoLauncher`. The repo's `settings.json` ships with `"Panel": false`
+and `"Menu": {"Enabled": false}`, so the sim opens straight onto the car with
+neither the panel nor the main menu; set either to `true` to turn it on (left
+out of `settings.json`, both are on). Settings, all optional:
 
 ```json
 "MissionControl": {
