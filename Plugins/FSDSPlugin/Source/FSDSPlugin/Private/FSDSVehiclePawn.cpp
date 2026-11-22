@@ -15,6 +15,9 @@
 #include "Materials/MaterialInterface.h"
 #include "Components/InputComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "ChaosVehicleWheel.h"
 #include "Components/BoxComponent.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/PhysicsSettings.h"   // determinism posture log (Stage 0)
@@ -45,30 +48,69 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 	VehicleMovement->SetWheelTraceResponseToChannel(FSDSCollision::PropChannel, ECR_Ignore);
 	VehicleMovement->SetWheelTraceResponseToChannel(FSDSCollision::PropLidarOnlyChannel, ECR_Ignore);
 
-	// Try to load the Formula Student skeletal mesh
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh> CarMesh(
+	// The car's art: settings.json Vehicles.<car>.Mesh (FFSDSVehicleMesh), or
+	// the inherited Technion car when none is set or it fails to load. The
+	// Technion car stays a hard reference so it is always there to fall back on.
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> TechnionMesh(
 		TEXT("/Game/Vehicle/TechnionCar/FormulaMesh.FormulaMesh"));
+	static ConstructorHelpers::FObjectFinder<UPhysicsAsset> TechnionPhys(
+		TEXT("/Game/Vehicle/TechnionCar/FormulaMesh_PhysicsAsset.FormulaMesh_PhysicsAsset"));
 
-	if (CarMesh.Succeeded())
+	FFSDSSettings::Get().AutoLoad();
+	const FFSDSVehicleSettings* ArtVehicle = FFSDSSettings::Get().GetDefaultVehicle();
+	USkeletalMesh* BodyMesh = nullptr;
+	UPhysicsAsset* BodyPhys = nullptr;
+	if (ArtVehicle && !ArtVehicle->Mesh.Body.IsEmpty())
 	{
-		GetMesh()->SetSkeletalMesh(CarMesh.Object);
+		const FFSDSVehicleMesh& Art = ArtVehicle->Mesh;
+		BodyMesh = LoadObject<USkeletalMesh>(nullptr, *Art.Body);
+		BodyPhys = Art.PhysicsAsset.IsEmpty() ? nullptr : LoadObject<UPhysicsAsset>(nullptr, *Art.PhysicsAsset);
+		if (BodyMesh)
+		{
+			bCustomVehicleMesh = true;
+			ArtWheelMeshes.Reset();
+			ArtCornerMeshes.Reset();
+			for (int32 i = 0; i < FSDS_NUM_WHEELS; i++)
+			{
+				ArtWheelMeshes.Add(Art.Wheels.IsValidIndex(i) ? LoadObject<UStaticMesh>(nullptr, *Art.Wheels[i]) : nullptr);
+				ArtCornerMeshes.Add(Art.Corners.IsValidIndex(i) ? LoadObject<UStaticMesh>(nullptr, *Art.Corners[i]) : nullptr);
+			}
+			UE_LOG(LogTemp, Log, TEXT("FSDS: car mesh %s (physics asset %s)"),
+				*Art.Body, BodyPhys ? *Art.PhysicsAsset : TEXT("the mesh's own"));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("FSDS: car mesh %s not found — drawing the Technion car"), *Art.Body);
+		}
+	}
+	if (!BodyMesh && TechnionMesh.Succeeded())
+	{
+		BodyMesh = TechnionMesh.Object;
+		BodyPhys = TechnionPhys.Succeeded() ? TechnionPhys.Object : nullptr;
+	}
+	if (!BodyPhys && BodyMesh)
+	{
+		BodyPhys = BodyMesh->GetPhysicsAsset();
+	}
+
+	if (BodyMesh)
+	{
+		USkeletalMesh* CarMeshObject = BodyMesh;
+		GetMesh()->SetSkeletalMesh(CarMeshObject);
 		GetMesh()->SetSimulatePhysics(true);
 
-		// Load physics asset
-		static ConstructorHelpers::FObjectFinder<UPhysicsAsset> PhysAsset(
-			TEXT("/Game/Vehicle/TechnionCar/FormulaMesh_PhysicsAsset.FormulaMesh_PhysicsAsset"));
-		if (PhysAsset.Succeeded())
+		if (BodyPhys)
 		{
-			GetMesh()->SetPhysicsAsset(PhysAsset.Object);
-			UE_LOG(LogTemp, Log, TEXT("FSDS: PhysicsAsset loaded"));
+			GetMesh()->SetPhysicsAsset(BodyPhys);
+			UE_LOG(LogTemp, Log, TEXT("FSDS: PhysicsAsset %s loaded"), *BodyPhys->GetName());
 		}
 
 		// Note: FormulaAnim was a UE4 PhysX animation BP — removed (incompatible with Chaos)
 		// Wheel animation will come from Chaos vehicle component automatically
 
 		// Check if skeleton has wheel bones AND a valid skeleton
-		if (CarMesh.Object->GetSkeleton() != nullptr &&
-			CarMesh.Object->GetRefSkeleton().FindBoneIndex(FName("WheelFL")) != INDEX_NONE)
+		if (CarMeshObject->GetSkeleton() != nullptr &&
+			CarMeshObject->GetRefSkeleton().FindBoneIndex(FName("WheelFL")) != INDEX_NONE)
 		{
 			// Material assignment is deferred to BeginPlay where we create
 			// a dynamic material instance with a visible color
@@ -80,7 +122,7 @@ AFSDSVehiclePawn::AFSDSVehiclePawn(const FObjectInitializer& ObjectInitializer)
 		{
 			bChaosVehicleActive = false;
 			UE_LOG(LogTemp, Warning, TEXT("FSDS: FormulaMesh loaded but NO wheel bones found. Bones in skeleton:"));
-			const FReferenceSkeleton& RefSkel = CarMesh.Object->GetRefSkeleton();
+			const FReferenceSkeleton& RefSkel = CarMeshObject->GetRefSkeleton();
 			for (int32 i = 0; i < FMath::Min(RefSkel.GetRawBoneNum(), 20); i++)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("  Bone[%d]: %s"), i, *RefSkel.GetBoneName(i).ToString());
@@ -1166,6 +1208,14 @@ void AFSDSVehiclePawn::BeginPlay()
 	FFSDSSettings::Get().AutoLoad();
 	SetupSensorsFromSettings();
 
+	// A car mesh from settings.json draws its wheels as separate meshes posed
+	// from the wheel state (PoseWheelsFromChaos / PoseWheelsFromPlant): its
+	// skeleton has the wheel bones Chaos needs, and no wheel geometry on them.
+	if (bCustomVehicleMesh && bChaosVehicleActive)
+	{
+		CreatePlantWheels();
+	}
+
 
 	// Instantiate the EMRAX 228 motor model. We own the powertrain
 	// from here on. Tick below feeds per-wheel
@@ -1194,7 +1244,9 @@ void AFSDSVehiclePawn::BeginPlay()
 	// Materials are loaded from /Game/Vehicle/TechnionCar/Materials/ (cooked in pak).
 	// Some materials reference legacy SuvCar automotive textures that were removed;
 	// those will return null and fall back to mat_british_green.
-	if (GetMesh() && GetMesh()->GetSkeletalMeshAsset())
+	// The Technion car only: its embedded material references are broken. A car
+	// mesh from settings.json (bCustomVehicleMesh) carries its own materials.
+	if (!bCustomVehicleMesh && GetMesh() && GetMesh()->GetSkeletalMeshAsset())
 	{
 		const FString MatPath = TEXT("/Game/Vehicle/TechnionCar/Materials/");
 
@@ -1487,6 +1539,10 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 			DrivePawnFromPlant();
 			PoseWheelsFromPlant(DeltaTime);
 		}
+	}
+	if (!bFmuDrivesPawn && bChaosVehicleActive)
+	{
+		PoseWheelsFromChaos();
 	}
 
 	// Acceleration tracking
@@ -2384,18 +2440,16 @@ void AFSDSVehiclePawn::CreatePlantWheels()
 {
 	USkeletalMeshComponent* M = GetMesh();
 	if (!M || !VehicleMovement) return;
+	// Built once: Chaos mode builds them in BeginPlay for a car mesh from
+	// settings.json, and the FMU swap may already have.
+	if (PlantWheels.Num() > 0) return;
 
-	// A cylinder, not the art asset's wheel. Extracting a bone's mesh at
-	// runtime is not something the engine offers, and the point here is that
-	// the wheel is WHERE and HOW FAST the plant says — a correct cylinder
-	// beats a pretty wheel in the wrong place. Swapping in the real mesh later
-	// is a one-line change.
+	// The car mesh's own wheels (FFSDSVehicleMesh::Wheels, pivot at the hub)
+	// when it has them; otherwise a cylinder of the configured wheel size.
+	// Extracting a bone's mesh at runtime is not something the engine offers,
+	// so the Technion car gets cylinders: a correct cylinder beats a pretty
+	// wheel in the wrong place.
 	UStaticMesh* Cyl = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	if (!Cyl)
-	{
-		UE_LOG(LogTemp, Error, TEXT("FSDS: no cylinder mesh — wheels will not be drawn"));
-		return;
-	}
 
 	const FFSDSVehiclePhysics& P = FFSDSSettings::Get().GetDefaultVehicle()
 		? FFSDSSettings::Get().GetDefaultVehicle()->Physics : FFSDSVehiclePhysics();
@@ -2405,10 +2459,31 @@ void AFSDSVehiclePawn::CreatePlantWheels()
 
 	PlantWheels.Reset();
 	const int32 N = FMath::Min((int32)FSDS_NUM_WHEELS, VehicleMovement->WheelSetups.Num());
+	ArtCorners.Reset();
 	for (int32 i = 0; i < N; i++)
 	{
+		UStaticMesh* Art = ArtWheelMeshes.IsValidIndex(i) ? ArtWheelMeshes[i].Get() : nullptr;
+		UStaticMesh* CornerArt = ArtCornerMeshes.IsValidIndex(i) ? ArtCornerMeshes[i].Get() : nullptr;
+		UStaticMeshComponent* Corner = nullptr;
+		if (CornerArt)
+		{
+			Corner = NewObject<UStaticMeshComponent>(this);
+			Corner->SetStaticMesh(CornerArt);
+			Corner->SetupAttachment(GetRootComponent());
+			Corner->RegisterComponent();
+			Corner->SetMobility(EComponentMobility::Movable);
+			Corner->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+		ArtCorners.Add(Corner);
+		if (!Art && !Cyl)
+		{
+			UE_LOG(LogTemp, Error, TEXT("FSDS: no cylinder mesh — wheel %d will not be drawn"), i);
+			PlantWheels.Add(nullptr);
+			continue;
+		}
+
 		UStaticMeshComponent* W = NewObject<UStaticMeshComponent>(this);
-		W->SetStaticMesh(Cyl);
+		W->SetStaticMesh(Art ? Art : Cyl);
 		W->SetupAttachment(GetRootComponent());
 		W->RegisterComponent();
 		W->SetMobility(EComponentMobility::Movable);
@@ -2416,8 +2491,13 @@ void AFSDSVehiclePawn::CreatePlantWheels()
 		// resolves the wheels against the road itself through the probe —
 		// giving these collision would have them fight it.
 		W->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		W->SetRelativeScale3D(FVector(DiaScale, DiaScale, WidthScale));
 		W->SetCastShadow(true);
+		if (Art)
+		{
+			PlantWheels.Add(W);
+			continue;
+		}
+		W->SetRelativeScale3D(FVector(DiaScale, DiaScale, WidthScale));
 
 		// A dark rubber-ish material. The engine cylinder ships with a bright
 		// default that reads as white plastic, which makes a correctly placed
@@ -2446,10 +2526,12 @@ void AFSDSVehiclePawn::CreatePlantWheels()
 		M->HideBoneByName(VehicleMovement->WheelSetups[i].BoneName, PBO_None);
 	}
 
+	const bool bArtWheels = ArtWheelMeshes.Num() > 0 && ArtWheelMeshes[0];
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS: %d wheels now drawn from the plant (%.0f mm diameter, %.0f mm wide); "
-		     "skeletal wheels hidden"),
-		PlantWheels.Num(), P.WheelRadius * 2000.0, P.WheelWidth * 1000.0);
+		TEXT("FSDS: %d wheels drawn as %s (%.0f mm diameter, %.0f mm wide)%s"),
+		PlantWheels.Num(), bArtWheels ? TEXT("the car mesh's wheels") : TEXT("cylinders"),
+		P.WheelRadius * 2000.0, P.WheelWidth * 1000.0,
+		ArtCorners.Num() > 0 && ArtCorners[0] ? TEXT(", with uprights and calipers") : TEXT(""));
 }
 
 void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
@@ -2502,8 +2584,14 @@ void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
 		// axis becomes the axle.
 		const FQuat Align(FVector::ForwardVector, HALF_PI);
 
-		W->SetRelativeLocation(FVector(Geo[i][0], Geo[i][1], RestZCm - TravelCm));
-		W->SetRelativeRotation((Steer * Spin * Align).Rotator());
+		const FVector Loc(Geo[i][0], Geo[i][1], RestZCm - TravelCm);
+		const bool bArt = ArtWheelMeshes.IsValidIndex(i) && ArtWheelMeshes[i];
+		W->SetRelativeLocation(Loc);
+		W->SetRelativeRotation((bArt ? Steer * Spin : Steer * Spin * Align).Rotator());
+		if (ArtCorners.IsValidIndex(i) && ArtCorners[i])
+		{
+			ArtCorners[i]->SetRelativeLocationAndRotation(Loc, Steer.Rotator());
+		}
 	}
 
 	// Report the gap between tyre and road once a second. This is the number
@@ -2529,6 +2617,36 @@ void AFSDSVehiclePawn::PoseWheelsFromPlant(float DeltaTime)
 			i, GapCm, PlantState.WheelOmega[i]);
 	}
 	UE_LOG(LogTemp, Log, TEXT("FSDS wheels:%s"), *Report);
+}
+
+void AFSDSVehiclePawn::PoseWheelsFromChaos()
+{
+	if (PlantWheels.Num() == 0 || !VehicleMovement) return;
+
+	// What the engine's wheel controller anim node does to a wheel bone
+	// (AnimNode_WheelController.cpp, VehicleAnimationInstance.cpp), done to
+	// the car mesh's wheel components: rotation (pitch = spin angle, yaw =
+	// steer angle) on top of the rest pose in component space, and the
+	// suspension offset along the suspension axis. The rest position is the
+	// physics wheel's, bone plus the settings.json placement offset, so the
+	// wheel is drawn where Chaos has it rather than where the art put it.
+	const FQuat Align(FVector::ForwardVector, HALF_PI);   // cylinder on its side
+	const int32 N = FMath::Min(PlantWheels.Num(), VehicleMovement->Wheels.Num());
+	for (int32 i = 0; i < N; i++)
+	{
+		UChaosVehicleWheel* VW = VehicleMovement->Wheels[i];
+		UStaticMeshComponent* W = PlantWheels[i];
+		if (!VW || !W) continue;
+		const FVector Loc = VehicleMovement->GetWheelRestLocation(i)
+			- VW->GetSuspensionAxis() * VW->GetSuspensionOffset();
+		const FQuat Rot = FRotator(VW->GetRotationAngle(), VW->GetSteerAngle(), 0.f).Quaternion();
+		const bool bArt = ArtWheelMeshes.IsValidIndex(i) && ArtWheelMeshes[i];
+		W->SetRelativeLocationAndRotation(Loc, bArt ? Rot : Rot * Align);
+		if (ArtCorners.IsValidIndex(i) && ArtCorners[i])
+		{
+			ArtCorners[i]->SetRelativeLocationAndRotation(Loc, FRotator(0.f, VW->GetSteerAngle(), 0.f));
+		}
+	}
 }
 
 void AFSDSVehiclePawn::ProbeRoad(FFSDSPlantInput& In) const

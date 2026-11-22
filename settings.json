@@ -23,6 +23,12 @@
       "EnableCollisions": true,
       "AllowAPIAlways": true,
       "AutoCreate": true,
+      "_comment_mesh": "The art the car is drawn with: the IFS-08, generated from the team's Blender livery scene by tools/assetgen (docs/vehicle_art.md). Body is a skeletal mesh with bones WheelFL/FR/RL/RR at the hub centres and its origin on the ground under the centre of mass; Wheels (what spins) and Corners (upright and caliper) are posed every tick from the plant's wheel state, FL, FR, RL, RR. Only what is drawn: mass, geometry, aero and suspension come from VehiclePhysics. Remove the block, or a Body that does not load, for the inherited Technion car.",
+      "Mesh": {
+        "Body": "/Game/Vehicle/IFS08/SK_IFS08.SK_IFS08",
+        "Wheels": ["/Game/Vehicle/IFS08/SM_IFS08_Wheel_FL.SM_IFS08_Wheel_FL", "/Game/Vehicle/IFS08/SM_IFS08_Wheel_FR.SM_IFS08_Wheel_FR", "/Game/Vehicle/IFS08/SM_IFS08_Wheel_RL.SM_IFS08_Wheel_RL", "/Game/Vehicle/IFS08/SM_IFS08_Wheel_RR.SM_IFS08_Wheel_RR"],
+        "Corners": ["/Game/Vehicle/IFS08/SM_IFS08_Corner_FL.SM_IFS08_Corner_FL", "/Game/Vehicle/IFS08/SM_IFS08_Corner_FR.SM_IFS08_Corner_FR", "/Game/Vehicle/IFS08/SM_IFS08_Corner_RL.SM_IFS08_Corner_RL", "/Game/Vehicle/IFS08/SM_IFS08_Corner_RR.SM_IFS08_Corner_RR"]
+      },
       "VehiclePhysics": {
         "_comment_motor": "MotorMaxTorque, MotorMaxPower, MotorRPM[], MotorTorque[] are vestigial. Drive torque comes from the dedicated UEmraxMotor class (EMRAX 228 MV at 400 V bus, see Plugins/FSDSPlugin/Source/FSDSPlugin/Public/EmraxMotor.h). The pawn silences Chaos's ICE-style engine each tick (SetThrottleInput(0)) and injects per-wheel torque via SetDriveTorque, so these fields feed only the silenced Chaos engine and have no effect on actual driving. Of the motor-side settings, MaxRegenTorque/MaxRegenPower and MotorMaxPower (the drive power cap, 80 kW per the FS rules) are forwarded to the EMRAX class; MotorMaxTorque and the curve arrays are not, peak torque comes from the EMRAX envelope. Kept here so existing tooling and external mirrors keep parsing; remove in a future pass.",
         "Mass": 275,

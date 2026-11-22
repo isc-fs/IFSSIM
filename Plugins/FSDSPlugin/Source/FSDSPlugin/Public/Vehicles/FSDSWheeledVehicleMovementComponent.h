@@ -62,6 +62,13 @@ class FSDSPLUGIN_API UFSDSWheeledVehicleMovementComponent : public UChaosWheeled
 	GENERATED_BODY()
 
 public:
+	/** Wheel i's rest position in the mesh's component space: its bone plus
+	 *  the settings.json placement offset (GetWheelRestingPosition is protected). */
+	FVector GetWheelRestLocation(int32 Index)
+	{
+		return WheelSetups.IsValidIndex(Index) ? GetWheelRestingPosition(WheelSetups[Index]) : FVector::ZeroVector;
+	}
+
 	/**
 	 * Tier 1: push every field that has a public per-field setter from
 	 * Wheels[WheelIndex] into the solver. Safe, public API only.

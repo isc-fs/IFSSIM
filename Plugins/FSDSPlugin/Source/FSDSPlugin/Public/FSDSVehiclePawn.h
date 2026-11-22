@@ -199,8 +199,26 @@ public:
 	 *  ground. The plant knows where its wheels are; this puts them there. */
 	void PoseWheelsFromPlant(float DeltaTime);
 
-	/** Build the plant-driven wheel meshes and hide the skeletal ones. */
+	/** Build the wheel meshes (the car mesh's own, or cylinders) and hide the skeletal ones. */
 	void CreatePlantWheels();
+
+	/** Pose the wheel meshes from Chaos's wheels: what the engine's wheel
+	 *  controller anim node does to wheel bones. Only for a car mesh from
+	 *  settings.json, which has no anim blueprint and no wheel geometry. */
+	void PoseWheelsFromChaos();
+
+	/** The car mesh comes from settings.json (FFSDSVehicleMesh), not the Technion fallback. */
+	bool bCustomVehicleMesh = false;
+
+	/** The car mesh's wheel and corner meshes, FL/FR/RL/RR; null = none. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMesh>> ArtWheelMeshes;
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMesh>> ArtCornerMeshes;
+
+	/** Uprights and calipers: steer and travel with the wheel, do not spin. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> ArtCorners;
 
 	/** Wheels drawn from the plant, in FL/FR/RL/RR order.
 	 *
