@@ -24,7 +24,7 @@ IFS08_livery.blend (≈10 M tris, ~270 procedural Cycles materials)
 | `MI_FX_*` | LED dies, the TSAL and the brake light: `M_IFS08_FX`, `Color` and `Glow` (0 = off) |
 | `MI_FX_DISPLAY_SCREEN` | the dash display: `M_IFS08_Screen`, a `Screen` texture (a render target later) |
 
-**Frame.** The mesh origin sits on the ground under the centre of mass: Wheelbase × (1 − WeightDistFront) behind the front axle, on the centreline. The pawn puts the centre of mass at the body origin and places the physics wheels around it from `settings.json` (`PlaceWheelsFromSettings`), so the art agrees with the physics when `settings.json` holds the CAD's numbers (#944). The export takes `--weight-front`, which must match `WeightDistFront`.
+**Frame.** The mesh origin sits on the ground under the centre of mass: Wheelbase × (1 − WeightDistFront) behind the front axle, on the centreline. The pawn puts the centre of mass at the body origin and places the physics wheels around it from `settings.json` (`PlaceWheelsFromSettings`), so the art agrees with the physics when `settings.json` holds the CAD's numbers (#944). The export reads `WeightDistFront` from `settings.json` so the two agree; `--weight-front` overrides it. If they differ, the drawn wheels (posed at the physics wheels) sit off the uprights by the difference.
 
 **Wheels.** The body's skeleton has wheel bones only because Chaos looks wheels up by bone. The wheels and corners are separate meshes, posed every tick from the wheel state of whichever plant drives the car:
 - Chaos: `AFSDSVehiclePawn::PoseWheelsFromChaos`, the same maths as the engine's wheel-controller anim node (spin and steer on the rest pose, suspension offset along the suspension axis).

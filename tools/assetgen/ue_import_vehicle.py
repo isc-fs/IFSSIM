@@ -46,6 +46,14 @@ def log(msg):
 def fresh(path):
     if EAL.does_asset_exist(path):
         EAL.delete_asset(path)
+    if EAL.does_asset_exist(path):
+        # A leftover skeleton is the dangerous one: the FBX importer merges
+        # into it and keeps its old reference pose.
+        # (The pawn loads SK_IFS08 from settings.json at startup, which keeps
+        # it referenced.) Delete Content/Vehicle/IFS08/SK_IFS08*.uasset before
+        # running this; they are regenerated.
+        raise RuntimeError(f"could not delete {path} before the import: delete "
+                           "Content/Vehicle/IFS08/SK_IFS08*.uasset first, they are regenerated")
 
 
 def import_task(filename, dest, name, options=None):
@@ -264,7 +272,8 @@ def body_setups(pa):
 
 
 def import_body(mats):
-    for n in ("SK_IFS08", "SK_IFS08_Skeleton", "SK_IFS08_PhysicsAsset", "PA_IFS08"):
+    # Users before what they use: physics asset, mesh, then skeleton.
+    for n in ("SK_IFS08_PhysicsAsset", "PA_IFS08", "SK_IFS08", "SK_IFS08_Skeleton"):
         fresh(f"{ROOT}/{n}")
     opts = unreal.FbxImportUI()
     setp(opts, import_mesh=True, import_as_skeletal=True, mesh_type_to_import=unreal.FBXImportType.FBXIT_SKELETAL_MESH, import_materials=False, import_textures=False, import_animations=False, create_physics_asset=True)
@@ -319,8 +328,17 @@ def import_body(mats):
     EAL.save_loaded_asset(skel, only_if_is_dirty=False)
     log(f"skeleton {skel.get_path_name()}")
     pose = unreal.AnimPoseExtensions.get_reference_pose(skel)
+    # Chaos (LocateBoneOffset) reads a wheel bone's translation in its
+    # parent's frame and ignores the parent's scale, so the root must be an
+    # identity: no rotation, scale 1.
+    rt = unreal.AnimPoseExtensions.get_bone_pose(pose, "root", unreal.AnimPoseSpaces.LOCAL)
+    rr = rt.rotation.rotator()
+    log(f"bone root: rot ({rr.roll:.1f}, {rr.pitch:.1f}, {rr.yaw:.1f}), scale {rt.scale3d.x:.2f}")
+    if max(abs(rr.roll), abs(rr.pitch), abs(rr.yaw)) > 0.01 or abs(rt.scale3d.x - 1) > 1e-3:
+        raise RuntimeError("root bone is not identity: Chaos would place the wheels wrong "
+                           "(export bones along +Y, in cm; see build_ifs08_vehicle.py)")
     for k in CORNERS:
-        t = unreal.AnimPoseExtensions.get_bone_pose(pose, "Wheel" + k, unreal.AnimPoseSpaces.WORLD)
+        t = unreal.AnimPoseExtensions.get_bone_pose(pose, "Wheel" + k, unreal.AnimPoseSpaces.LOCAL)
         want = wheels[k]["hub_cm"]
         got = t.translation
         log(f"bone Wheel{k}: ({got.x:.1f}, {got.y:.1f}, {got.z:.1f}) cm, manifest "

@@ -1,7 +1,7 @@
 """Game-ready IFS-08 for IFSSIM, from the team's Blender livery scene.
 
     blender -b <IFS08_livery.blend> --python tools/assetgen/blender/build_ifs08_vehicle.py -- \
-        --out <dir> [--weight-front 0.481] [--budget 450000] [--tex 4096] [--no-bake] [--preview]
+        --out <dir> [--weight-front <settings.json>] [--budget 450000] [--tex 4096] [--no-bake] [--preview]
 
 Reads the livery scene (SolidWorks export + procedural Cycles materials, ~10 M
 triangles) and writes, to --out:
@@ -55,8 +55,26 @@ from mathutils import Matrix, Vector
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 ap = argparse.ArgumentParser()
 ap.add_argument("--out", required=True)
-ap.add_argument("--weight-front", type=float, default=0.481,
-                help="front axle share of the weight, places the centre of mass (KIN CAD: 0.481)")
+
+
+def sim_weight_front():
+    """The sim's front weight share (settings.json VehiclePhysics.WeightDistFront).
+
+    The pawn's origin is the physics centre of mass, and the sim places the
+    physics wheels from Wheelbase and WeightDistFront around it. The body must
+    be built around the same point, or the drawn wheels (posed at the physics
+    wheels) sit off the body's hubs: 0.481 from the KIN CAD against the sim's
+    0.438 put them 7 cm forward of the uprights.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "settings.json")
+    with open(path, encoding="utf-8") as f:
+        veh = json.load(f)["Vehicles"]
+    return float(next(iter(veh.values()))["VehiclePhysics"]["WeightDistFront"])
+
+
+ap.add_argument("--weight-front", type=float, default=None,
+                help="front axle share of the weight, places the centre of mass "
+                     "(default: settings.json WeightDistFront, which the sim places its wheels from)")
 ap.add_argument("--budget", type=int, default=450_000, help="LOD0 triangles, all meshes")
 ap.add_argument("--tex", type=int, default=4096, help="atlas size, pixels")
 ap.add_argument("--samples", type=int, default=8, help="bake samples (AO takes 4x)")
@@ -67,6 +85,8 @@ ap.add_argument("--cpu", action="store_true", help="bake on the CPU")
 ap.add_argument("--reuse-visibility", action="store_true",
                 help="read <out>/visibility.json from an earlier run of the same scene instead of rendering")
 args = ap.parse_args(argv)
+if args.weight_front is None:
+    args.weight_front = sim_weight_front()
 OUT = os.path.abspath(args.out)
 os.makedirs(OUT, exist_ok=True)
 
@@ -90,6 +110,21 @@ BAKE_ONLY_RE = re.compile(r"lettering", re.I)
 # Kept as their own slots, not baked: the sim lights them.
 FX_MAT_RE = re.compile(r"LED die|LED silicone|DISPLAY_SCREEN", re.I)
 GLASS_MAT_RE = re.compile(r"glass|lens", re.I)
+
+
+def is_clear(m):
+    """Glass, lenses and clear plastics (the HVD's acrylic cover): baked as an
+    opaque albedo they would hide what is behind them, so they are dropped."""
+    if m is None:
+        return False
+    if GLASS_MAT_RE.search(m.name):
+        return True
+    for n in (m.node_tree.nodes if m.node_tree else []):
+        if n.type == "BSDF_PRINCIPLED":
+            t = n.inputs.get("Transmission Weight")
+            if t is not None and not t.is_linked and t.default_value >= 0.5:
+                return True
+    return False
 DROP_COLL = {"Environment", "Env Jarama"}
 DROP_NAME_RE = re.compile(r"^Gloss card")   # studio reflection cards in the Scene Collection
 ALWAYS_KEEP_RE = re.compile(r"DISPLAY_SCREEN|TSAL|Shift LED|Brake light|Indicator", re.I)
@@ -195,7 +230,13 @@ def find_wheels(objs):
         r = float(np.sqrt(((w[:, 1] - c[1]) ** 2 + (w[:, 2] - c[2]) ** 2)).max())
         zmin = min(zmin, float(lo[2]))
         key = ("F" if c[1] < 0 else "R") + ("L" if c[0] > 0 else "R")   # -y forward, +x left
-        wheels[key] = {"centre": [float(v) for v in c], "radius": r, "width": float(hi[0] - lo[0])}
+        # The axle: a tyre is wider than it is deep, so it is the direction of
+        # least spread. The CAD wheels carry 3-4 degrees of static camber (and
+        # some toe); the export levels them, see main.
+        _, _, vt = np.linalg.svd(w - w.mean(0), full_matrices=False)
+        axle = vt[2] if vt[2][0] > 0 else -vt[2]   # pointing left (+x)
+        wheels[key] = {"centre": [float(v) for v in c], "radius": r, "width": float(hi[0] - lo[0]),
+                       "axle": [float(v) for v in axle]}
     if sorted(wheels) != sorted(CORNERS):
         raise RuntimeError(f"tyres do not make four corners: {sorted(wheels)}")
     return wheels, zmin
@@ -477,7 +518,7 @@ def split_fx(o):
     """Move faces with FX materials (LEDs, screen) and glass out of o. Returns the FX object or None."""
     mats = [s.material for s in o.material_slots]
     fx_idx = {i for i, m in enumerate(mats) if m and FX_MAT_RE.search(m.name)}
-    glass_idx = {i for i, m in enumerate(mats) if m and GLASS_MAT_RE.search(m.name)}
+    glass_idx = {i for i, m in enumerate(mats) if is_clear(m)}
     if not fx_idx and not glass_idx:
         return None
     bm = bmesh.new()
@@ -526,22 +567,46 @@ def select_only(objs, active=None):
 
 
 def atlas_uv(objs):
+    # Smart project sizes islands in object-local units. A few CAD parts are
+    # stored in millimetres with a 0.001 object scale (the radiators): their
+    # islands came out 1000x too big and squeezed every other part of the
+    # atlas into a few texels. Apply scale first (the lows are single-user
+    # copies; the bake works in world space).
+    scaled = [o for o in objs if any(abs(v - 1) > 1e-4 for v in o.scale)]
+    if scaled:
+        select_only(scaled)
+        with bpy.context.temp_override(active_object=scaled[0], selected_objects=scaled,
+                                       selected_editable_objects=scaled, object=scaled[0]):
+            bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        log(f"  UV: applied object scale on {len(scaled)} meshes")
     for o in objs:
         me = o.data
         while me.uv_layers:
             me.uv_layers.remove(me.uv_layers[0])
         me.uv_layers.new(name="UVMap")
+    # UV operators take the aspect of the material's image (the livery's is a
+    # 3600 x 1 colour LUT, which squashes every island to a line; pack_islands
+    # has no correct_aspect switch). Unwrap under a blank material instead.
+    blank = bpy.data.materials.get("UV_BLANK") or bpy.data.materials.new("UV_BLANK")
+    stash = [(sl, sl.material) for o in objs for sl in o.material_slots]
+    for sl, _ in stash:
+        sl.material = blank
     select_only(objs)
     with bpy.context.temp_override(active_object=objs[0], selected_objects=objs,
                                    selected_editable_objects=objs, object=objs[0]):
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")
-        # correct_aspect=False: it takes the aspect of the material's first
-        # image node, and the livery's is a 3600 x 1 colour LUT, which squashes
-        # every island to a line. The atlas is square.
-        bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=0.0015,
+        bpy.ops.uv.smart_project(angle_limit=math.radians(60), island_margin=0.0,
                                  area_weight=0.0, correct_aspect=False, scale_to_bounds=False)
+        # Smart project's island_margin scales with the islands: with ~1400
+        # small parts the margins took 98 % of the atlas. Repack with a margin
+        # added in UV space instead (0.001 = 4 px at 4k, room for bake bleed).
+        bpy.ops.uv.select_all(action="SELECT")
+        bpy.ops.uv.pack_islands(udim_source="CLOSEST_UDIM", rotate=True, margin_method="ADD",
+                                margin=0.001, shape_method="AABB")
         bpy.ops.object.mode_set(mode="OBJECT")
+    for sl, m in stash:
+        sl.material = m
     area = 0.0
     for o in objs:
         uv = o.data.uv_layers.active.data
@@ -916,14 +981,25 @@ def assign_slot(o, slot):
 
 
 def export_fbx(path, objs, armature=None):
+    """Static meshes: metres, the importer scales them. The skeletal mesh:
+    its data is already in centimetres (see main), and the scene unit says so
+    for the export. UE puts any unit conversion on the root bone, and Chaos
+    reads wheel bones in the root's frame without that scale."""
     sel = list(objs) + ([armature] if armature else [])
     select_only(sel)
-    with bpy.context.temp_override(selected_objects=sel, active_object=sel[0]):
-        bpy.ops.export_scene.fbx(
-            filepath=path, use_selection=True, object_types={"MESH", "ARMATURE"},
-            apply_unit_scale=True, apply_scale_options="FBX_SCALE_NONE", axis_forward="-Z", axis_up="Y",
-            use_mesh_modifiers=True, mesh_smooth_type="FACE", use_tspace=False, add_leaf_bones=False,
-            bake_anim=False, path_mode="STRIP", use_armature_deform_only=False)
+    units = scene.unit_settings
+    saved = units.scale_length
+    if armature:
+        units.scale_length = 0.01
+    try:
+        with bpy.context.temp_override(selected_objects=sel, active_object=sel[0]):
+            bpy.ops.export_scene.fbx(
+                filepath=path, use_selection=True, object_types={"MESH", "ARMATURE"},
+                apply_unit_scale=True, apply_scale_options="FBX_SCALE_NONE", axis_forward="-Z", axis_up="Y",
+                use_mesh_modifiers=True, mesh_smooth_type="FACE", use_tspace=False, add_leaf_bones=False,
+                bake_anim=False, path_mode="STRIP", use_armature_deform_only=False)
+    finally:
+        units.scale_length = saved
 
 
 def main():
@@ -989,6 +1065,10 @@ def main():
         groups.setdefault(atlas_of(o["src"]), []).append(o)
     sources = {}
     for o in keep:
+        # A clear part is no bake source either: it would catch the rays meant
+        # for what is behind it.
+        if o.material_slots and all(is_clear(sl.material) for sl in o.material_slots):
+            continue
         sources.setdefault(atlas_of(o.name), []).append(o)
 
     if not args.no_bake:
@@ -1021,7 +1101,18 @@ def main():
         hub = xf @ Vector(w["centre"])
         manifest["wheels"][k] = {"hub_cm": [hub.x * 100, -hub.y * 100, hub.z * 100],
                                  "radius_cm": w["radius"] * 100, "width_cm": w["width"] * 100}
-        hub_xf = Matrix.Translation(-hub) @ xf
+        # Level the wheel about its hub. The sim spins a wheel about the body's
+        # lateral axis (Chaos rotation angle as pitch); a wheel modelled with
+        # its static camber and toe then tips side to side every half turn.
+        # The upright and caliper turn with it so the caliper still straddles
+        # the rotor. Costs the 3-4 degrees of static camber on screen.
+        axle = (xf.to_3x3() @ Vector(w["axle"])).normalized()    # export frame: +y is left
+        level = axle.rotation_difference(Vector((0, 1, 0))).to_matrix().to_4x4()
+        camber = math.degrees(math.atan2(axle.z, axle.y))
+        toe = math.degrees(math.atan2(axle.x, axle.y))
+        log(f"wheel {k}: axle tilted {camber:+.2f} deg (camber), {toe:+.2f} deg (toe); levelled")
+        manifest["wheels"][k]["levelled_deg"] = {"camber": camber, "toe": toe}
+        hub_xf = level @ Matrix.Translation(-hub) @ xf
         for kind in ("wheel", "corner"):
             parts = [o for o in lows + fx if cls[o["src"]] == (kind, k)]
             if not parts:
@@ -1038,21 +1129,28 @@ def main():
     select_only([arm])
     with bpy.context.temp_override(active_object=arm, object=arm, selected_editable_objects=[arm]):
         bpy.ops.object.mode_set(mode="EDIT")
+        # In centimetres, and every bone along +Y: a Blender bone's rest frame
+        # is identity when it points along +Y, so UE gets a root with no
+        # rotation and wheel bones whose local translation is the hub in cm
+        # (what Chaos's LocateBoneOffset reads). A bone along +Z gave the root
+        # a 90 degree roll and the wheels (x, z, -y) in metres: the physics
+        # wheels sat on the ground and the car fell through it.
         root = arm_data.edit_bones.new("root")
-        root.head, root.tail = (0, 0, 0), (0, 0, 0.3)
+        root.head, root.tail = (0, 0, 0), (0, 30, 0)
         for k in CORNERS:
-            hub = xf @ Vector(wheels[k]["centre"])
+            hub = xf @ Vector(wheels[k]["centre"]) * 100
             b = arm_data.edit_bones.new("Wheel" + k)
-            b.head, b.tail = hub, hub + Vector((0, 0, 0.15))
+            b.head, b.tail = hub, hub + Vector((0, 15, 0))
             b.parent = root
         bpy.ops.object.mode_set(mode="OBJECT")
-    j = join_into(body, "SK_IFS08_Body", xf)
+    j = join_into(body, "SK_IFS08_Body", Matrix.Scale(100, 4) @ xf)
     vg = j.vertex_groups.new(name="root")
     vg.add(list(range(len(j.data.vertices))), 1.0, "REPLACE")
     j.parent = arm
     mod = j.modifiers.new("arm", "ARMATURE")
     mod.object = arm
     export_fbx(os.path.join(OUT, "SK_IFS08.fbx"), [j], armature=arm)
+    j.data.transform(Matrix.Scale(0.01, 4))   # back to metres for the checks and previews
     lo = Vector([min(v.co[i] for v in j.data.vertices) for i in range(3)])
     hi = Vector([max(v.co[i] for v in j.data.vertices) for i in range(3)])
     manifest["meshes"]["SK_IFS08"] = {"tris": tri_count(j.data), "slots": [m.name for m in j.data.materials],
