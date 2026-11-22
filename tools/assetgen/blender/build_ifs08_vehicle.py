@@ -252,6 +252,7 @@ def visibility(objs, ground_z):
     scene.ray_cast walks every object's BVH per ray (~1 ms with 2,500 parts);
     this is two GPU renders per view."""
     L = 64
+    TOP = 0.9   # Workbench output has a little gain: the top levels clip at 255
     ids = {}
     for i, o in enumerate(objs):
         code = i + 1
@@ -262,7 +263,7 @@ def visibility(objs, ground_z):
     def paint(digit):
         for i, o in enumerate(objs):
             code = i + 1
-            v = srgb_to_linear(((code // L) if digit == 0 else (code % L)) / (L - 1))
+            v = srgb_to_linear(TOP * ((code // L) if digit == 0 else (code % L)) / (L - 1))
             o.color = (v, v, v, 1.0)
     r = scene.render
     saved = (r.engine, r.resolution_x, r.resolution_y, r.resolution_percentage, r.dither_intensity,
@@ -333,7 +334,7 @@ def visibility(objs, ground_z):
         me.from_pydata([(x0, 0, 0), (x0 + 1, 0, 0), (x0 + 1, 1, 0), (x0, 1, 0)], [], [(0, 1, 2, 3)])
         q = bpy.data.objects.new(f"VIS_Q{lv}", me)
         q.location = (0, 0, 500)
-        c = srgb_to_linear(lv / (L - 1))
+        c = srgb_to_linear(TOP * lv / (L - 1))
         q.color = (c, c, c, 1)
         scene.collection.objects.link(q)
         quads.append(q)
@@ -352,8 +353,9 @@ def visibility(objs, ground_z):
         bpy.data.objects.remove(q, do_unlink=True)
         bpy.data.meshes.remove(me)
     gaps = np.diff(table)
-    log(f"visibility: level calibration {np.round(table * 255).astype(int).tolist()}")
-    if gaps.min() < 1.5 / 255 or np.abs(px[10, :, 0] - px[10, :, 2]).max() > 1e-6:
+    log(f"visibility: level calibration {np.round(table * 255).astype(int).tolist()}, "
+        f"R-B spread {np.abs(px[10, :, 0] - px[10, :, 2]).max() * 255:.1f}/255 (decode reads R only)")
+    if gaps.min() < 1.5 / 255:
         raise RuntimeError("visibility: object-colour levels are not distinguishable after colour management")
     mids = (table[1:] + table[:-1]) / 2
 
