@@ -1,6 +1,6 @@
 """Import the IFS-08 car into the project (runs inside the UE editor).
 
-    UnrealEditor-Cmd IFSSIM.uproject -run=pythonscript -EnablePlugins=PythonScriptPlugin \
+    UnrealEditor-Cmd IFSSIM.uproject -run=pythonscript -EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities \
         -script="tools/assetgen/ue_import_vehicle.py" -unattended -nullrhi
 
 Reads what tools/assetgen/blender/build_ifs08_vehicle.py exported (folder from
@@ -39,7 +39,8 @@ CORNERS = ("FL", "FR", "RL", "RR")
 
 
 def log(msg):
-    unreal.log("IFS08 " + msg)
+    # Warning level: a -run=pythonscript commandlet drops Display-level lines.
+    unreal.log_warning("[ifs08] " + msg)
 
 
 def fresh(path):
@@ -239,23 +240,36 @@ def assign(mesh, mats, static):
         mesh.set_editor_property("materials", slots)
 
 
+
+def setp(obj, **props):
+    """set_editor_property for each; a property this engine version lacks is
+    logged and skipped (the bone check after import catches axis or unit errors)."""
+    for k, v in props.items():
+        try:
+            obj.set_editor_property(k, v)
+        except Exception as e:  # noqa: BLE001 - unreal raises plain Exception
+            unreal.log_warning(f"[ifs08] {type(obj).__name__}.{k} not set: {e}")
+
+
+
+def body_setups(pa):
+    """The physics asset's bodies. SkeletalBodySetups is not exposed to Python,
+    but each body is a subobject named SkeletalBodySetup_<n>."""
+    out = []
+    for i in range(64):
+        b = unreal.find_object(pa, f"SkeletalBodySetup_{i}")
+        if b is not None:
+            out.append(b)
+    return out
+
+
 def import_body(mats):
     for n in ("SK_IFS08", "SK_IFS08_Skeleton", "SK_IFS08_PhysicsAsset", "PA_IFS08"):
         fresh(f"{ROOT}/{n}")
     opts = unreal.FbxImportUI()
-    opts.import_mesh = True
-    opts.import_as_skeletal = True
-    opts.mesh_type_to_import = unreal.FBXImportType.FBXIT_SKELETAL_MESH
-    opts.import_materials = False
-    opts.import_textures = False
-    opts.import_animations = False
-    opts.create_physics_asset = True
+    setp(opts, import_mesh=True, import_as_skeletal=True, mesh_type_to_import=unreal.FBXImportType.FBXIT_SKELETAL_MESH, import_materials=False, import_textures=False, import_animations=False, create_physics_asset=True)
     sk = opts.skeletal_mesh_import_data
-    sk.import_morph_targets = False
-    sk.convert_scene = True
-    sk.force_front_x_axis = False
-    sk.use_t0_as_ref_pose = True
-    sk.normal_import_method = unreal.FBXNormalImportMethod.FBXNIM_IMPORT_NORMALS
+    setp(sk, import_morph_targets=False, convert_scene=True, force_front_x_axis=False, use_t0_as_ref_pose=True, normal_import_method=unreal.FBXNormalImportMethod.FBXNIM_IMPORT_NORMALS)
     mesh = import_task(os.path.join(SRC, "SK_IFS08.fbx"), ROOT, "SK_IFS08", opts)
     assign(mesh, mats, static=False)
 
@@ -272,20 +286,26 @@ def import_body(mats):
     box.set_editor_property("x", hi[0] - lo[0])
     box.set_editor_property("y", 2 * inner_y)
     box.set_editor_property("z", 50.0)
-    bodies = pa.get_editor_property("skeletal_body_setups")
-    keep = [b for b in bodies if str(b.get_editor_property("bone_name")) == "root"]
+    bodies = body_setups(pa)
+    names = [str(b.get_editor_property("bone_name")) for b in bodies]
+    keep = [b for b, n in zip(bodies, names) if n == "root"]
     if not keep:
-        raise RuntimeError(f"physics asset has no root body: {[str(b.get_editor_property('bone_name')) for b in bodies]}")
+        raise RuntimeError(f"physics asset has no root body: {names}")
     agg = keep[0].get_editor_property("agg_geom")
     agg.set_editor_property("box_elems", [box])
     agg.set_editor_property("sphyl_elems", [])
     agg.set_editor_property("sphere_elems", [])
     agg.set_editor_property("convex_elems", [])
     keep[0].set_editor_property("agg_geom", agg)
-    if len(bodies) != 1:
-        pa.set_editor_property("skeletal_body_setups", keep)
+    # Python cannot remove bodies from the asset; any other body (a wheel bone
+    # should have none: no vertices are weighted to it) is made inert.
+    for b, n in zip(bodies, names):
+        if n != "root":
+            setp(b, collision_reponse=unreal.BodyCollisionResponse.BODY_COLLISION_DISABLED,
+                 physics_type=unreal.PhysicsType.PHYS_TYPE_KINEMATIC)
+            log(f"WARNING physics asset: extra body on {n}, collision disabled")
     EAL.save_loaded_asset(pa)
-    log(f"physics asset {pa.get_path_name()}: {len(bodies)} bodies -> 1 box "
+    log(f"physics asset {pa.get_path_name()}: {len(bodies)} bodies {names} -> root: 1 box "
         f"{hi[0] - lo[0]:.0f} x {2 * inner_y:.0f} x 50 cm")
 
     # LODs from LOD0.
@@ -296,6 +316,8 @@ def import_body(mats):
         log("WARNING SK_IFS08: LODs not generated")
     EAL.save_loaded_asset(mesh)
     skel = mesh.get_editor_property("skeleton")
+    EAL.save_loaded_asset(skel, only_if_is_dirty=False)
+    log(f"skeleton {skel.get_path_name()}")
     pose = unreal.AnimPoseExtensions.get_reference_pose(skel)
     for k in CORNERS:
         t = unreal.AnimPoseExtensions.get_bone_pose(pose, "Wheel" + k, unreal.AnimPoseSpaces.WORLD)
@@ -316,20 +338,14 @@ def import_static(name, mats):
         return None
     fresh(f"{ROOT}/{name}")
     opts = unreal.FbxImportUI()
-    opts.import_mesh = True
-    opts.import_as_skeletal = False
-    opts.import_materials = False
-    opts.import_textures = False
+    setp(opts, import_mesh=True, import_as_skeletal=False, import_materials=False, import_textures=False)
     sm = opts.static_mesh_import_data
-    sm.combine_meshes = True
-    sm.auto_generate_collision = False
-    sm.generate_lightmap_u_vs = False
-    sm.convert_scene = True
-    sm.force_front_x_axis = False
-    sm.normal_import_method = unreal.FBXNormalImportMethod.FBXNIM_IMPORT_NORMALS
+    setp(sm, combine_meshes=True, auto_generate_collision=False, generate_lightmap_u_vs=False, convert_scene=True, force_front_x_axis=False, normal_import_method=unreal.FBXNormalImportMethod.FBXNIM_IMPORT_NORMALS)
     mesh = import_task(path, ROOT, name, opts)
     assign(mesh, mats, static=True)
-    sub = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    # get_editor_subsystem returns None for it in a commandlet; an instance
+    # made directly works (its methods hold no state).
+    sub = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem) or unreal.StaticMeshEditorSubsystem()
     lod = unreal.EditorScriptingMeshReductionOptions()
     lod.auto_compute_lod_screen_size = False
     lod.reduction_settings = [unreal.EditorScriptingMeshReductionSettings(1.0, 1.0),
@@ -344,11 +360,18 @@ def import_static(name, mats):
 
 
 def main():
+    # UE 5.x imports FBX through Interchange, which ignores FbxImportUI (no
+    # physics asset, its own axis conversion). Use the legacy FBX importer,
+    # whose options this script sets, for this run only.
+    unreal.SystemLibrary.execute_console_command(None, "Interchange.FeatureFlags.Import.FBX 0")
     mats = build_materials()
     import_body(mats)
     for kind in ("Wheel", "Corner"):
         for k in CORNERS:
             import_static(f"SM_IFS08_{kind}_{k}", mats)
+    # Whatever the importers created alongside (skeleton, physics asset) must be
+    # on disk too, or SK_IFS08 does not load in the next session.
+    EAL.save_directory(ROOT, only_if_is_dirty=True, recursive=True)
     log("done")
 
 

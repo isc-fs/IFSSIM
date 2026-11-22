@@ -41,7 +41,7 @@ Run these with UnrealEditor closed: the bake uses the GPU.
     --python tools\assetgen\blender\build_ifs08_vehicle.py -- --out <IFS08_KIN>\cad\blender\export_ue\ifs08 --preview
 set IFSSIM_VEHICLE_DIR=<IFS08_KIN>\cad\blender\export_ue\ifs08
 set IFSSIM_VEHICLE_DASH=<IFS08_KIN>\cad\blender\textures\wheel_dash_default.png
-UnrealEditor-Cmd IFSSIM.uproject -run=pythonscript -EnablePlugins=PythonScriptPlugin ^
+UnrealEditor-Cmd IFSSIM.uproject -run=pythonscript -EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities ^
     -script="%CD%\tools\assetgen\ue_import_vehicle.py" -unattended -nullrhi
 ```
 
