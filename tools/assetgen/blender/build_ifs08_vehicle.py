@@ -1234,4 +1234,6 @@ def preview(objs, wheels, xf):
         log(f"preview {name}")
 
 
-main()
+# Guarded so estimate_ifs08_inertia.py can reuse prepare() / find_wheels().
+if __name__ == "__main__":
+    main()

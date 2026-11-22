@@ -334,6 +334,30 @@ void UFSDSWheeledVehicleMovementComponent::OnCreatePhysicsState()
 	VerifyWheelPlacement();
 }
 
+void UFSDSWheeledVehicleMovementComponent::SetupVehicleMass()
+{
+	const FFSDSVehicleSettings* V = FFSDSSettings::Get().GetDefaultVehicle();
+	FBodyInstance* Body = UpdatedPrimitive ? UpdatedPrimitive->GetBodyInstance() : nullptr;
+	if (!bInertiaScaleFromSettings && V && Body && V->Physics.Inertia.GetMin() > 0.f && Body->GetBodyMass() > 0.f)
+	{
+		// What UpdateMassProperties starts from: the shapes' tensor (UE units,
+		// kg*cm^2) at the configured mass.
+		const FVector Shapes = Body->GetBodyInertiaTensor() * (Mass / Body->GetBodyMass());
+		const FVector Target = V->Physics.Inertia * 1e4;   // kg*m^2 -> kg*cm^2
+		if (Shapes.GetMin() > 0.f)
+		{
+			InertiaTensorScale = Target / Shapes;
+			bInertiaScaleFromSettings = true;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: body inertia from settings.json (%.1f, %.1f, %.1f) kg*m^2; the physics asset gives (%.1f, %.1f, %.1f), scale (%.3f, %.3f, %.3f)"),
+				V->Physics.Inertia.X, V->Physics.Inertia.Y, V->Physics.Inertia.Z,
+				Shapes.X * 1e-4, Shapes.Y * 1e-4, Shapes.Z * 1e-4,
+				InertiaTensorScale.X, InertiaTensorScale.Y, InertiaTensorScale.Z);
+		}
+	}
+	Super::SetupVehicleMass();
+}
+
 void UFSDSWheeledVehicleMovementComponent::PlaceWheelsFromSettings()
 {
 	TArray<FVector> Offsets;

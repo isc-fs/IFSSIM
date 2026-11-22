@@ -287,6 +287,11 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		{
 			for (auto& V : *TorqueArr) P.MotorTorque.Add(V->AsNumber());
 		}
+		const TArray<TSharedPtr<FJsonValue>>* InertiaArr;
+		if ((*PhysicsObj)->TryGetArrayField(TEXT("Inertia"), InertiaArr) && InertiaArr->Num() == 3)
+		{
+			P.Inertia = FVector((*InertiaArr)[0]->AsNumber(), (*InertiaArr)[1]->AsNumber(), (*InertiaArr)[2]->AsNumber());
+		}
 
 		// Pacejka Magic Formula coefficients (optional block)
 		const TSharedPtr<FJsonObject>* PacejkaObj;

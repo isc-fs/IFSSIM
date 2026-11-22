@@ -185,6 +185,12 @@ struct FFSDSVehiclePhysics
 	float SuspensionDamping = 1.5f;
 	TArray<float> MotorRPM;          // RPM points
 	TArray<float> MotorTorque;       // Nm at motor for each RPM
+	// Body inertia about the centre of mass, kg*m^2 (roll Ixx, pitch Iyy, yaw
+	// Izz). Zero = Chaos's own: the physics asset's shapes at Mass, times the
+	// pawn's InertiaTensorScale, which ties handling to whatever collision
+	// shape the car mesh carries. See UFSDSWheeledVehicleMovementComponent::
+	// SetupVehicleMass.
+	FVector Inertia = FVector::ZeroVector;
 
 	// --- Vehicle dynamics (load transfer) ---
 	// Geometry + stiffness fields consumed by AFSDSVehiclePawn::
