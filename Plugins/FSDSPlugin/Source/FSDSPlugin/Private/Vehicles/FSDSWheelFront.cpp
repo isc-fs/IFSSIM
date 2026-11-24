@@ -101,9 +101,9 @@ UFSDSWheelFront::UFSDSWheelFront()
 	// from the wheel class of the axle, so it is set on both.
 	RollbarScaling = 0.f;
 
-	// See FSDSWheelRear.cpp for rationale — use real per-wheel Fz, not
-	// Chaos's default 50/50 blend with resting load.
-	WheelLoadRatio = 1.0f;
+	// See FSDSWheelRear.cpp: the tyre load is the resting load, scaled per
+	// tick by AFSDSVehiclePawn::ApplyTyreLoads, not the spring force.
+	WheelLoadRatio = 0.0f;
 
 	// Hoosier R20 slick friction
 	FrictionForceMultiplier = 1.65f;

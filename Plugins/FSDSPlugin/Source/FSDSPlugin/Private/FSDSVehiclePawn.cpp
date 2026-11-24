@@ -1624,24 +1624,8 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 		VehicleMovement->SetBrakeInput(0.f);
 		VehicleMovement->SetHandbrakeInput(CurrentControls.bHandbrake);
 
-		// Lateral grip has to scale with the load on each tyre (#697).
-		// Chaos reads the lateral slip graph as a FORCE: it multiplies the
-		// curve by 10000 when it builds the wheel (ChaosVehicleWheel.h,
-		// FillWheelSetup) and the tyre force is curve(slip) x
-		// LateralSlipGraphMultiplier (WheelSystem.cpp). The Pacejka bake
-		// writes a friction coefficient (peak TireMu), so with the default
-		// multiplier of 1 every tyre topped out at TireMu x 100 N, whatever
-		// its load: about 140 N against ~520 N on a front tyre, which is why
-		// the car could not turn tighter than ~11 m. Multiplying by the
-		// wheel's current load (Chaos units, N x 100) / 10000 makes the
-		// lateral force mu(slip) x Fz, as the Pacejka model means it. The
-		// friction circle Chaos clips to (Fz x surface mu x FrictionMultiplier,
-		// set up in FSDSPacejka::BakeToWheel) already caps it at TireMu x Fz.
-		for (int32 i = 0; i < VehicleMovement->Wheels.Num(); ++i)
-		{
-			const float LoadChaos = VehicleMovement->GetWheelState(i).SpringForce;
-			VehicleMovement->SetWheelSlipGraphMultiplier(i, FMath::Max(LoadChaos, 0.f) / 10000.f);
-		}
+		// Each tyre's grip from its load this tick (#697, and see ApplyTyreLoads).
+		ApplyTyreLoads(DeltaTime);
 
 		// Electric: always in gear 1 (single speed)
 		VehicleMovement->SetTargetGear(1, true);
@@ -1823,6 +1807,89 @@ void AFSDSVehiclePawn::ApplyAeroForces()
 	FVector DownDir = FVector(0.f, 0.f, -1.f) * 100.f; // N → UE force
 	VehicleMesh->AddForceAtLocation(DownDir * Fdown * AeroBalanceFront, FrontAxleWorld, NAME_None);
 	VehicleMesh->AddForceAtLocation(DownDir * Fdown * (1.f - AeroBalanceFront), RearAxleWorld, NAME_None);
+}
+
+float AFSDSVehiclePawn::AeroDownforceAxle(bool bFront) const
+{
+	const float SpeedMs = GetVehicleVelocityUe().Size() / 100.f;
+	if (SpeedMs < 1.0f) return 0.f;   // as ApplyAeroForces
+	const float Fdown = 0.5f * 1.225f * SpeedMs * SpeedMs * ClA;
+	return Fdown * (bFront ? AeroBalanceFront : 1.f - AeroBalanceFront);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Tyre loads. Chaos's tyre solver (WheelSystem.cpp) builds its grip circle
+// as ForceIntoSurface x surface mu x FrictionMultiplier and its lateral
+// force as slip curve x LateralSlipGraphMultiplier. ForceIntoSurface used to
+// be the suspension SPRING force (WheelLoadRatio 1), which is not the
+// wheel's load: the car is held up by the suspension constraint, and the
+// spring forces summed to 40 % of the weight at 220 kg and 69 % at 275 kg.
+// The wheel classes now hand the solver the RESTING load (WheelLoadRatio 0,
+// sprung mass x g, see FSDSWheelRear.cpp) and this scales grip from it to
+// the load the wheel carries this tick:
+//
+//   load  = ComputeTireLoadsParametric(ax, ay, roll from ay) + axle downforce / 2
+//   FrictionMultiplier     = baked multiplier x load / resting load
+//   SlipGraphMultiplier    = load / 100  (curve is mu x 10000; force in N x 100)
+//
+// so the circle is TireMu x load and the lateral force mu(slip) x load, as
+// the Pacejka bake means them. Quasi-static: roll is taken steady-state from
+// ay, not the body's measured roll, so the road-roughness bumps and the
+// constraint's own motion do not feed grip. A wheel off the ground still
+// gets nothing: Chaos zeroes its load when the trace finds no contact.
+// ────────────────────────────────────────────────────────────────────
+void AFSDSVehiclePawn::ApplyTyreLoads(float DeltaTime)
+{
+	if (!VehicleMovement || VehicleMovement->Wheels.Num() < 4 || DeltaTime <= 0.f) return;
+
+	// Body-frame acceleration, m/s^2: x forward, y LEFT (ISO 8855, as
+	// ComputeTireLoadsParametric). A teleport or reset shows up as one huge
+	// sample; skip those rather than feed them through the filter.
+	const FTransform T = GetActorTransform();
+	const FVector A = CurrentAcceleration / 100.f;
+	const float Ax = FVector::DotProduct(A, T.GetUnitAxis(EAxis::X));
+	const float Ay = -FVector::DotProduct(A, T.GetUnitAxis(EAxis::Y));
+	if (FMath::Abs(Ax) < 60.f && FMath::Abs(Ay) < 60.f)
+	{
+		// ~0.05 s: the body's load transfer follows the sprung mass (~3 Hz),
+		// and a per-tick finite difference of the velocity is noisy.
+		const float Alpha = FMath::Clamp(DeltaTime / (0.05f + DeltaTime), 0.f, 1.f);
+		TyreLoadAccel.X += Alpha * (FMath::Clamp(Ax, -30.f, 30.f) - TyreLoadAccel.X);
+		TyreLoadAccel.Y += Alpha * (FMath::Clamp(Ay, -30.f, 30.f) - TyreLoadAccel.Y);
+	}
+
+	// Steady-state roll from ay: the sprung mass's moment about the mean
+	// roll axis over the total roll stiffness.
+	const float Krho = RollStiffnessFront + RollStiffnessRear;
+	const float RollArm = CoGHeight - (WeightDistFront * RollCenterFront + (1.f - WeightDistFront) * RollCenterRear);
+	const float Phi = (Krho > 1.f) ? Mass * TyreLoadAccel.Y * RollArm / Krho : 0.f;
+
+	FTireLoads L = ComputeTireLoadsParametric(TyreLoadAccel.X, TyreLoadAccel.Y, Phi, 0.f, 0.f);
+	const float DownF = 0.5f * AeroDownforceAxle(true);
+	const float DownR = 0.5f * AeroDownforceAxle(false);
+	L.FL += DownF; L.FR += DownF; L.RL += DownR; L.RR += DownR;
+	const float Load[4] = { L.FL, L.FR, L.RL, L.RR };   // WheelSetups order: FL, FR, RL, RR
+
+	for (int32 i = 0; i < 4; ++i)
+	{
+		const UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
+		float Resting = 0.f;
+		if (!W || !VehicleMovement->GetSolverRestingLoad(i, Resting)) continue;
+		const float Ratio = FMath::Clamp(Load[i] / Resting, 0.f, 4.f);
+		VehicleMovement->SetWheelFrictionMultiplier(i, W->FrictionForceMultiplier * Ratio);
+		VehicleMovement->SetWheelSlipGraphMultiplier(i, FMath::Max(Load[i], 0.f) / 100.f);
+	}
+
+	// Off the ground means no load, as the solver sees it.
+	float* Reported[4] = { &L.FL, &L.FR, &L.RL, &L.RR };
+	for (int32 i = 0; i < 4; ++i)
+	{
+		if (!VehicleMovement->GetWheelState(i).bInContact)
+		{
+			*Reported[i] = 0.f;
+		}
+	}
+	TyreLoads = L;
 }
 
 void AFSDSVehiclePawn::ApplyRollingResistance()
@@ -2169,14 +2236,21 @@ AFSDSVehiclePawn::ComputeTireLoadsParametric(
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Truth Fz — read from Chaos's per-wheel state. SpringForce is the
-// suspension spring force at the contact patch this tick; it equals
-// the normal contact force at low suspension velocity (which covers
-// effectively all driving-relevant cases). This is the value the wheel
-// solver uses to compute available longitudinal/lateral grip in the
-// same tick, so it's the canonical "what is Chaos seeing" signal.
+// Truth Fz — the load each tyre's grip is built on this tick
+// (ApplyTyreLoads). It USED to be Chaos's suspension spring force, on the
+// belief that it equals the normal force; it does not (see
+// FSDSWheelRear.cpp, WheelLoadRatio), and that is now GetSpringForces.
 // ────────────────────────────────────────────────────────────────────
 AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetTireLoadsTruth() const
+{
+	if (bFmuDrivesPawn && PlantState.bPlantOk)
+	{
+		return GetSpringForces();   // the plant's own normal force, see there
+	}
+	return TyreLoads;
+}
+
+AFSDSVehiclePawn::FTireLoads AFSDSVehiclePawn::GetSpringForces() const
 {
 	FTireLoads Out;
 	if (!VehicleMovement) return Out;
