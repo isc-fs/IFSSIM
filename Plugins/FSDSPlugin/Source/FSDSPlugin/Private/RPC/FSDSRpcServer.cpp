@@ -1186,8 +1186,11 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 	{
 		// Parse:  getTireLoads truth
 		//         getTireLoads predict ax ay phi theta z
-		// "truth"  → reads Chaos's per-tick spring force (the same Fz
-		//            the wheel solver is using to compute grip).
+		//         getTireLoads springs
+		// "truth"   → the load each tyre's grip is built on this tick
+		//             (AFSDSVehiclePawn::ApplyTyreLoads), N.
+		// "springs" → Chaos's suspension spring forces, N. Not the wheel
+		//             loads (they sum to well under the weight); diagnosis only.
 		// "predict" with chassis state → runs the closed-form Milliken
 		//            decomposition against the cached settings. Used for
 		//            offline validation and for forward-planning callers
@@ -1212,16 +1215,17 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			Loads = VehiclePawn->ComputeTireLoadsParametric(
 				AxIn, AyIn, PhiIn, ThetaIn, ZIn);
 		}
-		else if (Mode == TEXT("truth"))
+		else if (Mode == TEXT("truth") || Mode == TEXT("springs"))
 		{
+			const bool bSprings = (Mode == TEXT("springs"));
 			// Truth path needs to bounce to the GameThread to read the
 			// current FWheelStatus safely (the array is mutated each
 			// physics tick on the game thread). 200 ms timeout matches
 			// the rest of the GameThread RPCs.
 			Loads = CallOnGameThread<AFSDSVehiclePawn::FTireLoads>(
-				[this]() {
+				[this, bSprings]() {
 					if (!IsValid(VehiclePawn)) return AFSDSVehiclePawn::FTireLoads{};
-					return VehiclePawn->GetTireLoadsTruth();
+					return bSprings ? VehiclePawn->GetSpringForces() : VehiclePawn->GetTireLoadsTruth();
 				},
 				0.2,
 				AFSDSVehiclePawn::FTireLoads{},
@@ -1229,7 +1233,7 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		}
 		else
 		{
-			return TEXT("{\"error\":\"usage: getTireLoads truth|predict [ax ay phi theta z]\"}");
+			return TEXT("{\"error\":\"usage: getTireLoads truth|springs|predict [ax ay phi theta z]\"}");
 		}
 
 		return FString::Printf(

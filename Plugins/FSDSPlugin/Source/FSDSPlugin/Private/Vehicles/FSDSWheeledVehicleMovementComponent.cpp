@@ -178,6 +178,18 @@ bool UFSDSWheeledVehicleMovementComponent::GetSolverSuspension(
 	return true;
 }
 
+bool UFSDSWheeledVehicleMovementComponent::GetSolverRestingLoad(int32 WheelIndex, float& OutNewtons) const
+{
+	if (!VehicleSimulationPT || !VehicleSimulationPT->PVehicle
+		|| !VehicleSimulationPT->PVehicle->Suspension.IsValidIndex(WheelIndex))
+	{
+		return false;
+	}
+	// kg*cm/s^2 -> N
+	OutNewtons = VehicleSimulationPT->PVehicle->Suspension[WheelIndex].Setup().RestingForce * 0.01f;
+	return OutNewtons > 0.f;
+}
+
 bool UFSDSWheeledVehicleMovementComponent::VerifyAllWheelConfigsApplied(float Tolerance) const
 {
 	bool bAllOk = true;
