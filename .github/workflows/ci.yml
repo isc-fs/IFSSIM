@@ -205,6 +205,30 @@ jobs:
           python3 -m pytest tools/envgen/tests -q
 
   # ---------------------------------------------------------------
+  # Run specs — tools/sim_benchmark/launch: the spec format, run_spec.py,
+  # the local queue and rig checks, and the JSON Schema the benchweb's
+  # form is generated from. test_schema.py fails when the sim's
+  # Benchmarks page (SFSDSBenchPageFields.inl) and the schema drift apart.
+  # Fake benchmarks, rigs and git repos only: no sim, no Docker.
+  # ---------------------------------------------------------------
+  run-specs:
+    name: Run specs — launcher and schema
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Tests
+        run: |
+          python3 -m pip install --quiet pytest pyyaml
+          python3 -m pytest -q tools/sim_benchmark/tests/test_schema.py \
+            tools/sim_benchmark/tests/test_launch.py \
+            tools/sim_benchmark/tests/test_localq.py \
+            tools/sim_benchmark/tests/test_boards.py
+
+  # ---------------------------------------------------------------
   # Internal markdown link check — catches dead links inside the
   # repo's docs (relative paths, anchors). External URL checking is
   # OFF by default: GitHub-the-internet's flakiness would turn this
@@ -260,7 +284,7 @@ jobs:
   # ---------------------------------------------------------------
   ci-summary:
     name: CI summary
-    needs: [bridge-build, frontend, backend, tracks, links]
+    needs: [bridge-build, frontend, backend, tracks, run-specs, links]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
@@ -274,6 +298,7 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           BACKEND_RESULT:  ${{ needs.backend.result }}
           TRACKS_RESULT:   ${{ needs.tracks.result }}
+          SPECS_RESULT:    ${{ needs.run-specs.result }}
           LINKS_RESULT:    ${{ needs.links.result }}
         with:
           script: |
@@ -299,6 +324,7 @@ jobs:
               `| Mission Control — frontend | ${glyph(process.env.FRONTEND_RESULT)} |`,
               `| Mission Control — backend | ${glyph(process.env.BACKEND_RESULT)} |`,
               `| Tracks — CSV validator | ${glyph(process.env.TRACKS_RESULT)} |`,
+              `| Run specs — launcher and schema | ${glyph(process.env.SPECS_RESULT)} |`,
               `| Docs — markdown link checker | ${glyph(process.env.LINKS_RESULT)} |`,
               '',
               `<sub>Run [\`${context.runId}\`](${runUrl}) · workflow \`${context.workflow}\` · branch \`${branch}\`</sub>`,

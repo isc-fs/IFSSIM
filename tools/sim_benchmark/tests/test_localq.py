@@ -357,6 +357,32 @@ def test_code_pipeline_checks_out_a_branch_a_pr_or_a_commit(piped, tmp_path):
         run.pipeline_worktree(piped, "nope", tmp_path / "wt" / "n")
 
 
+def test_code_pipeline_checks_out_a_snapshot_and_pinned_refs(piped, tmp_path):
+    """A working copy ifsbench snapshot pushed (refs/bench/<user>/<id>, plan B5), and
+    <ref>@<commit> as the runner agent hands it over."""
+    origin = tmp_path / "origin"
+    _git("checkout", "-qb", "wip", cwd=origin)
+    (origin / "params.yaml").write_text("gate: 9\n")
+    _git("commit", "-qam", "snapshot", cwd=origin)
+    snap = subprocess.run(["git", "-C", str(origin), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    _git("update-ref", "refs/bench/alice/k3x9", snap, cwd=origin)
+    _git("checkout", "-q", "dev", cwd=origin)
+    _git("branch", "-qD", "wip", cwd=origin)  # only the snapshot ref keeps it
+    for ref in ("refs/bench/alice/k3x9", f"refs/bench/alice/k3x9@{snap[:10]}"):
+        where = tmp_path / "wt" / str(len(ref))
+        assert run.pipeline_worktree(piped, ref, where) == snap
+        assert (where / "params.yaml").read_text() == "gate: 9\n"
+        run.remove_pipeline_worktree(piped, where)
+    feat = subprocess.run(["git", "-C", str(origin), "rev-parse", "feat/x"], capture_output=True, text=True).stdout.strip()
+    assert run.pipeline_worktree(piped, f"feat/x@{feat[:8]}", tmp_path / "wt" / "p") == feat
+    with pytest.raises(run.sp.SpecError, match="isn't on branch dev"):
+        run.pipeline_worktree(piped, f"dev@{feat[:8]}", tmp_path / "wt" / "q")
+    with pytest.raises(run.sp.SpecError, match="couldn't fetch snapshot refs/bench/alice/nope"):
+        run.pipeline_worktree(piped, "refs/bench/alice/nope", tmp_path / "wt" / "r")
+    with pytest.raises(run.sp.SpecError, match="only refs a spec may name are snapshots"):
+        run.pipeline_worktree(piped, "refs/heads/dev", tmp_path / "wt" / "s")
+
+
 def test_a_queued_spec_runs_on_its_code_pipeline_and_cleans_up(piped):
     jid = lq.enqueue(piped.results, spec() | {"code": {"pipeline": "feat/x"}}, requested_by="alice")
     run.work(piped, once=True, check_rig=lambda: READY_RIG)

@@ -32,8 +32,6 @@ import benchmark_control_runner as _bcr
 
 TARGETS = ("local", "runner")
 RIG_STALE_S = 180.0  # the worker refreshes rig.json every minute
-# Settings the form doesn't show: launch sets mc_url to this backend.
-FORM_HIDDEN = frozenset({"mc_url"})
 PACKAGE = "ifssim_launch"
 
 
@@ -162,6 +160,7 @@ def manifest() -> dict[str, Any]:
     except SetupError as e:
         return {"error": str(e), "benchmarks": [], "bags": {}, "missions": [], "tracks": []}
     mf = _launch_module("manifest")
+    sc = _launch_module("schema")
     benches = []
     for b in m.benchmarks.values():
         benches.append(
@@ -181,7 +180,8 @@ def manifest() -> dict[str, Any]:
                         "default": s.default,
                     }
                     for s in b.settings.values()
-                    if s.name not in FORM_HIDDEN
+                    # launch sets these (mc_url: this backend); launch/schema.py marks them
+                    if s.name not in sc.BACKEND_FILLED
                 ],
             }
         )
@@ -198,7 +198,8 @@ def manifest() -> dict[str, Any]:
     pipeline_url = m.repo_urls.get("pipeline") or ""
     return {
         "error": None,
-        # the code a run can pin (spec code:): the pipeline's GitHub repository, for the picker
+        # the code a run can pin (spec code:): each repository's GitHub name, for the picker
+        # (the pipeline on every target; IFSSIM on a runner)
         "repos": {k: {"github": _slug(v)} for k, v in m.repo_urls.items() if _slug(v)},
         "pipeline_repo": _slug(pipeline_url),
         # boards a run can add (spec boards:): firmware {board: {repo, default}}, hil, vhil
@@ -332,16 +333,8 @@ def overrides_dir() -> Path:
 
 
 def _about(text: str) -> str:
-    """A spec file's leading comment, up to its first example or command."""
-    lines = []
-    for line in text.splitlines():
-        if not line.startswith("#"):
-            break
-        line = line[1:].strip()
-        if not line or line.endswith(":") or line.startswith(("python3 ", "--")):
-            break
-        lines.append(line)
-    return " ".join(lines)
+    """A spec file's leading comment (launch/schema.py, which the benchweb's form reads too)."""
+    return _launch_module("schema").preset_about(text)
 
 
 def _spec_files(folder: Path) -> list[tuple[Path, str, Any, str | None]]:
