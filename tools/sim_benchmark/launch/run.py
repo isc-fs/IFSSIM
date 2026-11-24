@@ -4,6 +4,7 @@
     python3 tools/sim_benchmark/run_spec.py my.yaml --set pipeline.slam_node.motion_model=imu
     python3 tools/sim_benchmark/run_spec.py sim-bag extra.yaml --dry-run   # merged spec + commands
     python3 tools/sim_benchmark/run_spec.py --list           # benchmarks, settings, bags, presets
+    python3 tools/sim_benchmark/run_spec.py --print-schema   # the spec's JSON Schema, for the benchweb's form
 
 The same command runs a spec on a laptop, on the bench PC's runner and from
 Mission Control. It runs the checkout it is started in, as it is: the
@@ -211,30 +212,17 @@ ENV_PROGRESS = "BENCH_PROGRESS_FILE"
 ENV_PIPELINE = "BENCH_PIPELINE_DIR"
 
 
-def _pipeline_refspec(ref: str) -> tuple[str | None, str]:
-    """(what to fetch, what was asked) for a code.pipeline value: a PR ("#88", "pr/88"),
-    a commit (7-40 hex: fetched only if it isn't here), or a branch."""
-    import re
-
-    r = ref.strip()
-    pr = re.fullmatch(r"(?:#|pr/|pull/)(\d+)", r)
-    if pr:
-        return f"pull/{pr.group(1)}/head", f"PR #{pr.group(1)}"
-    if re.fullmatch(r"[0-9a-f]{7,40}", r):
-        return None, f"commit {r}"
-    return r, f"branch {r}"
-
-
 def pipeline_worktree(m: mf.Manifest, ref: str, where: Path) -> str:
     """Check the spec's code.pipeline out at ``where`` (a git worktree of the pipeline
     submodule, so provenance reads it like any checkout); returns its commit. A branch,
-    a PR (#88) or a commit; ``branch@commit`` pins a commit and checks it's on the branch.
+    a PR (#88), a commit or a snapshot (refs/bench/<user>/<id>, spec.parse_ref);
+    ``<ref>@commit`` pins a commit and checks it's on the ref.
     The person's own pipeline/ checkout (its branch, its changes) is never touched."""
-    import re
-
     repo = m.repos.get("pipeline")
     if repo is None:
         raise sp.SpecError("code.pipeline: the manifest has no pipeline repository")
+    r_ = sp.parse_ref(ref, "code.pipeline")
+    what = r_.label.removesuffix(f" at {r_.pin}") if r_.pin else r_.label
 
     def git(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
@@ -243,44 +231,28 @@ def pipeline_worktree(m: mf.Manifest, ref: str, where: Path) -> str:
         lines = (r.stderr or r.stdout or "").strip().splitlines()
         return lines[-1] if lines else f"exit {r.returncode}"
 
-    # "branch@commit" / "#88@commit": that commit, which must be on the branch or PR
-    base, _, pinned = ref.strip().rpartition("@")
-    if base and re.fullmatch(r"[0-9a-f]{7,40}", pinned):
-        refspec, what = _pipeline_refspec(base)
-        if refspec is None:
-            raise sp.SpecError(f"code.pipeline: {ref}: before the @ goes a branch or #PR")
-        r = git("fetch", "--quiet", "origin", refspec)
-        if r.returncode != 0:
-            raise sp.SpecError(f"code.pipeline: couldn't fetch {what}: {first(r)}")
-        tip = git("rev-parse", "FETCH_HEAD").stdout.strip()
-        r = git("rev-parse", "--verify", "--quiet", f"{pinned}^{{commit}}")
-        if r.returncode != 0 or git("merge-base", "--is-ancestor", r.stdout.strip(), tip).returncode != 0:
-            raise sp.SpecError(f"code.pipeline: commit {pinned} isn't on {what}")
-        sha = r.stdout.strip()
-        where.parent.mkdir(parents=True, exist_ok=True)
-        r = git("worktree", "add", "--detach", "--force", str(where), sha)
-        if r.returncode != 0:
-            raise sp.SpecError(f"code.pipeline: couldn't check out {pinned}: {first(r)}")
-        return sha
-
-    refspec, what = _pipeline_refspec(ref)
-    if refspec is None:
-        r = git("rev-parse", "--verify", "--quiet", f"{ref.strip()}^{{commit}}")
+    if r_.kind == "commit":
+        r = git("rev-parse", "--verify", "--quiet", f"{r_.value}^{{commit}}")
         if r.returncode != 0:
             git("fetch", "--quiet", "origin")
-            r = git("rev-parse", "--verify", "--quiet", f"{ref.strip()}^{{commit}}")
+            r = git("rev-parse", "--verify", "--quiet", f"{r_.value}^{{commit}}")
         if r.returncode != 0:
             raise sp.SpecError(f"code.pipeline: no {what} in the pipeline repository")
     else:
-        r = git("fetch", "--quiet", "origin", refspec)
+        r = git("fetch", "--quiet", "origin", r_.refspec)
         if r.returncode != 0:
             raise sp.SpecError(f"code.pipeline: couldn't fetch {what}: {first(r)}")
         r = git("rev-parse", "FETCH_HEAD")
+        if r_.pin:  # that commit, which must be on the branch, PR or snapshot
+            tip = r.stdout.strip()
+            r = git("rev-parse", "--verify", "--quiet", f"{r_.pin}^{{commit}}")
+            if r.returncode != 0 or git("merge-base", "--is-ancestor", r.stdout.strip(), tip).returncode != 0:
+                raise sp.SpecError(f"code.pipeline: commit {r_.pin} isn't on {what}")
     sha = r.stdout.strip()
     where.parent.mkdir(parents=True, exist_ok=True)
     r = git("worktree", "add", "--detach", "--force", str(where), sha)
     if r.returncode != 0:
-        raise sp.SpecError(f"code.pipeline: couldn't check out {what}: {first(r)}")
+        raise sp.SpecError(f"code.pipeline: couldn't check out {r_.pin or what}: {first(r)}")
     return sha
 
 
@@ -574,6 +546,12 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="print the jobs, run nothing"
     )
     ap.add_argument("--list", action="store_true", help="what the manifest offers")
+    ap.add_argument(
+        "--print-schema",
+        action="store_true",
+        help="print the run spec's JSON Schema with the form's UI hints (launch/schema.py) and "
+        "run nothing: what the benchweb's form is generated from",
+    )
     ap.add_argument("--stop-on-error", action="store_true")
     local = ap.add_argument_group(
         "the local queue",
@@ -608,6 +586,11 @@ def main(argv: list[str] | None = None) -> int:
         m = m.with_paths(results=Path(a.results).resolve())
     if a.list:
         print_list(m)
+        return 0
+    if a.print_schema:
+        from . import schema as sc
+
+        print(sc.write(m), end="")
         return 0
     from . import localq as lq
     from . import rig as rg
