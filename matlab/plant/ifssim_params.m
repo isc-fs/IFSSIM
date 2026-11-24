@@ -127,13 +127,20 @@ P.Derived.RideFreqHz        = sqrt(P.Derived.WheelRateEach / P.Derived.SprungPer
 % README has the table of why each matters and how to measure it.
 P.Assumed = struct();
 
-% Typical values for a ~275 kg FS car. settings.json has no inertia and UE only
-% scales what its physics asset computes, so there is nothing to read.
-% Izz sets yaw response, which is what the controller is tuned against.
-P.Assumed.Ixx = 30.0;    % kg*m^2   roll     ASSUMPTION
-P.Assumed.Iyy = 110.0;   % kg*m^2   pitch    ASSUMPTION
-P.Assumed.Izz = 125.0;   % kg*m^2   yaw      ASSUMPTION
-P.Assumed.InertiaSource = 'ESTIMATE — typical FS values, not measured for this car';
+% Body inertia: settings.json VehiclePhysics.Inertia [Ixx Iyy Izz] (kg*m^2),
+% which the sim also uses, estimated from the IFS-08 CAD (see its comment
+% there). The fallbacks are typical values for a ~275 kg FS car. Izz sets yaw
+% response, which is what the controller is tuned against.
+P.Assumed.Ixx = 30.0;    % kg*m^2   roll     fallback
+P.Assumed.Iyy = 110.0;   % kg*m^2   pitch    fallback
+P.Assumed.Izz = 125.0;   % kg*m^2   yaw      fallback
+P.Assumed.InertiaSource = 'FALLBACK — typical FS values, not this car';
+if isfield(phys, 'Inertia') && numel(phys.Inertia) == 3
+    P.Assumed.Ixx = double(phys.Inertia(1));
+    P.Assumed.Iyy = double(phys.Inertia(2));
+    P.Assumed.Izz = double(phys.Inertia(3));
+    P.Assumed.InertiaSource = 'settings.json Inertia — ESTIMATED from the IFS-08 CAD, not measured';
+end
 
 % Wheel+tyre. Corroborated two ways: a solid disc at 10 kg / r=0.202 gives 0.204,
 % and IFS_Sim carried 0.215. Sets how fast a wheel spins up or locks.

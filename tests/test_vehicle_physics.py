@@ -25,7 +25,7 @@ EXPECTED = {
     "motor_peak_torque": 230,  # Nm at motor
     "motor_max_power": 80000,  # W
     "gear_ratio": 2.909,
-    "tire_radius": 0.2002,  # m
+    "tire_radius": 0.202,   # m
     "tire_mu": 1.678,
     "CdA": 1.2,            # settings.json (coarse CFD)
     "ClA": 2.8,

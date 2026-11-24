@@ -62,6 +62,13 @@ class FSDSPLUGIN_API UFSDSWheeledVehicleMovementComponent : public UChaosWheeled
 	GENERATED_BODY()
 
 public:
+	/** Wheel i's rest position in the mesh's component space: its bone plus
+	 *  the settings.json placement offset (GetWheelRestingPosition is protected). */
+	FVector GetWheelRestLocation(int32 Index)
+	{
+		return WheelSetups.IsValidIndex(Index) ? GetWheelRestingPosition(WheelSetups[Index]) : FVector::ZeroVector;
+	}
+
 	/**
 	 * Tier 1: push every field that has a public per-field setter from
 	 * Wheels[WheelIndex] into the solver. Safe, public API only.
@@ -141,6 +148,17 @@ public:
 	 */
 	virtual void OnCreatePhysicsState() override;
 
+	/**
+	 * Body inertia from settings.json (VehiclePhysics.Inertia, kg*m^2) when it
+	 * is set. Chaos otherwise scales whatever the physics asset's shapes give
+	 * at Mass by InertiaTensorScale, so changing the car mesh changed the
+	 * handling: the IFS-08's chassis box gave a yaw inertia of 231 kg*m^2
+	 * against the Technion car's hull's 130. This picks the InertiaTensorScale
+	 * that lands on the configured values, so Chaos's own UpdateMassProperties
+	 * (also re-run on every mass recalculation) produces them.
+	 */
+	virtual void SetupVehicleMass() override;
+
 private:
 	/**
 	 * Sets each wheel's AdditionalOffset in X and Y so the wheel sits where
@@ -158,4 +176,14 @@ private:
 
 	/** Offsets from the last placement, so a rebuild only logs when they change. */
 	TArray<FVector> LastPlacedOffsets;
+
+	/** Set once SetupVehicleMass has derived InertiaTensorScale from the
+	 *  physics asset's own tensor. Later calls can find the body already at
+	 *  the scaled tensor, so the scale is not derived again. */
+	bool bInertiaScaleFromSettings = false;
+
+	/** settings.json Inertia was applied (the physics asset's principal axes
+	 *  lie along the car's), and the principal moments it should give, kg*cm^2. */
+	bool bInertiaFromSettingsApplied = false;
+	FVector InertiaExpected = FVector::ZeroVector;
 };

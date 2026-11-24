@@ -199,8 +199,40 @@ public:
 	 *  ground. The plant knows where its wheels are; this puts them there. */
 	void PoseWheelsFromPlant(float DeltaTime);
 
-	/** Build the plant-driven wheel meshes and hide the skeletal ones. */
+	/** Build the wheel meshes (the car mesh's own, or cylinders) and hide the skeletal ones. */
 	void CreatePlantWheels();
+
+	/** Pose the wheel meshes from Chaos's wheels: what the engine's wheel
+	 *  controller anim node does to wheel bones. Only for a car mesh from
+	 *  settings.json, which has no anim blueprint and no wheel geometry. */
+	void PoseWheelsFromChaos();
+
+	/** The car mesh comes from settings.json (FFSDSVehicleMesh), not the Technion fallback. */
+	bool bCustomVehicleMesh = false;
+
+	/** Raise or lower the centre of mass to settings.json CoGHeight above the
+	 *  ground, once the car has settled on its wheels (Chaos mode). Where the
+	 *  ground is in the body frame depends on the car mesh (the IFS-08's origin
+	 *  is on the ground, the Technion car's CoM sat 0.99 m up), so it is
+	 *  measured from Chaos's own wheels rather than assumed. */
+	void PlaceCoGHeight();
+
+	/** PlaceCoGHeight has run (it runs once; the override then persists
+	 *  through physics-state rebuilds and resets). */
+	bool bCoGHeightPlaced = false;
+
+	/** Consecutive ticks the car has been at rest on all four wheels. */
+	int32 CoGSettleTicks = 0;
+
+	/** The car mesh's wheel and corner meshes, FL/FR/RL/RR; null = none. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMesh>> ArtWheelMeshes;
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMesh>> ArtCornerMeshes;
+
+	/** Uprights and calipers: steer and travel with the wheel, do not spin. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> ArtCorners;
 
 	/** Wheels drawn from the plant, in FL/FR/RL/RR order.
 	 *

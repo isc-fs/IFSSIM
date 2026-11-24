@@ -334,6 +334,79 @@ void UFSDSWheeledVehicleMovementComponent::OnCreatePhysicsState()
 	VerifyWheelPlacement();
 }
 
+void UFSDSWheeledVehicleMovementComponent::SetupVehicleMass()
+{
+	const FFSDSVehicleSettings* V = FFSDSSettings::Get().GetDefaultVehicle();
+	FBodyInstance* Body = UpdatedPrimitive ? UpdatedPrimitive->GetBodyInstance() : nullptr;
+	if (!bInertiaScaleFromSettings && V && Body && V->Physics.Inertia.GetMin() > 0.f && Body->GetBodyMass() > 0.f)
+	{
+		// What UpdateMassProperties starts from: the shapes' tensor (UE units,
+		// kg*cm^2) at the configured mass.
+		const FVector Shapes = Body->GetBodyInertiaTensor() * (Mass / Body->GetBodyMass());
+		const FVector Target = V->Physics.Inertia * 1e4;   // kg*m^2 -> kg*cm^2
+
+		// Chaos scales the body's PRINCIPAL moments (its mass space), not
+		// roll/pitch/yaw. They are the same moments only when each principal
+		// axis lies along one of the car's axes, so match them up (in any
+		// order) and give up when one doesn't: scaling a tilted tensor per
+		// axis gives neither the target nor the asset's own (the Technion
+		// car's principal axes are not the car's: per-axis scaling left it at
+		// 31/75/130 for a target of 33/154/130, and it failed the turning checks).
+		const FQuat R = Body->GetMassSpaceLocal().GetRotation();
+		const FVector Axes[3] = { R.GetAxisX(), R.GetAxisY(), R.GetAxisZ() };
+		FVector Scale(1.0);
+		FVector Expected(0.0);
+		bool bAligned = Shapes.GetMin() > 0.f;
+		int32 Used = 0;
+		for (int32 j = 0; j < 3 && bAligned; j++)
+		{
+			const FVector A = Axes[j].GetAbs();
+			const int32 CarAxis = (A.X >= A.Y && A.X >= A.Z) ? 0 : (A.Y >= A.Z ? 1 : 2);
+			if (A[CarAxis] < 0.99 || (Used & (1 << CarAxis)))   // within ~8 degrees
+			{
+				bAligned = false;
+				break;
+			}
+			Used |= 1 << CarAxis;
+			Scale[j] = Target[CarAxis] / Shapes[j];
+			Expected[j] = Target[CarAxis];
+		}
+		bInertiaScaleFromSettings = true;   // decided once, applied or not
+		if (bAligned)
+		{
+			InertiaTensorScale = Scale;
+			bInertiaFromSettingsApplied = true;
+			InertiaExpected = Expected;
+			UE_LOG(LogTemp, Log,
+				TEXT("FSDS: body inertia from settings.json (%.1f, %.1f, %.1f) kg*m^2; the physics asset gives (%.1f, %.1f, %.1f) about its principal axes, scale (%.3f, %.3f, %.3f)"),
+				V->Physics.Inertia.X, V->Physics.Inertia.Y, V->Physics.Inertia.Z,
+				Shapes.X * 1e-4, Shapes.Y * 1e-4, Shapes.Z * 1e-4,
+				InertiaTensorScale.X, InertiaTensorScale.Y, InertiaTensorScale.Z);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("FSDS: settings.json Inertia NOT applied: the physics asset's principal axes are not along the car's ")
+				TEXT("(mass-space rotation %s), so roll/pitch/yaw cannot be set axis by axis; keeping the asset's tensor x (%.2f, %.2f, %.2f)"),
+				*R.Rotator().ToString(), InertiaTensorScale.X, InertiaTensorScale.Y, InertiaTensorScale.Z);
+		}
+	}
+	Super::SetupVehicleMass();
+
+	if (bInertiaFromSettingsApplied && Body)
+	{
+		const FVector Got = Body->GetBodyInertiaTensor();
+		const FVector Err = (Got - InertiaExpected) / InertiaExpected;
+		if (Err.GetAbs().GetMax() > 0.02)
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("FSDS: body inertia is (%.1f, %.1f, %.1f) kg*m^2 about its principal axes, not settings.json's (%.1f, %.1f, %.1f)"),
+				Got.X * 1e-4, Got.Y * 1e-4, Got.Z * 1e-4,
+				InertiaExpected.X * 1e-4, InertiaExpected.Y * 1e-4, InertiaExpected.Z * 1e-4);
+		}
+	}
+}
+
 void UFSDSWheeledVehicleMovementComponent::PlaceWheelsFromSettings()
 {
 	TArray<FVector> Offsets;
