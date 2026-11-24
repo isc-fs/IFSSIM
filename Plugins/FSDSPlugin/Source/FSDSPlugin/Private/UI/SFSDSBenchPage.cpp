@@ -5,6 +5,7 @@
 
 #include "GenericPlatform/GenericPlatformHttp.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/FileHelper.h"
@@ -58,26 +59,6 @@ namespace BenchUi
 	const TCHAR* const PipelineOnSetting = TEXT("pipeline_on");
 	const TCHAR* const OnThisPc = TEXT("bench_pc");
 	const TCHAR* const OnPanda = TEXT("latte_panda");
-
-	/** The settings a person picks, in words; the rest keep bench.yaml's help. */
-	struct FNice { const TCHAR* Name; const TCHAR* Label; const TCHAR* Help; };
-	const FNice Nice[] = {
-		{ TEXT("laps"), TEXT("Laps"), TEXT("For every mission. Empty: each mission's own.") },
-		{ TEXT("timeout_s"), TEXT("Time limit (s)"), TEXT("Per run, for every mission. Empty: each mission's own.") },
-		{ TEXT("stack"), TEXT("Pipeline stack"), TEXT("Its own: started from the code being tested. The running one: the stack that's already up.") },
-		{ TEXT("replace_stack"), TEXT("Stop the running stack"), TEXT("Stop a running pipeline stack for the benchmark, and start it again after.") },
-		{ TEXT("panda_start"), TEXT("LattePanda: start"), TEXT("The command that starts the pipeline on the LattePanda.") },
-		{ TEXT("panda_stop"), TEXT("LattePanda: stop"), TEXT("The command that stops it.") },
-		{ TEXT("panda_sha"), TEXT("LattePanda: commit"), TEXT("The command that prints the pipeline commit there.") },
-		{ TEXT("gt_range_m"), TEXT("Ground truth range (m)"), TEXT("Cones within this distance count.") },
-		{ TEXT("gt_hfov_deg"), TEXT("Ground truth view (deg)"), TEXT("Half the horizontal field of view.") },
-		{ TEXT("gt_min_range_m"), TEXT("Ground truth from (m)"), TEXT("Cones closer than this are left out.") },
-		{ TEXT("gt_scan_period_ms"), TEXT("LiDAR period (ms)"), TEXT("Used to time the ground-truth cones.") },
-		{ TEXT("max_frames"), TEXT("First frames only"), TEXT("Perception on the first N LiDAR frames only.") },
-		{ TEXT("profile"), TEXT("Time each stage"), TEXT("Perception's per-stage timings.") },
-		{ TEXT("strategy"), TEXT("SLAM strategy"), TEXT("Empty: trackdrive.") },
-		{ TEXT("resynth_odom"), TEXT("Rebuild odometry"), TEXT("SLAM rebuilds /odom from the bag's sensors.") },
-	};
 
 	FSlateFontInfo Font(int32 Size, const TCHAR* Weight = TEXT("Regular"))
 	{
@@ -186,29 +167,137 @@ namespace BenchUi
 		return S;
 	}
 
-	/** A setting's label and help: in words when Nice knows it, else bench.yaml's. */
-	void Words(const FString& Name, const FString& ManifestHelp, FString& Label, FString& Help)
+	/** A run spec field this page sets, and the words it shows for it. */
+	struct FSpecField
 	{
-		for (const FNice& N : Nice)
+		FString Path, Tab, Label, Help, Needs;
+		TArray<FString> Targets;
+		TArray<TPair<FString, FString>> Options;   // value, label
+
+		FString Option(const FString& Value) const
 		{
-			if (Name == N.Name) { Label = N.Label; Help = N.Help; return; }
+			for (const TPair<FString, FString>& O : Options) if (O.Key == Value) return O.Value;
+			return Value;
 		}
-		Label = Human(Name);
-		Help = ManifestHelp;
+	};
+
+	struct FRegistry
+	{
+		TArray<FSpecField> Fields;
+		TArray<TArray<FString>> Segments;   // each field's path, split on '.'
+		TMap<FString, TPair<FString, FString>> Benchmarks;   // name: title, about
+	};
+
+	// The fields this page sets: SFSDSBenchPageFields.inl, a JSON document that
+	// tools/sim_benchmark/tests/test_schema.py checks against run_spec.py --print-schema
+	// (the benchweb's form), both ways. A field drawn here must be registered there (SpecField).
+	const char* const FieldsJson =
+#include "UI/SFSDSBenchPageFields.inl"
+		;
+
+	const FRegistry& Registry()
+	{
+		static const FRegistry R = []()
+		{
+			FRegistry Out;
+			TSharedPtr<FJsonObject> Doc;
+			if (!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(FString(UTF8_TO_TCHAR(FieldsJson))), Doc) || !Doc.IsValid())
+			{
+				UE_LOG(LogTemp, Error, TEXT("FSDS Benchmarks: SFSDSBenchPageFields.inl isn't valid JSON; the page shows setting names"));
+				return Out;
+			}
+			const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+			if (Doc->TryGetArrayField(TEXT("fields"), List))
+			{
+				for (const TSharedPtr<FJsonValue>& V : *List)
+				{
+					const TSharedPtr<FJsonObject>* O = nullptr;
+					if (!V.IsValid() || !V->TryGetObject(O)) continue;
+					FSpecField F;
+					(*O)->TryGetStringField(TEXT("path"), F.Path);
+					(*O)->TryGetStringField(TEXT("tab"), F.Tab);
+					(*O)->TryGetStringField(TEXT("label"), F.Label);
+					(*O)->TryGetStringField(TEXT("help"), F.Help);
+					(*O)->TryGetStringField(TEXT("needs"), F.Needs);
+					(*O)->TryGetStringArrayField(TEXT("targets"), F.Targets);
+					const TSharedPtr<FJsonObject>* Opts = nullptr;
+					if ((*O)->TryGetObjectField(TEXT("options"), Opts))
+					{
+						for (const auto& KV : (*Opts)->Values) F.Options.Emplace(FString(*KV.Key), KV.Value.IsValid() ? KV.Value->AsString() : FString());
+					}
+					TArray<FString> Seg;
+					F.Path.ParseIntoArray(Seg, TEXT("."));
+					Out.Segments.Add(MoveTemp(Seg));
+					Out.Fields.Add(MoveTemp(F));
+				}
+			}
+			const TSharedPtr<FJsonObject>* Benches = nullptr;
+			if (Doc->TryGetObjectField(TEXT("benchmarks"), Benches))
+			{
+				for (const auto& KV : (*Benches)->Values)
+				{
+					const TArray<TSharedPtr<FJsonValue>>* Pair = nullptr;
+					if (KV.Value.IsValid() && KV.Value->TryGetArray(Pair) && Pair->Num() == 2)
+					{
+						Out.Benchmarks.Add(FString(*KV.Key), TPair<FString, FString>((*Pair)[0]->AsString(), (*Pair)[1]->AsString()));
+					}
+				}
+			}
+			return Out;
+		}();
+		return R;
+	}
+
+	/** The registered field for a spec path ("benchmarks.missions.settings.laps"): the most
+	 *  specific entry ("*" matches any key, "x_*" a prefix). Unregistered: empty, and a warning. */
+	const FSpecField& SpecField(const FString& Path)
+	{
+		static const FSpecField None;
+		static TSet<FString> Warned;
+		TArray<FString> P;
+		Path.ParseIntoArray(P, TEXT("."));
+		const FRegistry& R = Registry();
+		const FSpecField* Best = nullptr;
+		int32 BestScore = -1;
+		for (int32 I = 0; I < R.Fields.Num(); ++I)
+		{
+			const TArray<FString>& Q = R.Segments[I];
+			if (Q.Num() != P.Num()) continue;
+			int32 Score = 0;
+			bool bOk = true;
+			for (int32 J = 0; J < Q.Num() && bOk; ++J)
+			{
+				const bool bAny = Q[J] == TEXT("*"), bPrefix = !bAny && Q[J].EndsWith(TEXT("*"));
+				bOk = bAny || (bPrefix ? P[J].StartsWith(Q[J].LeftChop(1)) : Q[J] == P[J]);
+				Score += bAny ? 0 : bPrefix ? 1 : 2;
+			}
+			if (bOk && Score > BestScore) { Best = &R.Fields[I]; BestScore = Score; }
+		}
+		if (Best) return *Best;
+		if (!Warned.Contains(Path))
+		{
+			Warned.Add(Path);
+			UE_LOG(LogTemp, Warning, TEXT("FSDS Benchmarks: the page sets %s, which SFSDSBenchPageFields.inl doesn't register: "
+				"add it there and to run_spec.py's schema (tools/sim_benchmark/launch/schema.py)"), *Path);
+		}
+		return None;
+	}
+
+	/** A setting's label and help: the registry's words, else its name and bench.yaml's help. */
+	void Words(const FString& Bench, const FString& Name, const FString& ManifestHelp, FString& Label, FString& Help)
+	{
+		const FSpecField& F = SpecField(FString::Printf(TEXT("benchmarks.%s.settings.%s"), *Bench, *Name));
+		Label = F.Label.IsEmpty() ? Human(Name) : F.Label;
+		Help = F.Help.IsEmpty() ? ManifestHelp : F.Help;
 	}
 
 	/** The benchmark as a choice of what to test. */
 	void BenchWords(const FString& Name, FString& Title, FString& About)
 	{
-		if (Name == TEXT("missions"))
+		if (const TPair<FString, FString>* W = Registry().Benchmarks.Find(Name))
 		{
-			Title = TEXT("Drive the missions");
-			About = TEXT("The pipeline drives the sim through the missions, scored by the referee. The sim and Mission Control must be running.");
-		}
-		else if (Name == TEXT("sim_bag"))
-		{
-			Title = TEXT("Replay recorded bags");
-			About = TEXT("Perception and SLAM run offline on recorded simulator bags, scored against the sim's ground truth.");
+			Title = W->Key;
+			About = W->Value;
 		}
 	}
 
@@ -227,7 +316,9 @@ namespace BenchUi
 		if (E.FindChar(TEXT(':'), Colon) && Colon > 0)
 		{
 			FString Label, Help;
-			Words(E.Left(Colon), FString(), Label, Help);
+			const FString Key = E.Left(Colon);
+			if (Key.Contains(TEXT("."))) Label = Human(Key);   // boards.system, code.pipeline: not a setting
+			else Words(TEXT("*"), Key, FString(), Label, Help);
 			E = Label + E.RightChop(Colon);
 		}
 		return E;
@@ -313,6 +404,50 @@ namespace BenchUi
 		TArray<TSharedPtr<FJsonValue>> J;
 		for (const FString& X : Values) J.Add(MakeShared<FJsonValueString>(X));
 		O->SetArrayField(Key, J);
+	}
+
+	// Starts Command, detached, in a login shell in the repo (its paths relative to the repo).
+	// On Windows in WSL's default distro: the benchmarks need Linux, and WSL sees the repo
+	// under /mnt and Docker Desktop's engine. The script goes in results/.bench there, where
+	// wsl.exe --cd (which takes the Windows path) finds it.
+	bool LaunchInRepo(const FString& Repo, const TCHAR* Prefix, const FString& Command, FString& Error)
+	{
+		const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
+		IFileManager::Get().MakeDirectory(*Bench, true);
+#if PLATFORM_WINDOWS
+		const FString Exe = FPaths::Combine(FPlatformMisc::GetEnvironmentVariable(TEXT("SystemRoot")), TEXT("System32/wsl.exe"));
+		if (!FPaths::FileExists(Exe))
+		{
+			Error = TEXT("WSL isn't installed, and the benchmarks run in it: install it (wsl --install) with Ubuntu, then try again.");
+			return false;
+		}
+		const FString Name = FString(Prefix) + TEXT("windows.sh");
+		const FString Script = FPaths::Combine(Bench, Name);
+		const FString Body = TEXT("cd ../../../.. || exit 1\n") + Command + TEXT("\n");
+		const FString Args = FString::Printf(TEXT("--cd \"%s\" -e bash -l %s"), *FPaths::ConvertRelativePathToFull(Bench), *Name);
+#else
+		// Through a script, as FFSDSStackStarter::Run does: CreateProc on Linux ignores the
+		// working folder and splits its arguments on spaces.
+		auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
+		const FString Exe = TEXT("/bin/bash");
+		const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), Prefix, TEXT(".sh"));
+		const FString Body = FString::Printf(TEXT("cd %s || exit 1\n%s\n"), *Quote(Repo), *Command);
+		const FString Args = FString::Printf(TEXT("-l \"%s\""), *Script);
+#endif
+		if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		{
+			Error = FString::Printf(TEXT("Couldn't write %s."), *Script);
+			return false;
+		}
+		FProcHandle H = FPlatformProcess::CreateProc(*Exe, *Args,
+			/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
+		if (!H.IsValid())
+		{
+			Error = FString::Printf(TEXT("Couldn't start %s."), *Exe);
+			return false;
+		}
+		FPlatformProcess::CloseProc(H);
+		return true;
 	}
 }
 
@@ -521,11 +656,7 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 								if (bWorkerAlive && bWorkerStopping) return LOCTEXT("WorkerStopping", "Stopping once no spec is running.");
 								if (bWorkerAlive) return LOCTEXT("Worker", "Worker running: queued specs run one at a time.");
 								if (FPlatformTime::Seconds() < WorkerStartingUntil) return LOCTEXT("WorkerStarting", "Starting the worker...");
-#if PLATFORM_WINDOWS
-								return LOCTEXT("NoWorkerWin", "No worker: queued specs wait. Start one from WSL: python3 tools/sim_benchmark/run_spec.py --work");
-#else
 								return LOCTEXT("NoWorker", "No worker: queued specs wait until you start it.");
-#endif
 							})
 							.ToolTipText_Lambda([this]()
 							{
@@ -548,11 +679,7 @@ void SFSDSBenchPage::Construct(const FArguments& InArgs)
 								{
 									if (!bQueueKnown || !Client.IsValid()) return false;
 									if (bWorkerAlive) return !bWorkerStopping;
-#if PLATFORM_WINDOWS
-									return false;
-#else
 									return FPlatformTime::Seconds() >= WorkerStartingUntil && !RepoDir().IsEmpty();
-#endif
 								}))
 						]
 					]
@@ -825,14 +952,14 @@ void SFSDSBenchPage::RebuildForm()
 				[this, N = B->Name]() { PickBench(N); }, FText::FromString(About), true, 12)
 		];
 	}
-	FormBox->AddSlot().AutoHeight().Padding(0, 16, 0, 6) [ BenchUi::Heading(LOCTEXT("What", "WHAT TO TEST")) ];
+	FormBox->AddSlot().AutoHeight().Padding(0, 16, 0, 6) [ BenchUi::Heading(FText::FromString(BenchUi::SpecField(TEXT("benchmarks")).Label.ToUpper())) ];
 	FormBox->AddSlot().AutoHeight() [ What ];
 
 	const FBench* Shown = nullptr;
 	for (const FBench* B : Order) if (HasBench(B->Name)) { Shown = B; break; }
 	if (!Shown)
 	{
-		FormBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ BenchUi::Small(LOCTEXT("PickOne", "Pick one, or start from a preset above.")) ];
+		FormBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ BenchUi::Small(FText::FromString(BenchUi::SpecField(TEXT("benchmarks")).Help)) ];
 		return;
 	}
 	{
@@ -847,6 +974,7 @@ void SFSDSBenchPage::AddBenchRows(const FBench& B)
 {
 	auto Add = [this](TSharedRef<SWidget> W) { FormBox->AddSlot().AutoHeight().Padding(0, 8, 0, 0) [ W ]; };
 	TSet<FString> Done;   // settings shown above More settings
+	auto F = [&B](const FString& Rest) -> const BenchUi::FSpecField& { return BenchUi::SpecField(TEXT("benchmarks.") + B.Name + TEXT(".") + Rest); };
 
 	if (B.Name == BenchUi::Missions)
 	{
@@ -862,13 +990,13 @@ void SFSDSBenchPage::AddBenchRows(const FBench& B)
 		}
 		if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == TEXT("repeats"); }))
 		{
-			Add(MakeCountRow(B, TEXT("repeats"), TEXT("Runs per track"), TEXT("Each run is scored on its own; run i uses seed i.")));
+			Add(MakeCountRow(B, TEXT("repeats"), F(TEXT("settings.repeats")).Label, F(TEXT("settings.repeats")).Help));
 			Done.Add(TEXT("repeats"));
 		}
 		if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == TEXT("start_noise"); }))
 		{
 			const FString N = B.Name;
-			Add(BenchUi::Row(TEXT("Vary the start"), TEXT("Start each run from a slightly different, seeded position."),
+			Add(BenchUi::Row(F(TEXT("settings.start_noise")).Label, F(TEXT("settings.start_noise")).Help,
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
 				[
@@ -887,7 +1015,7 @@ void SFSDSBenchPage::AddBenchRows(const FBench& B)
 	{
 		if (!B.Bags.IsEmpty()) Add(MakeBagsRow(B));
 		if (B.Parts.Num() > 0) Add(MakePartsRow(B));
-		Add(MakeCountRow(B, FString(), TEXT("Runs per bag"), TEXT("Each run is a job of its own.")));
+		Add(MakeCountRow(B, FString(), F(TEXT("repeats")).Label, F(TEXT("repeats")).Help));
 	}
 	if (B.Settings.ContainsByPredicate([](const FSetting& S) { return S.Name == BenchUi::PipelineOnSetting; }))
 	{
@@ -895,7 +1023,7 @@ void SFSDSBenchPage::AddBenchRows(const FBench& B)
 	}
 	Add(MakeOverridesRow());
 
-	Add(BenchUi::Row(TEXT("Name"), TEXT("How it shows in the queue."),
+	Add(BenchUi::Row(BenchUi::SpecField(TEXT("name")).Label, BenchUi::SpecField(TEXT("name")).Help,
 		SNew(SBox).HAlign(HAlign_Left)
 		[
 			SNew(SEditableTextBox)
@@ -924,7 +1052,7 @@ void SFSDSBenchPage::AddBenchRows(const FBench& B)
 	for (const FSetting* S : Rest)
 	{
 		// The LattePanda's commands matter only when the pipeline runs there.
-		if (S->Name.StartsWith(TEXT("panda_")))
+		if (F(TEXT("settings.") + S->Name).Needs == TEXT("latte_panda"))
 		{
 			Add(SNew(SBox)
 				.Visibility_Lambda([this]() { return PipelineOn() == BenchUi::OnPanda ? EVisibility::Visible : EVisibility::Collapsed; })
@@ -935,7 +1063,7 @@ void SFSDSBenchPage::AddBenchRows(const FBench& B)
 	}
 	if (B.Name == BenchUi::Missions)
 	{
-		Add(MakeCountRow(B, FString(), TEXT("Repeat everything"), TEXT("The whole benchmark again, each time a job of its own.")));
+		Add(MakeCountRow(B, FString(), F(TEXT("repeats")).Label, F(TEXT("repeats")).Help));
 	}
 }
 
@@ -963,7 +1091,8 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeMissionsRow(const FBench& B)
 				})
 		];
 	}
-	return BenchUi::Row(TEXT("Missions"), TEXT("All lit: every mission."), W);
+	const BenchUi::FSpecField& F = BenchUi::SpecField(TEXT("benchmarks.") + N + TEXT(".settings.missions"));
+	return BenchUi::Row(F.Label, F.Help, W);
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakeTracksRow(const FBench& B)
@@ -984,10 +1113,11 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeTracksRow(const FBench& B)
 		}
 		return FText::FromString(FString::Join(Lines, TEXT("\n")));
 	};
+	const BenchUi::FSpecField& F = BenchUi::SpecField(TEXT("benchmarks.") + N + TEXT(".settings.tracks"));
 	const bool bChosen = CsvSetting(N, TEXT("tracks")).Num() > 0;
 	if (!bChosen && !bTracksOpen)
 	{
-		return BenchUi::Row(TEXT("Tracks"), FString(),
+		return BenchUi::Row(F.Label, FString(),
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -1022,7 +1152,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeTracksRow(const FBench& B)
 				})
 		];
 	}
-	return BenchUi::Row(TEXT("Tracks"), TEXT("The tracks picked here replace every mission's own: each picked mission runs on all of them."),
+	return BenchUi::Row(F.Label, F.Help,
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight() [ W ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
@@ -1038,9 +1168,10 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBagsRow(const FBench& B)
 {
 	const FString N = B.Name;
 	const TArray<FString>* Have = BagsByKind.Find(B.Bags);
+	const BenchUi::FSpecField& F = BenchUi::SpecField(TEXT("benchmarks.") + N + TEXT(".bags"));
 	if (!Have || Have->Num() == 0)
 	{
-		return BenchUi::Row(TEXT("Bags"), FString(), BenchUi::Small(
+		return BenchUi::Row(F.Label, FString(), BenchUi::Small(
 			LOCTEXT("NoBags", "No recorded bags yet: record a run with Record a bag (Drive, Autonomous), or tools/sim_benchmark/capture_benchmark_bag.py."),
 			BenchUi::Bad));
 	}
@@ -1069,7 +1200,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBagsRow(const FBench& B)
 				})
 		];
 	}
-	return BenchUi::Row(TEXT("Bags"), TEXT("Pick one or more, or all."), W);
+	return BenchUi::Row(F.Label, F.Help, W);
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakePartsRow(const FBench& B)
@@ -1095,7 +1226,8 @@ TSharedRef<SWidget> SFSDSBenchPage::MakePartsRow(const FBench& B)
 				})
 		];
 	}
-	return BenchUi::Row(TEXT("Measure"), TEXT("All lit: all of them."), W);
+	const BenchUi::FSpecField& F = BenchUi::SpecField(TEXT("benchmarks.") + N + TEXT(".only"));
+	return BenchUi::Row(F.Label, F.Help, W);
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakeCountRow(const FBench& B, const FString& Setting, const FString& Label, const FString& Help)
@@ -1131,7 +1263,9 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeCountRow(const FBench& B, const FString&
 
 TSharedRef<SWidget> SFSDSBenchPage::MakePipelineChoice()
 {
-	auto Where = [this](const FString& Choice, const FString& Part, const FText& Label)
+	const BenchUi::FSpecField& On = BenchUi::SpecField(FString::Printf(TEXT("benchmarks.*.settings.%s"), BenchUi::PipelineOnSetting));
+	const FText Tip = FText::FromString(On.Label + TEXT(". ") + On.Help);
+	auto Where = [this, Tip](const FString& Choice, const FString& Part, const FText& Label)
 	{
 		return BenchUi::Choice(
 			TAttribute<FText>::CreateLambda([this, Part, Label]()
@@ -1145,12 +1279,12 @@ TSharedRef<SWidget> SFSDSBenchPage::MakePipelineChoice()
 			}),
 			[this, Choice]() { return PipelineOn() == Choice; },
 			[this, Choice]() { SetPipelineOn(Choice); },
-			LOCTEXT("WhereTip", "Where the pipeline runs. Not now: the run waits in the queue until it's free."),
+			Tip,
 			TAttribute<bool>::CreateLambda([this, Part, Choice]() { return PipelineOn() == Choice || BoxState(Part) != EBox::Never; }));
 	};
 	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Where(BenchUi::OnThisPc, TEXT("pipeline_bench_pc"), LOCTEXT("OnPc", "This PC")) ]
-		+ SHorizontalBox::Slot().AutoWidth() [ Where(BenchUi::OnPanda, TEXT("latte_panda"), LOCTEXT("OnPanda", "LattePanda")) ];
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Where(BenchUi::OnThisPc, TEXT("pipeline_bench_pc"), FText::FromString(On.Option(BenchUi::OnThisPc))) ]
+		+ SHorizontalBox::Slot().AutoWidth() [ Where(BenchUi::OnPanda, TEXT("latte_panda"), FText::FromString(On.Option(BenchUi::OnPanda))) ];
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
@@ -1169,10 +1303,39 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
 		};
 	};
 	TSharedRef<SWrapBox> Boxes = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.f, 8.f));
+
+	// The sim: this one on Local; on a runner, a branch, PR, commit or snapshot it checks out.
+	const BenchUi::FSpecField& SimCode = BenchUi::SpecField(TEXT("code.ifssim"));
+	auto SimVersion = [this, Own = VersionOf(TEXT("ifssim"), TEXT("IFSSIM"))]()
+	{
+		const FString Ref = CodeRef(TEXT("ifssim"));
+		if (Ref.IsEmpty()) return Own();
+		return bRunner ? FString::Printf(TEXT("IFSSIM %s, checked out on the runner"), *Ref)
+			: FString::Printf(TEXT("%s (IFSSIM %s is for a runner: a local run uses this sim)"), *Own(), *Ref);
+	};
+	TSharedRef<SWidget> SimExtra = SNew(SBox)
+		.Visibility_Lambda([this]() { return bRunner ? EVisibility::Visible : EVisibility::Collapsed; })
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 6, 0)
+			[
+				BenchUi::Button(LOCTEXT("ChangeSimVersion", "Change version"), BenchUi::PlainBtn, [this, Title = SimCode.Label]()
+				{
+					OpenPicker(Title, IfssimRepo, CodeRef(TEXT("ifssim")), [this](const FString& Ref) { SetCodeRef(TEXT("ifssim"), Ref); });
+				}, TAttribute<bool>::CreateLambda([this]() { return !IfssimRepo.IsEmpty(); }))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).Visibility_Lambda([this]() { return CodeRef(TEXT("ifssim")).IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+				[
+					BenchUi::Button(LOCTEXT("UseRunnerSim", "The runner's default"), BenchUi::PlainBtn, [this]() { SetCodeRef(TEXT("ifssim"), FString()); })
+				]
+			]
+		];
 	Boxes->AddSlot()
 	[
-		MakeComponent(LOCTEXT("CompSim", "Sim"), []() { return FString(TEXT("sim")); }, VersionOf(TEXT("ifssim"), TEXT("IFSSIM")), nullptr,
-			LOCTEXT("SimVersionNote", "A local run uses this sim, as it is. Other versions come with the bench PC runner."))
+		MakeComponent(LOCTEXT("CompSim", "Sim"), []() { return FString(TEXT("sim")); }, SimVersion, SimExtra,
+			FText::FromString(SimCode.Help))
 	];
 
 	// The pipeline: where it runs, and which commit.
@@ -1185,7 +1348,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeComponents()
 		[
 			BenchUi::Button(LOCTEXT("ChangeVersion", "Change version"), BenchUi::PlainBtn, [this]()
 			{
-				OpenPicker(TEXT("Pipeline (IFS09)"), PipelineRepo, CodeRef(TEXT("pipeline")), [this](const FString& Ref) { SetCodeRef(TEXT("pipeline"), Ref); });
+				OpenPicker(BenchUi::SpecField(TEXT("code.pipeline")).Label, PipelineRepo, CodeRef(TEXT("pipeline")), [this](const FString& Ref) { SetCodeRef(TEXT("pipeline"), Ref); });
 			}, TAttribute<bool>::CreateLambda([this]() { return !PipelineRepo.IsEmpty(); }))
 		]
 		+ SHorizontalBox::Slot().AutoWidth()
@@ -1369,16 +1532,17 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeOverridesRow()
 		];
 	}
 	W->AddSlot() [ Open ];
-	return BenchUi::Row(TEXT("Parameter changes"),
+	const BenchUi::FSpecField& F = BenchUi::SpecField(TEXT("pipeline"));
+	return BenchUi::Row(F.Label,
 		Overrides.Num() == 0 ? TEXT("Files of pipeline parameter changes (YAML, a pipeline: section) go in the overrides folder; Refresh shows them.")
-			: TEXT("Files of pipeline parameter changes, over the preset's own; a file picked later wins."),
+			: F.Help,
 		W);
 }
 
 TSharedRef<SWidget> SFSDSBenchPage::MakeSettingRow(const FBench& B, const FSetting& S)
 {
 	FString Label, Help;
-	BenchUi::Words(S.Name, S.Help, Label, Help);
+	BenchUi::Words(B.Name, S.Name, S.Help, Label, Help);
 	const FString N = B.Name, Key = S.Name;
 
 	// Yes, no, or the benchmark's default.
@@ -1406,13 +1570,15 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeSettingRow(const FBench& B, const FSetti
 		return BenchUi::Row(Label, Help, H);
 	}
 
-	// One of a few values: the manifest's choices, or the stack's.
+	// One of a few values: the manifest's choices, or the registry's (the stack's).
 	TArray<TPair<FString, FText>> Choices;
 	for (const FString& C : S.Choices) Choices.Emplace(C, FText::FromString(C));
-	if (S.Name == TEXT("stack") && Choices.Num() == 0)
+	if (Choices.Num() == 0)
 	{
-		Choices.Emplace(TEXT("own"), LOCTEXT("StackOwn", "Its own"));
-		Choices.Emplace(TEXT("running"), LOCTEXT("StackRunning", "The running one"));
+		for (const TPair<FString, FString>& O : BenchUi::SpecField(TEXT("benchmarks.") + N + TEXT(".settings.") + Key).Options)
+		{
+			Choices.Emplace(O.Key, FText::FromString(O.Value));
+		}
 	}
 	if (Choices.Num() > 0)
 	{
@@ -1533,6 +1699,7 @@ TArray<FString> SFSDSBenchPage::BoardsInRun() const
 TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 {
 	TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
+	const BenchUi::FSpecField& ModeField = BenchUi::SpecField(TEXT("boards.mode"));
 	// Like the pipeline's LattePanda: a mode this machine can't have isn't selectable
 	// (the rig check's hil and vhil parts), unless the spec already has it.
 	auto Mode = [this](const FString& M, const FText& Label)
@@ -1557,8 +1724,8 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 	[
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(FString(), LOCTEXT("BoardsNone", "None")) ]
-		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(TEXT("hil"), LOCTEXT("BoardsHil", "Real (HIL)")) ]
-		+ SHorizontalBox::Slot().AutoWidth() [ Mode(TEXT("vhil"), LOCTEXT("BoardsVhil", "Emulated (vHIL)")) ]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0) [ Mode(TEXT("hil"), FText::FromString(ModeField.Option(TEXT("hil")))) ]
+		+ SHorizontalBox::Slot().AutoWidth() [ Mode(TEXT("vhil"), FText::FromString(ModeField.Option(TEXT("vhil")))) ]
 	];
 	// Why a mode can't be picked, as the check says (the same reason for both today).
 	V->AddSlot().AutoHeight().Padding(0, 4, 0, 0)
@@ -1591,7 +1758,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 					FText::FromString(FString::Printf(TEXT("IFS-vHIL systems/%s.yaml"), *Sys.Key)))
 			];
 		}
-		V->AddSlot().AutoHeight().Padding(0, 8, 0, 2) [ BenchUi::Small(LOCTEXT("VhilSystem", "System")) ];
+		V->AddSlot().AutoHeight().Padding(0, 8, 0, 2) [ BenchUi::Small(FText::FromString(BenchUi::SpecField(TEXT("boards.system")).Label)) ];
 		V->AddSlot().AutoHeight() [ Systems ];
 	}
 	for (const FString& Board : BoardsInRun())
@@ -1629,6 +1796,7 @@ TSharedRef<SWidget> SFSDSBenchPage::MakeBoardsChoices()
 			[
 				SNew(SEditableTextBox)
 				.HintText(FText::FromString(F && !F->Default.IsEmpty() ? F->Default : TEXT("branch, #PR or commit")))
+				.ToolTipText(FText::FromString(BenchUi::SpecField(TEXT("boards.firmware.") + Board).Help))
 				.Text_Lambda([this, Key]() { const FString* T = SetupText.Find(Key); return FText::FromString(T ? *T : FString()); })
 				.OnTextChanged_Lambda([Set](const FText& T) { Set(T.ToString()); })
 				.Font(BenchUi::Font(10))
@@ -2125,6 +2293,13 @@ void SFSDSBenchPage::FetchManifest()
 		O->TryGetStringArrayField(TEXT("tracks"), Self->TrackNames);
 		Self->PipelineRepo.Reset();
 		O->TryGetStringField(TEXT("pipeline_repo"), Self->PipelineRepo);
+		Self->IfssimRepo.Reset();
+		const TSharedPtr<FJsonObject>* Repos = nullptr;
+		const TSharedPtr<FJsonObject>* Ifssim = nullptr;
+		if (O->TryGetObjectField(TEXT("repos"), Repos) && (*Repos)->TryGetObjectField(TEXT("ifssim"), Ifssim))
+		{
+			(*Ifssim)->TryGetStringField(TEXT("github"), Self->IfssimRepo);
+		}
 		Self->Firmware.Reset();
 		Self->HilBoards.Reset();
 		Self->VhilSystems.Reset();
@@ -2412,27 +2587,20 @@ void SFSDSBenchPage::CheckMachine()
 {
 	const double T = FPlatformTime::Seconds();
 	NextMachineCheck = T + 60.0;
-#if PLATFORM_WINDOWS
-	return;   // run_spec.py's checks need a Linux host (the worker runs in WSL there)
-#else
 	const FString Repo = RepoDir();
 	if (Repo.IsEmpty() || T < MachineCheckUntil) return;
 	// run_spec.py --rig saves its checks where the backend reads them (results/.bench/rig.json).
-	const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
-	IFileManager::Get().MakeDirectory(*Bench, true);
-	auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
-	const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-rig-"), TEXT(".sh"));
-	const FString Body = FString::Printf(TEXT("cd %s || exit 1\nexec python3 tools/sim_benchmark/run_spec.py --rig --json > /dev/null 2>> %s\n"),
-		*Quote(Repo), *Quote(FPaths::Combine(Bench, TEXT("rig-check.out"))));
-	if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)) return;
-	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/bin/bash"), *FString::Printf(TEXT("-l \"%s\""), *Script),
-		/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
-	if (!H.IsValid()) return;
-	FPlatformProcess::CloseProc(H);
-	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds; read it back then.
+	FString Error;
+	if (!BenchUi::LaunchInRepo(Repo, TEXT("fsds-rig-"),
+		TEXT("exec python3 tools/sim_benchmark/run_spec.py --rig --json > /dev/null 2>> tools/sim_benchmark/results/.bench/rig-check.out"), Error))
+	{
+		return;
+	}
+	// nvidia-smi, docker info and the LattePanda's ssh take a few seconds (about 14 s from
+	// WSL on Windows, Python's start included); read it back then.
 	MachineCheckUntil = T + 12.0;
 	TWeakPtr<SFSDSBenchPage> Weak = SharedThis(this);
-	for (const float After : { 4.f, 8.f, 13.f })
+	for (const float After : { 4.f, 8.f, 13.f, 20.f })
 	{
 		RegisterActiveTimer(After, FWidgetActiveTimerDelegate::CreateLambda([Weak](double, float)
 		{
@@ -2440,44 +2608,26 @@ void SFSDSBenchPage::CheckMachine()
 			return EActiveTimerReturnType::Stop;
 		}));
 	}
-#endif
 }
 
 void SFSDSBenchPage::StartWorker()
 {
-#if PLATFORM_WINDOWS
-	SetNote(TEXT("Start the worker in a terminal (WSL): python3 tools/sim_benchmark/run_spec.py --work"), true);
-#else
 	const FString Repo = RepoDir();
 	if (Repo.IsEmpty())
 	{
 		SetNote(TEXT("The IFSSIM folder isn't set: START once to set it up."), true);
 		return;
 	}
-	// It runs on the host like the sim (a benchmark needs the host's Docker and paths),
-	// and outlives the page: the queue keeps running when you leave it. Through a script,
-	// as FFSDSStackStarter::Run does: CreateProc on Linux ignores the working folder and
-	// splits its arguments on spaces.
-	const FString Bench = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench"));
-	IFileManager::Get().MakeDirectory(*Bench, true);
-	const FString Log = FPaths::Combine(Bench, TEXT("worker.out"));
-	auto Quote = [](const FString& S) { return TEXT("'") + S.Replace(TEXT("'"), TEXT("'\\''")) + TEXT("'"); };
-	const FString Script = FPaths::CreateTempFilename(FPlatformProcess::UserTempDir(), TEXT("fsds-worker-"), TEXT(".sh"));
-	const FString Body = FString::Printf(TEXT("cd %s || exit 1\nexec python3 tools/sim_benchmark/run_spec.py --work >> %s 2>&1\n"),
-		*Quote(Repo), *Quote(Log));
-	if (!FFileHelper::SaveStringToFile(Body, *Script, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	// It runs on the host like the sim (a benchmark needs the host's Docker and paths; on
+	// Windows, WSL), and outlives the page: the queue keeps running when you leave it.
+	const FString Log = FPaths::Combine(Repo, TEXT("tools/sim_benchmark/results/.bench/worker.out"));
+	FString Error;
+	if (!BenchUi::LaunchInRepo(Repo, TEXT("fsds-worker-"),
+		TEXT("exec python3 tools/sim_benchmark/run_spec.py --work >> tools/sim_benchmark/results/.bench/worker.out 2>&1"), Error))
 	{
-		SetNote(FString::Printf(TEXT("Couldn't write %s."), *Script), true);
+		SetNote(FString::Printf(TEXT("Couldn't start the worker: %s"), *Error), true);
 		return;
 	}
-	FProcHandle H = FPlatformProcess::CreateProc(TEXT("/bin/bash"), *FString::Printf(TEXT("-l \"%s\""), *Script),
-		/*bLaunchDetached=*/true, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true, nullptr, 0, nullptr, nullptr);
-	if (!H.IsValid())
-	{
-		SetNote(TEXT("Couldn't start the worker (/bin/bash)."), true);
-		return;
-	}
-	FPlatformProcess::CloseProc(H);
 	WorkerStartingUntil = FPlatformTime::Seconds() + BenchUi::WorkerStartS;
 	SetNote(FString::Printf(TEXT("Starting the worker; its output goes to %s."), *Log), false);
 	NextQueue = 0.0;
@@ -2494,7 +2644,6 @@ void SFSDSBenchPage::StartWorker()
 		}
 		return EActiveTimerReturnType::Stop;
 	}));
-#endif
 }
 
 void SFSDSBenchPage::StopWorker()

@@ -81,6 +81,27 @@ if(BUILD_TESTING)
   target_include_directories(test_stamp_guard PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
+
+  ament_add_gtest(test_hesai_cloud
+    test/test_hesai_cloud.cpp
+  )
+  target_include_directories(test_hesai_cloud PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_frame_fifo
+    test/test_frame_fifo.cpp
+  )
+  target_include_directories(test_frame_fifo PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_sensor_stream_sync
+    test/test_sensor_stream_sync.cpp
+  )
+  target_include_directories(test_sensor_stream_sync PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 ament_package()

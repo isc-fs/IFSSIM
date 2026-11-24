@@ -106,6 +106,29 @@ def bring_up_backend(cfg: RunConfig, log) -> None:
     subprocess.run(cmd, cwd=cfg.compose_dir, env=env, check=True)
 
 
+def raise_sim_cpu_weight(env=os.environ, run=subprocess.run) -> Optional[str]:
+    """``docker update --cpu-shares`` on the sim's container, when the environment asks.
+
+    ``IFSSIM_SIM_CPU_SHARES`` is the weight (Docker's default is 1024, the same as every other
+    service on the box); ``IFSSIM_SIM_CONTAINER`` names the container (the GPU box's wrapper
+    starts ``ifssim-sim``). The GPU box's CI sets it so the sim keeps its CPU while other
+    jobs share the machine. Returns what happened, for the run record; None when not asked.
+    """
+    shares = (env.get("IFSSIM_SIM_CPU_SHARES") or "").strip()
+    if not shares:
+        return None
+    name = (env.get("IFSSIM_SIM_CONTAINER") or "ifssim-sim").strip()
+    if not shares.isdigit() or int(shares) < 2:
+        return f"not applied: IFSSIM_SIM_CPU_SHARES must be a whole number >= 2, not {shares!r}"
+    try:
+        r = run(["docker", "update", "--cpu-shares", shares, name], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"not applied: {e}"
+    if r.returncode != 0:
+        return f"not applied: {(r.stderr or r.stdout).strip()[:200]}"
+    return f"{name} cpu-shares {shares}"
+
+
 def wait_backend_sees_sim(cfg: RunConfig, should_stop: Callable[[], bool]) -> float:
     t0 = time.monotonic()
     while time.monotonic() - t0 < cfg.mc_timeout_s:
@@ -175,6 +198,98 @@ def _terminate(proc: subprocess.Popen, grace_s: float = 30.0) -> None:
         proc.wait(timeout=10)
 
 
+def bring_up(cfg: RunConfig, sim: SimProcess, rec: Dict, label: str, log,
+             should_stop: Callable[[], bool]) -> Optional[str]:
+    """Start the sim, Mission Control (``mc_up``) and wait until the sim keeps real time,
+    noting each step in ``rec``. Returns the failed run's outcome, or None when all is up."""
+    log(f"[{label or 'run'}] starting the sim" + (" (attach)" if sim.attached else ""))
+    try:
+        sim.start()
+        rec["sim_ready_s"] = round(sim.wait_ready(cfg.sim_ready_timeout_s, should_stop=should_stop), 1)
+    except SimError as e:
+        rec["error"] = str(e)
+        return "sim_failed_to_start"
+    try:
+        rec["sim_status"] = json.loads(rpc(cfg.host, "getSimStatus", port=cfg.port) or "{}")
+    except (OSError, ValueError):
+        pass
+    log(f"[{label or 'run'}] sim ready in {rec.get('sim_ready_s', 0)} s")
+    if not sim.attached:
+        weight = raise_sim_cpu_weight()
+        if weight:
+            rec["sim_cpu_weight"] = weight
+            log(f"[{label or 'run'}] sim CPU weight: {weight}")
+    try:
+        if cfg.mc_up:
+            bring_up_backend(cfg, log)
+        rec["backend_ready_s"] = round(wait_backend_sees_sim(cfg, should_stop), 1)
+    except (SimError, subprocess.CalledProcessError, FileNotFoundError) as e:
+        rec["error"] = str(e)
+        return "backend_unreachable"
+    if not sim.attached and cfg.settle_s > 0:
+        log(f"[{label or 'run'}] waiting for the sim to keep real time")
+        rec.update(wait_real_time(cfg, should_stop))
+        log(f"[{label or 'run'}] sim at {rec['settle_rtf']:.2f}x real time after "
+            f"{rec['settle_s']:.0f} s" + (" (gave up waiting)" if rec.get("settle_timeout") else ""))
+    return None
+
+
+def run_command(cfg: RunConfig, argv: List[str], log=print,
+                should_stop: Callable[[], bool] = lambda: False) -> int:
+    """``exec``: any command around a fresh sim (and Mission Control), e.g. a run spec
+    (tools/sim_benchmark/run_spec.py). The command finds the sim and the backend through
+    ``IFSSIM_SIM_ADDR`` and ``IFSSIM_MC_URL``. Returns the command's exit code; 3 when the
+    machine failed (sim or backend never up, sim crashed), 130 interrupted."""
+    root = Path(cfg.results_root)
+    run_dir = root / "headless" / (_stamp() + "_exec")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    sim = SimProcess(cfg.sim_command, log_path=run_dir / "sim.log", host=cfg.host, port=cfg.port)
+    rec: Dict = {"started": _now(), "label": "exec", "run_dir": str(run_dir),
+                 "sim": "attach" if sim.attached else cfg.sim_command.argv, "command": argv,
+                 "outcome": None}
+    proc: Optional[subprocess.Popen] = None
+    t_start = time.monotonic()
+    code = 3
+    try:
+        failed = bring_up(cfg, sim, rec, "exec", log, should_stop)
+        if failed:
+            rec["outcome"] = failed
+            return code
+        env = {**os.environ, "IFSSIM_SIM_ADDR": f"{cfg.host}:{cfg.port}", "IFSSIM_MC_URL": cfg.mc_url}
+        log(f"[exec] $ {' '.join(argv)}")
+        proc = subprocess.Popen(argv, cwd=str(REPO), env=env, stdin=subprocess.DEVNULL,
+                                start_new_session=(sys.platform != "win32"))
+        while proc.poll() is None:
+            time.sleep(cfg.poll_s)
+            if should_stop():
+                _terminate(proc)
+                rec["outcome"], code = "interrupted", 130
+                return code
+            if not sim.alive():
+                _terminate(proc)
+                rec["outcome"], rec["error"] = "sim_crashed", "the sim exited mid-run; see sim.log"
+                return code
+            if cfg.max_run_s and time.monotonic() - t_start > cfg.max_run_s:
+                _terminate(proc)
+                rec["outcome"] = "run_timeout"
+                return code
+        code = proc.returncode
+        rec["outcome"] = "finished" if code == 0 else "command_failed"
+        rec["command_exit"] = code
+        return code
+    except KeyboardInterrupt:
+        if proc is not None:
+            _terminate(proc)
+        rec["outcome"], code = "interrupted", 130
+        return code
+    finally:
+        sim.stop()
+        rec["ended"] = _now()
+        rec["duration_s"] = round(time.monotonic() - t_start, 1)
+        (run_dir / "run.json").write_text(json.dumps(rec, indent=2) + "\n")
+        log(f"[exec] {rec['outcome']} in {rec['duration_s']} s -> {run_dir}")
+
+
 def run_once(cfg: RunConfig, label: str = "", log=print,
              should_stop: Callable[[], bool] = lambda: False) -> Dict:
     """One run. Never raises for a failed run: the outcome is in the record."""
@@ -204,32 +319,10 @@ def run_once(cfg: RunConfig, label: str = "", log=print,
             rec["outcome"] = "benchmark_error"
             rec["error"] = f"the benchmark doesn't start with {cfg.benchmark_cmd[0]}: {tail[0]}"
             return rec
-        log(f"[{label or 'run'}] starting the sim" + (" (attach)" if sim.attached else ""))
-        try:
-            sim.start()
-            rec["sim_ready_s"] = round(sim.wait_ready(cfg.sim_ready_timeout_s, should_stop=should_stop), 1)
-        except SimError as e:
-            rec["outcome"], rec["error"] = "sim_failed_to_start", str(e)
+        failed = bring_up(cfg, sim, rec, label, log, should_stop)
+        if failed:
+            rec["outcome"] = failed
             return rec
-        try:
-            rec["sim_status"] = json.loads(rpc(cfg.host, "getSimStatus", port=cfg.port) or "{}")
-        except (OSError, ValueError):
-            pass
-        log(f"[{label or 'run'}] sim ready in {rec.get('sim_ready_s', 0)} s")
-
-        try:
-            if cfg.mc_up:
-                bring_up_backend(cfg, log)
-            rec["backend_ready_s"] = round(wait_backend_sees_sim(cfg, should_stop), 1)
-        except (SimError, subprocess.CalledProcessError, FileNotFoundError) as e:
-            rec["outcome"], rec["error"] = "backend_unreachable", str(e)
-            return rec
-
-        if not sim.attached and cfg.settle_s > 0:
-            log(f"[{label or 'run'}] waiting for the sim to keep real time")
-            rec.update(wait_real_time(cfg, should_stop))
-            log(f"[{label or 'run'}] sim at {rec['settle_rtf']:.2f}x real time after "
-                f"{rec['settle_s']:.0f} s" + (" (gave up waiting)" if rec.get("settle_timeout") else ""))
 
         if cfg.characterise_cmd:
             log(f"[{label or 'run'}] car characterisation")

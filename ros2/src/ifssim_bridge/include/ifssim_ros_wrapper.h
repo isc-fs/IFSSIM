@@ -23,6 +23,7 @@
 
 #include "lws_steering_sensor.h"
 #include "sim_clock_gate.h"
+#include "sensor_stream_sync.h"
 #include "sim_rate_gate.h"
 #include "stamp_guard.h"
 #include "tcp_client.h"
@@ -32,6 +33,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include "frame_fifo.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -88,13 +90,26 @@ private:
     // env-var-gated fallback (IFSSIM_LIDAR_TRANSPORT=udp) — see
     // startStreaming() for the switch.
     void sensorStreamThread();
+    // Checks that the sim writes this bridge's SensorFrame size and leaves `fd` on a
+    // frame boundary (sensor_stream_sync.h). `already_read` is a frame the caller read
+    // that turned out out of step. Sets `mismatched` when the sizes differ. False when
+    // the stream closed.
+    bool syncSensorStream(int fd, bool& mismatched, const SensorFrame* already_read = nullptr);
     void sensorPublishThread();  // Drains the single-slot buffer, calls onSensorFrame
     void lidarStreamThread();    // PR-#482: TCP recv loop, reads stream-header + payload
+    // Organised scan (streamLidar2, Flags bit 0): points hold every ray in
+    // the car's Hesai order, slots x channels; see hesai_cloud.h.
+    struct LidarOrganisation {
+        bool organised = false;
+        int32_t slots = 0;
+        int64_t sweep_ns = 0;
+    };
     void lidarPublishThread();   // Drains the single-slot buffer, calls onLidarFrame
 
     // Stream data handlers
     void onSensorFrame(const SensorFrame& frame);
-    void onLidarFrame(const LidarChunkHeader& header, const float* points);
+    void onLidarFrame(const LidarChunkHeader& header, const float* points,
+                      const LidarOrganisation& org);
 
     // Timer callbacks (TCP command client, low frequency)
     void goSignalTimerCb();
@@ -149,11 +164,14 @@ private:
     // "topic does not appear to be published" for 10 s. Move publishes
     // to a dedicated thread; recv thread now only pushes the latest
     // SensorFrame into a single-slot buffer and immediately re-enters
-    // recv. Frame drops are acceptable: at 400 Hz a missed sample is
-    // 2.5 ms of IMU.
+    // recv. Since #875 every frame carries a distinct 400 Hz IMU sample, so
+    // the handoff is a FIFO, not a single overwrite slot: the slot lost ~6 %
+    // of the samples on a loaded box (gaps up to 12.5 ms; the car has none).
+    // It holds 1 s of frames; past that the oldest are dropped and counted.
+    static constexpr size_t kSensorFifoFrames = 400;
     std::mutex sensor_pub_mutex_;
     std::condition_variable sensor_pub_cv_;
-    std::optional<SensorFrame> sensor_pending_;
+    ifssim_bridge::FrameFifo<SensorFrame> sensor_fifo_{kSensorFifoFrames};
     std::thread sensor_pub_thread_;
 
     // LiDAR producer-consumer split. The recv thread used to call
@@ -169,6 +187,7 @@ private:
     struct PendingLidarFrame {
         LidarChunkHeader header;
         std::vector<float> points;
+        LidarOrganisation org{};
     };
     std::mutex lidar_pub_mutex_;
     std::condition_variable lidar_pub_cv_;
@@ -326,7 +345,15 @@ private:
     // connection time via `getSensorOffset <name>` so the static TFs the
     // bridge publishes follow settings.json instead of stale hardcoded
     // numbers.
-    struct Vec3 { double x = 0.0; double y = 0.0; double z = 0.0; bool valid = false; };
+    struct Vec3 {
+        double x = 0.0; double y = 0.0; double z = 0.0; bool valid = false;
+        // Mount rotation (REP-103 body frame) and whether the sensor's data is
+        // in its own frame (then base_link -> sensor TF is this pose) or
+        // already in the vehicle frame (identity TF). Older plugins send
+        // neither: identity, vehicle frame.
+        double qw = 1.0; double qx = 0.0; double qy = 0.0; double qz = 0.0;
+        bool sensor_frame = false;
+    };
     Vec3 lidar_offset_;
 
     // Spawn position captured once at connection time via simGetVehiclePose.
@@ -339,7 +366,7 @@ private:
     Vec3 querySensorOffset(const std::string& name);
 
     // Per-sensor publish rates (divisors of the 400Hz sensor stream):
-    //   IMU  → publish every frame    (400 Hz)
+    //   IMU  → every frame that carries a sample (imu_timestamp != 0, 400 Hz)
     //   GSS / TF / Odom → every 4    (100 Hz)
     //   GPS  → every 40              ( 10 Hz)
     uint64_t sensor_frame_count_ = 0;
@@ -388,5 +415,12 @@ private:
     void parseNoiseSettings(const std::string& settings_json);
 
     // Helper: open a raw TCP socket and send a command
-    int openStreamSocket(const std::string& command);
+    // require_ok: close and return -1 unless the plugin answers "OK\n"
+    // (an older plugin answers an unknown stream command with an error).
+    int openStreamSocket(const std::string& command, bool require_ok = false);
+    // LiDAR stream: streamLidar2 (Hesai layout) when lidar_cloud_format is
+    // "hesai" and the plugin supports it, else streamLidar.
+    int openLidarStream();
+    bool lidar_hesai_format_ = true;          // lidar_cloud_format parameter
+    std::atomic<bool> lidar_stream_v2_{false}; // the open stream uses the 48-byte header
 };

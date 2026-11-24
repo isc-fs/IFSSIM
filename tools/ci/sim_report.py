@@ -169,6 +169,9 @@ def read_run(seed_dir: Path, run_dir: Path) -> dict:
         # Sim seconds per real second: below ~0.95 the car is known to drive badly
         # (the pipeline is real-time sensitive), so a failure there may be the box.
         "sim_speed": sim / wall if sim and wall else None,
+        # Share of the run some task on the machine waited for a CPU (Linux CPU pressure):
+        # what explains a slow sim on the GPU box, where other jobs share the CPU.
+        "cpu_wait": _num(res.get("box/cpu_wait")),
         "steer_max": max(steer) if steer else None,
         "corner_min_m": stats["min_radius_m"],
         "corner_tight": stats["n_tight"],
@@ -215,7 +218,7 @@ def build(root: Path, config: dict) -> dict:
             "scenario": r["scenario"], "mission": r["mission"], "track": r["track"],
             "random": r["random_seed"] is not None,
             "required": r["mission"] not in info, "runs": 0, "finished": 0, "laps": [],
-            "cones": 0, "off_track": 0, "v_max": None, "sim_speed": [],
+            "cones": 0, "off_track": 0, "v_max": None, "sim_speed": [], "cpu_wait": None,
         })
         g["runs"] += 1
         g["finished"] += r["finished"]
@@ -227,6 +230,8 @@ def build(root: Path, config: dict) -> dict:
             g["v_max"] = max(g["v_max"] or 0, r["v_max"])
         if r["sim_speed"] is not None:
             g["sim_speed"].append(r["sim_speed"])
+        if r.get("cpu_wait") is not None:
+            g["cpu_wait"] = max(g["cpu_wait"] or 0.0, r["cpu_wait"])
     for g in groups.values():
         g["lap_mean"] = statistics.fmean(g["laps"]) if g["laps"] else None
         g["sim_speed"] = min(g["sim_speed"]) if g["sim_speed"] else None
@@ -300,7 +305,7 @@ def display_groups(groups: list[dict]) -> list[dict]:
             m = merged[g["mission"]] = {
                 **g, "scenario": f"{g['mission']}_random", "track": "", "tracks": 0,
                 "runs": 0, "finished": 0, "cones": 0, "off_track": 0, "laps": [],
-                "lap_mean": None, "v_max": None, "sim_speed": None,
+                "lap_mean": None, "v_max": None, "sim_speed": None, "cpu_wait": None,
             }
             out.append(m)
         m["tracks"] += 1
@@ -310,7 +315,16 @@ def display_groups(groups: list[dict]) -> list[dict]:
             m["v_max"] = max(m["v_max"] or 0, g["v_max"])
         if g["sim_speed"] is not None:
             m["sim_speed"] = g["sim_speed"] if m["sim_speed"] is None else min(m["sim_speed"], g["sim_speed"])
+        if g.get("cpu_wait") is not None:
+            m["cpu_wait"] = max(m["cpu_wait"] or 0.0, g["cpu_wait"])
     return out
+
+
+def speed_cell(speed, cpu_wait) -> str:
+    """Sim speed, with the machine's CPU wait when it was recorded (e.g. ``0.78× · 21 % CPU wait``)."""
+    if speed is None:
+        return "–"
+    return f"{speed:.2f}×" + ("" if cpu_wait is None else f" · {cpu_wait * 100:.0f} % CPU wait")
 
 
 def _name(g: dict) -> str:
@@ -401,7 +415,7 @@ def tables(report: dict, baseline: dict | None) -> str:
             "" if ok else "**", g["finished"], f"{g['runs']}**" if not ok else g["runs"],
             f1(g["lap_mean"], " s"), _delta(g, baseline), g["cones"], g["off_track"],
             f1(g["v_max"], " m/s"),
-            "–" if g["sim_speed"] is None else f"{g['sim_speed']:.2f}×",
+            speed_cell(g["sim_speed"], g.get("cpu_wait")),
         ))
     out.append("")
     out.append("<details><summary>Every run</summary>\n")
@@ -416,12 +430,14 @@ def tables(report: dict, baseline: dict | None) -> str:
             f1(r["v_mean"]), f1(r["v_max"], " m/s"),
             "–" if r["steer_max"] is None else f"{r['steer_max']:.2f}",
             corner_cell(r),
-            "–" if r["sim_speed"] is None else f"{r['sim_speed']:.2f}×",
+            speed_cell(r["sim_speed"], r.get("cpu_wait")),
         ))
     out.append("\n</details>\n")
     out.append(hits_table(report))
     out.append("*Sim speed* is sim seconds per real second, the slowest run's. "
-               "Below ~0.95× the car is known to drive badly, so check it before blaming the pipeline.")
+               "Below ~0.95× the car is known to drive badly, so check it before blaming the pipeline. "
+               "*CPU wait* is the share of the run some task on the machine waited for a CPU, the highest "
+               "run's. A slow sim with a high CPU wait means a busy machine, not a slow change.")
     return "\n".join(out)
 
 

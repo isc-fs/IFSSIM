@@ -18,6 +18,7 @@
 #include "Plant/FSDSPlant.h"
 #include "Vehicles/FSDSWheelRear.h"
 #include "EmraxMotor.h"
+#include "Vehicles/FSDSRoadRoughness.h"
 #include "FSDSVehiclePawn.generated.h"
 
 /**
@@ -491,10 +492,10 @@ private:
 	float TrackRear = 1.190f;            // m
 	float RollCenterFront = 0.040f;      // m
 	float RollCenterRear = 0.060f;       // m
-	float RollStiffnessFront = 27000.f;  // Nm/rad
-	float RollStiffnessRear = 22000.f;   // Nm/rad
-	float HeaveStiffness = 227600.f;     // N/m
-	float PitchStiffness = 155600.f;     // Nm/rad
+	float RollStiffnessFront = 15021.f;  // Nm/rad, springs only (no bar)
+	float RollStiffnessRear = 14291.f;   // Nm/rad, springs only (no bar)
+	float HeaveStiffness = 80736.f;      // N/m
+	float PitchStiffness = 54250.f;      // Nm/rad, 2 x wheel rate x (lf^2 + lr^2)
 
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;
@@ -505,4 +506,26 @@ private:
 	float AeroBalanceFront = 0.45f;   // 45% downforce on front axle
 	void ApplyAeroForces();
 	void ApplyRollingResistance();
+
+	/**
+	 * Road roughness on the level floor: each wheel pushes the body with the
+	 * force its strut would pass on from the road, K*Zu + C*dZu/dt, where Zu
+	 * is the wheel's motion from a per-corner quarter car (road -> tyre
+	 * spring -> wheel), using the solver's own spring and damper. The tyres'
+	 * grip load does not see it. Off on a track's world. See
+	 * FFSDSRoadRoughness and FFSDSRoadCorner.
+	 */
+	void ApplyRoadRoughness(float DeltaTime);
+
+	FFSDSRoadRoughness Road;
+	uint32 RoadGeneration = 0;
+	bool bRoadSeeded = false;
+	bool bRoadPrevValid = false;
+	bool bRoadOnTrackWorld = true;
+	bool bRoadSuppressedByWorld = false;
+	float RoadWorldCheckTimer = 0.f;
+	double RoadDistance = 0.0;             // m driven on this profile
+	double RoadPrevHeight[4] = {0.0, 0.0, 0.0, 0.0};
+	FFSDSRoadCorner RoadCorner[4];
+	float RoadTyreStiffness = 100000.f;   // N/m
 };

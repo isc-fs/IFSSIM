@@ -47,11 +47,20 @@ struct FFSDSSensorSettings
 	// any mismatch logs a warning and falls back to the global value.
 	TArray<float> PerChannelMaxRangeM;
 
+	// Per-channel elevation in DEGREES, sensor frame, one entry per
+	// channel. Real LiDARs space their beams unevenly (the Hesai ATX packs
+	// them at ~0.1° around the horizon and ~0.2-0.4° at the edges). Empty
+	// (default) keeps the uniform VerticalFOVLower..Upper grid. Validation
+	// and sorting live in FSDSLidarSensor::OnSettingsApplied.
+	TArray<float> ChannelElevationsDeg;
+	TArray<int32> ChannelRingIds;     // car ring number per ChannelElevationsDeg entry (LiDAR)
+
 	// LiDAR path: "cpu" (default, ParallelFor + Chaos line traces) or
 	// "gpu" (depth-render + compute decode, #223). Read by
 	// FSDSLidarSensor::BeginPlay; switching at runtime requires a PIE
 	// stop/start. Unknown values fall back to "cpu" with a warning log.
 	FString LidarPath = TEXT("cpu");
+	FString PointFrame = TEXT("vehicle");  // LiDAR points: "vehicle" or "sensor"
 
 	// Noise parameters (apply to all sensor types, 0 = no noise).
 	// All values are SI: m, m/s, m/s², rad/s. The plugin converts to its
@@ -72,9 +81,59 @@ struct FFSDSSensorSettings
 	float GyroBiasStd = 0.f;          // rad/s steady-state σ
 	float AccelBiasTau = 100.f;       // s
 	float GyroBiasTau = 100.f;        // s
+	// IMU sample stream and digitisation (uDV parity, see FSDSImuSensor.h).
+	// XYZ noise overrides the scalar per axis (REP-103 axes) when non-zero;
+	// the scalars stay what the bridge publishes as /imu covariance.
+	float ImuSampleRateHz = 400.f;    // Hz of sim time; 0 = one sample per tick
+	float AccelOdrHz = 0.f;           // Hz; accel held between updates; 0 = every sample
+	FVector AccelNoiseStdXYZ = FVector::ZeroVector;  // m/s² per accel update
+	FVector GyroNoiseStdXYZ = FVector::ZeroVector;   // rad/s per sample
+	float AccelTurnOnBiasStd = 0.f;   // m/s², constant per session
+	float GyroTurnOnBiasStd = 0.f;    // rad/s, constant per session
+	float AccelLsb = 0.f;             // m/s²; 0 = no quantisation
+	float GyroLsb = 0.f;              // rad/s; 0 = no quantisation
+	float AccelRange = 0.f;           // m/s² full scale; 0 = unlimited
+	float GyroRange = 0.f;            // rad/s full scale; 0 = unlimited
+	// IMU on-car vibration (see FSDSImuSensor.h). Rms 0 = off.
+	FVector VibrationAccelRms = FVector::ZeroVector;  // m/s² at VibrationRefSpeed
+	FVector VibrationAccelHz = FVector(20.f);
+	FVector VibrationAccelQ = FVector(2.f);
+	FVector VibrationGyroRms = FVector::ZeroVector;   // rad/s at VibrationRefSpeed
+	FVector VibrationGyroHz = FVector(20.f);
+	FVector VibrationGyroQ = FVector(2.f);
+	float VibrationRefSpeed = 7.5f;   // m/s
+	float VibrationSpeedExp = 0.25f;
+	float VibrationOnSpeed = 3.f;     // m/s
 	float VelocityNoiseStd = 0.f;     // m/s (GSS)
 	float RangeNoiseStd = 0.f;        // m (LiDAR)
 	float DropoutRate = 0.f;          // [0,1] (LiDAR)
+	float DropoutWeakRate = 0.f;      // P(no return) at intensity 1, falls as I^-DropoutWeakExp (LiDAR)
+	float DropoutWeakExp = 0.77f;
+	float DropoutWeakMax = 0.3f;      // cap on that probability (LiDAR)
+	float DropoutBurstScans = 0.f;    // longest same-direction run a drop lasts; 0 = per scan (LiDAR)
+	float DropoutBurstIidShare = 0.15f; // share of those drops that stay one-scan (LiDAR)
+	float RangeNoiseRangeCoeff = 0.f;      // m per m² of range: σ grows by this · r² (LiDAR)
+	float RangeNoiseRefReflectance = 0.2f; // ρ where the reflectance factor is 1 (LiDAR)
+	float RangeNoiseReflectanceExp = 0.f;  // σ ∝ (ρ_ref/ρ)^exp, 0 = off (LiDAR)
+	float EdgeSwapRate = 0.f;              // at a depth edge: P(return from the other surface) (LiDAR)
+	float EdgeDropRate = 0.f;              // at a depth edge: P(no return) (LiDAR)
+	float IntensityNoise = 0.f;            // relative σ of intensity jitter (LiDAR)
+	// Intensity law (LiDAR): I = IntensityScale · ρ · cos(θ)^IntensityIncidenceExp
+	// · r^-IntensityRangeExp, clamped to [0, IntensityMax], rounded when
+	// bIntensityRound. Scale < 0 keeps the old law (ρ·cos·(R_ref/r)², 0..1).
+	float IntensityScale = -1.f;
+	float IntensityRangeExp = 2.f;
+	float IntensityIncidenceExp = 1.f;
+	float IntensityMax = 1.f;
+	bool bIntensityRound = false;
+	// ρ for hits with no reflectance-LUT entry = clamp(gain · scene luminance, 0, 1).
+	float LuminanceReflectanceGain = 1.f;
+	// The same gain while a track's world (Montmeló) is built; < 0 = LuminanceReflectanceGain.
+	float WorldLuminanceReflectanceGain = -1.f;
+	// Mirror sweep (LiDAR): a point at azimuth fraction f of the FOV is measured
+	// SweepDurationMs·f after the scan stamp (1-f on reversed scans); 0 = one instant.
+	float SweepDurationMs = 0.f;
+	bool bSweepAlternate = true;
 };
 
 struct FFSDSVehiclePhysics
@@ -138,10 +197,25 @@ struct FFSDSVehiclePhysics
 	float TrackRear = 1.190f;            // m
 	float RollCenterFront = 0.040f;      // m
 	float RollCenterRear = 0.060f;       // m
-	float RollStiffnessFront = 27000.f;  // Nm/rad
-	float RollStiffnessRear = 22000.f;   // Nm/rad
-	float HeaveStiffness = 227600.f;     // N/m (sum of 4 wheel rates)
-	float PitchStiffness = 155600.f;     // Nm/rad
+	float RollStiffnessFront = 15021.f;  // Nm/rad, springs only (no bar)
+	float RollStiffnessRear = 14291.f;   // Nm/rad, springs only (no bar)
+	float HeaveStiffness = 80736.f;      // N/m (sum of 4 wheel rates)
+	float PitchStiffness = 54250.f;      // Nm/rad, 2 x wheel rate x (lf^2 + lr^2)
+
+	// Road roughness on the level floor (AFSDSVehiclePawn::ApplyRoadRoughness,
+	// FFSDSRoadRoughness). ISO 8608 displacement PSD level at 0.1 cycle/m in
+	// m^3; 0 = off. CutoffWavelength (m) rolls the profile off so it does not
+	// wander; Footprint (m) is the tyre contact length it is averaged over;
+	// TyreStiffness (N/m) the vertical tyre spring between road and wheel.
+	// Also on a track's world: Montmeló's asphalt is a smooth fitted surface
+	// (tools/worldgen), so the road model supplies its roughness there too.
+	// OnTrackWorld false turns it off on worlds.
+	float RoadRoughnessGd0 = 0.f;
+	float RoadRoughnessCutoffWavelength = 20.f;
+	float RoadRoughnessFootprint = 0.15f;
+	float RoadRoughnessCrossWavelength = 3.f;      // m: waves longer than this are common to both wheel tracks
+	float RoadRoughnessTyreStiffness = 100000.f;   // N/m, tyre vertical stiffness the road passes through
+	bool bRoadRoughnessOnTrackWorld = true;
 
 	// Pacejka Magic Formula '96 tire coefficients.
 	// Applied to Chaos LateralSlipGraph / LongitudinalSlipGraph at BeginPlay.

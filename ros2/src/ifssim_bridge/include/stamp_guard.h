@@ -1,10 +1,11 @@
 // StampGuard — keeps one topic's header stamps strictly increasing.
 //
 // GLIM (and any LiDAR-IMU SLAM pipeline) rejects a sample whose stamp is at or
-// before the previous one. The bridge republishes each sim tick's stamp several
-// times on /imu (a 400 Hz stream over a 60 Hz tick), and LiDAR stamps can
-// arrive slightly out of order, so the guard moves such a stamp 1 ns past the
-// last one it let through.
+// before the previous one. /imu used to republish each sim tick's stamp several
+// times (a 400 Hz stream over a 60 Hz tick); it now carries one stamp per IMU
+// sample, but a repeat must still not reach GLIM. LiDAR stamps can arrive
+// slightly out of order. The guard moves such a stamp 1 ns past the last one
+// it let through.
 //
 // Like the /clock mark (sim_clock_gate.h, #611), the last stamp belongs to one
 // sim session. A restarted sim starts its clock near zero, so without the

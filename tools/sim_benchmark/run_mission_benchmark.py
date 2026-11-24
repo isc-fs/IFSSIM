@@ -18,11 +18,13 @@ For each mission, track and repeat (in that order), one run:
 WHERE THE PIPELINE RUNS (``--pipeline-on``):
 
   bench_pc     On this computer. With ``--stack own`` (the default) the benchmark starts its own
-               pipeline container (``bench-dv-stack``) from THIS checkout's ``pipeline/``: a copy of
-               it is mounted into the image (``$IFSSIM_DV_IMAGE``, else the one ``docker compose``
-               builds) and rebuilt at start-up, so the runs use exactly this checkout's pipeline
-               commit, which is what gets recorded. This is how to try the benchmark on any of our
-               computers, without the latte panda.
+               pipeline container (``bench-dv-stack``) from THIS checkout's ``pipeline/`` and sim
+               bridge (``ros2/src``): a copy of them is mounted into the image (``$IFSSIM_DV_IMAGE``,
+               else the one ``docker compose`` builds) and rebuilt at start-up, so the runs use
+               exactly this checkout's pipeline commit, which is what gets recorded, and a bridge
+               that reads the sim's sensor frames as this checkout's plugin writes them, however
+               old the image is. This is how to try the benchmark on any of our computers, without
+               the latte panda.
   latte_panda  On the latte panda. The benchmark's container runs only the sim bridge here; the
                pipeline (``ros2 launch bringup sim_pipeline.launch.py``: the autonomy against a
                bridge elsewhere) runs there, started and stopped by ``--panda-start`` /
@@ -43,7 +45,8 @@ before anything runs), merged into it, and loaded by every launch of the benchma
 calls ``cone_detection``). Needs ``--stack own`` on the bench PC, and a pipeline commit that has
 ``params.yaml``; each run records what was overridden.
 
-The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451),
+The sim and Mission Control must already be up: the sim on ``--sim`` (default 127.0.0.1:41451;
+from WSL in its default NAT mode, where 127.0.0.1 isn't Windows, WSL's gateway, which is),
 Mission Control on ``--mc-url`` (default http://127.0.0.1:3000, ``--mc-key`` if it has an API key):
 the UI's address, whose ``/api`` reaches the backend on every OS (its own port 8000 is not
 published on Docker Desktop for Windows). This script itself needs no ROS: it's HTTP, the sim's
@@ -75,7 +78,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -91,12 +94,21 @@ DOO_PENALTY_S = 2.0  # FS rules: +2 s per cone down or out
 OC_PENALTY_S = 10.0  # +10 s per off course
 START_TIMEOUT_S = 330.0  # /api/event/start: prepare (Numba JIT) + EKF calibration + go
 POLL_S = 1.0
+# The referee starts acceleration's clock when the event is set, not when the car crosses a line
+# (FSDSReferee.cpp, "Acceleration starts it when the event is set"), so its time includes arming
+# and the start sequence; "race/drive_time_s" counts from the car's first motion instead. The run
+# is polled this fast until the car moves and for FINE_POLL_FOR_S after, to place that moment.
+SET_OFF_MPS = 0.5
+FINE_POLL_S = 0.2
+FINE_POLL_FOR_S = 60.0
 # FS-Rules T14.9 AS state bytes on /assi/state, and the pipeline's /dv/status
 # DV_EMERGENCY (mission_control.interface_contract). Mission Control reports
 # both in /api/event/state as as_state / dv_status.
 AS_EMERGENCY, AS_DRIVING = 1, 3
 DV_EMERGENCY = 5
-MC_URL = "http://127.0.0.1:3000"  # the UI; see the docstring
+# the UI; see the docstring. $IFSSIM_MC_URL names the backend directly (http://127.0.0.1:8000)
+# where the UI's container isn't up.
+MC_URL = os.environ.get("IFSSIM_MC_URL", "http://127.0.0.1:3000")
 # timeout_s counts SIM time when the sim reports it (getSimStatus "sim_time"): a slow
 # sim (an editor build at 15 fps runs at 0.25x real time) must not fail a run it would
 # finish. This many times timeout_s of real time still ends the run, in case the sim
@@ -107,6 +119,22 @@ WALL_BACKSTOP = 6.0
 # slower sim gives the pipeline more time per sim second than it has on the car.
 # The sim's HUD shows the same threshold (FFSDSRealTime::GoodFactor).
 REAL_TIME_OK = 0.95
+
+# Linux's CPU pressure: microseconds some runnable task waited for a CPU (/proc/pressure/cpu,
+# "some ... total="). Its growth over a run, per second of the run, says how CPU-starved the
+# machine was; on the GPU box that, not the code, is what drops the sim below real time.
+CPU_PRESSURE = Path("/proc/pressure/cpu")
+
+
+def cpu_pressure_us() -> float | None:
+    """The machine's cumulative CPU-pressure stall time in µs; None where Linux doesn't report it."""
+    try:
+        for line in CPU_PRESSURE.read_text().splitlines():
+            if line.startswith("some "):
+                return float(line.rsplit("total=", 1)[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 # --speed-factor runs the pipeline's sessions in slow motion (the sim's
 # setSpeedFactor, docs/sim_timing.md): 1 is real time, 0.25 gives the
 # pipeline four times its real time per sim second, for comparing algorithms
@@ -200,11 +228,52 @@ def plan(missions: dict[str, dict]) -> list[PlannedRun]:
 
 
 # ------------------------------------------------------------------ the sim and Mission Control
+SIM_PORT = 41451
+
+
+def wsl_windows_host() -> str | None:
+    """Windows' address from WSL (WSL's default gateway), or None when this isn't WSL."""
+    try:
+        if "microsoft" not in Path("/proc/sys/kernel/osrelease").read_text().lower():
+            return None
+        for line in Path("/proc/net/route").read_text().splitlines()[1:]:
+            f = line.split()
+            if len(f) > 2 and f[1] == "00000000":
+                return socket.inet_ntoa(int(f[2], 16).to_bytes(4, "little"))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _reachable(host: str, port: int, timeout: float = 2.0) -> bool:
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
+def sim_address(given: str | None) -> tuple[str, int]:
+    """``--sim`` as (host, port); without it 127.0.0.1, or Windows when run from WSL in NAT mode.
+
+    A worker in WSL drives the sim running on Windows: in WSL's mirrored networking mode
+    127.0.0.1 reaches it, in the default NAT mode only WSL's gateway does.
+    """
+    if given:
+        host, port = given.rsplit(":", 1)
+        return host, int(port)
+    host = "127.0.0.1"
+    windows = wsl_windows_host()
+    if windows and not _reachable(host, SIM_PORT) and _reachable(windows, SIM_PORT):
+        host = windows
+    return host, SIM_PORT
+
+
 class Sim:
     """The sim's RPC: one command per line, one JSON (or text) answer per line."""
 
     def __init__(
-        self, host: str = "127.0.0.1", port: int = 41451, timeout: float = 30.0
+        self, host: str = "127.0.0.1", port: int = SIM_PORT, timeout: float = 30.0
     ) -> None:
         self.host, self.port, self.timeout = host, port, timeout
 
@@ -386,6 +455,7 @@ STACK_UP_TIMEOUT_S = 1200.0  # rebuild (C++ too) + a cold Numba cache
 # colcon when the cached build was made from the same ones.
 BUILD_CACHE = "bench_ws_"
 PARAMS = Path("bringup") / "config" / "params.yaml"
+BRIDGE_SRC = Path("ros2") / "src"  # the sim bridge's packages, in the IFSSIM checkout
 COMPONENT_ALIASES = {"cone_detection": "cone_detection_node"}
 
 
@@ -427,6 +497,27 @@ def build_cache(image: str) -> list[tuple[str, str]]:
         if name.startswith(BUILD_CACHE) and not name.startswith(mine):
             docker("volume", "rm", name)
     return [(f"{mine}{folder}", folder) for folder in ("build", "install")]
+
+
+def stack_cpu_args(env) -> list[str]:
+    """Extra ``docker run`` flags for the stack from the environment (the GPU box's CI sets them).
+
+    ``BENCH_CPU_SHARES``: the container's CPU weight (Docker's default is 1024, the same as
+    every other service on the box). Raised, the pipeline keeps its CPU when other jobs
+    share the machine.
+    ``DV_VIZ_RELAY``: ``false`` skips viz_relay, the sim's in-game pipeline view, which
+    nobody sees in a headless run and which costs about half a core.
+    """
+    args: list[str] = []
+    shares = (env.get("BENCH_CPU_SHARES") or "").strip()
+    if shares:
+        if not shares.isdigit() or int(shares) < 2:
+            raise BenchmarkError(f"BENCH_CPU_SHARES must be a whole number >= 2, not {shares!r}")
+        args += ["--cpu-shares", shares]
+    viz = (env.get("DV_VIZ_RELAY") or "").strip()
+    if viz:
+        args += ["-e", f"DV_VIZ_RELAY={viz}"]
+    return args
 
 
 def running_stacks() -> list[str]:
@@ -576,6 +667,8 @@ class Stack:
             f"IFSSIM_PORT={self.sim_port}",
             "-e",
             f"ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID', '0')}",
+            # emulated boards (IFS-vHIL), when the run spec asks for them (launch/boards.py)
+            *[a for v in ("IFSSIM_VHIL_BOARDS", "IFSSIM_VHIL_TORQUE") if v in os.environ for a in ("-e", f"{v}={os.environ[v]}")],
             "-e",
             "NUMBA_CACHE_DIR=/numba_cache",
             "-v",
@@ -583,6 +676,7 @@ class Stack:
             "-e",
             f"FASTRTPS_DEFAULT_PROFILES_FILE={WS}/fastdds_profile.xml",
         ]
+        run += stack_cpu_args(os.environ)
         for var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
             run += [
                 "-e",
@@ -608,15 +702,27 @@ class Stack:
                     "pipeline overrides: "
                     + ", ".join(f"{k}={v!r}" for k, v in self.changed.items())
                 )
+            # ... and of its sim bridge (ros2/src): the image's own is from whenever it was
+            # built, and a bridge older or newer than the sim misreads its sensor stream
+            # (#875 grew the frame; a 2026-11-09 image fed the pipeline a few Hz of IMU).
+            bridge = self.tmp / "ros2"
+            if (self.checkout / BRIDGE_SRC).is_dir():
+                shutil.copytree(
+                    self.checkout / BRIDGE_SRC, bridge, ignore=shutil.ignore_patterns(".git")
+                )
             for pkg in sorted(
-                p for p in src.iterdir() if (p / "package.xml").is_file()
+                p
+                for d in (src, bridge)
+                if d.is_dir()
+                for p in d.iterdir()
+                if (p / "package.xml").is_file()
             ):
                 run += ["-v", f"{pkg}:{WS}/src/{pkg.name}"]
             cache = build_cache(self.image)
             for volume, folder in cache:
                 run += ["-v", f"{volume}:{WS}/{folder}"]
             if cache:
-                run += ["-e", f"DV_SRC_HASH={source_hash(src)}"]
+                run += ["-e", f"DV_SRC_HASH={source_hash(self.tmp)}"]
             run += ["-e", "DV_REBUILD_ON_STARTUP=true", self.image]
             ready = STACK_READY
         else:  # the latte panda runs the pipeline: here only the sim bridge
@@ -632,7 +738,7 @@ class Stack:
             run += ["--entrypoint", "bash", self.image, "-c", launch]
             ready = None
         log(
-            f"starting the pipeline stack ({'pipeline from this checkout' if ready else 'bridge only'}, {self.image})"
+            f"starting the pipeline stack ({'pipeline and sim bridge from this checkout' if ready else 'bridge only'}, {self.image})"
         )
         r = docker(*run, timeout=600)
         self.started = (
@@ -663,6 +769,30 @@ class Stack:
             time.sleep(poll_s)
         log(f"pipeline stack up ({time.monotonic() - t0:.0f} s)")
 
+    def remove_work_copy(self, log, as_root: bool) -> None:
+        """Delete the copy of the pipeline and the bridge (``self.tmp``). The stack's container
+        ran as root and left root-owned files (``__pycache__``) anywhere under both ``pipeline/``
+        and ``ros2/``, which the user can't delete: so everything inside goes from a container,
+        as root, and the folder itself (ours) after. Best effort: it never hides the run's own
+        result, and if something stays it says where and how to remove it."""
+        tmp, self.tmp = self.tmp, None
+        if tmp is None or not tmp.exists():
+            return
+        wipe = ["run", "--rm", "--entrypoint", "find", "-v", f"{tmp}:/copy", self.image,
+                "/copy", "-mindepth", "1", "-delete"]
+        if as_root:
+            try:
+                r = docker(*wipe, timeout=300)
+                if r.returncode != 0:
+                    log(f"warning: removing the stack's work copy as root failed: "
+                        f"{(r.stderr or r.stdout).strip()[:200]}")
+            except BenchmarkError as e:
+                log(f"warning: removing the stack's work copy as root failed: {e}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp.exists():
+            log(f"warning: the stack's work copy {tmp} is still there (root-owned files); remove it with: "
+                f"docker {' '.join(wipe)} && rmdir {tmp}")
+
     def reach_sim(self) -> None:
         """Whether the stack's container can reach the sim. Its entrypoint says it is up before
         the bridge connects, so an unreachable sim would otherwise only show as missions that
@@ -682,6 +812,7 @@ class Stack:
         if not self.started:
             for name in self.stopped:  # stopped, then failed before our stack ran
                 docker("start", name)
+            self.remove_work_copy(log, as_root=False)  # made, then failed before the container ran
             return
         if results is not None:
             logs = docker("logs", CONTAINER, timeout=60)
@@ -697,20 +828,7 @@ class Stack:
         for name in self.stopped:
             log(f"starting {name} again")
             docker("start", name)
-        if self.tmp is not None:
-            # the stack ran as root and left root-owned files (__pycache__) in the copy
-            docker(
-                "run",
-                "--rm",
-                "--entrypoint",
-                "rm",
-                "-v",
-                f"{self.tmp}:/copy",
-                self.image,
-                "-rf",
-                "/copy/pipeline",
-            )
-            shutil.rmtree(self.tmp, ignore_errors=True)
+        self.remove_work_copy(log, as_root=True)
 
 
 # ------------------------------------------------------------------ one run
@@ -755,6 +873,10 @@ class RunResult:
     sim_start: float | None = None  # the sim clock when the run began (doo events are stamped on it)
     speed_factor: float | None = None  # the sim's speed while the pipeline drove, when it reports it
     emergency_at: float | None = None  # seconds into the run (sim time when reported) the car went to AS Emergency
+    cpu_wait: float | None = None  # share of the run some task waited for a CPU (Linux CPU pressure)
+    load1: float | None = None  # the machine's 1-minute load average at the end of the run
+    set_off: float | None = None  # seconds into the run the car first moved (speed above SET_OFF_MPS)
+    boards: dict | None = None  # the emulated boards' pace over the run (boards_pace), when they ran
 
 
 class Progress:
@@ -811,6 +933,7 @@ def run_one(
         sim.cmd("simSetVehiclePose {x} {y} {z} {qw} {qx} {qy} {qz}".format(**pose))
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
+    p0 = cpu_pressure_us()
     sim0 = sim.sim_time()  # None: this sim doesn't report its clock, count real time
     progress.report(r.index, 0.0, f"{where} · starting the pipeline")
     status, body = mc.post(
@@ -842,6 +965,7 @@ def run_one(
     seen_driving = False
     limit = float(m["timeout_s"])
     sim_now = sim0
+    set_off: float | None = None
 
     def elapsed() -> float:
         return time.monotonic() - t0 if sim0 is None else sim_now - sim0
@@ -861,6 +985,8 @@ def run_one(
                     "steering": (st.get("controls") or {}).get("steering"),
                 }
             )
+        if set_off is None and isinstance(st.get("speed"), (int, float)) and st["speed"] > SET_OFF_MPS:
+            set_off = t
         laps, need = (
             int(ref.get("laps") or 0),
             max(1, int(ref.get("required_laps") or m["laps"])),
@@ -883,22 +1009,80 @@ def run_one(
                 f"(/assi/state {as_state}, /dv/status {dv_status}), ending the run"
             )
             break
-        time.sleep(poll_s)
+        fine = set_off is None or t - set_off < FINE_POLL_FOR_S
+        time.sleep(min(poll_s, FINE_POLL_S) if fine else poll_s)
         if sim0 is not None:
             sim_now = sim.sim_time() or sim_now  # no answer: the clock holds, the backstop ends it
+    seconds = time.monotonic() - t0
+    p1 = cpu_pressure_us()
     mc.post("/api/pipeline/stop")
     return RunResult(
         r,
         outcome,
         started,
-        time.monotonic() - t0,
+        seconds,
         ref,
         offset,
         telemetry=telemetry,
         sim_seconds=None if sim0 is None else sim_now - sim0,
         sim_start=sim0,
         emergency_at=emergency_at,
+        cpu_wait=None if p0 is None or p1 is None or seconds <= 0 else min(1.0, (p1 - p0) / 1e6 / seconds),
+        load1=os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
+        set_off=set_off,
+        boards=boards_pace(started, datetime.now(timezone.utc)),
     )
+
+
+# ------------------------------------------------------------------ the emulated boards' pace
+BOARDS_CONTAINER = "ifssim-vhil-boards"  # launch/boards.py CONTAINER
+BOARDS_MAX_LAG_S = 2.0  # a run whose boards fell further behind the wall clock than this was not real time
+BOARDS_MIN_RTF = 0.97
+
+
+def boards_pace(start: datetime, end: datetime, run=subprocess.run) -> dict | None:
+    """How the emulated boards (IFS-vHIL, tools/vhil_boards/server.py) kept up with the wall clock
+    between ``start`` and ``end``: their real-time factor over the window, the furthest they were
+    behind the wall clock in it, and whether that counts as real time. None when no boards ran
+    (``IFSSIM_VHIL_BOARDS`` unset) or their log has too few lines in the window."""
+    if not os.environ.get("IFSSIM_VHIL_BOARDS"):
+        return None
+    pad = timedelta(seconds=3)
+    try:
+        r = run(
+            ["docker", "logs", "--since", (start - pad).isoformat(), "--until", (end + pad).isoformat(), BOARDS_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    rows = []
+    for line in ((r.stdout or "") + (r.stderr or "")).splitlines():
+        if line.startswith("{"):
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if "wall" in d and start.timestamp() - 3 <= d["wall"] <= end.timestamp() + 3:
+                rows.append(d)
+    return boards_pace_of(rows)
+
+
+def boards_pace_of(rows: list[dict]) -> dict | None:
+    """The pace over the longest stretch of the log where the emulation's clock only went forward:
+    the server restarts the emulated car when the operator goes OFF (the end of a run, which a
+    window's padding can include), and its clock starts again from zero there."""
+    rows = sorted(rows, key=lambda d: d["wall"])
+    stretches: list[list[dict]] = [[]]
+    for d in rows:
+        if stretches[-1] and d["t"] < stretches[-1][-1]["t"]:
+            stretches.append([])
+        stretches[-1].append(d)
+    rows = max(stretches, key=lambda st: st[-1]["wall"] - st[0]["wall"])
+    if len(rows) < 2 or rows[-1]["wall"] <= rows[0]["wall"]:
+        return None
+    rtf = (rows[-1]["t"] - rows[0]["t"]) / (rows[-1]["wall"] - rows[0]["wall"])
+    lag = max(float(d.get("lag_s", 0.0)) for d in rows)
+    return {"rtf": round(rtf, 3), "max_lag_s": round(lag, 2), "real_time_ok": rtf >= BOARDS_MIN_RTF and lag <= BOARDS_MAX_LAG_S}
 
 
 # ------------------------------------------------------------------ writing a run
@@ -964,6 +1148,20 @@ def race_metrics(res: RunResult) -> dict[str, float]:
             out["race/real_time_ok"] = 1 if factor >= REAL_TIME_OK * target else 0
     if res.speed_factor is not None:
         out["race/speed_factor"] = res.speed_factor
+    if res.boards is not None:
+        # the emulated boards' own pace: a run they could not keep up with is not a real-time run of the car
+        out["box/boards_rtf"] = res.boards["rtf"]
+        out["box/boards_max_lag_s"] = res.boards["max_lag_s"]
+        out["race/boards_real_time_ok"] = 1 if res.boards["real_time_ok"] else 0
+    if res.set_off is not None:
+        # from the car's first motion to the finish: what the drive took, whatever the start
+        # sequence before it (arming, the EKF's calibration, an ECU's ready-to-drive delay)
+        out["race/set_off_s"] = round(res.set_off, 2)
+        out["race/drive_time_s"] = round(res.seconds - res.set_off, 2)
+    if res.cpu_wait is not None:
+        out["box/cpu_wait"] = round(res.cpu_wait, 3)
+    if res.load1 is not None:
+        out["box/load1"] = round(res.load1, 2)
     if laps:
         out |= {
             "race/lap_time_best_s": min(laps),
@@ -1178,18 +1376,19 @@ def run(
         if args.pipeline_overrides
         else {}
     )
+    sim_host, sim_port = sim_address(args.sim)
     stack = Stack(
         args.stack,
         args.pipeline_on,
         args.image or os.environ.get("IFSSIM_DV_IMAGE") or DEFAULT_IMAGE,
         Path(getattr(args, "checkout", None) or REPO),
-        int(args.sim.rsplit(":", 1)[1]),
+        sim_port,
         pipeline_overrides,
         args.replace_stack,
         work_dir=Path(args.results_root).resolve(),
     )
     stack.check()
-    sim = sim or Sim(*(args.sim.rsplit(":", 1)[0], int(args.sim.rsplit(":", 1)[1])))
+    sim = sim or Sim(sim_host, sim_port)
     mc = mc or MissionControl(args.mc_url, args.mc_key or os.environ.get("MC_API_KEY"))
     status = mc.get("/api/sim/status") or {}
     if not status.get("connected"):
@@ -1281,7 +1480,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--panda-sha", help="command that prints the pipeline commit on the latte panda"
     )
-    ap.add_argument("--sim", default="127.0.0.1:41451", help="the sim's RPC host:port")
+    ap.add_argument(
+        "--sim",
+        help="the sim's RPC host:port (default 127.0.0.1:41451; from WSL in NAT mode, Windows)",
+    )
     ap.add_argument(
         "--speed-factor",
         type=float,

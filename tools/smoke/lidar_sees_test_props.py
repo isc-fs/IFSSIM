@@ -6,8 +6,9 @@ default, within the LiDAR's 25-30 m range), counts returns inside each prop's
 box over a few scans, then clears them and counts again. Each prop must show
 points with the props in place and none once they are gone.
 
-Boxes are in the sensor frame (x forward, y left), offset from the car as the
-RPC reports, and measured up from the ground right in front of each prop (the
+Boxes are in the vehicle frame (x forward, y left), offset from the car as the
+RPC reports; a cloud in the pitched sensor frame (settings.json PointFrame
+"sensor") is moved into it with getSensorOffset's mount pose first. They are and measured up from the ground right in front of each prop (the
 road 0.3-0.8 m before it): a ground estimate taken further away is off by
 several cm when the car sits slightly nose-down, enough to put road points
 inside a 15 cm box. Only scans stamped (in sim time, from /clock)
@@ -82,6 +83,21 @@ def grab(node, scans, n, after_ns):
             for m in scans if stamp_ns(m.header.stamp) > after_ns][:n]
 
 
+def to_vehicle(points, mount):
+    """Sensor-frame points into the vehicle frame (p' = R(q) p + t); a
+    vehicle-frame cloud passes through. Drops the (0, 0, 0) no-returns."""
+    pts = [p for p in points if p != (0.0, 0.0, 0.0)]
+    if mount.get("points") != "sensor":
+        return pts
+    w, qx, qy, qz = (mount.get(k, 0.0) for k in ("qw", "qx", "qy", "qz"))
+    r = [[1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - w * qz), 2 * (qx * qz + w * qy)],
+         [2 * (qx * qy + w * qz), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - w * qx)],
+         [2 * (qx * qz - w * qy), 2 * (qy * qz + w * qx), 1 - 2 * (qx * qx + qy * qy)]]
+    t = (mount["x"], mount["y"], mount["z"])
+    return [tuple(r[i][0] * x + r[i][1] * y + r[i][2] * z + t[i] for i in range(3))
+            for x, y, z in pts]
+
+
 def count(points, props):
     """Points inside each prop's box, at least 5 cm above the local road."""
     out = {}
@@ -132,16 +148,18 @@ def main():
     # margin.
     margin_ns = 500_000_000
 
+    mount = json.loads(rpc(host, port, "getSensorOffset lidar"))
+
     reply = json.loads(rpc(host, port, f"validateCollisionMatrix {args.ahead}"))
     if "props" not in reply:
         print(f"FAIL: {reply}")
         return 1
     props = reply["props"]
     after = sim_now(node, clock) + margin_ns
-    with_props = [count(s, props) for s in grab(node, scans, args.scans, after)]
+    with_props = [count(to_vehicle(s, mount), props) for s in grab(node, scans, args.scans, after)]
     rpc(host, port, "validateCollisionMatrix clear")
     after = sim_now(node, clock) + margin_ns
-    without = [count(s, props) for s in grab(node, scans, args.scans, after)]
+    without = [count(to_vehicle(s, mount), props) for s in grab(node, scans, args.scans, after)]
     node.destroy_node()
     rclpy.shutdown()
 

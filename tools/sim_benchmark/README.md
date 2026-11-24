@@ -278,6 +278,37 @@ block with the run, the runner and a link to the logs. Runs with the same code b
 **spec id**, so the viewer doesn't show them as reruns. The format:
 `launch/spec.py`. It came from IFS-DV-BENCHWEB's launcher, whose queue and worker are frozen.
 
+### Code: what runs
+
+`code:` picks, per repository in `bench.yaml` (`ifssim`, `pipeline`), a branch (`dev`), a
+PR (`#88`), a commit (`4f1c2ab`) or a snapshot of someone's working copy that
+`ifsbench snapshot` pushed (`refs/bench/<user>/<id>`); `<any of them>@<commit>` pins a commit
+that must be on it. Unset: this checkout's. `run_spec.py` checks `code.pipeline` out for the
+run; `code.ifssim` is checked out by whoever launches it (the benchweb's runner agent).
+
+### The form's schema (`--print-schema`)
+
+```bash
+python3 tools/sim_benchmark/run_spec.py --print-schema    # JSON Schema + UI hints
+```
+
+prints the run spec as a JSON Schema for this checkout's `bench.yaml`, with the hints a
+form needs: the sim's Benchmarks page's tabs, groups and order, the labels, the presets,
+the lists the backend fills (missions, tracks, bags, override files, branches), which
+fields need a rig part (`latte_panda`, `hil`, `vhil`, as `--rig` names them) and which are
+not on the form. The benchweb generates its launch form from it, so both offer the same
+options (`launch/schema.py` documents the hints and when `x-schema-version` goes up).
+The page registers the fields it sets in
+`Plugins/FSDSPlugin/Source/FSDSPlugin/Private/UI/SFSDSBenchPageFields.inl`, and
+`tests/test_schema.py` fails when the page and the schema disagree: a field on one side
+only, or other words for it. A new field goes into `spec.py` (or `bench.yaml`), its hints
+into `schema.py`, and onto the page with its entry in that file.
+
+`boards.bench` (which HIL bench) and `lattepanda.deploy` (deploy the pipeline on the
+LattePanda with IFS09's scripts) are in the format for the LattePanda and HIL work
+(task T12) but not on the form yet; a spec that asks for `lattepanda.deploy` is refused by
+the rig check until then.
+
 ### The local queue and the rig
 
 Mission Control's Benchmarks tab (target *Local*) doesn't run benchmarks itself: its

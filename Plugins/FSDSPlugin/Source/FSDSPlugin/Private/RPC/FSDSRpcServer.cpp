@@ -422,6 +422,14 @@ void FFSDSRpcServer::HandleClient(FSocket* ClientSocket)
 					StreamViz(ClientSocket);
 					return;
 				}
+				if (Request == TEXT("streamLidar2"))
+				{
+					// Organised cloud in the car's Hesai layout, 48-byte
+					// header. Older bridges never send this and keep the
+					// streamLidar format below.
+					StreamLidar(ClientSocket, /*bOrganised=*/true);
+					return;
+				}
 				if (Request == TEXT("streamLidar"))
 				{
 					// PR-#482: TCP LiDAR re-introduced. See StreamLidar
@@ -1268,6 +1276,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 
 		FString Name = Parts[1];
 		FVector UeOffsetCm(0.f, 0.f, 0.f);
+		FQuat UeMount = FQuat::Identity;
+		bool bSensorFrame = false;
 		bool bFound = false;
 
 		if (Name.Equals(TEXT("lidar"), ESearchCase::IgnoreCase))
@@ -1275,6 +1285,8 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 			if (VehiclePawn->LidarSensor)
 			{
 				UeOffsetCm = VehiclePawn->LidarSensor->SensorOffset;
+				UeMount = VehiclePawn->LidarSensor->MountRotation.Quaternion();
+				bSensorFrame = VehiclePawn->LidarSensor->bPointsInSensorFrame;
 				bFound = true;
 			}
 		}
@@ -1285,7 +1297,14 @@ FString FFSDSRpcServer::ProcessRequest(const FString& Request)
 		const float X = UeOffsetCm.X / 100.f;
 		const float Y = -UeOffsetCm.Y / 100.f;
 		const float Z = UeOffsetCm.Z / 100.f;
-		return FString::Printf(TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f}"), X, Y, Z);
+		// Mount rotation in the ROS body frame: mirroring Y maps the UE
+		// quaternion (w, x, y, z) to (w, -x, y, -z). "points" says which frame
+		// the sensor's data is in: "sensor" (relative to this mount, so the
+		// TF base_link -> sensor is this pose) or "vehicle" (identity TF).
+		return FString::Printf(
+			TEXT("{\"x\":%.4f,\"y\":%.4f,\"z\":%.4f,\"qw\":%.6f,\"qx\":%.6f,\"qy\":%.6f,\"qz\":%.6f,\"points\":\"%s\"}"),
+			X, Y, Z, UeMount.W, -UeMount.X, UeMount.Y, -UeMount.Z,
+			bSensorFrame ? TEXT("sensor") : TEXT("vehicle"));
 	}
 	else if (Method == TEXT("simGetGroundTruthKinematics"))
 	{
@@ -2231,9 +2250,45 @@ void FFSDSRpcServer::CaptureSensorFrame(UWorld* InWorld)
 	FFSDSSensorFrame Frame;
 	PackSensorFrame(Frame);
 
+	// This tick's IMU samples (400 Hz of sim time), drained from the sensor
+	// here on the game thread so the stream thread never touches the pawn.
+	TArray<UFSDSImuSensor::FImuOutput> NewImuSamples;
+	if (VehiclePawn->ImuSensor)
+	{
+		VehiclePawn->ImuSensor->ConsumeSamples(NewImuSamples);
+	}
+
 	FScopeLock Lock(&LatestSensorFrameLock);
 	LatestSensorFrame = Frame;
 	bHasLatestSensorFrame = true;
+	PendingImuSamples.Append(NewImuSamples);
+	// Bounded to 0.25 s: with no stream client connected nobody drains it,
+	// and a client that connects later must not get a burst of stale samples.
+	constexpr int32 MaxPendingImuSamples = 100;
+	if (PendingImuSamples.Num() > MaxPendingImuSamples)
+	{
+		PendingImuSamples.RemoveAt(0, PendingImuSamples.Num() - MaxPendingImuSamples, EAllowShrinking::No);
+	}
+}
+
+namespace FSDSRpcServerPrivate
+{
+	/** Write one IMU sample into a sensor frame's IMU fields (m/s², rad/s, ENU quat, sim-time stamp). */
+	static void WriteImuSample(FFSDSSensorFrame& Frame, const UFSDSImuSensor::FImuOutput& Imu)
+	{
+		Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
+		Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
+		Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
+		Frame.GyroX = Imu.AngularVelocity.X;
+		Frame.GyroY = Imu.AngularVelocity.Y;
+		Frame.GyroZ = Imu.AngularVelocity.Z;
+		const FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
+		Frame.OrientX = EnuQuat.X;
+		Frame.OrientY = EnuQuat.Y;
+		Frame.OrientZ = EnuQuat.Z;
+		Frame.OrientW = EnuQuat.W;
+		Frame.ImuTimestamp = Imu.SimTimeSec > 0.0 ? (uint64)(Imu.SimTimeSec * 1e9) : 0;
+	}
 }
 
 void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
@@ -2259,21 +2314,11 @@ void FFSDSRpcServer::PackSensorFrame(FFSDSSensorFrame& Frame) const
 		Frame.Altitude = Gps.Altitude;
 	}
 
-	// IMU
+	// IMU: the latest sample. StreamSensors overwrites these fields with each
+	// queued sample in turn (and sends ImuTimestamp 0 when it has none).
 	if (VehiclePawn->ImuSensor)
 	{
-		auto Imu = VehiclePawn->ImuSensor->GetOutput();
-		Frame.AccelX = Imu.LinearAcceleration.X / 100.f;
-		Frame.AccelY = Imu.LinearAcceleration.Y / 100.f;
-		Frame.AccelZ = Imu.LinearAcceleration.Z / 100.f;
-		Frame.GyroX = Imu.AngularVelocity.X;
-		Frame.GyroY = Imu.AngularVelocity.Y;
-		Frame.GyroZ = Imu.AngularVelocity.Z;
-		FQuat EnuQuat = FSDSCoord::UEQuatToENU(Imu.Orientation);
-		Frame.OrientX = EnuQuat.X;
-		Frame.OrientY = EnuQuat.Y;
-		Frame.OrientZ = EnuQuat.Z;
-		Frame.OrientW = EnuQuat.W;
+		FSDSRpcServerPrivate::WriteImuSample(Frame, VehiclePawn->ImuSensor->GetOutput());
 	}
 
 	// GSS — body frame, X=forward (longitudinal), Y=lateral
@@ -2404,17 +2449,22 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	int32 Sent = 0;
 	ClientSocket->Send((const uint8*)AckConv.Get(), AckConv.Length(), Sent);
 
-	// 400 frames per second of SIM time. The latest tick's frame is resent
-	// until the next tick replaces it, so at 60 fps each tick goes out about
-	// 6.7 times. Paced on the wall clock alone, slow motion (FFSDSRealTime)
-	// would send far more per sim second (27 per tick at 0.25x): 1600 IMU
-	// samples per sim second and a GPS, GSS and odometry the bridge counts
-	// off this stream at four times their rate. So each new tick earns sends
-	// for the sim time it advanced, one per StreamPeriodNs, and each send
-	// spends one: the same frames as before at real time, the same rate in
-	// sim time in slow motion.
+	// 400 frames per second of SIM time. Each tick earns sends for the sim
+	// time it advanced, one per StreamPeriodNs, and each send spends one, so
+	// slow motion (FFSDSRealTime) keeps 400 frames per SIM second rather than
+	// per wall second; the bridge counts GPS, GSS and odometry off this
+	// stream (every 40th / 4th frame).
+	//
+	// Each send carries the latest tick's frame and the next queued IMU
+	// sample (FSDSImuSensor emits the 400 Hz grid of sim time, ~6.7 samples
+	// per 60 Hz tick). Before, the tick's single IMU sample was resent ~6.7
+	// times, so /imu was 60 Hz of information at 400 Hz with +1 ns stamps.
+	// A send with no queued sample gets ImuTimestamp 0 and the bridge skips
+	// /imu for it; the credit and the sample grid both run at 400 Hz of sim
+	// time, so that is rare and the queue stays within a sample or two.
 	constexpr int64 StreamPeriodNs = 2'500'000;   // 400 Hz
 	constexpr double MaxStreamCredit = 40.0;      // 0.1 s of sim time: no burst after a pause
+	constexpr int32 ImuBacklogDrain = 8;          // queued samples above which a send needs no credit
 	uint64 LastStampNs = 0;
 	double StreamCredit = 0.0;
 
@@ -2422,19 +2472,20 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 	{
 		if (!IsValid(VehiclePawn)) { FPlatformProcess::Sleep(0.1f); continue; }
 
-		// Resend the latest tick's frame (CaptureSensorFrame). This loop used to
-		// pack the frame itself, off the game thread, reading sim time, the IMU,
-		// the pose and ground truth at different moments while the game thread
-		// was updating them. A frame could then carry one tick's time with the
-		// previous tick's IMU sample, and which tick each 400 Hz frame landed on
-		// changed from run to run, so two runs with the same seed could never be
-		// compared sample by sample (#643).
+		// Copy the latest tick's frame (CaptureSensorFrame) and take the next
+		// IMU sample. This loop used to pack the frame itself, off the game
+		// thread, reading sim time, the IMU, the pose and ground truth at
+		// different moments while the game thread was updating them (#643).
 		FFSDSSensorFrame Frame;
 		bool bHaveFrame = false;
+		bool bHaveImu = false;
+		int32 ImuBacklog = 0;
+		UFSDSImuSensor::FImuOutput ImuSample;
 		{
 			FScopeLock Lock(&LatestSensorFrameLock);
 			bHaveFrame = bHasLatestSensorFrame;
 			if (bHaveFrame) Frame = LatestSensorFrame;
+			ImuBacklog = PendingImuSamples.Num();
 		}
 		if (!bHaveFrame) { FPlatformProcess::Sleep(0.0025f); continue; }
 
@@ -2446,8 +2497,27 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 				: FMath::Min(StreamCredit + double(Frame.Timestamp - LastStampNs) / StreamPeriodNs, MaxStreamCredit);
 			LastStampNs = Frame.Timestamp;
 		}
-		if (StreamCredit < 1.0) { FPlatformProcess::Sleep(0.0025f); continue; }
-		StreamCredit -= 1.0;
+		const bool bDrain = ImuBacklog > ImuBacklogDrain;
+		if (StreamCredit < 1.0 && !bDrain) { FPlatformProcess::Sleep(0.0025f); continue; }
+		StreamCredit = FMath::Max(StreamCredit - 1.0, 0.0);
+
+		{
+			FScopeLock Lock(&LatestSensorFrameLock);
+			if (PendingImuSamples.Num() > 0)
+			{
+				ImuSample = PendingImuSamples[0];
+				PendingImuSamples.RemoveAt(0, 1, EAllowShrinking::No);
+				bHaveImu = true;
+			}
+		}
+		if (bHaveImu)
+		{
+			FSDSRpcServerPrivate::WriteImuSample(Frame, ImuSample);
+		}
+		else
+		{
+			Frame.ImuTimestamp = 0;
+		}
 
 		Frame.FrameID = StreamFrameCounter++;
 		// Wall clock at send time (latency/health only, never integrated).
@@ -2463,8 +2533,10 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 		}
 
 		// Pace at ~400Hz of wall time between sends (the BMI088's rate); the
-		// credit above holds it to 400 Hz of sim time.
-		FPlatformProcess::Sleep(0.0025f);
+		// credit above holds it to 400 Hz of sim time. Catching up on a
+		// backlog goes faster, but not back to back: the bridge keeps only
+		// the newest frame between its receive and publish threads.
+		FPlatformProcess::Sleep(bDrain ? 0.0005f : 0.0025f);
 	}
 }
 
@@ -2508,9 +2580,9 @@ void FFSDSRpcServer::StreamSensors(FSocket* ClientSocket)
 // short-sleep loop polling GetTimestamp() and emit a frame whenever
 // it advances. Loop sleep is 1 ms — well below the 100 ms scan
 // interval, gives the kernel plenty of game-thread slack.
-void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
+void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket, bool bOrganised)
 {
-	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started"));
+	UE_LOG(LogTemp, Log, TEXT("FSDS RPC: LiDAR streaming started%s"), bOrganised ? TEXT(" (organised, V2 header)") : TEXT(""));
 
 	// Send "OK\n" to confirm streaming mode (same handshake the
 	// sensor stream uses; bridge's openStreamSocket reads exactly 3
@@ -2567,7 +2639,15 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		// LastTimestamp AFTER PointCloudBuffer is fully written, so
 		// the ordering is safe — if we observed a newer timestamp
 		// then the cloud we read here corresponds to that scan).
-		TArray<float> Points = VehiclePawn->LidarSensor->GetPointCloud();
+		TArray<float> Points;
+		int32 OrgChannels = 0, OrgSlots = 0;
+		float OrgSweepS = 0.f;
+		const bool bSendOrganised = bOrganised
+			&& VehiclePawn->LidarSensor->GetOrganisedPointCloud(Points, OrgChannels, OrgSlots, OrgSweepS);
+		if (!bSendOrganised)
+		{
+			Points = VehiclePawn->LidarSensor->GetPointCloud();
+		}
 		const int32 TotalPoints = Points.Num() / 4;
 		if (TotalPoints <= 0)
 		{
@@ -2611,11 +2691,28 @@ void FFSDSRpcServer::StreamLidar(FSocket* ClientSocket)
 		// AND avoids the bridge needing two recvs (the bridge's
 		// readExact already handles partial-recv internally).
 		const int32 PayloadBytes = TotalPoints * 4 * (int32)sizeof(float);
-		const int32 WireBytes = (int32)sizeof(FFSDSLidarStreamHeader) + PayloadBytes;
+		const int32 HeaderBytes = bOrganised ? (int32)sizeof(FFSDSLidarStreamHeaderV2) : (int32)sizeof(FFSDSLidarStreamHeader);
+		const int32 WireBytes = HeaderBytes + PayloadBytes;
 		WireBuf.SetNumUninitialized(WireBytes, EAllowShrinking::No);
-		FMemory::Memcpy(WireBuf.GetData(), &Header, sizeof(FFSDSLidarStreamHeader));
+		if (bOrganised)
+		{
+			FFSDSLidarStreamHeaderV2 Header2;
+			Header2.FrameID         = Header.FrameID;
+			Header2.Channels        = bSendOrganised ? OrgChannels : Header.Channels;
+			Header2.TotalPoints     = TotalPoints;
+			Header2.LagNs           = Header.LagNs;
+			Header2.SimCaptureNs    = Header.SimCaptureNs;
+			Header2.SweepDurationNs = bSendOrganised ? (int64)((double)OrgSweepS * 1e9) : 0;
+			Header2.Slots           = bSendOrganised ? OrgSlots : 0;
+			Header2.Flags           = bSendOrganised ? 1u : 0u;
+			FMemory::Memcpy(WireBuf.GetData(), &Header2, sizeof(Header2));
+		}
+		else
+		{
+			FMemory::Memcpy(WireBuf.GetData(), &Header, sizeof(FFSDSLidarStreamHeader));
+		}
 		FMemory::Memcpy(
-			WireBuf.GetData() + sizeof(FFSDSLidarStreamHeader),
+			WireBuf.GetData() + HeaderBytes,
 			Points.GetData(),
 			PayloadBytes);
 

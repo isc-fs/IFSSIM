@@ -220,6 +220,9 @@ void FFSDSUdpBroadcaster::PackSensorFrame(FFSDSSensorFrame& Frame)
 		Frame.OrientY = EnuQuat.Y;
 		Frame.OrientZ = EnuQuat.Z;
 		Frame.OrientW = EnuQuat.W;
+		// UDP sends one frame per tick: it carries the tick's latest IMU
+		// sample, stamped with that sample's sim time.
+		Frame.ImuTimestamp = Imu.SimTimeSec > 0.0 ? (uint64)(Imu.SimTimeSec * 1e9) : 0;
 	}
 
 	// GSS

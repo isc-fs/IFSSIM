@@ -56,7 +56,7 @@ def _adopt(path: Path) -> None:
     there is no owner to give it to; it gets the permissions of the folder above
     instead. Without that the queue's folders were root's and 755 to WSL, and a
     worker started there couldn't write a job's state."""
-    if os.geteuid() != 0:
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:   # no owners to adopt on native Windows
         return
     above = None
     for up in path.parents:

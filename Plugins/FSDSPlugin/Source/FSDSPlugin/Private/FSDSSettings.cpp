@@ -256,6 +256,15 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("RollStiffnessRear"), DblVal)) P.RollStiffnessRear = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("HeaveStiffness"), DblVal)) P.HeaveStiffness = DblVal;
 		if ((*PhysicsObj)->TryGetNumberField(TEXT("PitchStiffness"), DblVal)) P.PitchStiffness = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessGd0"), DblVal)) P.RoadRoughnessGd0 = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessCutoffWavelength"), DblVal)) P.RoadRoughnessCutoffWavelength = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessFootprint"), DblVal)) P.RoadRoughnessFootprint = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessCrossWavelength"), DblVal)) P.RoadRoughnessCrossWavelength = DblVal;
+		if ((*PhysicsObj)->TryGetNumberField(TEXT("RoadRoughnessTyreStiffness"), DblVal)) P.RoadRoughnessTyreStiffness = DblVal;
+		{
+			bool B = false;
+			if ((*PhysicsObj)->TryGetBoolField(TEXT("RoadRoughnessOnTrackWorld"), B)) P.bRoadRoughnessOnTrackWorld = B;
+		}
 
 		// Motor torque curve arrays
 		const TArray<TSharedPtr<FJsonValue>>* RPMArr;
@@ -347,6 +356,35 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 		}
 	}
 
+	// Per-channel elevation table: "ChannelElevationsDeg": [e0, ..., e{N-1}]
+	// in degrees, sensor frame. Length must equal NumberOfChannels.
+	{
+		const TArray<TSharedPtr<FJsonValue>>* ElevArr = nullptr;
+		if (SensorObj->TryGetArrayField(TEXT("ChannelElevationsDeg"), ElevArr) && ElevArr)
+		{
+			Sensor.ChannelElevationsDeg.Reset(ElevArr->Num());
+			for (const TSharedPtr<FJsonValue>& Entry : *ElevArr)
+			{
+				double V = 0.0;
+				if (Entry->TryGetNumber(V))
+				{
+					Sensor.ChannelElevationsDeg.Add((float)V);
+				}
+			}
+		}
+		// "ChannelRingIds": the car's ring number for each entry above.
+		const TArray<TSharedPtr<FJsonValue>>* RingArr = nullptr;
+		if (SensorObj->TryGetArrayField(TEXT("ChannelRingIds"), RingArr) && RingArr)
+		{
+			Sensor.ChannelRingIds.Reset(RingArr->Num());
+			for (const TSharedPtr<FJsonValue>& Entry : *RingArr)
+			{
+				double V = 0.0;
+				if (Entry->TryGetNumber(V)) Sensor.ChannelRingIds.Add((int32)V);
+			}
+		}
+	}
+
 	// LidarPath: "cpu" (default) or "gpu" — see #223. Only honoured when
 	// SensorType==6 (LiDAR); read by FSDSLidarSensor::BeginPlay. We
 	// store it on every sensor's settings struct uniformly because
@@ -354,6 +392,8 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	{
 		FString PathVal;
 		if (SensorObj->TryGetStringField(TEXT("LidarPath"), PathVal)) Sensor.LidarPath = PathVal;
+		FString FrameVal;
+		if (SensorObj->TryGetStringField(TEXT("PointFrame"), FrameVal)) Sensor.PointFrame = FrameVal;
 	}
 
 	// Noise parameters (all sensor types)
@@ -365,9 +405,67 @@ void FFSDSSettings::ParseSensor(const FString& Name, TSharedPtr<FJsonObject> Sen
 	if (SensorObj->TryGetNumberField(TEXT("GyroBiasStd"), DblVal)) Sensor.GyroBiasStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("AccelBiasTau"), DblVal)) Sensor.AccelBiasTau = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("GyroBiasTau"), DblVal)) Sensor.GyroBiasTau = DblVal;
+	// IMU sample stream and digitisation (SensorType 2 only reads these)
+	if (SensorObj->TryGetNumberField(TEXT("SampleRateHz"), DblVal)) Sensor.ImuSampleRateHz = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelOdrHz"), DblVal)) Sensor.AccelOdrHz = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelTurnOnBiasStd"), DblVal)) Sensor.AccelTurnOnBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroTurnOnBiasStd"), DblVal)) Sensor.GyroTurnOnBiasStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelLsb"), DblVal)) Sensor.AccelLsb = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroLsb"), DblVal)) Sensor.GyroLsb = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("AccelRange"), DblVal)) Sensor.AccelRange = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("GyroRange"), DblVal)) Sensor.GyroRange = DblVal;
+	{
+		// [x, y, z] arrays; anything but three numbers is ignored with a warning.
+		auto ReadXYZ = [&SensorObj, &Name](const TCHAR* Key, FVector& OutXYZ)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* XYZArr = nullptr;
+			if (!SensorObj->TryGetArrayField(Key, XYZArr) || !XYZArr) return;
+			if (XYZArr->Num() != 3)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("FSDS Settings: %s.%s needs 3 numbers, got %d — ignored"),
+					*Name, Key, XYZArr->Num());
+				return;
+			}
+			OutXYZ = FVector((*XYZArr)[0]->AsNumber(), (*XYZArr)[1]->AsNumber(), (*XYZArr)[2]->AsNumber());
+		};
+		ReadXYZ(TEXT("AccelNoiseStdXYZ"), Sensor.AccelNoiseStdXYZ);
+		ReadXYZ(TEXT("GyroNoiseStdXYZ"), Sensor.GyroNoiseStdXYZ);
+		ReadXYZ(TEXT("VibrationAccelRms"), Sensor.VibrationAccelRms);
+		ReadXYZ(TEXT("VibrationAccelHz"), Sensor.VibrationAccelHz);
+		ReadXYZ(TEXT("VibrationAccelQ"), Sensor.VibrationAccelQ);
+		ReadXYZ(TEXT("VibrationGyroRms"), Sensor.VibrationGyroRms);
+		ReadXYZ(TEXT("VibrationGyroHz"), Sensor.VibrationGyroHz);
+		ReadXYZ(TEXT("VibrationGyroQ"), Sensor.VibrationGyroQ);
+	}
+	if (SensorObj->TryGetNumberField(TEXT("VibrationRefSpeed"), DblVal)) Sensor.VibrationRefSpeed = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("VibrationSpeedExp"), DblVal)) Sensor.VibrationSpeedExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("VibrationOnSpeed"), DblVal)) Sensor.VibrationOnSpeed = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("VelocityNoiseStd"), DblVal)) Sensor.VelocityNoiseStd = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseStd"), DblVal)) Sensor.RangeNoiseStd = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakRate"), DblVal)) Sensor.DropoutWeakRate = DblVal;
 	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakExp"), DblVal)) Sensor.DropoutWeakExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutWeakMax"), DblVal)) Sensor.DropoutWeakMax = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutBurstScans"), DblVal)) Sensor.DropoutBurstScans = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutRate"), DblVal)) Sensor.DropoutRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("DropoutBurstIidShare"), DblVal)) Sensor.DropoutBurstIidShare = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRangeCoeff"), DblVal)) Sensor.RangeNoiseRangeCoeff = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseRefReflectance"), DblVal)) Sensor.RangeNoiseRefReflectance = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("RangeNoiseReflectanceExp"), DblVal)) Sensor.RangeNoiseReflectanceExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("EdgeSwapRate"), DblVal)) Sensor.EdgeSwapRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("EdgeDropRate"), DblVal)) Sensor.EdgeDropRate = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityNoise"), DblVal)) Sensor.IntensityNoise = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityScale"), DblVal)) Sensor.IntensityScale = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityRangeExp"), DblVal)) Sensor.IntensityRangeExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityIncidenceExp"), DblVal)) Sensor.IntensityIncidenceExp = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("IntensityMax"), DblVal)) Sensor.IntensityMax = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("LuminanceReflectanceGain"), DblVal)) Sensor.LuminanceReflectanceGain = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("WorldLuminanceReflectanceGain"), DblVal)) Sensor.WorldLuminanceReflectanceGain = DblVal;
+	if (SensorObj->TryGetNumberField(TEXT("SweepDurationMs"), DblVal)) Sensor.SweepDurationMs = DblVal;
+	{ bool bVal; if (SensorObj->TryGetBoolField(TEXT("SweepAlternate"), bVal)) Sensor.bSweepAlternate = bVal; }
+	SensorObj->TryGetBoolField(TEXT("IntensityRound"), Sensor.bIntensityRound);
 
 	Vehicle.Sensors.Add(Name, Sensor);
 }

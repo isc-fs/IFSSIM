@@ -188,13 +188,18 @@ slam_node:
 """
 
 
-def _checkout(tmp_path, params=True):
-    """An IFSSIM checkout with a small pipeline: two packages and a file that isn't one."""
+def _checkout(tmp_path, params=True, bridge=True):
+    """An IFSSIM checkout with a small pipeline (two packages and a file that isn't one)
+    and, with ``bridge``, the sim bridge's package under ros2/src."""
     root = tmp_path / "checkout"
     for pkg in ("bringup", "slam"):
         (root / "pipeline" / pkg).mkdir(parents=True, exist_ok=True)
         (root / "pipeline" / pkg / "package.xml").write_text("<package/>")
     (root / "pipeline" / "README.md").write_text("not a package")
+    if bridge:
+        (root / "ros2" / "src" / "ifssim_bridge" / "src").mkdir(parents=True, exist_ok=True)
+        (root / "ros2" / "src" / "ifssim_bridge" / "package.xml").write_text("<package/>")
+        (root / "ros2" / "src" / "ifssim_bridge" / "src" / "wrapper.cpp").write_text("// v1")
     if params:
         (root / "pipeline" / "bringup" / "config").mkdir(exist_ok=True)
         (root / "pipeline" / "bringup" / "config" / "params.yaml").write_text(
@@ -224,11 +229,18 @@ class FakeDocker:
         )
         self.image_id = ""  # what `docker image inspect` reports ("" = it fails)
         self.volumes: list[str] = []  # named volumes that exist
+        self.wipe_fails = False  # the container that deletes the root-owned files fails ...
+        self.wipe_raises = False  # ... or docker itself can't run it
 
     def __call__(self, *args, timeout=120.0):
         self.calls.append(list(args))
-        out, code = "", 0
-        if args[0] == "ps":
+        out, code, err = "", 0, ""
+        if args[:4] == ("run", "--rm", "--entrypoint", "find"):  # the work copy's wipe, as root
+            if self.wipe_raises:
+                raise rmb.BenchmarkError("docker run: timed out")
+            if self.wipe_fails:
+                code, err = 1, "docker: no such image"
+        elif args[0] == "ps":
             out = "\n".join(["mission_control", *self.others])
         elif args[0] == "stop":
             self.others.remove(args[1])
@@ -255,7 +267,7 @@ class FakeDocker:
             )
         elif args[0] == "run" and "/dev/tcp/" in args[-1]:
             code = 0 if self.sim_reachable else 1
-        return subprocess.CompletedProcess(["docker", *args], code, out, "")
+        return subprocess.CompletedProcess(["docker", *args], code, out, err)
 
     def run_args(self):
         [r] = [c for c in self.calls if c[0] == "run" and "--rm" not in c]
@@ -442,20 +454,29 @@ def test_the_own_stack_runs_this_checkouts_pipeline(
     )  # Fast DDS shared memory, as compose
     mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
     targets = sorted(_mount(m)[1] for m in mounts if "/src/" in m)
+    # the pipeline's packages and the sim bridge's: the image's own bridge may be older
+    # than the sim's sensor frame
     assert targets == [
         "/dv_pipeline_stack_ws/src/bringup",
+        "/dv_pipeline_stack_ws/src/ifssim_bridge",
         "/dv_pipeline_stack_ws/src/slam",
     ]
     hosts = [Path(_mount(m)[0]) for m in mounts if "/src/" in m]
-    assert all(h.is_absolute() and h.parent.name == "pipeline" for h in hosts)
+    assert all(h.is_absolute() for h in hosts)
+    assert sorted(h.parent.name for h in hosts) == ["pipeline", "pipeline", "ros2"]
     # a copy is mounted, never the checkout itself (the container builds into it)
     assert not any(str(tmp_path / "checkout") in m for m in mounts)
     # ... and the copy sits under the results root, never in /tmp, which snap's Docker
     # mounts as an empty folder
     assert all(h.is_relative_to((tmp_path / "results").resolve()) for h in hosts)
     assert ["rm", "-f", rmb.CONTAINER] in docker.calls
-    # root-owned files in the copy are removed from a container, as root
-    assert docker.calls[-1][:3] == ["run", "--rm", "--entrypoint"]
+    # root-owned files anywhere in the copy (pipeline/ and ros2/ both) are removed from a
+    # container, as root: everything inside the copy's folder, not just one subfolder
+    copy = hosts[-1].parent.parent
+    assert docker.calls[-1] == [
+        "run", "--rm", "--entrypoint", "find", "-v", f"{copy}:/copy", "ifssim-dv:abc1234",
+        "/copy", "-mindepth", "1", "-delete",
+    ]
     assert list((tmp_path / "results" / "mission").glob("stack_*.log"))
     assert not hosts[-1].exists()  # the copy is cleaned up
 
@@ -475,6 +496,42 @@ def test_the_stacks_build_is_kept_between_runs_of_one_image(tmp_path, world, doc
     assert "bench_ws_0123456789ab_install:/dv_pipeline_stack_ws/install" in mounts
     assert docker.volumes == ["bench_ws_0123456789ab_build", "bench_numba_cache"]
     assert any(a.startswith("DV_SRC_HASH=") for a in run)  # so unchanged sources skip colcon
+
+
+def test_a_change_to_the_bridge_alone_changes_the_stacks_source_hash(
+    tmp_path, world, docker
+):
+    """The entrypoint skips colcon when DV_SRC_HASH matches the cached build: a bridge
+    change must not be skipped."""
+    docker.image_id = "sha256:0123456789abcdef"
+    checkout = _checkout(tmp_path / "c")
+
+    def src_hash():
+        rc, _ = _run(tmp_path, world, checkout=str(checkout))
+        assert rc == 0
+        last = [c for c in docker.calls if c[0] == "run" and "--rm" not in c][-1]
+        return next(a for a in last if a.startswith("DV_SRC_HASH="))
+
+    first = src_hash()
+    assert src_hash() == first  # same sources, same hash: colcon is skipped
+    (checkout / "ros2" / "src" / "ifssim_bridge" / "src" / "wrapper.cpp").write_text(
+        "// v2: a bigger sensor frame"
+    )
+    assert src_hash() != first
+
+
+def test_a_checkout_without_the_bridge_still_runs_its_pipeline(
+    tmp_path, world, docker
+):
+    checkout = _checkout(tmp_path / "c", bridge=False)
+    rc, _ = _run(tmp_path, world, checkout=str(checkout))
+    assert rc == 0
+    run = docker.run_args()
+    mounts = [run[i + 1] for i, a in enumerate(run) if a == "-v"]
+    assert sorted(_mount(m)[1] for m in mounts if "/src/" in m) == [
+        "/dv_pipeline_stack_ws/src/bringup",
+        "/dv_pipeline_stack_ws/src/slam",
+    ]
 
 
 def test_the_source_hash_follows_paths_and_contents(tmp_path):
@@ -724,3 +781,127 @@ def test_a_finish_beats_the_emergency_brake_that_follows_it(tmp_path):
     w = FakeWorld(sim_step=1.0, assi=[(3, 3), (1, 5)])
     rc, logs = _run(tmp_path, w, timeout_s=60.0)
     assert rc == 0 and _result(tmp_path)["race/finished"] == 1
+
+
+# ------------------------------------------------------------------ where the sim is
+def test_a_given_sim_address_is_used_as_is(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: pytest.fail("no lookup"))
+    assert rmb.sim_address("10.0.0.5:4000") == ("10.0.0.5", 4000)
+
+
+def test_outside_wsl_the_sim_is_on_this_machine(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: None)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_from_wsl_in_nat_mode_the_sim_is_on_windows(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: host == "172.18.240.1")
+    assert rmb.sim_address(None) == ("172.18.240.1", 41451)
+
+
+def test_from_wsl_in_mirrored_mode_the_sim_stays_on_localhost(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: True)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_with_the_sim_down_the_error_names_localhost(monkeypatch):
+    monkeypatch.setattr(rmb, "wsl_windows_host", lambda: "172.18.240.1")
+    monkeypatch.setattr(rmb, "_reachable", lambda host, port: False)
+    assert rmb.sim_address(None) == ("127.0.0.1", 41451)
+
+
+def test_windows_host_is_read_from_wsls_default_route(monkeypatch, tmp_path):
+    files = {
+        "/proc/sys/kernel/osrelease": "5.15.167.4-microsoft-standard-WSL2\n",
+        "/proc/net/route": "Iface\tDestination\tGateway\tFlags\n"
+        "eth0\t0000F0AC\t00000000\t0001\n"
+        "eth0\t00000000\t01F012AC\t0003\n",
+    }
+    real = rmb.Path.read_text
+    monkeypatch.setattr(
+        rmb.Path,
+        "read_text",
+        lambda self, *a, **k: files[self.as_posix()] if self.as_posix() in files else real(self, *a, **k),
+    )
+    assert rmb.wsl_windows_host() == "172.18.240.1"
+    files["/proc/sys/kernel/osrelease"] = "6.8.0-generic\n"
+    assert rmb.wsl_windows_host() is None
+
+
+def test_the_stack_takes_its_cpu_weight_and_viz_switch_from_the_environment(
+    tmp_path, world, docker, monkeypatch
+):
+    assert rmb.stack_cpu_args({}) == []  # a laptop run changes nothing
+    monkeypatch.setenv("BENCH_CPU_SHARES", "8192")
+    monkeypatch.setenv("DV_VIZ_RELAY", "false")
+    rc, _ = _run(tmp_path, world)
+    assert rc == 0
+    run = docker.run_args()
+    assert run[run.index("--cpu-shares") + 1] == "8192"
+    assert "DV_VIZ_RELAY=false" in run
+    with pytest.raises(rmb.BenchmarkError):
+        rmb.stack_cpu_args({"BENCH_CPU_SHARES": "lots"})
+
+
+def test_a_run_records_how_cpu_starved_the_machine_was(tmp_path, monkeypatch):
+    # /proc/pressure/cpu's "some" total grows by 0.25 s per second of the run
+    clock = {"t": 100.0}
+    real = rmb.time.monotonic
+    monkeypatch.setattr(rmb, "cpu_pressure_us", lambda: (real() - clock["t"]) * 0.25e6)
+    rc, _ = _run(tmp_path, FakeWorld(never_finishes=True, sim_step=1.0), timeout_s=3.0)
+    res = _result(tmp_path)
+    assert rc == 1
+    assert res["box/cpu_wait"] == pytest.approx(0.25, abs=0.02)
+    assert "box/load1" in res
+
+
+def test_cpu_pressure_is_read_from_the_some_line(tmp_path, monkeypatch):
+    p = tmp_path / "cpu"
+    p.write_text("some avg10=20.79 avg60=21.74 avg300=13.63 total=14420655869\n"
+                 "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")
+    monkeypatch.setattr(rmb, "CPU_PRESSURE", p)
+    assert rmb.cpu_pressure_us() == 14420655869.0
+    monkeypatch.setattr(rmb, "CPU_PRESSURE", tmp_path / "missing")
+    assert rmb.cpu_pressure_us() is None  # not Linux, or an old kernel: nothing recorded
+
+
+# ------------------------------------------------------------------ the stack's work copy is always cleaned up
+def _copies(tmp_path):
+    return list((tmp_path / "results").glob("bench-dv-stack-*"))
+
+
+def test_a_failing_wipe_never_hides_the_runs_result(tmp_path, world, docker):
+    docker.wipe_fails = True
+    rc, logs = _run(tmp_path, world)
+    assert rc == 0  # the run's own result
+    assert any("removing the stack's work copy as root failed: docker: no such image" in m for m in logs)
+    assert _copies(tmp_path) == []  # what we own is removed anyway
+
+
+def test_docker_failing_to_run_the_wipe_is_a_warning_too(tmp_path, world, docker):
+    docker.wipe_raises = True
+    rc, logs = _run(tmp_path, world)
+    assert rc == 0
+    assert any("removing the stack's work copy as root failed: docker run: timed out" in m for m in logs)
+
+
+def test_what_stays_is_named_with_the_command_that_removes_it(tmp_path, world, docker, monkeypatch):
+    monkeypatch.setattr(rmb.shutil, "rmtree", lambda *a, **k: None)  # as if root-owned files stayed
+    rc, logs = _run(tmp_path, world)
+    assert rc == 0
+    [left] = _copies(tmp_path)
+    [warning] = [m for m in logs if "is still there" in m]
+    assert str(left) in warning and "docker run --rm --entrypoint find" in warning
+
+
+def test_a_copy_made_before_the_container_ran_is_removed_without_root(tmp_path, docker):
+    work = tmp_path / "bench-dv-stack-abc"
+    (work / "pipeline").mkdir(parents=True)
+    (work / "pipeline" / "x.py").write_text("")
+    stack = rmb.Stack("own", "bench_pc", "img", tmp_path)
+    stack.tmp = work
+    stack.down(lambda m: None)  # never started: a failure before `docker run`
+    assert not work.exists() and stack.tmp is None
+    assert not any(c[:4] == ["run", "--rm", "--entrypoint", "find"] for c in docker.calls)

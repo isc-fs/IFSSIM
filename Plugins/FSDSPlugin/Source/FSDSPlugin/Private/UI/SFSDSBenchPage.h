@@ -26,6 +26,9 @@ struct FFSDSMcReply;
  * missions, or replay recorded bags), the few choices that matter for it in
  * plain words, and everything else bench.yaml declares under More settings
  * (drawn from the manifest, so a new setting appears without touching the sim).
+ * The spec fields it sets, and its words for them, are registered in
+ * SFSDSBenchPageFields.inl; tools/sim_benchmark/tests/test_schema.py checks that list
+ * against run_spec.py --print-schema (the benchweb's form) both ways.
  * A preset fills it in; the form edits a copy of its spec (the draft), so what it
  * doesn't show (notes, a sweep) rides along. A bar under the form says what will
  * run, or what's wrong, next to Queue.
@@ -181,6 +184,7 @@ private:
 	TArray<FString> Missions, TrackNames;
 	TMap<FString, TArray<FString>> MissionTracks;   // each mission's own tracks (missions.yaml)
 	FString PipelineRepo;   // owner/name on GitHub
+	FString IfssimRepo;     // the same, for code.ifssim on a runner target
 	struct FFirmware { FString Repo, Default; };
 	TMap<FString, FFirmware> Firmware;   // per board (bench.yaml boards.firmware)
 	TArray<FString> HilBoards;

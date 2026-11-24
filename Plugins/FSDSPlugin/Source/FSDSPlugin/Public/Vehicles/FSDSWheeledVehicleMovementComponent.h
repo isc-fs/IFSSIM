@@ -97,6 +97,14 @@ public:
 	bool VerifyAllWheelConfigsApplied(float Tolerance = 0.5f) const;
 
 	/**
+	 * The suspension the solver actually runs for one wheel: spring rate in
+	 * N/m, compression damping in N*s/m (Chaos derives it from the damping
+	 * ratio and the sprung mass, SetupSuspension), and the wheel's resting
+	 * position in the body frame (cm). False until the vehicle exists.
+	 */
+	bool GetSolverSuspension(int32 WheelIndex, float& OutSpringRate, float& OutDamping, FVector& OutLocalPosition) const;
+
+	/**
 	 * Log every wheel parameter this project never explicitly chose.
 	 *
 	 * Chaos's wheel class ships twelve tuning fields that FSDSWheelFront/Rear
@@ -106,7 +114,8 @@ public:
 	 * cannot grep for a value that is never written.
 	 *
 	 * Two of them are physically significant and neither was a decision:
-	 *   RollbarScaling      0.15  — a live anti-roll bar
+	 *   RollbarScaling      0.15  — a live anti-roll bar (now set to 0 in
+	 *                       FSDSWheelFront/Rear, from the car's measured roll)
 	 *   MaxHandBrakeTorque  3000 N.m/wheel — and the handbrake channel IS the
 	 *                       EBS on this car, so this is the number the entire
 	 *                       emergency-braking case rests on

@@ -46,4 +46,7 @@ trackdrive:
   repeats: 1
   start_pose: {noise: false, lateral_m: 0.3, longitudinal_m: 0.3, yaw_deg: 5}
   laps: 10
-  timeout_s: 2400
+  # Slowest measured 10-lap finish + 25 %: 1054.7 s (track 3721, pipeline on the Orange Pi, RTF ~0.99,
+  # 2026-11-13; the others took 701-860 s). Tighter than "twice the expected time" on purpose: a car that
+  # keeps driving but never finishes would otherwise hold the box for 40 min.
+  timeout_s: 1300

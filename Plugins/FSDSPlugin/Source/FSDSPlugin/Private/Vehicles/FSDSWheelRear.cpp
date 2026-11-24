@@ -31,16 +31,21 @@ UFSDSWheelRear::UFSDSWheelRear()
 	// fudged wheel physics that the real car would inherit.
 	WheelMass = 10.f;
 
-	// IFS-08: 35mm ride height, 300 lbs/in rear springs
-	SuspensionMaxRaise = 3.5f;
-	SuspensionMaxDrop = 3.5f;
-	SuspensionDampingRatio = 1.5f;
+	// Travel: MaxDrop keeps the static wheel position (ride height) of the
+	// old 52.5 kN/m rate. Static compression 758.1 N / 20184 N/m = 3.76 cm,
+	// was 1.44 cm, so MaxDrop 3.5 + 2.31 = 5.81 cm. See FSDSWheelFront.cpp.
+	SuspensionMaxRaise = 3.5f;  // cm
+	SuspensionMaxDrop = 5.81f;  // cm
+	SuspensionDampingRatio = 1.5f;   // overwritten from settings.json SuspensionDamping (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs)
 
-	// Wheel rate: 300 lb/in = 52538 N/m -> property 525.4 (the property is
-	// scaled x100 into N/m; see FSDSWheelFront.cpp for the full unit
-	// derivation and the cross-check against HeaveStiffness). Previously
-	// unset, so Chaos used its 250 default = 25 kN/m.
-	SpringRate = 525.4f;
+	// Wheel rate 20184 N/m -> property 201.84 (x100 into N/m), the same as
+	// the front. Was 300 lb/in = 52538 N/m, the workbook's spring rate taken
+	// as a wheel rate. See FSDSWheelFront.cpp for the units and the
+	// measurement against the car.
+	SpringRate = 201.84f;
+
+	// No anti-roll bar: see FSDSWheelFront.cpp.
+	RollbarScaling = 0.f;
 
 	// Use the actual per-wheel vertical load (Fz) for grip calculation
 	// instead of Chaos's default 50/50 blend with the resting load.

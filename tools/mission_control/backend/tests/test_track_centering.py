@@ -85,3 +85,16 @@ def test_builtin_tracks_fit_the_floor_as_they_are():
         rows = [line.split(",") for line in (tracks / name).read_text().splitlines() if line.strip()]
         far = max(max(abs(float(r[1])), abs(float(r[2]))) for r in rows if len(r) >= 3)
         assert far <= FLOOR_HALF_M, f"{name}: a cone {far:.0f} m from the origin, off the floor"
+
+
+def test_committed_tracks_are_already_centred():
+    """Loading recentres every other track in place, so one committed off-centre
+    would show up modified in the working tree after its first load."""
+    from pathlib import Path
+
+    from track_centering import is_centered
+
+    tracks = Path(__file__).resolve().parents[4] / "Content" / "tracks"
+    builtin = set(_builtin_tracks())
+    off = [p.name for p in sorted(tracks.glob("*.csv")) if p.name not in builtin and not is_centered(str(p))]
+    assert not off, f"committed off-centre (load would rewrite them): {', '.join(off)}"

@@ -27,8 +27,9 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
 )
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -66,7 +67,10 @@ def generate_launch_description() -> LaunchDescription:
     # The sim's pipeline view (Esc during an autonomous run): what the
     # pipeline sees, streamed to the sim to draw over the track. Sim-side,
     # so it lives here rather than in the pipeline's bringup.
+    # DV_VIZ_RELAY=false skips it: a headless run (the GPU box's sim check)
+    # has nobody to show it to, and it costs about half a core there.
     viz_relay = Node(
+        condition=IfCondition(EnvironmentVariable("DV_VIZ_RELAY", default_value="true")),
         package="sim_supervisor",
         executable="viz_relay",
         name="viz_relay",

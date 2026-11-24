@@ -20,6 +20,32 @@
 #include "ShaderParameterMacros.h"
 #include "Sensors/FSDSLidarDecodeShader.h"
 #include "FSDSReferee.h"  // FSDSConeStencil:: IDs (#321 D-Phase-1)
+#include "Environment/FSDSWorldActor.h"
+#include "EngineUtils.h"  // TActorIterator
+#include "Components/PrimitiveComponent.h"
+
+namespace FSDSLidarSweepPrivate
+{
+	// Vehicle velocity at its origin (m/s) and angular velocity (rad/s), both in
+	// the vehicle's UE frame (X fwd, Y right, Z up). Numerically consistent with
+	// UE's cross product, so a point p moves at v + w x p in that frame.
+	static void OwnerVelocityLocal(const AActor* Owner, FVector& OutVelMps, FVector& OutOmega)
+	{
+		OutVelMps = FVector::ZeroVector; OutOmega = FVector::ZeroVector;
+		if (!Owner) return;
+		const FTransform Xf = Owner->GetActorTransform();
+		UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(Owner->GetRootComponent());
+		if (Root && Root->IsSimulatingPhysics())
+		{
+			OutVelMps = Xf.InverseTransformVectorNoScale(Root->GetPhysicsLinearVelocityAtPoint(Xf.GetLocation())) / 100.0;
+			OutOmega  = Xf.InverseTransformVectorNoScale(Root->GetPhysicsAngularVelocityInRadians());
+		}
+		else
+		{
+			OutVelMps = Xf.InverseTransformVectorNoScale(Owner->GetVelocity()) / 100.0;
+		}
+	}
+}
 #include "Materials/MaterialInterface.h"  // M_LiDARStencilEncoder load (#321 D-Phase-2)
 
 using FSDSNoise::RandStandardNormal;
@@ -141,6 +167,57 @@ void UFSDSLidarSensor::EndPlay(const EEndPlayReason::Type Reason)
 
 void UFSDSLidarSensor::OnSettingsApplied()
 {
+	// Channel elevations: a measured table from settings.json, or the
+	// uniform grid. Done first because it can move VerticalFOVLower/Upper,
+	// which the GPU capture is sized from.
+	const bool bHasElevTable = ChannelElevationsDeg.Num() == NumberOfChannels && NumberOfChannels > 0;
+	RingToChannel.Reset();
+	if (!bHasElevTable)
+	{
+		if (ChannelElevationsDeg.Num() != 0)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("FSDS LiDAR: ChannelElevationsDeg has %d entries but NumberOfChannels=%d — using a uniform %.1f..%.1f° grid."),
+				ChannelElevationsDeg.Num(), NumberOfChannels, VerticalFOVLower, VerticalFOVUpper);
+		}
+		EffectiveElevationsDeg.SetNumUninitialized(FMath::Max(0, NumberOfChannels));
+		const float Step = (NumberOfChannels > 1)
+			? (VerticalFOVUpper - VerticalFOVLower) / (float)(NumberOfChannels - 1) : 0.f;
+		for (int32 v = 0; v < NumberOfChannels; v++)
+		{
+			EffectiveElevationsDeg[v] = VerticalFOVLower + v * Step;
+		}
+	}
+	else
+	{
+		EffectiveElevationsDeg = ChannelElevationsDeg;
+		EffectiveElevationsDeg.Sort();
+		// Ring numbering: entry i of the table is ring ChannelRingIds[i];
+		// its shader channel is its rank in the sorted table.
+		if (ChannelRingIds.Num() == NumberOfChannels)
+		{
+			TArray<int32> Order;
+			for (int32 i = 0; i < NumberOfChannels; i++) Order.Add(i);
+			Order.StableSort([this](int32 A, int32 B) { return ChannelElevationsDeg[A] < ChannelElevationsDeg[B]; });
+			TArray<int32> Ring2Ch;
+			Ring2Ch.Init(-1, NumberOfChannels);
+			bool bValid = true;
+			for (int32 Ch = 0; Ch < NumberOfChannels && bValid; Ch++)
+			{
+				const int32 Ring = ChannelRingIds[Order[Ch]];
+				bValid = Ring >= 0 && Ring < NumberOfChannels && Ring2Ch[Ring] < 0;
+				if (bValid) Ring2Ch[Ring] = Ch;
+			}
+			if (bValid) RingToChannel = MoveTemp(Ring2Ch);
+			else UE_LOG(LogTemp, Warning, TEXT("FSDS LiDAR: ChannelRingIds is not a permutation of 0..%d — rings by elevation instead."), NumberOfChannels - 1);
+		}
+		VerticalFOVLower = EffectiveElevationsDeg[0];
+		VerticalFOVUpper = EffectiveElevationsDeg.Last();
+		UE_LOG(LogTemp, Log,
+			TEXT("FSDS LiDAR: per-channel elevation table, %d channels, %.2f..%.2f°"),
+			NumberOfChannels, VerticalFOVLower, VerticalFOVUpper);
+	}
+
 	const float HFov = HorizontalFOVEnd - HorizontalFOVStart;
 	const float VFov = VerticalFOVUpper - VerticalFOVLower;
 	const int32 PointsPerScan = PointsPerSecond / FMath::Max(1.f, RotationsPerSecond);
@@ -255,6 +332,8 @@ void UFSDSLidarSensor::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 	// is already by value.
 	TWeakObjectPtr<UWorld> WeakWorld(World);
 	TWeakObjectPtr<AActor> WeakOwner(Owner);
+	FSDSLidarSweepPrivate::OwnerVelocityLocal(Owner, CpuSweepVelLocalMps, CpuSweepOmegaLocal);
+	++CpuSweepCounter;
 	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, WeakWorld, WeakOwner, OwnerTransform]()
 	{
 		UWorld* W = WeakWorld.Get();
@@ -282,7 +361,13 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	float VStep = (NumberOfChannels > 1) ? VFov / (float)(NumberOfChannels - 1) : 0.f;
 
 	FVector SensorWorldPos = OwnerTransform.TransformPosition(SensorOffset);
-	FQuat OwnerRotation = OwnerTransform.GetRotation();
+	// Mirror sweep (see SweepDurationMs), snapshot on the game thread.
+	const float SweepTauPerFrac = FMath::Max(0.f, SweepDurationMs) / 1000.f;
+	const bool bSweepReversed = bSweepAlternate && (CpuSweepCounter & 1u);
+	const FVector SweepVelMps = CpuSweepVelLocalMps;
+	const FVector SweepOmega = CpuSweepOmegaLocal;
+	// Mount rotation first (sensor frame -> vehicle frame), then the vehicle's.
+	FQuat OwnerRotation = OwnerTransform.GetRotation() * MountRotation.Quaternion();
 
 	TArray<float> NewPoints;
 	NewPoints.Reserve(PointsPerRotation * 3);
@@ -325,7 +410,9 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 	ChannelDir.SetNumUninitialized(NumberOfChannels);
 	for (int32 v = 0; v < NumberOfChannels; v++)
 	{
-		const float VAngleRad = FMath::DegreesToRadians(VerticalFOVLower + v * VStep);
+		const float VAngleDeg = EffectiveElevationsDeg.IsValidIndex(v)
+			? EffectiveElevationsDeg[v] : VerticalFOVLower + v * VStep;
+		const float VAngleRad = FMath::DegreesToRadians(VAngleDeg);
 		ChannelDir[v] = { FMath::Cos(VAngleRad), FMath::Sin(VAngleRad) };
 	}
 
@@ -366,8 +453,18 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				continue;
 
 			float Dist = (Hit.ImpactPoint - SensorWorldPos).Size();
-			if (RangeNoiseStd > 0.f)
-				Dist += RangeNoiseStd * RandStandardNormal(Noise());
+			{
+				// Same σ model as the GPU shader, with the CPU path's placeholder
+				// reflectance (0.5). No edge outliers here: they need neighbour depths.
+				const float RangeMPre = Dist / 100.f;
+				float SigmaCm = RangeNoiseStd + RangeNoiseRangeCoeffCm * RangeMPre * RangeMPre;
+				if (RangeNoiseReflectanceExp > 0.f)
+				{
+					SigmaCm *= FMath::Clamp(FMath::Pow(RangeNoiseRefReflectance / 0.5f, RangeNoiseReflectanceExp), 0.3f, 4.f);
+				}
+				if (SigmaCm > 0.f)
+					Dist += SigmaCm * RandStandardNormal(Noise());
+			}
 
 			// Re-cull after noise — a +noise sample can push Dist past
 			// the channel's max range. Match the GPU path which checks
@@ -376,7 +473,20 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 				continue;
 
 			const FVector NoisyHitPoint = SensorWorldPos + RayDir * Dist;
-			const FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
+			FVector LocalHit = OwnerTransform.InverseTransformPosition(NoisyHitPoint);
+			// Mirror sweep: move the point by the car's motion over its delay
+			// (cm; velocities in m/s, so x100 on the linear term).
+			if (SweepTauPerFrac > 0.f)
+			{
+				const float Frac = (HorizontalSteps > 1) ? float(h) / float(HorizontalSteps - 1) : 0.5f;
+				const float Tau = SweepTauPerFrac * (bSweepReversed ? 1.f - Frac : Frac);
+				LocalHit -= Tau * (SweepVelMps * 100.0 + FVector::CrossProduct(SweepOmega, LocalHit));
+			}
+			// Sensor frame: relative to the mount, axes tilted with it.
+			if (bPointsInSensorFrame)
+			{
+				LocalHit = MountRotation.Quaternion().UnrotateVector(LocalHit - SensorOffset);
+			}
 			// UE5 vehicle local frame is left-handed (X-fwd, Y-RIGHT, Z-up).
 			// ROS REP-103 vehicle frame is right-handed (X-fwd, Y-LEFT, Z-up).
 			// Without the Y flip, every cone shows up mirrored across the
@@ -399,9 +509,21 @@ void UFSDSLidarSensor::PerformScan(UWorld* InWorld, AActor* InOwner, FTransform 
 			const float CosIncidence = FMath::Max(0.0f,
 				static_cast<float>(FVector::DotProduct(-RayDir, Hit.ImpactNormal)));
 			const float RangeM   = FMath::Max(Dist / 100.0f, 0.01f);
-			const float Falloff  = (R_REFERENCE_M * R_REFERENCE_M) / (RangeM * RangeM);
-			const float Intensity = FMath::Clamp(
-				CPU_REFLECTANCE_PLACEHOLDER * CosIncidence * Falloff, 0.0f, 1.0f);
+			// Same law as the GPU path; IntensityScale < 0 is the old
+			// ρ·cos·(R_ref/r)² with R_ref = 1 m here.
+			const bool bLegacyLaw = IntensityScale < 0.f;
+			const float LawScale = bLegacyLaw ? R_REFERENCE_M * R_REFERENCE_M : IntensityScale;
+			const float RangeExp = bLegacyLaw ? 2.f : IntensityRangeExp;
+			const float IncExp   = bLegacyLaw ? 1.f : IntensityIncidenceExp;
+			const float IncLaw   = IncExp > 0.f ? FMath::Pow(FMath::Max(CosIncidence, 1e-6f), IncExp) : 1.f;
+			const float Falloff  = FMath::Pow(RangeM, -RangeExp);
+			const float Jitter = IntensityNoise > 0.f
+				? FMath::Max(0.f, 1.f + IntensityNoise * static_cast<float>(RandStandardNormal(Noise())))
+				: 1.f;
+			float Intensity = FMath::Clamp(
+				CPU_REFLECTANCE_PLACEHOLDER * LawScale * IncLaw * Falloff * Jitter,
+				0.0f, bLegacyLaw ? 1.0f : IntensityMax);
+			if (!bLegacyLaw && bIntensityRound) Intensity = FMath::RoundToFloat(Intensity);
 
 			SlotResults[SlotIdx] = {
 				static_cast<float>(LocalHit.X) / 100.f,
@@ -446,6 +568,16 @@ TArray<float> UFSDSLidarSensor::GetPointCloud() const
 {
 	FScopeLock Lock(&const_cast<UFSDSLidarSensor*>(this)->PointCloudLock);
 	return PointCloudBuffer;
+}
+
+bool UFSDSLidarSensor::GetOrganisedPointCloud(TArray<float>& OutPoints, int32& OutChannels, int32& OutSlots, float& OutSweepS) const
+{
+	FScopeLock Lock(&const_cast<UFSDSLidarSensor*>(this)->PointCloudLock);
+	OutPoints   = OrganisedBuffer;
+	OutChannels = OrganisedChannels;
+	OutSlots    = OrganisedSlots;
+	OutSweepS   = OrganisedSweepS;
+	return OrganisedBuffer.Num() > 0;
 }
 
 int32 UFSDSLidarSensor::GetPointCount() const
@@ -594,7 +726,7 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUDepthCapture->RegisterComponent();
 	GPUDepthCapture->SetRelativeLocation(SensorOffset);
 	// tilt=0 — see comment in geometry-derivation block above.
-	GPUDepthCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	GPUDepthCapture->SetRelativeRotation(MountRotation);  // camera = sensor axis; tilt=0 in the sensor frame
 	GPUDepthCapture->TextureTarget         = GPUDepthRT;
 	// Tried SCS_DeviceDepth here as an #488 residual-reduction attempt
 	// — device depth has less pipeline machinery than SceneDepth. It
@@ -713,7 +845,7 @@ void UFSDSLidarSensor::InitializeGPUPath()
 	GPUColorCapture->SetupAttachment(Owner->GetRootComponent());
 	GPUColorCapture->RegisterComponent();
 	GPUColorCapture->SetRelativeLocation(SensorOffset);
-	GPUColorCapture->SetRelativeRotation(FRotator::ZeroRotator);
+	GPUColorCapture->SetRelativeRotation(MountRotation);
 	GPUColorCapture->TextureTarget         = GPUColorRT;
 	GPUColorCapture->CaptureSource         = ESceneCaptureSource::SCS_FinalColorLDR;
 	GPUColorCapture->bCaptureEveryFrame    = false;
@@ -980,6 +1112,7 @@ bool UFSDSLidarSensor::TickGPUPath(float DeltaTime)
 		GPUPendingOwnerTransform = Xf;
 		GPUPendingSensorWorldPos = Xf.TransformPosition(SensorOffset);
 		GPUPendingOwnerRotation  = Xf.GetRotation();
+		FSDSLidarSweepPrivate::OwnerVelocityLocal(Owner, GPUPendingVelLocalMps, GPUPendingOmegaLocal);
 	}
 
 	const double T0 = FPlatformTime::Seconds();
@@ -1090,7 +1223,19 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		float HStartRad, HEndRad, VUpperRad, VLowerRad, TiltRad;
 		float HHalfPlanar, VBottomPlanar, VTopPlanar;
 		float MinRangeCm, MaxRangeCm, RangeNoiseStdCm, DropoutRate;
+		float DropoutWeakRate, DropoutWeakExp, DropoutWeakMax, DropoutBurstScans, DropoutBurstIidShare;
+		uint32 DropoutScanIndex, DropoutCellSeed;
+		float RangeNoiseRangeCoeffCm, RangeNoiseRefReflectance, RangeNoiseReflectanceExp;
+		float EdgeSwapRate, EdgeDropRate, IntensityNoiseRel;
+		float IntensityScale, IntensityRangeExp, IntensityIncidenceExp, IntensityMax;
+		uint32 IntensityRound;
+		float LuminanceReflectanceGain;
+		float SweepDurationS;
+		uint32 SweepReversed;
+		FVector3f SweepVelMps;
+		FVector3f SweepOmega;
 		uint32 RNGSeed;
+		uint32 PointsInSensorFrame;
 		float SensorOffsetXm, SensorOffsetYm, SensorOffsetZm;
 		// #255 — sensor's world-frame rotation rows. The shader uses
 		// these to take the vehicle-local ray direction into world frame
@@ -1100,6 +1245,11 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		FVector3f SensorRotRowX;
 		FVector3f SensorRotRowY;
 		FVector3f SensorRotRowZ;
+		// Mount rotation, sensor frame -> vehicle frame: row i dotted with a
+		// sensor-frame direction gives its vehicle-frame component i.
+		FVector3f MountRotRowX;
+		FVector3f MountRotRowY;
+		FVector3f MountRotRowZ;
 		float RReferenceM;  // inverse-square reference range (#255)
 
 		// #321 D-Phase-1 — per-cone-material reflectance LUT. Filled
@@ -1125,6 +1275,55 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	U.MaxRangeCm         = MaxRange;
 	U.RangeNoiseStdCm    = RangeNoiseStd;
 	U.DropoutRate        = DropoutRate;
+	U.DropoutWeakRate      = FMath::Max(0.f, DropoutWeakRate);
+	U.DropoutWeakExp       = DropoutWeakExp;
+	U.DropoutWeakMax       = FMath::Clamp(DropoutWeakMax, 0.f, 1.f);
+	U.DropoutBurstScans    = FMath::Max(0.f, DropoutBurstScans);
+	U.DropoutBurstIidShare = FMath::Clamp(DropoutBurstIidShare, 0.f, 1.f);
+	U.RangeNoiseRangeCoeffCm   = RangeNoiseRangeCoeffCm;
+	U.RangeNoiseRefReflectance = RangeNoiseRefReflectance;
+	U.RangeNoiseReflectanceExp = RangeNoiseReflectanceExp;
+	U.EdgeSwapRate             = EdgeSwapRate;
+	U.EdgeDropRate             = EdgeDropRate;
+	U.IntensityNoiseRel        = IntensityNoise;
+	// Intensity law. Scale < 0 = the old ρ·cos·(R_ref/r)² with R_ref = 5 m.
+	if (IntensityScale < 0.f)
+	{
+		U.IntensityScale        = 25.f;
+		U.IntensityRangeExp     = 2.f;
+		U.IntensityIncidenceExp = 1.f;
+		U.IntensityMax          = 1.f;
+		U.IntensityRound        = 0u;
+	}
+	else
+	{
+		U.IntensityScale        = IntensityScale;
+		U.IntensityRangeExp     = IntensityRangeExp;
+		U.IntensityIncidenceExp = IntensityIncidenceExp;
+		U.IntensityMax          = IntensityMax;
+		U.IntensityRound        = bIntensityRound ? 1u : 0u;
+	}
+	// Luminance → ρ gain. The level's floor renders darker than asphalt
+	// (luminance ~0.04), so the default gain lifts it; a track's world
+	// (Montmeló) brings photo-matched colours and hides that floor, so it
+	// gets its own gain.
+	bool bWorldBuilt = false;
+	if (UWorld* W = GetWorld())
+	{
+		for (TActorIterator<AFSDSWorldActor> It(W); It; ++It)
+		{
+			if (It->IsBuilt()) { bWorldBuilt = true; break; }
+		}
+	}
+	const float Gain = (bWorldBuilt && WorldLuminanceReflectanceGain >= 0.f)
+		? WorldLuminanceReflectanceGain : LuminanceReflectanceGain;
+	U.LuminanceReflectanceGain = FMath::Max(0.f, Gain);
+	if (LastWorldGainState != int8(bWorldBuilt))
+	{
+		LastWorldGainState = int8(bWorldBuilt);
+		UE_LOG(LogTemp, Log, TEXT("FSDS LiDAR: luminance-to-reflectance gain %.2f (%s)"),
+			U.LuminanceReflectanceGain, bWorldBuilt ? TEXT("track world built") : TEXT("level floor"));
+	}
 	// Per-scan seed derived from the scenario seed plus a scan counter, so
 	// dropouts and range noise still vary scan to scan but the whole sequence
 	// replays identically for a given seed. Previously this was
@@ -1144,7 +1343,24 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		GpuScanCounterGeneration = GpuGen;
 	}
 	U.RNGSeed            = FSDSRandom::MakeSeed(TEXT("Lidar.gpu"), ++GpuScanCounter);
+	// Mirror sweep: delay up to SweepDurationMs across the FOV, direction
+	// alternating per scan, motion from the capture-time snapshot.
+	U.SweepDurationS = FMath::Max(0.f, SweepDurationMs) / 1000.f;
+	U.SweepReversed  = (bSweepAlternate && (GpuScanCounter & 1u)) ? 1u : 0u;
+	// Dropout bursts count scans of one sweep direction, like the car's
+	// beams (the two directions sample slightly different azimuths). The
+	// per-beam seed is drawn once per seed generation so bursts span scans
+	// (unseeded, MakeSeed reads the clock and would differ every scan).
+	if (GpuScanCounter == 1u || GpuDropoutCellSeed == 0u)
+	{
+		GpuDropoutCellSeed = FSDSRandom::MakeSeed(TEXT("Lidar.gpu.dropout"), 0) | 1u;
+	}
+	U.DropoutScanIndex = bSweepAlternate ? (GpuScanCounter >> 1) : GpuScanCounter;
+	U.DropoutCellSeed  = GpuDropoutCellSeed;
+	U.SweepVelMps    = FVector3f(GPUPendingVelLocalMps);
+	U.SweepOmega     = FVector3f(GPUPendingOmegaLocal);
 	// SensorOffset is stored in cm; shader takes metres.
+	U.PointsInSensorFrame = bPointsInSensorFrame ? 1u : 0u;
 	U.SensorOffsetXm     = SensorOffset.X / 100.f;
 	U.SensorOffsetYm     = SensorOffset.Y / 100.f;
 	U.SensorOffsetZm     = SensorOffset.Z / 100.f;
@@ -1160,6 +1376,16 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		U.SensorRotRowX = FVector3f(M.M[0][0], M.M[0][1], M.M[0][2]);
 		U.SensorRotRowY = FVector3f(M.M[1][0], M.M[1][1], M.M[1][2]);
 		U.SensorRotRowZ = FVector3f(M.M[2][0], M.M[2][1], M.M[2][2]);
+	}
+	{
+		// Columns are the rotated sensor axes; the shader wants rows.
+		const FQuat MountQ = MountRotation.Quaternion();
+		const FVector Ax = MountQ.RotateVector(FVector::XAxisVector);
+		const FVector Ay = MountQ.RotateVector(FVector::YAxisVector);
+		const FVector Az = MountQ.RotateVector(FVector::ZAxisVector);
+		U.MountRotRowX = FVector3f(Ax.X, Ay.X, Az.X);
+		U.MountRotRowY = FVector3f(Ax.Y, Ay.Y, Az.Y);
+		U.MountRotRowZ = FVector3f(Ax.Z, Ay.Z, Az.Z);
 	}
 	// Reference range for the inverse-square term (#255). Set to 5 m —
 	// a typical FS-cone detection distance — so perpendicular hits at
@@ -1228,6 +1454,8 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 		UWorld* W = GetWorld();
 		Slot.CaptureSimNs = W ? (uint64)(W->GetTimeSeconds() * 1e9) : 0;
 	}
+	Slot.bSweepReversed  = U.SweepReversed != 0u;
+	Slot.SweepDurationS  = U.SweepDurationS;
 	Slot.bInFlight       = true;
 	Slot.bLockDispatched = false;
 	NextDispatchSlot     = (NextDispatchSlot + 1) % ReadbackQueueDepth;
@@ -1239,10 +1467,20 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 	// uploads this into a structured buffer SRV bound as the shader's
 	// ChannelMaxRangeCm parameter.
 	const TArray<float> ChannelMaxRangeCmCopy = PerChannelMaxRangeCm;
+	// Same for the channel elevations, converted to radians for the shader.
+	TArray<float> ChannelElevationRadCopy;
+	ChannelElevationRadCopy.Reserve(NumberOfChannels);
+	for (int32 v = 0; v < NumberOfChannels; v++)
+	{
+		const float Deg = EffectiveElevationsDeg.IsValidIndex(v)
+			? EffectiveElevationsDeg[v]
+			: VerticalFOVLower + v * ((NumberOfChannels > 1) ? (VerticalFOVUpper - VerticalFOVLower) / (float)(NumberOfChannels - 1) : 0.f);
+		ChannelElevationRadCopy.Add(FMath::DegreesToRadians(Deg));
+	}
 
 	ENQUEUE_RENDER_COMMAND(FSDSLidarDecode)(
 		[Readback, RTResource, ColorRTResource,
-		 U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy](FRHICommandListImmediate& RHICmdList)
+		 U, NumPoints, PointsBytes, ChannelMaxRangeCmCopy, ChannelElevationRadCopy](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHITexture* DepthRHI = RTResource->GetRenderTargetTexture();
 			if (!DepthRHI) return;
@@ -1275,11 +1513,21 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 				ChannelMaxRangeCmCopy.GetData(),
 				ChannelMaxRangeCmCopy.Num() * sizeof(float));
 
+			const int32 ElevCount = FMath::Max(1, ChannelElevationRadCopy.Num());
+			FRDGBufferRef ChannelElevBuf = GraphBuilder.CreateBuffer(
+				FRDGBufferDesc::CreateStructuredDesc(sizeof(float), ElevCount),
+				TEXT("FSDSLidarChannelElevation"));
+			GraphBuilder.QueueBufferUpload(
+				ChannelElevBuf,
+				ChannelElevationRadCopy.GetData(),
+				ChannelElevationRadCopy.Num() * sizeof(float));
+
 			auto* Params = GraphBuilder.AllocParameters<FFSDSLidarDecodeCS::FParameters>();
 			Params->DepthTexture          = DepthRDG;
 			Params->ColorTexture          = ColorRDG;   // #255
 			Params->OutPoints             = GraphBuilder.CreateUAV(OutBuf);
 			Params->ChannelMaxRangeCm     = GraphBuilder.CreateSRV(ChannelRangeBuf);
+			Params->ChannelElevationRad   = GraphBuilder.CreateSRV(ChannelElevBuf);
 			Params->NumChannels           = U.NumChannels;
 			Params->NumHorizontalSteps    = U.NumHorizontalSteps;
 			Params->RTWidth               = U.RTWidth;
@@ -1296,6 +1544,29 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->MaxRangeCm            = U.MaxRangeCm;
 			Params->RangeNoiseStdCm       = U.RangeNoiseStdCm;
 			Params->DropoutRate           = U.DropoutRate;
+			Params->DropoutWeakRate = U.DropoutWeakRate;
+			Params->DropoutWeakExp = U.DropoutWeakExp;
+			Params->DropoutWeakMax = U.DropoutWeakMax;
+			Params->DropoutBurstScans = U.DropoutBurstScans;
+			Params->DropoutBurstIidShare = U.DropoutBurstIidShare;
+			Params->DropoutScanIndex = U.DropoutScanIndex;
+			Params->DropoutCellSeed = U.DropoutCellSeed;
+			Params->RangeNoiseRangeCoeffCm   = U.RangeNoiseRangeCoeffCm;
+			Params->RangeNoiseRefReflectance = U.RangeNoiseRefReflectance;
+			Params->RangeNoiseReflectanceExp = U.RangeNoiseReflectanceExp;
+			Params->EdgeSwapRate             = U.EdgeSwapRate;
+			Params->EdgeDropRate             = U.EdgeDropRate;
+			Params->IntensityNoiseRel        = U.IntensityNoiseRel;
+			Params->IntensityScale           = U.IntensityScale;
+			Params->IntensityRangeExp        = U.IntensityRangeExp;
+			Params->IntensityIncidenceExp    = U.IntensityIncidenceExp;
+			Params->IntensityMax             = U.IntensityMax;
+			Params->IntensityRound           = U.IntensityRound;
+			Params->LuminanceReflectanceGain = U.LuminanceReflectanceGain;
+			Params->SweepDurationS           = U.SweepDurationS;
+			Params->SweepReversed            = U.SweepReversed;
+			Params->SweepVelMps              = U.SweepVelMps;
+			Params->SweepOmega               = U.SweepOmega;
 			Params->RNGSeed               = U.RNGSeed;
 			Params->SensorOffsetXm        = U.SensorOffsetXm;
 			Params->SensorOffsetYm        = U.SensorOffsetYm;
@@ -1303,6 +1574,10 @@ void UFSDSLidarSensor::EnqueueDecodePass()
 			Params->SensorRotRowX         = U.SensorRotRowX;  // #255
 			Params->SensorRotRowY         = U.SensorRotRowY;  // #255
 			Params->SensorRotRowZ         = U.SensorRotRowZ;  // #255
+			Params->PointsInSensorFrame   = U.PointsInSensorFrame;
+			Params->MountRotRowX          = U.MountRotRowX;
+			Params->MountRotRowY          = U.MountRotRowY;
+			Params->MountRotRowZ          = U.MountRotRowZ;
 			Params->RReferenceM           = U.RReferenceM;    // #255
 			// #321 D-Phase-1 — bind LUT + flag. Inert until Phase 2.
 			// GET_SCALAR_ARRAY_ELEMENT writes through the FVector4f
@@ -1408,7 +1683,7 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 	// output of FSDSLidarDecode.usf and packs valid hits into
 	// PointCloudBuffer in the flat-float [x,y,z,intensity, …] format
 	// FSDSUdpBroadcaster + GetPointCloud() consumers expect. The shader
-	// writes intensity ∈ [0, 1] in P.W for valid hits and -1.0 as the
+	// writes intensity ∈ [0, IntensityMax] in P.W for valid hits and -1.0 as the
 	// invalid sentinel (distinct from a clean 0.0 intensity, which is
 	// a valid hit on a black surface or grazing-angle return). Skips
 	// invalid entries (P.W < 0 → dropped / far-plane / out-of-range).
@@ -1434,10 +1709,38 @@ void UFSDSLidarSensor::ConsumeReadbackResult(int32 SlotIdx, TArray<FVector4f>&& 
 		HitCount++;
 	}
 
+	// Organised copy in the car's Hesai order. The shader writes ray
+	// h * NumChannels + v, h from the left edge of the FOV (ROS +azimuth,
+	// where a forward sweep starts) and v from the lowest beam up. The car
+	// sends slots in firing order and its rings in its own numbering
+	// (ChannelRingIds; ring 0 = the top beam).
+	TArray<float> NewOrganised;
+	const int32 NumCh = FMath::Max(1, NumberOfChannels);
+	const int32 NumSlots = Points.Num() / NumCh;
+	if (NumSlots > 0 && NumSlots * NumCh == Points.Num())
+	{
+		NewOrganised.SetNumUninitialized(Points.Num() * 4);
+		float* Dst = NewOrganised.GetData();
+		for (int32 s = 0; s < NumSlots; s++)
+		{
+			const int32 h = Slot.bSweepReversed ? (NumSlots - 1 - s) : s;
+			for (int32 r = 0; r < NumCh; r++)
+			{
+				const int32 Ch = RingToChannel.Num() == NumCh ? RingToChannel[r] : (NumCh - 1 - r);
+				const FVector4f& P = Points[h * NumCh + Ch];
+				*Dst++ = P.X; *Dst++ = P.Y; *Dst++ = P.Z; *Dst++ = P.W;
+			}
+		}
+	}
+
 	{
 		FScopeLock Lock(&PointCloudLock);
 		PointCloudBuffer = MoveTemp(NewBuffer);
 		CachedPointCount = HitCount;
+		OrganisedBuffer   = MoveTemp(NewOrganised);
+		OrganisedChannels = NumCh;
+		OrganisedSlots    = NumSlots;
+		OrganisedSweepS   = Slot.SweepDurationS;
 		// Capture-time timestamp (#232) — use the cycles stamped when the
 		// depth render dispatched, not now. The readback ring delays
 		// consume by ~50-100 ms after capture, so stamping at consume time

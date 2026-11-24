@@ -13,6 +13,26 @@ shipping pipeline, documentation.
 ## [Unreleased]
 
 ### Added
+- **`IFSSIM_VHIL_CPUSET` pins the emulated boards to chosen cores, and the server dumps a stuck run's state.** On this PC's hybrid CPU the boards ran at 0.94-0.98x beside a full benchmark; pinned to the fast cores (`0-15`) they hold 1.00x. When the uDV drives and the ECU never takes its ready-to-drive request, the server logs the last frames of the contract and the uDV's variables (`vhil-boards: STUCK`).
+- **The emulated uDV's IMU follows the sim's.** With emulated boards the node hands the sim's `/imu` (averaged over 40 ms, in milli-g and degrees per second) to the uDV's BMI088 model, so the ECU receives the uDV's `0x512` frames of the car's motion instead of a board lying flat. The server's link also survives a client that disconnects abruptly.
+- **A mission benchmark records whether the emulated boards kept up with real time.** `box/boards_rtf` (their real-time factor over the run), `box/boards_max_lag_s` (the furthest they were behind the wall clock) and `race/boards_real_time_ok` (1 at 0.97x or more and under 2 s behind) are in the run's results when the run used emulated boards, so a runner too slow for them (the Windows PC is) cannot hand in a slow-boards run that looks valid.
+- **Any commit, branch or pull request for each emulated board's firmware.** A spec's `boards.firmware` (and the page's per-board box) takes a branch, a tag, `#123` or a commit id; each is resolved to a full commit and the firmware built at it (vHIL's own builder takes only branches and tags), and `boards.json` in the job's folder records the commit each board ran.
+- **`race/set_off_s` and `race/drive_time_s` in a mission benchmark's results.** The referee starts acceleration's clock when the event is set, not when the car crosses a line, so its time includes the start sequence (arming, the EKF's calibration, an ECU's ready-to-drive delay) and two modes of the same car compare unfairly. `set_off_s` is when the car first moved (polled every 0.2 s until it does and for a minute after) and `drive_time_s` runs from there to the finish. The referee's lap times are unchanged.
+- **Emulated boards in a sim run (IFS-vHIL).** A run spec's `boards: {mode: vhil, system: ecu-ams-udv}` runs the car's real ECU, AMS and uDV firmware on IFS-vHIL's emulated MainLites in place of the sim's fake uDV: `launch/boards.py` builds the firmware at the spec's refs, starts a container that paces them to the wall clock and wires them to the stack; the AS state, the mission gate and the ECU's torque are the firmware's. The Benchmarks page's vHIL box works on Local when Docker, the IFS-vHIL checkout and its image are there, and says what is missing otherwise. See `docs/VHIL_BOARDS.md`.
+
+- **Road roughness on the level floor.** The floor every generated track sits on was perfectly flat, so below 15 Hz the sim car's body only moved from steering and throttle: vertical acceleration at 3–15 Hz was 0.13–0.19 m/s² against the car's 0.33–0.67 m/s² (2026-09-20 manual bag, 3–6 m/s). Each wheel track now drives over a random ISO 8608 road profile (class B/C boundary, calibrated on the sim against the bag), through a per-corner tyre spring and wheel, and the strut passes the wheel's motion to the body. On the flat floor at 3–6 m/s it now gives 0.50/0.43/0.24 m/s² at 3–6/6–10/10–15 Hz against the car's 0.67/0.45/0.33, and pitch rate within 25 %. Configured in `settings.json` (`RoadRoughness*`), drawn from the scenario seed, off on a track world such as Montmeló.
+- **The sim's IMU vibrates like the car's.** The car's /imu carries 15–50 Hz vibration (a resonance near 23 Hz: a_z ~1.3 m/s² rms, roll rate ~3.4 °/s) that the sim's ~60 Hz physics cannot produce; the sim had a quarter of it above 15 Hz. Nine `Vibration*` IMU settings add it per axis as band-passed noise that grows with speed and is off when parked, fitted to the car's manual bag. Rms 0 turns an axis off.
+- **`/lidar_points` in the LiDAR's own frame, like the car's.** The car's Hesai driver publishes points relative to the sensor, tilted with its 8.6° nose-down mount; the sim levelled them and moved them to `base_link`, with an identity `base_link → hesai_lidar` TF. `PointFrame: "sensor"` (the new `settings.json` value) keeps them in the sensor frame, `getSensorOffset` now returns the mount rotation (`qw, qx, qy, qz`) and which frame the points are in, and the bridge publishes the real mount pose as the TF. The pipeline levels the cloud by its own ground fit, so it needs no change. `PointFrame: "vehicle"` (or an older plugin) keeps the old frame and identity TF.
+- **`/lidar_points` in the car's Hesai layout.** The bridge publishes the sim's LiDAR the way the car's driver does: every ray (1500 slots × 116 rings in firing order, ring 0 = top), 26-byte points with `ring` (uint16) and a per-point `timestamp` (float64, when the slot fired), no-returns as zeros. The plugin sends it on a new `streamLidar2` stream with a 48-byte header; older bridges keep `streamLidar` and the compact cloud, and a new bridge falls back to compact against an older plugin. `LIDAR_CLOUD_FORMAT=compact` keeps the old 16-byte valid-hits cloud. A scan grows from ~2.6 MB to ~4.5 MB.
+- **LiDAR dropout follows return strength and comes in bursts, like the car's.** The sim dropped 1% of rays at random. The car's Hesai loses weak returns (about 20% at intensity 0–2, 1% above 32) and a missing beam usually stays missing for several scans. `DropoutWeakRate` (0.2), `DropoutWeakExp` (0.77), `DropoutWeakMax` (0.3), `DropoutBurstScans` (64) and `DropoutBurstIidShare` (0.15) model that on the GPU path, and `DropoutRate` drops to 0.
+
+- **LiDAR depth edges behave like the car's.** `EdgeOutlierRate` placed a few returns at cone silhouettes uniformly between the cone and the background. The car does something else: at an edge, about 15% of returns come from the other surface and edge beams drop out more often, so objects grow into the beams beside them and flicker. `EdgeSwapRate` (0.15) and `EdgeDropRate` (0.18) replace it, tested against the neighbouring beams rather than adjacent texels. **`EdgeOutlierRate` is no longer read.**
+
+- **LiDAR scans smear with the car's motion, like the car's.** The car's Hesai measures a scan over 90 ms, alternating direction, and doesn't correct for motion, so at speed its cones jump about 30 cm from scan to scan. The sim captured each scan in one instant. `SweepDurationMs` (89.8) and `SweepAlternate` now move each point by the car's motion over its delay.
+
+- **LiDAR intensity on the car's scale.** The sim reported intensity as 0–1 falling with the square of the range and with the angle of incidence. The car's Hesai reports whole numbers 0–255 that fall as r^−1.29 and ignore the angle. Five new LiDAR settings (`IntensityScale`, `IntensityRangeExp`, `IntensityIncidenceExp`, `IntensityMax`, `IntensityRound`) set the law, and `settings.json` ships the car's fit, scaled so the cones match. `LuminanceReflectanceGain` (3.2) brightens surfaces that take their reflectance from their rendered colour, so the asphalt matches the car's ground too; that also lowers the range noise on the ground, which the dark asphalt had pushed to its cap. Remove `IntensityScale` to get the old law.
+
+- **LiDAR beams at the car's elevations.** The sim's 116 LiDAR channels were spread evenly over −12.4…+5.9° (0.16° apart). The car's Hesai spaces them unevenly: about 0.1° around the horizon and 0.2–0.4° at the top and bottom. With the −8.6° mount, cones beyond about 10 m fall in the sparse top beams, so the sim put 1.6–1.8× the car's beams on them. `settings.json` now has `ChannelElevationsDeg`, the 116 elevations measured from the 2026-09-20 car bag, and both LiDAR back-ends use it. Remove the array to get the old even grid.
 
 - **A Benchmarks page in the sim's menu.** Run: pick what to test (drive the missions, or
   replay recorded bags), the missions, tracks (each mission's own are listed), runs per
@@ -25,6 +45,13 @@ shipping pipeline, documentation.
   can run now (the page checks it itself with `run_spec.py --rig`, no worker needed).
   Start worker / Stop worker run the local queue's worker; the queue shows each spec's
   progress, with Cancel and its folder.
+
+- **A benchmark spec on a GPU box, and `headless_run exec`.** `tools/ci/bench_run.sh`
+  runs a spec as a runner does: the same `run_spec.py` you run locally, under the sim-session
+  lock, with a fresh headless sim and Mission Control around it when the spec drives the
+  sim (the new `python3 -m headless_run exec -- <command>`). `run_spec.py` gains
+  `--results DIR` and `--print-spec`. The new `missions-extensive` preset (acceleration,
+  skidpad and autocross, 5 noisy starts per track) is the suite for the weekly season run.
 
 - **A run spec's `code.pipeline` now runs locally.** `run_spec.py` (queued or direct)
   checks the branch, PR (`#88`) or commit out as a worktree of the pipeline submodule
@@ -55,8 +82,44 @@ shipping pipeline, documentation.
   GitHub user who launched it), the host, and in GitHub Actions the run, the
   runner and a link to its logs.
 
-### Fixed
+- **A host script for the GPU runner's box.** `tools/ci/setup_bench_host.sh` sets up a
+  clean Ubuntu 24.04 for the runner: the held NVIDIA driver, Docker CE with the NVIDIA
+  Container Toolkit, Vulkan, `gh`, Tailscale, a `runner` user without sudo, `CI_HOME`,
+  and the Actions runner (checksum-checked, org-registered with only its own labels, as
+  a service). Steps run on their own or again; `--dry-run` prints them. The bench PC's
+  rig descriptor is `rigs/bench-pc.yaml`.
 
+### Fixed
+- **`SuspensionDamping` in `settings.json` reaches the car.** It was parsed and read by nothing: the wheel classes hard-coded a damping ratio of 1.5. It now goes into the wheel class defaults before Chaos builds the car, as the tyre model does, and the sim log prints each strut's spring rate and damping as the solver has them. The value is unchanged (1.5, still an assumption).
+- **A mission benchmark with its own pipeline stack leaves nothing behind.** The stack's container runs as root and writes `__pycache__` into both the copy of the pipeline and the copy of the sim bridge (`bench-dv-stack-*`, next to the results); only the pipeline's was deleted, so the `ros2/` one stayed, owned by root, and the folder couldn't be removed without `sudo`. The whole copy is now wiped from a container as root, also when the benchmark fails before the container starts; a Docker error there is a warning, never the run's result, and a copy that can't be removed is named with the command that removes it.
+- **Loading the committed autocross tracks no longer modifies them.** `track_20260404_013723`, `…013725` and `…013726` were committed with the generator's start gate at the origin, so the backend recentred them on their first load and left them changed in the working tree. They are now committed centred, exactly as that load wrote them, so the sim and every run see the same cones as before. A test fails if a committed track other than the built-in ones is off-centre.
+- **`/imu` no longer loses samples on a busy machine.** The bridge handed sensor frames from its receive thread to its publish thread through a single slot that a newer frame overwrote. Since every frame carries its own 400 Hz IMU sample, a capture on the GPU box was missing about 6 % of them, with gaps up to 12.5 ms (the car's /imu has none). The handoff is now a FIFO holding 1 s of frames; if the publisher falls further behind, the oldest are dropped and the bridge logs how many.
+
+- **LiDAR intensity on Montmeló.** The 3.2 luminance gain from #912 matched the level's floor to the car but put Montmeló's photo-matched asphalt at about 3× the car's ground. While a track's world is built the sensor now uses `WorldLuminanceReflectanceGain` (1), and both grounds land near the car's.
+
+- **Mission benchmarks build the sim bridge from the checkout, not the image.** The
+  benchmark's stack rebuilt `pipeline/` from the checkout but kept the bridge baked into
+  `ifssim-dv_pipeline_stack`, however old. After #875 grew the sensor frame, a stack image
+  from before it read the sim's stream out of step: the pipeline got IMU, wheel speeds and
+  steering at a few Hz, and acceleration runs drifted onto the cones (6 of 12 on this
+  Windows PC). `ros2/src` is now copied into the stack like `pipeline/` and rebuilt when it
+  changes (about a minute the first time).
+- **The bridge refuses a sim whose sensor frame isn't its own.** The sensor stream has no
+  length prefix, so a bridge and a sim plugin from commits with different frame sizes (as
+  across #875) read every frame after the first out of step, dropped them on the bad magic
+  and published about 1 in 47: the car drove badly and nothing said why. The bridge now
+  measures the sim's frame size from the stream when it connects and when a frame is out of
+  step. On a mismatch it logs both sizes and how to fix it, every 10 s, and publishes
+  nothing from that sim; on a glitch it finds the next frame instead of staying out of step.
+- **On Windows, the Benchmarks page starts the worker itself.** Start worker and the
+  machine check (Setup) now run `run_spec.py` in WSL through `wsl.exe`, instead of asking
+  you to start the worker from a WSL terminal.
+- **Benchmark runs queued on Windows now reach the sim.** The worker runs in WSL, where
+  127.0.0.1 isn't Windows in WSL's default NAT mode. Without `--sim`, a mission benchmark
+  run from WSL now uses WSL's gateway (Windows) when only it answers on port 41451.
+- **LiDAR range noise is applied in centimetres.** settings.json gives `RangeNoiseStd` in metres and the
+  sensor works in cm, but the ×100 was missing, so the 3 cm σ ran as 0.3 mm: sim clouds were
+  effectively noise-free.
 - **The rig check called Docker ready when it couldn't reach the daemon**: `docker info
   --format` exits 0 then, with no server version. Only a version counts as ready now.
 
@@ -86,6 +149,7 @@ shipping pipeline, documentation.
   resolve `host.docker.internal`, so it never saw the sim and START waited until it
   timed out.
 
+- **Trackdrive's mission timeout is 1300 s instead of 2400 s** (`tools/sim_benchmark/missions.yaml`): the slowest measured 10-lap finish was 1054.7 s, so a run that never finishes no longer holds the GPU box for 40 minutes.
 - **The mission benchmark ends a run as soon as the car goes to AS Emergency** instead of waiting out `timeout_s` (2400 s for trackdrive). The run's outcome is `emergency`, with `emergency_at_s` in the manifest, `race/emergency` and `race/emergency_at_s` in the results, and the usual laps, telemetry and events. Mission Control's `/api/event/state` now reports `as_state` (`/assi/state`) and `dv_status` (`/dv/status`). An AS Emergency only ends the run after the car was seen driving in it, so a state latched from the previous run does not.
 - **`run_mission_benchmark --pipeline-on latte_panda` starts the bridge again.** The bridge-only
   container skips the image's entrypoint, so `ros2 launch` couldn't find `ifssim_bridge`. The launch
@@ -107,7 +171,37 @@ shipping pipeline, documentation.
   sits next to the run's results.
 
 ### Changed
+- **Strut damping 0.7 and road level 4.5e-4, fitted together to the car.** Chaos caps the damping ratio at 1.0, so the 1.5 in `settings.json` was critical damping, and the body moved 1.3-2x the car at 9-12.5 m/s (2026-09-20 manual bag). A sweep of damping 1.0/0.7/0.5/0.35 and road level 1/2/3x gave 0.7 with twice the road: at 3-6 m/s within 10 % of the car on average, at 9-12.5 m/s 20-30 % above it (the sim's motion grows faster with speed than the car's, still open). Three times the road drove the car off the acceleration straight.
+- **Montmeló's asphalt is a smooth surface, and the road model runs on it.** The terrain carried the LiDAR's 1 m cell means, which scatter about 1 cm around the real road (scanner noise) and were stored in whole centimetres: the car crossed a bump every metre, which shook it at 5-12 Hz at 5-12 m/s (vertical acceleration 1.30 m/s² at 5-15 Hz against the car's 0.66), and it parked rolled 1.76° against the road's 1.35°. The generator now writes the asphalt as a surface fitted to the survey, with heights in mm; its cross-fall matches the raw points to 0.03 % (2.2-2.5 % towards the pits). The car's road model (`RoadRoughness*`) now also runs on track worlds and gives the asphalt its roughness, and its two wheel tracks now share their waves longer than 3 m (`RoadRoughnessCrossWavelength`): drawn independently, they rolled the car at 0.5–3 Hz at 11 m/s about twice as much as the real one, which threw the pipeline off the straight on one acceleration seed.
 
+- **Sim suspension softened to the car's.** The wheels now run 20.2 kN/m per corner, the plant spec's rate from the recorded 2.9–3.0 Hz ride frequency, with no anti-roll bar. Before, they ran 61.3 / 52.5 kN/m front/rear, the workbook's spring rates taken as wheel rates (a 5 Hz ride), plus Chaos's default anti-roll bar that nobody chose. The sim car pitched 0.30° and rolled 0.36° per g. The real car's LiDAR ground plane in the 2026-09-20 manual bag shows about 0.6–0.8° of pitch and 1.5–1.8° of roll per g; the new suspension gives 0.86° and 1.6°. Droop travel is lengthened so the static ride height, and the LiDAR's height above the ground, stay where they were. The shadow load-transfer stiffnesses in `settings.json` follow the same rate.
+- **LiDAR mount pitch 8.77° (was 8.6°).** A 60-scan ground fit of the 2026-09-20 car bag puts the Hesai at 8.77° nose-down.
+
+- **The sim check runs on any Linux GPU box, not only `gpu-1080`.**
+  `tools/ci/sim_build.sh` and `sim_pr_check.sh` take one folder, `CI_HOME`
+  (default `/build/ifssim-ci`, so `gpu-1080` is unchanged), for the shared
+  build, the baseline and the owner marker. Without the box's container
+  wrapper the check starts the packaged build itself. `tools/ci/README.md`
+  says how to run the check on your own machine.
+
+- **The GPU box's sim check keeps its CPU, and its report says when the box was busy.**
+  - The box has 8 cores, and the sim (~4 threads) plus the pipeline (~5) already fill them.
+  - Every other service there (other CI runners, renders) had the same CPU weight as the sim, so a compile job took CPU from it. The sim fell to 0.6–0.8× real time on the same commit that ran at 0.99× on a quiet box.
+  - The check now gives the sim's and the pipeline's containers 8× Docker's default CPU shares (`IFSSIM_SIM_CPU_SHARES`, `BENCH_CPU_SHARES`), about 3× the weight of the other services.
+  - It skips viz_relay (`DV_VIZ_RELAY=false`), which only draws in the sim's window.
+  - Each mission run records `box/cpu_wait` (Linux CPU pressure) and `box/load1`, and the report shows the CPU wait next to the sim speed.
+  - Off the GPU box nothing changes.
+- **LiDAR noise follows the car's Hesai.** Range σ now grows with range and on dark surfaces
+  (1.2 cm + 0.0056 cm/m²·r², ×(0.2/ρ)^0.8), returns at depth edges sometimes land between the two
+  surfaces, and intensity jitters by 14 %, all fitted to a parked manual car bag. New settings:
+  `RangeNoiseRangeCoeff`, `RangeNoiseRefReflectance`, `RangeNoiseReflectanceExp`, `EdgeOutlierRate`,
+  `IntensityNoise` (0 = the old flat Gaussian).
+- **The sim IMU now publishes like the car's.** `/imu` carries 400 distinct samples per sim second, each stamped with its own sim time, instead of one sample per ~60 Hz tick repeated about 7 times with +1 ns stamps. The accelerometer refreshes at 100 Hz and holds in between (uDV's ACC_CONF), readings are quantised and clamped to uDV's ±6 g / ±2000 °/s settings, white noise is per axis from raw BMI088 logs, and each session draws a turn-on gyro/accel offset that is not removed, as on the car. The sensor frame gains `imu_timestamp` (188 bytes): the plugin and the bridge must be updated together. `tools/scenario_runner/verify_determinism.py` pairs `/imu` with ground truth on the ticks where the two grids meet.
+
+- **The LiDAR is mounted like the car's: 8.6° down, ~1.03 m above the ground.** Measured from a manual
+  car bag. The sim mounted it level, so a third of its beams saw sky and the ground started at ~5.3 m
+  (car: ~3 m). The LiDAR now reads `Roll`/`Pitch`/`Yaw` from settings.json (CPU and GPU paths); points
+  stay in the vehicle frame.
 - **Regen power cap raised from 6 kW to 11 kW** (`MaxRegenPower`). Regen is
   the car's only service brake, and above ~2 m/s this cap sets how hard it can
   brake. 11 kW is the IFS-08 pack's charge limit: 95s6p Sony VTC6 cells at
@@ -403,6 +497,10 @@ shipping pipeline, documentation.
   car characterisation drives the same cones on flat ground
   (`characterisation.csv`), since its turns need open space beside the
   start.
+- **Frame-time log.** Every 5 s the sim logs `FSDS Frame:` with the mean
+  and worst game-thread, render-thread, RHI and GPU time per frame (the
+  `stat unit` numbers), so a run below real time shows which one is the
+  limit (docs/rendering_presets.md). Needs a UE recompile.
 - **Montmeló surfaces and markings from the aerial photo.** Measured on the
   ICGC orthophoto (CC BY 4.0): the track is 13.35 m of asphalt with dry-grass
   verges (it was 20 m of asphalt), the finish line is at −127 m, and the grid,
@@ -723,6 +821,15 @@ shipping pipeline, documentation.
 
 ### Fixed
 
+- **`package_windows.sh` stops when the build fails.** `RunUAT.bat` runs
+  under `cmd.exe`, whose exit code doesn't reach bash, so a compile error
+  printed `BUILD FAILED` and the script went on to stage and zip the previous
+  build's binary as if it were the new one. It now reads UAT's own verdict
+  (`AutomationTool exiting with ExitCode=0`) and exits 1 otherwise.
+- **`package_windows.sh` keeps the user's `GameUserSettings.ini`.** It copied
+  the project's default over it on every package, throwing away what was
+  chosen in the sim (the window, the menu's frame rate, the graphics
+  settings). It now seeds the file only when there is none.
 - **Hidden engine-braking drag removed.** Chaos's engine was set to brake the rear wheels with EngineRPM x 0.05 N.m whenever its own throttle was zero, and the pawn always passes it zero (the EMRAX drives the wheels directly). That was a speed-proportional drag of about 0.085·v m/s², present while driving as well as coasting, and most of the coast-down excess the car characterisation found (1.02 vs 0.31 m/s² at 10 m/s). `EngineBrakeEffect` is now 0, and the startup log warns if it isn't.
 - **The sim car kept driving after leaving AS Driving.** The uDV emulator only stopped relaying `/ctrl/cmd`, and the bridge and pawn hold the last command, so an emergency, an e-stop or the end of a run left the car on its last throttle and steering. It now does what the car's firmware does: zeroes the command on leaving Driving or when `/ctrl/cmd` is older than 0.5 s, fires the EBS on AS Emergency, and treats a `/dv/status` heartbeat older than 0.4 s mid-run as an emergency (it was read as idle, with a 1.5 s window). Arming from AS Off releases an EBS latched by the previous run.
 - Downforce is applied at the axles where the physics wheels now sit, so the front axle carries the configured 45% of it. Since the wheel placement in #757 it was applied at ±half the wheelbase around the centre of mass, which put 38.8% on the front.

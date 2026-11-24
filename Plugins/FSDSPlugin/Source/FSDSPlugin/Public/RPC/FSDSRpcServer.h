@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "RPC/FSDSUdpBroadcaster.h"  // FFSDSSensorFrame
+#include "Sensors/FSDSImuSensor.h"   // UFSDSImuSensor::FImuOutput
 #include <memory>
 #include <thread>
 #include <atomic>
@@ -84,7 +85,9 @@ private:
 	 *  overflow in WSL2 on Windows) are structurally unfixable
 	 *  cross-platform from inside the plugin. */
 	void StreamSensors(FSocket* ClientSocket);
-	void StreamLidar(FSocket* ClientSocket);
+	/** bOrganised: "streamLidar2" — 48-byte V2 header and, on the GPU path,
+	 *  every ray in the car's Hesai order (FFSDSLidarStreamHeaderV2). */
+	void StreamLidar(FSocket* ClientSocket, bool bOrganised = false);
 	/** The other way: the stack's viz_relay sends the pipeline view (FFSDSPipelineView). */
 	void StreamViz(FSocket* ClientSocket);
 	uint32 StreamFrameCounter = 0;
@@ -101,6 +104,10 @@ private:
 	FCriticalSection LatestSensorFrameLock;
 	FFSDSSensorFrame LatestSensorFrame;
 	bool bHasLatestSensorFrame = false;
+	// IMU samples not yet sent, oldest first, under LatestSensorFrameLock.
+	// The IMU emits ~6.7 per tick at 400 Hz; StreamSensors sends one frame
+	// per sample (the latest tick's frame with that sample's IMU fields).
+	TArray<UFSDSImuSensor::FImuOutput> PendingImuSamples;
 	FDelegateHandle PostActorTickHandle;
 
 	/** Run Fn on the game thread at the start of the next world tick, before

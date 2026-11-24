@@ -127,9 +127,15 @@ TICK_US = 1e6 / 60.0   # bUseFixedFrameRate, FixedFrameRate=60 (Config/DefaultEn
 
 
 def tick_key(stamp) -> int:
-    """The game tick a message belongs to: its stamp floored to the microsecond.
-    Ticks are 16.7 ms apart; the bridge's per-copy /imu bumps are 1 ns."""
-    return (stamp.sec * 1_000_000_000 + stamp.nanosec) // 1000
+    """A message's stamp in microseconds, rounded to the nearest 100 us.
+
+    /testing_only/odom is stamped with the 60 Hz tick; /imu carries one stamp
+    per 400 Hz sample. The two grids meet every third tick (every 50 ms), where
+    the IMU sample is the tick's own plant state, so those ticks pair up. The
+    rounding absorbs the nanosecond difference between the tick clock and the
+    sample grid (and the bridge's 1 ns monotonic bump)."""
+    ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+    return int(round(ns / 100_000)) * 100
 
 
 class Collector(Node):

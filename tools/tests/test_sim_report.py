@@ -85,6 +85,18 @@ class Verdict(unittest.TestCase):
         self.assertIn('src="https://x/a.png"', body)
         self.assertIn("[Run, logs and telemetry](https://run)", body)
 
+    def test_sim_speed_shows_the_machines_cpu_wait_when_recorded(self):
+        write_run(self.root, "acceleration_acceleration", "acceleration", 1, True, 29.0)
+        write_run(self.root, "skidpad_skidpad", "skidpad", 1, True, 80.0)
+        res = self.root / "headless/20261103_120000/mission/skidpad_skidpad/abc1234/seed1/results.json"
+        res.write_text(json.dumps({**json.loads(res.read_text()), "box/cpu_wait": 0.214}))
+        r = sim_report.build(self.root, CONFIG)
+        body = sim_report.comment(r, None, {}, "https://run")
+        self.assertIn("0.95× · 21 % CPU wait", body)  # recorded: shown
+        acc = next(g for g in r["groups"] if g["mission"] == "acceleration")
+        self.assertIsNone(acc["cpu_wait"])  # an older run without it: just the speed
+        self.assertEqual(sim_report.speed_cell(0.95, None), "0.95×")
+
 
 class Characterisation(unittest.TestCase):
     """The car characterisation's result (tools/characterise) in the report."""

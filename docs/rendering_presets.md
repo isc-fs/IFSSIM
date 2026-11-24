@@ -11,6 +11,16 @@ The sim has two rendering presets.
 
 Neither preset changes what the sensors measure: the LiDAR depth capture turns lighting, GI and post-processing off whatever the preset.
 
+## Frame time
+
+The sim logs where each frame's time goes every 5 s, in game runs:
+
+```
+FSDS Frame: 300 frames in 5.0 s (60.0 FPS) | mean ms: frame 16.67, game 6.10, render 4.20, rhi 2.00, gpu 9.80 | max ms: ...
+```
+
+Game, render, RHI and GPU are the numbers `stat unit` shows. The sim is capped at 60 FPS (16.7 ms), so whichever of them passes 16.7 ms is what holds it below real time. The sim check's `sim.log` (in its `sim-pr-results` artifact) carries these lines; split them by the `FSDS loadTrack:` lines to compare tracks.
+
 ## Switching
 
 - Start with it: add `-showcase` to the sim's command line.

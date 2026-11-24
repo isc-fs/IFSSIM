@@ -6,6 +6,8 @@
 #include "UI/FSDSHud.h"
 #include "GameFramework/PlayerController.h"
 #include "FSDSRandom.h"
+#include "Environment/FSDSWorldActor.h"
+#include "EngineUtils.h"
 #include "FSDSPacejkaTireModel.h"
 #include "Plant/FSDSChaosPlant.h"
 #include "Plant/FSDSFmuPlant.h"
@@ -261,6 +263,19 @@ void AFSDSVehiclePawn::ApplyWheelSettingsToSolver(bool bLogInherited)
 	VehicleMovement->ApplyAllWheelConfigsToPhysics(/*bFullReinit=*/false);
 	VehicleMovement->VerifyAllWheelConfigsApplied();
 
+	// The strut as the solver has it: spring rate and damping coefficient
+	// come from the wheel CDOs (SpringRate, SuspensionDampingRatio), so this
+	// is where to see what settings.json's SuspensionDamping became.
+	for (int32 i = 0; i < VehicleMovement->Wheels.Num(); ++i)
+	{
+		float K = 0.f, C = 0.f;
+		FVector Local;
+		if (VehicleMovement->GetSolverSuspension(i, K, C, Local))
+		{
+			UE_LOG(LogTemp, Log, TEXT("FSDS: wheel %d strut in the solver: spring %.0f N/m, damping %.0f N*s/m"), i, K, C);
+		}
+	}
+
 	// Verification above only covers fields this project actually sets.
 	// The complement — what it never set, and therefore inherited from
 	// Chaos — is invisible by construction: you cannot grep for a value
@@ -316,11 +331,20 @@ void AFSDSVehiclePawn::ApplyTireModelToWheelCDOs()
 		UFSDSWheelRear::StaticClass()->GetDefaultObject<UFSDSWheelRear>()
 	};
 
+	// The damping ratio takes the same route: Chaos turns it into the strut's
+	// damping coefficient (ComputeDamping from the spring rate and sprung
+	// mass) only when it builds the vehicle, and the live setters cannot
+	// reach suspension safely (see ApplyWheelConfigToPhysics). Before this,
+	// settings.json's SuspensionDamping was parsed and read by nothing.
+	const float DampingRatio = FMath::Clamp(P.SuspensionDamping, 0.05f, 5.f);
 	for (UChaosVehicleWheel* CDO : CDOs)
 	{
 		if (!CDO) continue;
 		FSDSPacejka::BakeToWheel(CDO, P.Pacejka, P.TireMu);
+		CDO->SuspensionDampingRatio = DampingRatio;
 	}
+	UE_LOG(LogTemp, Log, TEXT("FSDS: suspension damping ratio %.2f into wheel CDOs (settings.json SuspensionDamping)"),
+		DampingRatio);
 
 	UE_LOG(LogTemp, Log,
 		TEXT("FSDS: Pacejka baked into wheel CDOs before CreateVehicle — ")
@@ -680,8 +704,31 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				LidarSensor->HorizontalFOVEnd = SensorPair.Value.HorizontalFOVEnd;
 				LidarSensor->MaxRange = SensorPair.Value.MaxRange * 100.f;     // meters → cm
 				LidarSensor->SensorOffset = SensorPair.Value.Position * 100.f; // meters to cm
-				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd;
+				LidarSensor->MountRotation = SensorPair.Value.Rotation;
+				// settings.json gives metres; the sensor works in cm. The ×100 was
+				// missing, so the 0.03 m σ ran as 0.03 cm (0.3 mm).
+				LidarSensor->RangeNoiseStd = SensorPair.Value.RangeNoiseStd * 100.f;
+				LidarSensor->RangeNoiseRangeCoeffCm = SensorPair.Value.RangeNoiseRangeCoeff * 100.f;
+				LidarSensor->RangeNoiseRefReflectance = SensorPair.Value.RangeNoiseRefReflectance;
+				LidarSensor->RangeNoiseReflectanceExp = SensorPair.Value.RangeNoiseReflectanceExp;
+				LidarSensor->EdgeSwapRate = SensorPair.Value.EdgeSwapRate;
+				LidarSensor->EdgeDropRate = SensorPair.Value.EdgeDropRate;
+				LidarSensor->IntensityNoise = SensorPair.Value.IntensityNoise;
+				LidarSensor->IntensityScale = SensorPair.Value.IntensityScale;
+				LidarSensor->IntensityRangeExp = SensorPair.Value.IntensityRangeExp;
+				LidarSensor->IntensityIncidenceExp = SensorPair.Value.IntensityIncidenceExp;
+				LidarSensor->IntensityMax = SensorPair.Value.IntensityMax;
+				LidarSensor->LuminanceReflectanceGain = SensorPair.Value.LuminanceReflectanceGain;
+				LidarSensor->WorldLuminanceReflectanceGain = SensorPair.Value.WorldLuminanceReflectanceGain;
+				LidarSensor->SweepDurationMs = SensorPair.Value.SweepDurationMs;
+				LidarSensor->bSweepAlternate = SensorPair.Value.bSweepAlternate;
+				LidarSensor->bIntensityRound = SensorPair.Value.bIntensityRound;
 				LidarSensor->DropoutRate = SensorPair.Value.DropoutRate;
+				LidarSensor->DropoutWeakRate = SensorPair.Value.DropoutWeakRate;
+				LidarSensor->DropoutWeakExp = SensorPair.Value.DropoutWeakExp;
+				LidarSensor->DropoutWeakMax = SensorPair.Value.DropoutWeakMax;
+				LidarSensor->DropoutBurstScans = SensorPair.Value.DropoutBurstScans;
+				LidarSensor->DropoutBurstIidShare = SensorPair.Value.DropoutBurstIidShare;
 
 				// Per-channel max-range (#223 tune): convert metres → cm
 				// to match the global MaxRange units the sensor stores.
@@ -692,6 +739,9 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				{
 					LidarSensor->PerChannelMaxRangeCm.Add(Rm * 100.f);
 				}
+				LidarSensor->ChannelElevationsDeg = SensorPair.Value.ChannelElevationsDeg;
+				LidarSensor->bPointsInSensorFrame = SensorPair.Value.PointFrame.Equals(TEXT("sensor"), ESearchCase::IgnoreCase);
+				LidarSensor->ChannelRingIds = SensorPair.Value.ChannelRingIds;
 
 				// #223: select CPU (legacy ParallelFor + Chaos line traces)
 				// vs GPU (depth render + compute decode). Unknown values
@@ -749,6 +799,30 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 				ImuSensor->GyroNoiseStd = SensorPair.Value.GyroNoiseStd;
 				ImuSensor->AccelBiasStd = SensorPair.Value.AccelBiasStd;
 				ImuSensor->GyroBiasStd = SensorPair.Value.GyroBiasStd;
+				ImuSensor->AccelBiasTau = SensorPair.Value.AccelBiasTau;
+				ImuSensor->GyroBiasTau = SensorPair.Value.GyroBiasTau;
+				// Sample stream and digitisation. The sensor works in cm/s² for
+				// accel (see FSDSImuSensor.cpp), so the m/s² values scale by 100
+				// here; the noise σ are scaled inside the sensor instead.
+				ImuSensor->SampleRateHz = SensorPair.Value.ImuSampleRateHz;
+				ImuSensor->AccelOdrHz = SensorPair.Value.AccelOdrHz;
+				ImuSensor->AccelNoiseStdXYZ = SensorPair.Value.AccelNoiseStdXYZ;
+				ImuSensor->GyroNoiseStdXYZ = SensorPair.Value.GyroNoiseStdXYZ;
+				ImuSensor->AccelTurnOnBiasStd = SensorPair.Value.AccelTurnOnBiasStd * 100.f;
+				ImuSensor->GyroTurnOnBiasStd = SensorPair.Value.GyroTurnOnBiasStd;
+				ImuSensor->AccelLsb = SensorPair.Value.AccelLsb * 100.f;
+				ImuSensor->GyroLsb = SensorPair.Value.GyroLsb;
+				ImuSensor->AccelRange = SensorPair.Value.AccelRange * 100.f;
+				ImuSensor->GyroRange = SensorPair.Value.GyroRange;
+				ImuSensor->VibrationAccelRms = SensorPair.Value.VibrationAccelRms * 100.f;
+				ImuSensor->VibrationAccelHz = SensorPair.Value.VibrationAccelHz;
+				ImuSensor->VibrationAccelQ = SensorPair.Value.VibrationAccelQ;
+				ImuSensor->VibrationGyroRms = SensorPair.Value.VibrationGyroRms;
+				ImuSensor->VibrationGyroHz = SensorPair.Value.VibrationGyroHz;
+				ImuSensor->VibrationGyroQ = SensorPair.Value.VibrationGyroQ;
+				ImuSensor->VibrationRefSpeed = SensorPair.Value.VibrationRefSpeed;
+				ImuSensor->VibrationSpeedExp = SensorPair.Value.VibrationSpeedExp;
+				ImuSensor->VibrationOnSpeed = SensorPair.Value.VibrationOnSpeed;
 				break;
 			}
 		}
@@ -868,6 +942,15 @@ void AFSDSVehiclePawn::SetupSensorsFromSettings()
 		RollStiffnessRear = P.RollStiffnessRear;
 		HeaveStiffness = P.HeaveStiffness;
 		PitchStiffness = P.PitchStiffness;
+
+		Road.Configure(P.RoadRoughnessGd0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessFootprint, P.RoadRoughnessCrossWavelength);
+		bRoadOnTrackWorld = P.bRoadRoughnessOnTrackWorld;
+		RoadTyreStiffness = P.RoadRoughnessTyreStiffness;
+		bRoadSeeded = false;
+		UE_LOG(LogTemp, Log, TEXT("FSDS: road roughness Gd0 %.3g m^3 (profile sigma %.2f mm, cutoff %.0f m, left-right below %.1f m, footprint %.2f m, tyre %.0f N/m)%s"),
+			P.RoadRoughnessGd0, Road.GetSigma() * 1000.0, P.RoadRoughnessCutoffWavelength, P.RoadRoughnessCrossWavelength,
+			P.RoadRoughnessFootprint, P.RoadRoughnessTyreStiffness,
+			Road.IsActive() ? (bRoadOnTrackWorld ? TEXT(", also on track worlds") : TEXT(", level floor only")) : TEXT(" - off"));
 
 		// Size the rear-wheel brake torque to the max motor regen
 		// referred to the wheel. Brake input (0-1) then represents a
@@ -1419,6 +1502,7 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	{
 		ApplyAeroForces();
 		ApplyRollingResistance();
+		ApplyRoadRoughness(DeltaTime);
 	}
 
 	// Apply controls
@@ -1674,6 +1758,78 @@ void AFSDSVehiclePawn::ApplyRollingResistance()
 	const float Frr = RollingResistance * Fz * Ramp;   // N
 
 	VehicleMesh->AddForce(-Velocity.GetSafeNormal() * Frr * 100.f, NAME_None, false);   // N -> UE
+}
+
+void AFSDSVehiclePawn::ApplyRoadRoughness(float DeltaTime)
+{
+	if (!Road.IsActive() || DeltaTime <= 0.f || !VehicleMovement) return;
+	USkeletalMeshComponent* VehicleMesh = GetMesh();
+	if (!VehicleMesh || !VehicleMesh->IsSimulatingPhysics()) return;
+
+	// Off on a track's world (Montmeló) if RoadRoughnessOnTrackWorld is false;
+	// checked once a second.
+	RoadWorldCheckTimer -= DeltaTime;
+	if (RoadWorldCheckTimer <= 0.f)
+	{
+		RoadWorldCheckTimer = 1.f;
+		bool bWorldBuilt = false;
+		if (UWorld* W = GetWorld())
+		{
+			for (TActorIterator<AFSDSWorldActor> It(W); It; ++It)
+			{
+				if (It->IsBuilt()) { bWorldBuilt = true; break; }
+			}
+		}
+		bRoadSuppressedByWorld = bWorldBuilt && !bRoadOnTrackWorld;
+	}
+	if (bRoadSuppressedByWorld) return;
+
+	// A new profile per scenario generation, so a same-seed reset drives the
+	// same road again.
+	const uint32 Gen = FSDSRandom::GetGeneration();
+	if (!bRoadSeeded || RoadGeneration != Gen)
+	{
+		Road.Reset(FSDSRandom::MakeStream(TEXT("Road.profile")));
+		RoadGeneration = Gen;
+		bRoadSeeded = true;
+		bRoadPrevValid = false;
+		RoadDistance = 0.0;
+	}
+
+	FVector Velocity = GetVehicleVelocityUe();   // cm/s
+	Velocity.Z = 0.f;
+	RoadDistance += Velocity.Size() / 100.0 * DeltaTime;
+
+	const FTransform Body = VehicleMesh->GetComponentTransform();
+	const FVector Up = Body.GetUnitAxis(EAxis::Z);
+	const int32 NumWheels = FMath::Min(VehicleMovement->Wheels.Num(), 4);
+	for (int32 i = 0; i < NumWheels; ++i)
+	{
+		float K = 0.f, C = 0.f;
+		FVector Local;
+		if (!VehicleMovement->GetSolverSuspension(i, K, C, Local)) return;
+
+		// Front wheels are ahead of the body origin (the centre of mass); the
+		// rear ones drive over the same track a wheelbase later. UE +Y is right.
+		const int32 Track = (Local.Y < 0.f) ? 0 : 1;
+		const double S = (Local.X > 0.f) ? RoadDistance : RoadDistance - Wheelbase;
+		const double H = Road.Height(Track, S);                       // m
+		if (!bRoadPrevValid)
+		{
+			RoadCorner[i].Reset(H);
+			RoadPrevHeight[i] = H;
+		}
+		const double Ms = Mass * ((Local.X > 0.f) ? WeightDistFront : (1.f - WeightDistFront)) / 2.0;
+		const UChaosVehicleWheel* Wheel = VehicleMovement->Wheels[i];
+		const double Mu = Wheel ? FMath::Max(1.f, Wheel->WheelMass) : 10.0;
+		RoadCorner[i].Advance(RoadPrevHeight[i], H, DeltaTime, Ms, Mu, K, C, RoadTyreStiffness);
+		RoadPrevHeight[i] = H;
+
+		const double F = RoadCorner[i].Force(K, C);                     // N
+		VehicleMesh->AddForceAtLocation(Up * (F * 100.0), Body.TransformPosition(Local), NAME_None);   // N -> UE
+	}
+	bRoadPrevValid = true;
+	Road.TrimBefore(RoadDistance - Wheelbase);
 }
 
 void AFSDSVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)

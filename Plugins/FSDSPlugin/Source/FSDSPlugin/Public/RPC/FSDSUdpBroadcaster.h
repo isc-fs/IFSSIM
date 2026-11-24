@@ -80,7 +80,15 @@ struct FFSDSSensorFrame
 	// /testing_only/odom's twist.angular from these — closes the gap left
 	// by #315 (which only populated twist.linear).
 	float GtAngVelBodyX = 0.f, GtAngVelBodyY = 0.f, GtAngVelBodyZ = 0.f; // rad/s
+
+	// Sim time of the IMU sample this frame carries, in ns. The IMU emits a
+	// 400 Hz sample stream (FSDSImuSensor) while frames are captured once per
+	// ~60 Hz tick, so the TCP stream sends one frame per IMU sample and the
+	// bridge stamps /imu with this instead of the tick time. 0 = this frame
+	// carries no new IMU sample; the bridge then does not publish /imu for it.
+	uint64 ImuTimestamp = 0;
 };
+static_assert(sizeof(FFSDSSensorFrame) == 188, "FFSDSSensorFrame must match the bridge's SensorFrame (udp_receiver.h) byte for byte");
 
 struct FFSDSLidarChunkHeader
 {
@@ -105,8 +113,8 @@ struct FFSDSLidarChunkHeader
 	// on). LagNs is kept for old-bridge fallback + wall-clock diagnostics.
 	int64 SimCaptureNs = 0;
 	// Followed by PointsInChunk * 4 * sizeof(float) bytes of point data:
-	// (x, y, z, intensity) per point — intensity ∈ [0, 1] in #255's
-	// physically-grounded model. Stride was 3 floats pre-#255.
+	// (x, y, z, intensity) per point — intensity in [0, IntensityMax]
+	// (0-255 with the shipped settings). Stride was 3 floats pre-#255.
 };
 
 // Wire header for the TCP LiDAR stream (PR-#482). One header per scan,
@@ -144,6 +152,29 @@ static_assert(sizeof(FFSDSLidarStreamHeader) == 32,
 	"its size is part of the bridge↔sim ABI. If you grow or shrink "
 	"this struct, bump a wire-version field instead of expecting "
 	"old bridges to keep parsing.");
+
+// Wire header for the organised LiDAR stream ("streamLidar2\n"). Same
+// first six fields as FFSDSLidarStreamHeader, magic "LID2". Followed by
+// TotalPoints * 4 floats (x, y, z, intensity). When Flags bit 0 is set the
+// payload is every ray of the scan in the car's Hesai order: Slots slots in
+// firing order, Channels rays each, ring 0 = top beam, intensity -1 = no
+// return; slot s fires SweepDurationNs * s / (Slots - 1) after the stamp.
+// Otherwise it is the compact cloud (valid hits only), as on streamLidar.
+// Bridges that don't ask for streamLidar2 keep getting the 32-byte header.
+struct FFSDSLidarStreamHeaderV2
+{
+	uint32 Magic = 0x4C494432; // "LID2", same convention as "LIDR" 0x4C494452
+	uint32 FrameID = 0;
+	int32  Channels = 0;
+	int32  TotalPoints = 0;
+	int64  LagNs = 0;
+	int64  SimCaptureNs = 0;
+	int64  SweepDurationNs = 0;
+	int32  Slots = 0;
+	uint32 Flags = 0;          // bit 0: organised
+};
+static_assert(sizeof(FFSDSLidarStreamHeaderV2) == 48,
+	"FFSDSLidarStreamHeaderV2 is part of the bridge<->sim ABI (bridge: ifssim_ros_wrapper.cpp).");
 
 #pragma pack(pop)
 

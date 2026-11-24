@@ -58,9 +58,38 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		// when settings.json doesn't provide overrides — see
 		// UFSDSLidarSensor::OnSettingsApplied).
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, ChannelMaxRangeCm)
+		// Per-channel elevation (rad, sensor frame), NumChannels entries.
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float>, ChannelElevationRad)
 
 		SHADER_PARAMETER(float, RangeNoiseStdCm)
 		SHADER_PARAMETER(float, DropoutRate)
+		SHADER_PARAMETER(uint32, PointsInSensorFrame)
+		// Weak-return dropout, see UFSDSLidarSensor::DropoutWeakRate.
+		SHADER_PARAMETER(float, DropoutWeakRate)
+		SHADER_PARAMETER(float, DropoutWeakExp)
+		SHADER_PARAMETER(float, DropoutWeakMax)
+		SHADER_PARAMETER(float, DropoutBurstScans)
+		SHADER_PARAMETER(float, DropoutBurstIidShare)
+		SHADER_PARAMETER(uint32, DropoutScanIndex)
+		SHADER_PARAMETER(uint32, DropoutCellSeed)
+		SHADER_PARAMETER(float, RangeNoiseRangeCoeffCm)
+		SHADER_PARAMETER(float, RangeNoiseRefReflectance)
+		SHADER_PARAMETER(float, RangeNoiseReflectanceExp)
+		SHADER_PARAMETER(float, EdgeSwapRate)
+		SHADER_PARAMETER(float, EdgeDropRate)
+		SHADER_PARAMETER(float, IntensityNoiseRel)
+		// Intensity law: Scale · ρ · cos^IncidenceExp · r^-RangeExp, clamped to
+		// [0, Max], rounded when Round != 0.
+		SHADER_PARAMETER(float, IntensityScale)
+		SHADER_PARAMETER(float, IntensityRangeExp)
+		SHADER_PARAMETER(float, IntensityIncidenceExp)
+		SHADER_PARAMETER(float, IntensityMax)
+		SHADER_PARAMETER(float, LuminanceReflectanceGain)
+		SHADER_PARAMETER(float, SweepDurationS)
+		SHADER_PARAMETER(uint32, SweepReversed)
+		SHADER_PARAMETER(FVector3f, SweepVelMps)
+		SHADER_PARAMETER(FVector3f, SweepOmega)
+		SHADER_PARAMETER(uint32, IntensityRound)
 
 		SHADER_PARAMETER(uint32, RNGSeed)
 
@@ -77,6 +106,10 @@ class FFSDSLidarDecodeCS : public FGlobalShader
 		SHADER_PARAMETER(FVector3f, SensorRotRowX)
 		SHADER_PARAMETER(FVector3f, SensorRotRowY)
 		SHADER_PARAMETER(FVector3f, SensorRotRowZ)
+		// Mount rotation rows, sensor frame -> vehicle frame (pitched mount).
+		SHADER_PARAMETER(FVector3f, MountRotRowX)
+		SHADER_PARAMETER(FVector3f, MountRotRowY)
+		SHADER_PARAMETER(FVector3f, MountRotRowZ)
 
 		// Intensity model (#255). RReferenceM gives the inverse-square
 		// reference range; perpendicular surfaces at this range return
