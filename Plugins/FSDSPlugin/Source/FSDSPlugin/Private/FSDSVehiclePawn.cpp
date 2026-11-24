@@ -691,7 +691,7 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	// The HEIGHT is not the origin's: PlaceCoGHeight sets the override's Z
 	// once the car has settled, so the centre of mass sits CoGHeight above
 	// the ground. Left at 0 it was wherever the mesh's body frame put it:
-	// 0.48 m up on the Technion car, on the ground on the IFS-08 (origin on
+	// 0.99 m up on the Technion car, on the ground on the IFS-08 (origin on
 	// the ground), and the load transfer went with it. Only Z moves, so the
 	// static wheel loads do not (ComputeSprungMasses uses the wheels' X/Y).
 	UE_LOG(LogTemp, Log,

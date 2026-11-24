@@ -213,7 +213,7 @@ public:
 	/** Raise or lower the centre of mass to settings.json CoGHeight above the
 	 *  ground, once the car has settled on its wheels (Chaos mode). Where the
 	 *  ground is in the body frame depends on the car mesh (the IFS-08's origin
-	 *  is on the ground, the Technion car's CoM sat 0.48 m up), so it is
+	 *  is on the ground, the Technion car's CoM sat 0.99 m up), so it is
 	 *  measured from Chaos's own wheels rather than assumed. */
 	void PlaceCoGHeight();
 
