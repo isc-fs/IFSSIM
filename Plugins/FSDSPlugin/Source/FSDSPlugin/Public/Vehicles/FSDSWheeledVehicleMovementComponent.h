@@ -112,6 +112,15 @@ public:
 	bool GetSolverSuspension(int32 WheelIndex, float& OutSpringRate, float& OutDamping, FVector& OutLocalPosition) const;
 
 	/**
+	 * The static load Chaos gives one wheel, in N: its sprung mass (from the
+	 * wheel positions and the vehicle mass, SetupSuspension) times g. With
+	 * the wheel classes' WheelLoadRatio at 0 this is the load the tyre solver
+	 * reads every tick (ForceIntoSurface), so per-tick grip is scaled from it.
+	 * False until the vehicle exists.
+	 */
+	bool GetSolverRestingLoad(int32 WheelIndex, float& OutNewtons) const;
+
+	/**
 	 * Log every wheel parameter this project never explicitly chose.
 	 *
 	 * Chaos's wheel class ships twelve tuning fields that FSDSWheelFront/Rear

@@ -1470,8 +1470,9 @@ void IFSSIMRosWrapper::lwsPublishTimerCb()
 
 void IFSSIMRosWrapper::tireLoadsTimerCb()
 {
-    // Pulls Chaos's per-wheel SpringForce via the plugin RPC and publishes
-    // it as a 4-element Float32MultiArray on /tire_loads. Layout label is
+    // Pulls the load each tyre's grip is built on (getTireLoads truth: the
+    // pawn's load-transfer model plus aero, not Chaos's spring force) and
+    // publishes it as a 4-element Float32MultiArray on /tire_loads. Layout label is
     // "wheels" with the documented order [FL, FR, RL, RR]; clients should
     // index by name not by position, but they should know the order from
     // the dim label too.

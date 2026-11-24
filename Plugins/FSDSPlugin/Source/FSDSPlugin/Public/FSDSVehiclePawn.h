@@ -135,12 +135,20 @@ public:
 	FTireLoads ComputeTireLoadsParametric(float ax, float ay, float phi, float theta, float z) const;
 
 	/**
-	 * Read the truth Fz per wheel as Chaos's solver currently has it
-	 * (the same value being used to compute longitudinal/lateral grip
-	 * this tick). Reads UChaosWheeledVehicleMovementComponent's
-	 * per-wheel state — no parametric model, just the live signal.
+	 * The load each tyre's grip is built on this tick, in N (ApplyTyreLoads):
+	 * the quasi-static transfer from ComputeTireLoadsParametric plus aero
+	 * downforce, zero for a wheel off the ground. This is what the tyre
+	 * solver uses, so it is the "truth" the RPC reports.
 	 */
 	FTireLoads GetTireLoadsTruth() const;
+
+	/**
+	 * Chaos's suspension spring force per wheel, in N (spring rate x
+	 * compression of its "simple" suspension). NOT the wheel's normal load:
+	 * the car is held up by the suspension constraint, and these summed to
+	 * 40-70 % of the weight at rest. Kept for diagnosis (RPC getTireLoads springs).
+	 */
+	FTireLoads GetSpringForces() const;
 
 	// EBS analog: clamps the handbrake and locks all input channels (API +
 	// keyboard) until explicitly released. The real IFS-08 EBS is a
@@ -531,6 +539,24 @@ private:
 
 	FVector PreviousVelocity = FVector::ZeroVector;
 	FVector CurrentAcceleration = FVector::ZeroVector;
+
+	/**
+	 * Sets each tyre's load for the tyre solver this tick. Chaos's own spring
+	 * force is not the wheel's load (see FSDSWheelRear.cpp, WheelLoadRatio),
+	 * so the wheel classes hand the solver the static resting load and this
+	 * scales it: grip circle via SetWheelFrictionMultiplier (base x load /
+	 * resting load), lateral force via SetWheelSlipGraphMultiplier (load).
+	 * The load is ComputeTireLoadsParametric at the body's filtered
+	 * acceleration (roll taken quasi-static from ay) plus aero downforce per
+	 * axle, the same downforce ApplyAeroForces puts on the body.
+	 */
+	void ApplyTyreLoads(float DeltaTime);
+
+	/** Aero downforce on one axle, N (0 below 1 m/s, as ApplyAeroForces). */
+	float AeroDownforceAxle(bool bFront) const;
+
+	FTireLoads TyreLoads;                 // last ApplyTyreLoads result, N
+	FVector2D TyreLoadAccel = FVector2D::ZeroVector;   // filtered (ax forward, ay left), m/s^2
 
 	// IFS-08 Aerodynamics
 	float CdA = 0.95f;               // Drag coefficient * frontal area (m²)

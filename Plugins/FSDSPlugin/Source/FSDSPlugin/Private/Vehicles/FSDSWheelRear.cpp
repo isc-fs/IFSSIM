@@ -47,16 +47,24 @@ UFSDSWheelRear::UFSDSWheelRear()
 	// No anti-roll bar: see FSDSWheelFront.cpp.
 	RollbarScaling = 0.f;
 
-	// Use the actual per-wheel vertical load (Fz) for grip calculation
-	// instead of Chaos's default 50/50 blend with the resting load.
-	// Chaos's ChaosWheeledVehicleMovementComponent.cpp:653 does:
-	//   ForceMagnitude = WheelLoadRatio * ActualFz + (1-WheelLoadRatio) * RestingForce
-	// At 0.5 (default), each wheel sees half its real Fz averaged with
-	// the static one-quarter-mass restingForce. That's a Chaos arcade-
-	// handling helper — at 1.0 it uses the true dynamic Fz, which is
-	// what we want for a physics-truthful FS simulation. Load transfer
-	// during launch then properly increases rear-axle grip.
-	WheelLoadRatio = 1.0f;
+	// The tyre solver reads its load from the RESTING force, not the spring.
+	// Chaos's ChaosWheeledVehicleMovementComponent.cpp:665 does:
+	//   ForceMagnitude = WheelLoadRatio * SpringForce + (1-WheelLoadRatio) * RestingForce
+	// and the tyre's grip circle and (via SetWheelSlipGraphMultiplier) its
+	// lateral force are built on ForceMagnitude. SpringForce is the "simple"
+	// suspension's spring rate x compression, but the car is physically held
+	// up by the suspension CONSTRAINT (stiffness 0.25 x rate, its own travel
+	// limits), so the two disagree: at rest the four spring forces summed to
+	// 9 / 40 / 69 / 93 % of the weight at 150 / 220 / 275 / 350 kg (measured
+	// 2026-11-24, road roughness off, either car body). The 220 kg car's
+	// tyres got 40 % of their load and spun up from half throttle.
+	//
+	// At 0 the solver gets RestingForce (sprung mass x g, right at rest), and
+	// AFSDSVehiclePawn::ApplyTyreLoads scales grip every tick by the load
+	// transfer, aero included (see there). WAS 1.0, on the reasoning that it
+	// is "the true dynamic Fz"; it is the dynamic number of a spring that is
+	// not the one carrying the car.
+	WheelLoadRatio = 0.0f;
 
 	// Hoosier R20 slick friction — peak μ ≈ 1.45 on dry tarmac, 1.4 is
 	// the conservative default we run against. Reverted from the 1.0
