@@ -181,4 +181,9 @@ private:
 	 *  physics asset's own tensor. Later calls can find the body already at
 	 *  the scaled tensor, so the scale is not derived again. */
 	bool bInertiaScaleFromSettings = false;
+
+	/** settings.json Inertia was applied (the physics asset's principal axes
+	 *  lie along the car's), and the principal moments it should give, kg*cm^2. */
+	bool bInertiaFromSettingsApplied = false;
+	FVector InertiaExpected = FVector::ZeroVector;
 };

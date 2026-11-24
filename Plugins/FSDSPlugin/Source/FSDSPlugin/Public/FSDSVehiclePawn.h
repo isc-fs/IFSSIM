@@ -210,6 +210,20 @@ public:
 	/** The car mesh comes from settings.json (FFSDSVehicleMesh), not the Technion fallback. */
 	bool bCustomVehicleMesh = false;
 
+	/** Raise or lower the centre of mass to settings.json CoGHeight above the
+	 *  ground, once the car has settled on its wheels (Chaos mode). Where the
+	 *  ground is in the body frame depends on the car mesh (the IFS-08's origin
+	 *  is on the ground, the Technion car's CoM sat 0.48 m up), so it is
+	 *  measured from Chaos's own wheels rather than assumed. */
+	void PlaceCoGHeight();
+
+	/** PlaceCoGHeight has run (it runs once; the override then persists
+	 *  through physics-state rebuilds and resets). */
+	bool bCoGHeightPlaced = false;
+
+	/** Consecutive ticks the car has been at rest on all four wheels. */
+	int32 CoGSettleTicks = 0;
+
 	/** The car mesh's wheel and corner meshes, FL/FR/RL/RR; null = none. */
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMesh>> ArtWheelMeshes;

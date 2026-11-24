@@ -688,16 +688,17 @@ void AFSDSVehiclePawn::SetupVehicleMovement()
 	VehicleMovement->CenterOfMassOverride = FVector::ZeroVector;
 	VehicleMovement->bEnableCenterOfMassOverride = true;
 
-	// KNOWN GAP, not fixed here: the override also pins the CoG HEIGHT to the
-	// origin's height, while settings.json declares CoGHeight = 0.3 m
-	// and ComputeTireLoadsParametric uses that number for load transfer.
-	// Setting Z changes ride height and load transfer together, so it needs a
-	// validation lap and belongs with the plant work.
+	// The HEIGHT is not the origin's: PlaceCoGHeight sets the override's Z
+	// once the car has settled, so the centre of mass sits CoGHeight above
+	// the ground. Left at 0 it was wherever the mesh's body frame put it:
+	// 0.48 m up on the Technion car, on the ground on the IFS-08 (origin on
+	// the ground), and the load transfer went with it. Only Z moves, so the
+	// static wheel loads do not (ComputeSprungMasses uses the wheels' X/Y).
 	UE_LOG(LogTemp, Log,
-		TEXT("FSDS: mass %.1f kg from settings.json; centre of mass at the body ")
-		TEXT("origin, wheels placed around it from Wheelbase and WeightDistFront. ")
-		TEXT("CoG HEIGHT is NOT the declared %.3f m."),
-		ConfiguredMass, MassVehicle ? MassVehicle->Physics.CoGHeight : 0.344f);
+		TEXT("FSDS: mass %.1f kg from settings.json; centre of mass over the body ")
+		TEXT("origin, wheels placed around it from Wheelbase and WeightDistFront; ")
+		TEXT("its height (%.3f m) is set once the car has settled."),
+		ConfiguredMass, MassVehicle ? MassVehicle->Physics.CoGHeight : 0.3f);
 
 	// Disable Chaos's vehicle-specific aggressive sleep. Chaos's
 	// ProcessSleeping() (ChaosVehicleMovementComponent.cpp:1252) puts
@@ -1543,6 +1544,10 @@ void AFSDSVehiclePawn::Tick(float DeltaTime)
 	if (!bFmuDrivesPawn && bChaosVehicleActive)
 	{
 		PoseWheelsFromChaos();
+		if (!bCoGHeightPlaced)
+		{
+			PlaceCoGHeight();
+		}
 	}
 
 	// Acceleration tracking
@@ -2646,6 +2651,61 @@ void AFSDSVehiclePawn::PoseWheelsFromChaos()
 		{
 			ArtCorners[i]->SetRelativeLocationAndRotation(Loc, FRotator(0.f, VW->GetSteerAngle(), 0.f));
 		}
+	}
+}
+
+void AFSDSVehiclePawn::PlaceCoGHeight()
+{
+	USkeletalMeshComponent* M = GetMesh();
+	FBodyInstance* Body = M ? M->GetBodyInstance() : nullptr;
+	const FFSDSVehicleSettings* V = FFSDSSettings::Get().GetDefaultVehicle();
+	if (!VehicleMovement || !Body || !V || V->Physics.CoGHeight <= 0.f || VehicleMovement->Wheels.Num() < 4)
+	{
+		return;
+	}
+
+	// Settled: every wheel on the ground and the body still, for half a
+	// second of ticks, so the suspension is at its static compression.
+	bool bSettled = GetVelocity().Size() < 5.f;   // cm/s
+	for (int32 i = 0; i < 4 && bSettled; i++)
+	{
+		bSettled = VehicleMovement->Wheels[i] && !VehicleMovement->Wheels[i]->IsInAir();
+	}
+	CoGSettleTicks = bSettled ? CoGSettleTicks + 1 : 0;
+	if (CoGSettleTicks < 30)
+	{
+		return;
+	}
+	bCoGHeightPlaced = true;
+
+	// The ground in the body frame: under each wheel centre where Chaos has
+	// it (rest position minus the suspension offset, as PoseWheelsFromChaos
+	// draws it), one tyre radius down.
+	double GroundZ = 0.0;
+	for (int32 i = 0; i < 4; i++)
+	{
+		const UChaosVehicleWheel* W = VehicleMovement->Wheels[i];
+		const FVector Centre = VehicleMovement->GetWheelRestLocation(i)
+			- W->GetSuspensionAxis() * W->GetSuspensionOffset();
+		GroundZ += (Centre.Z - W->GetWheelRadius()) / 4.0;
+	}
+	const FTransform Actor = GetActorTransform();
+	const double BeforeCm = Actor.InverseTransformPosition(Body->GetCOMPosition()).Z - GroundZ;
+
+	// The override is in the chassis BODY's frame, which is not always the
+	// actor's (the Technion car's root body sits 0.48 m above its origin), so
+	// move it by the difference rather than set it outright.
+	VehicleMovement->CenterOfMassOverride.Z += V->Physics.CoGHeight * 100.0 - BeforeCm;
+	Body->UpdateMassProperties();   // recalculates; the movement component re-applies the override
+
+	const double AfterCm = Actor.InverseTransformPosition(Body->GetCOMPosition()).Z - GroundZ;
+	UE_LOG(LogTemp, Log,
+		TEXT("FSDS: centre of mass %.3f m above the ground (settings.json CoGHeight %.3f m; was %.3f m); ")
+		TEXT("ground %.1f cm from the body origin, override z %.1f cm"),
+		AfterCm * 0.01, V->Physics.CoGHeight, BeforeCm * 0.01, GroundZ, VehicleMovement->CenterOfMassOverride.Z);
+	if (FMath::Abs(AfterCm - V->Physics.CoGHeight * 100.0) > 1.0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("FSDS: centre of mass NOT at CoGHeight: %.3f m above the ground"), AfterCm * 0.01);
 	}
 }
 
