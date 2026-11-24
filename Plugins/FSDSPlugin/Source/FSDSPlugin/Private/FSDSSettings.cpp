@@ -196,6 +196,16 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 	VehicleObj->TryGetBoolField(TEXT("AllowAPIAlways"), Vehicle.bAllowAPIAlways);
 	VehicleObj->TryGetBoolField(TEXT("AutoCreate"), Vehicle.bAutoCreate);
 
+	// Mesh: the art the car is drawn with (FFSDSVehicleMesh)
+	const TSharedPtr<FJsonObject>* MeshObj;
+	if (VehicleObj->TryGetObjectField(TEXT("Mesh"), MeshObj))
+	{
+		(*MeshObj)->TryGetStringField(TEXT("Body"), Vehicle.Mesh.Body);
+		(*MeshObj)->TryGetStringField(TEXT("PhysicsAsset"), Vehicle.Mesh.PhysicsAsset);
+		(*MeshObj)->TryGetStringArrayField(TEXT("Wheels"), Vehicle.Mesh.Wheels);
+		(*MeshObj)->TryGetStringArrayField(TEXT("Corners"), Vehicle.Mesh.Corners);
+	}
+
 	// Sensors
 	const TSharedPtr<FJsonObject>* SensorsObj;
 	if (VehicleObj->TryGetObjectField(TEXT("Sensors"), SensorsObj))
@@ -276,6 +286,11 @@ void FFSDSSettings::ParseVehicle(const FString& Name, TSharedPtr<FJsonObject> Ve
 		if ((*PhysicsObj)->TryGetArrayField(TEXT("MotorTorque"), TorqueArr))
 		{
 			for (auto& V : *TorqueArr) P.MotorTorque.Add(V->AsNumber());
+		}
+		const TArray<TSharedPtr<FJsonValue>>* InertiaArr;
+		if ((*PhysicsObj)->TryGetArrayField(TEXT("Inertia"), InertiaArr) && InertiaArr->Num() == 3)
+		{
+			P.Inertia = FVector((*InertiaArr)[0]->AsNumber(), (*InertiaArr)[1]->AsNumber(), (*InertiaArr)[2]->AsNumber());
 		}
 
 		// Pacejka Magic Formula coefficients (optional block)

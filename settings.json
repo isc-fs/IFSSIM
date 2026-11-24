@@ -3,6 +3,9 @@
   "SimMode": "Car",
   "ViewMode": "SpringArmChase",
   "ClockSpeed": 1.0,
+  "_comment_ui": "In-sim overlays, both off here so the sim opens straight onto the car. MissionControl.Panel = the Mission Control panel on Tab; Menu.Enabled = the main menu (Manual / Autonomous / Track editor) the sim opens on. Set either to true to turn it on. Left out of settings.json, both are on.",
+  "MissionControl": { "Panel": false },
+  "Menu": { "Enabled": false },
   "_comment_plant": "Which implementation of IFSDSPlant stands behind the car. 'chaos' = Chaos observes the car it is already integrating (the only validated reference). 'shadow' = Chaos still DRIVES and the FMU is stepped alongside it with identical inputs, with divergence logged once a second; behaviour is unchanged by construction because nothing downstream reads the shadow. 'fmu' = the FMU is the plant, but the pawn is still Chaos-integrated, so the sensors describe a different car from the one on screen — bring-up only until the Phase 6 kinematic swap. See docs/fmu_plant_migration.md.",
   "Plant": {
     "Type": "chaos",
@@ -23,6 +26,12 @@
       "EnableCollisions": true,
       "AllowAPIAlways": true,
       "AutoCreate": true,
+      "_comment_mesh": "The art the car is drawn with: the IFS-08, generated from the team's Blender livery scene by tools/assetgen (docs/vehicle_art.md). Body is a skeletal mesh with bones WheelFL/FR/RL/RR at the hub centres and its origin on the ground under the centre of mass; Wheels (what spins) and Corners (upright and caliper) are posed every tick from the plant's wheel state, FL, FR, RL, RR. Only what is drawn: mass, geometry, aero and suspension come from VehiclePhysics. Remove the block, or a Body that does not load, for the inherited Technion car.",
+      "Mesh": {
+        "Body": "/Game/Vehicle/IFS08/SK_IFS08.SK_IFS08",
+        "Wheels": ["/Game/Vehicle/IFS08/SM_IFS08_Wheel_FL.SM_IFS08_Wheel_FL", "/Game/Vehicle/IFS08/SM_IFS08_Wheel_FR.SM_IFS08_Wheel_FR", "/Game/Vehicle/IFS08/SM_IFS08_Wheel_RL.SM_IFS08_Wheel_RL", "/Game/Vehicle/IFS08/SM_IFS08_Wheel_RR.SM_IFS08_Wheel_RR"],
+        "Corners": ["/Game/Vehicle/IFS08/SM_IFS08_Corner_FL.SM_IFS08_Corner_FL", "/Game/Vehicle/IFS08/SM_IFS08_Corner_FR.SM_IFS08_Corner_FR", "/Game/Vehicle/IFS08/SM_IFS08_Corner_RL.SM_IFS08_Corner_RL", "/Game/Vehicle/IFS08/SM_IFS08_Corner_RR.SM_IFS08_Corner_RR"]
+      },
       "VehiclePhysics": {
         "_comment_motor": "MotorMaxTorque, MotorMaxPower, MotorRPM[], MotorTorque[] are vestigial. Drive torque comes from the dedicated UEmraxMotor class (EMRAX 228 MV at 400 V bus, see Plugins/FSDSPlugin/Source/FSDSPlugin/Public/EmraxMotor.h). The pawn silences Chaos's ICE-style engine each tick (SetThrottleInput(0)) and injects per-wheel torque via SetDriveTorque, so these fields feed only the silenced Chaos engine and have no effect on actual driving. Of the motor-side settings, MaxRegenTorque/MaxRegenPower and MotorMaxPower (the drive power cap, 80 kW per the FS rules) are forwarded to the EMRAX class; MotorMaxTorque and the curve arrays are not, peak torque comes from the EMRAX envelope. Kept here so existing tooling and external mirrors keep parsing; remove in a future pass.",
         "Mass": 275,
@@ -47,6 +56,8 @@
         "EbsGripMultiple": 1.5,
         "EbsFillTime": 0.0,
         "WeightDistFront": 0.438,
+        "_comment_inertia": "Body inertia about the centre of mass, kg*m^2: roll Ixx, pitch Iyy, yaw Izz. ESTIMATED from the IFS-08 CAD (tools/assetgen/blender/estimate_ifs08_inertia.py, 2026-11-23), not measured: each CAD part's own volume/surface moments with a density from its material (steel frame, aluminium, CFRP panels by area, EMRAX 12.3 kg, tyres 4.3 kg), plus the mass the CAD lacks up to Mass. The CAD's accumulator is an empty container, so the cells are ASSUMED at 50 kg as a block in it; the other 61 kg of non-CAD mass (wiring, DV kit, fluids) is spread like the CAD parts. Cells at 40 / 60 kg give yaw 154 / 142. The estimate's own CoG (47.3 % front, 0.27 m) is not fitted to WeightDistFront / CoGHeight, so it is a check on it. Without it the sim keeps the physics asset's own tensor (the IFS-08's gives 27.9 / 193 / 210 about its principal axes). It is applied only when the asset's principal axes lie along the car's: the Technion car's do not, so on that car it is ignored with an error in the log. Replace with SOLIDWORKS mass properties or a swing/pendulum test when there is one. matlab/plant reads it from here.",
+        "Inertia": [37.5, 129.4, 148.6],
         "CoGHeight": 0.300,
         "_comment_damping": "SuspensionDamping is the strut's damping ratio; Chaos turns it into a damping coefficient (N*s/m) from the spring rate and sprung mass when it builds the car, and the sim log prints the result per wheel ('strut in the solver'). Chaos caps the ratio at 1.0: the 1.5 used before was critical damping (2205 N*s/m front). 0.7 is fitted together with RoadRoughnessGd0 against the 2026-09-20 manual bag (ratios 1.0/0.7/0.5/0.35 x road level 1/2/3x, 2026-11-20); not measured on the car's dampers.",
         "SuspensionDamping": 0.7,

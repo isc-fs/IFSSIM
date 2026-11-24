@@ -185,6 +185,12 @@ struct FFSDSVehiclePhysics
 	float SuspensionDamping = 1.5f;
 	TArray<float> MotorRPM;          // RPM points
 	TArray<float> MotorTorque;       // Nm at motor for each RPM
+	// Body inertia about the centre of mass, kg*m^2 (roll Ixx, pitch Iyy, yaw
+	// Izz). Zero = Chaos's own: the physics asset's shapes at Mass, times the
+	// pawn's InertiaTensorScale, which ties handling to whatever collision
+	// shape the car mesh carries. See UFSDSWheeledVehicleMovementComponent::
+	// SetupVehicleMass.
+	FVector Inertia = FVector::ZeroVector;
 
 	// --- Vehicle dynamics (load transfer) ---
 	// Geometry + stiffness fields consumed by AFSDSVehiclePawn::
@@ -223,6 +229,23 @@ struct FFSDSVehiclePhysics
 	FFSDSPacejkaCoeffs Pacejka;
 };
 
+/** The art the car is drawn with (settings.json Vehicles.<car>.Mesh). Empty
+ *  Body = the inherited Technion car, /Game/Vehicle/TechnionCar.
+ *
+ *  Body is a skeletal mesh with bones WheelFL/FR/RL/RR at the hub centres and
+ *  its origin on the ground under the centre of mass. Wheels are the parts that
+ *  spin, Corners the parts that steer and travel but do not spin (upright,
+ *  caliper); both are static meshes with their pivot at the hub centre, in
+ *  FL, FR, RL, RR order, posed every tick from the wheel state of whichever
+ *  plant drives the car. */
+struct FFSDSVehicleMesh
+{
+	FString Body;
+	FString PhysicsAsset;
+	TArray<FString> Wheels;
+	TArray<FString> Corners;
+};
+
 struct FFSDSVehicleSettings
 {
 	FString Name = TEXT("FSCar");
@@ -232,6 +255,7 @@ struct FFSDSVehicleSettings
 	bool bAutoCreate = true;
 
 	FFSDSVehiclePhysics Physics;
+	FFSDSVehicleMesh Mesh;
 	TMap<FString, FFSDSSensorSettings> Sensors;
 };
 
