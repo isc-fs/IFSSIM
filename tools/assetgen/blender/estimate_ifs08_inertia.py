@@ -1,6 +1,6 @@
 """Estimate the IFS-08's body inertia from its CAD, for settings.json VehiclePhysics.Inertia.
 
-    blender -b <IFS08_KIN>\\cad\\blender\\IFS08_livery.blend --python tools\\assetgen\\blender\\estimate_ifs08_inertia.py -- [--cells-kg 50]
+    blender -b <IFS08_KIN>\\cad\\blender\\IFS08_livery.blend --python tools\\assetgen\\blender\\estimate_ifs08_inertia.py -- [--cells-kg 38]
 
 An ESTIMATE, not a measurement. Each CAD part gives its own volume (closed
 meshes) or surface (open meshes, thin panels) moments; its mass comes from a
@@ -30,7 +30,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 ap = argparse.ArgumentParser()
-ap.add_argument("--cells-kg", type=float, default=50.0, help="accumulator cells + modules (the CAD has none)")
+ap.add_argument("--cells-kg", type=float, default=38.0,
+                help="accumulator contents: cells + modules, the CAD has only the empty case (12.5 kg). AS_BT_1000_v2 rebuilt is 50.6 kg")
 ap.add_argument("--total-kg", type=float, default=None, help="default: settings.json Mass")
 args = ap.parse_args(argv)
 with open(os.path.join(HERE, "..", "..", "..", "settings.json"), encoding="utf-8") as f:

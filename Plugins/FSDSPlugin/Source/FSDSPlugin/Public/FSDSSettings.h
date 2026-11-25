@@ -208,6 +208,30 @@ struct FFSDSVehiclePhysics
 	float HeaveStiffness = 80736.f;      // N/m (sum of 4 wheel rates)
 	float PitchStiffness = 54250.f;      // Nm/rad, 2 x wheel rate x (lf^2 + lr^2)
 
+	// --- Chaos wheel classes, per axle ---
+	// Delivered into the wheel CLASS DEFAULT OBJECTS before CreateVehicle()
+	// (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs), the same route as the
+	// Pacejka curve; a live push resets solver suspension state.
+	//
+	// Defaults are exactly what FSDSWheelFront/Rear.cpp hardcoded before these
+	// keys existed, so a settings.json without them drives the same car.
+	//
+	// SpringRate is the WHEEL rate in N/m (spring rate x motion ratio^2), not
+	// the Chaos property: the property is this / 100 (see FSDSWheelFront.cpp
+	// for the unit derivation). Keep HeaveStiffness = 2*(Front + Rear) so the
+	// parametric load model and Chaos agree.
+	//
+	// WheelMass is what Chaos uses for wheel SPIN inertia (0.5 m r^2), not the
+	// unsprung mass; set it as 2 I / r^2 from the real rotating inertia.
+	float SpringRateFront = 20184.f;     // N/m wheel rate (plant spec, = wheel-class fallback)
+	float SpringRateRear = 20184.f;      // N/m wheel rate
+	// Chaos SuspensionDampingRatio per axle. 0 = not set: the axle takes
+	// SuspensionDamping instead (ApplyTireModelToWheelCDOs).
+	float DampingRatioFront = 0.f;
+	float DampingRatioRear = 0.f;
+	float WheelMassFront = 10.f;         // kg, spin-inertia equivalent
+	float WheelMassRear = 10.f;
+
 	// Road roughness on the level floor (AFSDSVehiclePawn::ApplyRoadRoughness,
 	// FFSDSRoadRoughness). ISO 8608 displacement PSD level at 0.1 cycle/m in
 	// m^3; 0 = off. CutoffWavelength (m) rolls the profile off so it does not

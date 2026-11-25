@@ -38,6 +38,11 @@ UFSDSWheelRear::UFSDSWheelRear()
 	SuspensionMaxDrop = 5.81f;  // cm
 	SuspensionDampingRatio = 1.5f;   // overwritten from settings.json SuspensionDamping (AFSDSVehiclePawn::ApplyTireModelToWheelCDOs)
 
+	// FALLBACK ONLY. SpringRate, SuspensionDampingRatio, WheelMass and
+	// SuspensionMaxDrop are overwritten from settings.json (SpringRate*,
+	// DampingRatio*, WheelMass*) by AFSDSVehiclePawn::ApplyTireModelToWheelCDOs
+	// before CreateVehicle(); MaxDrop is recomputed there from the rate so the
+	// static ride height stays put. These literals equal the FSDSSettings.h defaults.
 	// Wheel rate 20184 N/m -> property 201.84 (x100 into N/m), the same as
 	// the front. Was 300 lb/in = 52538 N/m, the workbook's spring rate taken
 	// as a wheel rate. See FSDSWheelFront.cpp for the units and the

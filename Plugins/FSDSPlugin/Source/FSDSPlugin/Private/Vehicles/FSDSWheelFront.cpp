@@ -85,6 +85,11 @@ UFSDSWheelFront::UFSDSWheelFront()
 	// physics wheels from the CLASS DEFAULT OBJECT in CreateVehicle() before
 	// BeginPlay. Pushing suspension to a live vehicle instead is what
 	// launched the car into the air upside down on an earlier attempt.
+	// FALLBACK ONLY. SpringRate, SuspensionDampingRatio, WheelMass and
+	// SuspensionMaxDrop are overwritten from settings.json (SpringRate*,
+	// DampingRatio*, WheelMass*) by AFSDSVehiclePawn::ApplyTireModelToWheelCDOs
+	// before CreateVehicle(); MaxDrop is recomputed there from the rate so the
+	// static ride height stays put. These literals equal the FSDSSettings.h defaults.
 	SpringRate = 201.84f;
 
 	// Chaos's anti-roll bar: each axle adds RollbarScaling x (left - right

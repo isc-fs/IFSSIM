@@ -209,7 +209,13 @@ class EndToEnd(unittest.TestCase):
     """The driver against a stepped fake sim: a right car passes, each bug fails its check."""
 
     def run_car(self, **plant):
-        sim = fake_car_sim.FakeSim(fake_car_sim.Plant(**plant))
+        # The fake car is built to settings.json, so its parameters follow the file.
+        vp = SETTINGS["Vehicles"]["FSCar"]["VehiclePhysics"]
+        crr, m = vp.get("RollingResistance", 0.0), vp["Mass"]
+        built = dict(wheelbase=vp["Wheelbase"], front_weight=vp["WeightDistFront"],
+                     max_steer_deg=vp["MaxSteerAngle"], a0=crr * 9.81,
+                     b=1.225 / (2 * m) * (vp["CdA"] + crr * vp.get("ClA", 0.0)))
+        sim = fake_car_sim.FakeSim(fake_car_sim.Plant(**{**built, **plant}))
         srv, port = fake_car_sim.serve(sim)
         try:
             res, meas = characterise(Rpc("127.0.0.1", port), SETTINGS, Layout(), log=lambda m: None)
