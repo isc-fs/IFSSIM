@@ -38,6 +38,7 @@ from common import (
 from onboard_report import summarize, write_onboard_report
 
 DEFAULT_FOXGLOVE_PORT = 8766
+FASTDDS_PROFILE = "/dv_pipeline_stack_ws/fastdds_profile.xml"
 FOXGLOVE_WHITELIST = (
     "/Conos",
     "/Conos_full",
@@ -849,6 +850,14 @@ if __name__ == "__main__":
     maybe_reexec_in_docker(
         "run_onboard_replay.py",
         extra_docker_args=live_docker_publish_args(),
-        extra_env={"ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID", "42")},
+        extra_env={
+            "ROS_DOMAIN_ID": os.environ.get("ROS_DOMAIN_ID", "42"),
+            # Default Fast DDS buffers drop the 4.5 MB LiDAR messages (~5 Hz
+            # vs ~9 Hz). Replay-only: the profile asks for a 64 MB SHM
+            # segment, which needs the --shm-size=1g this script passes
+            # (live_docker_publish_args); other benchmarks keep Docker's
+            # 64 MB /dev/shm.
+            "FASTRTPS_DEFAULT_PROFILES_FILE": FASTDDS_PROFILE,
+        },
     )
     main()
