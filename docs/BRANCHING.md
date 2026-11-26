@@ -69,18 +69,12 @@ fail is worse than no rule at all — the branch looks gated and is not.
 
 Cut from `dev`. `main` is not involved.
 
-Immutable releases are enabled, so a published release's assets cannot be
-changed afterwards. Build every platform's artifact **before** publishing, or
-the ones that come late need their own release.
-
-Packaging workflows:
-
-- `.github/workflows/package-windows.yml` — GitHub-hosted is not enough; needs
-  a self-hosted Windows runner with UE5.
-- `.github/workflows/package-mac.yml` — needs a self-hosted **macOS** runner
-  with UE5. There isn't one registered, so this workflow cancels on tag pushes
-  and the macOS artifact has to be built by hand until a runner exists.
-- `.github/workflows/package-linux.yml`
+Each OS's build is added to the release by whoever builds it, with
+`tools/publish_build.sh stable` (docs/TEAM_SETUP.md, "Publishing a build"),
+or by `.github/workflows/package.yml` on a runner that offered to. That needs
+**Immutable releases off** (Settings, General): an immutable release takes no
+assets once published, and the rolling `latest-dev` replaces its build on
+every publish. v1.0.1 onwards were published with it off.
 
 ## Working on the plant
 

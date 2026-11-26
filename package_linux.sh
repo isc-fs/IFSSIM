@@ -97,6 +97,25 @@ mkdir -p "$USER_SETTINGS_DIR"
 cp "$SCRIPT_DIR/settings.json" "$USER_SETTINGS_DIR/settings.json"
 echo "  settings.json staged → $USER_SETTINGS_DIR/settings.json"
 
+# 3b. build.json: what this build is, for the sim's updater (Settings,
+#     Updates), as package_windows.sh writes it.
+STAGED_DIR="$SCRIPT_DIR/Saved/StagedBuilds/Linux"
+PROJECT_VERSION="$(grep -E '^ProjectVersion=' "$SCRIPT_DIR/Config/DefaultGame.ini" | head -1 | cut -d= -f2 | tr -d '\r\n ')"
+BUILD_COMMIT="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_COMMIT_TIME="$(TZ=UTC git -C "$SCRIPT_DIR" log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd 2>/dev/null || echo "")"
+BUILD_DIRTY=false
+if [ -n "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then BUILD_DIRTY=true; fi
+cat > "$STAGED_DIR/build.json" <<EOF2
+{
+  "version": "$PROJECT_VERSION",
+  "commit": "$BUILD_COMMIT",
+  "commit_time": "$BUILD_COMMIT_TIME",
+  "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "dirty": $BUILD_DIRTY
+}
+EOF2
+echo "  build.json: $PROJECT_VERSION $BUILD_COMMIT ($BUILD_COMMIT_TIME, dirty=$BUILD_DIRTY)"
+
 # 4. Force windowed mode + 60 FPS cap in UECommandLine.txt
 #    (BuildCookRun overwrites this file). Same idea as package_mac.sh —
 #    -ExecCmds runs console commands at startup; t.MaxFPS is also

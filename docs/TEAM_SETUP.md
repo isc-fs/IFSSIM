@@ -94,7 +94,73 @@ All in the sim, no web page or terminal:
   track and moves it as it drove while the pipeline view shows what the
   pipeline saw at each moment. Esc stops it.
 
-## Keeping up to date
+## Updating the sim
+
+Settings, UPDATES. The sim checks the repo's GitHub Releases when it starts
+and says on the main menu when a newer build is out.
+
+- **Builds**: **Stable** (the default) gets the tagged releases; **Latest**
+  gets the last build of `dev`, newer but less tested.
+- **Update and restart** downloads it, restarts the sim into it and keeps the
+  build you had next to it (`<folder>-previous`): **Back to the previous
+  build** returns to it. A `settings.json` you changed in the sim's folder is
+  kept as `settings.previous.json`, and tracks you added there come along.
+- The sim compares the team's code with the commit it was built from
+  (Settings, PIPELINE CODE). When your copy is older, has no changes and is
+  on `dev`, **Bring the stack in step** moves it forward and rebuilds. The
+  pipeline moves with it only when you haven't touched it: a branch of your
+  own or any change in `pipeline/` stays exactly as it is. Otherwise it only
+  warns, and nothing is moved.
+
+### Publishing a build
+
+Every release has Linux: the bench PC builds it on each `v*` tag and merge
+to `dev`, and creates the release. Windows and macOS are added by whoever
+has the sim on that OS, with write access and UE 5.8:
+
+```bash
+tools/publish_build.sh latest   # the last build of dev, on `latest-dev`
+tools/publish_build.sh stable   # a release: v<ProjectVersion>
+```
+
+From a clean tree, with `gh` logged in (Git Bash on Windows).
+
+- **A new release:** bump `ProjectVersion` in `Config/DefaultGame.ini`
+  above the newest release, merge it to `dev`, then tag it
+  (`git tag v1.2.0 && git push origin v1.2.0`). The bench PC creates the
+  release with Linux. Then `git checkout v1.2.0` and
+  `tools/publish_build.sh stable` adds your OS. If the bench PC is down,
+  `--first` creates the release from your OS.
+- **Latest:** from `dev`, up to date. The script only moves `latest-dev`
+  forward, so publishing from an older commit does nothing.
+
+The script refuses another commit than the tag's and a version older than
+the newest release (Stable would go back), and skips an OS already there. Each zip
+goes up with a `.sha256`. GitHub takes up to 2 GiB per file, with no limit on
+a release's total or on downloads.
+
+### A machine that builds on its own (optional)
+
+A runner builds on every `v*` tag (`.github/workflows/package-*.yml`, which
+call the same script). Register it for packaging only, with its own label
+and none of the defaults, so no other job lands on it:
+
+```
+config.cmd --url https://github.com/isc-fs/IFSSIM --token <token from an admin> ^
+  --name <you>-win --labels ifssim-package-windows --no-default-labels
+```
+
+Start it with `run.cmd` when the machine can build; while it's off, the job
+waits and anyone can publish by hand. Labels: `ifssim-package-linux` (the
+bench PC; runs first), `ifssim-package-windows`, `ifssim-package-mac` (after
+Linux).
+
+The repo is public, and a fork's pull request runs the fork's own workflow
+file, which can ask for any label. Settings, Actions, "Require approval for
+all external contributors" stays on, and a fork's run that changes
+`.github/workflows` is never approved.
+
+## Keeping the code up to date
 
 The sim doesn't pull for you. To get the team's latest code:
 

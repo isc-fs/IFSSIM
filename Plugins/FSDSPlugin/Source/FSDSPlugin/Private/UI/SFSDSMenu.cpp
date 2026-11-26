@@ -14,6 +14,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "UI/FSDSUpdater.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -321,6 +322,12 @@ TSharedRef<SWidget> SFSDSMenu::BuildMain()
 						[
 							SNew(STextBlock).Text(LOCTEXT("Team", "ISC Racing Team"))
 							.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted)
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+						[
+							SNew(STextBlock).Text(LOCTEXT("UpdateBadge", "A new build is out: Settings, Updates"))
+							.Visibility_Lambda([]() { return FFSDSUpdater::Get().HasUpdate() ? EVisibility::Visible : EVisibility::Collapsed; })
+							.Font(MenuUi::MenuFont(10, TEXT("Bold"))).ColorAndOpacity(MenuUi::Good)
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavDrive", "Drive"), EPage::Drive) ]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 2) [ MakeNavButton(LOCTEXT("NavEditor", "Track editor"), EPage::Editor) ]
@@ -1033,6 +1040,71 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				"room within each 1/60 s frame."))
 			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
 		]
+		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("Updates", "UPDATES")) ]
+		+ SVerticalBox::Slot().AutoHeight() [ GraphicsRow(LOCTEXT("UChannel", "Builds"),
+			{ { LOCTEXT("UStable", "Stable"), []() { return FFSDSUpdater::Get().GetChannel() == FFSDSUpdater::EChannel::Stable; },
+				  []() { FFSDSUpdater::Get().SetChannel(FFSDSUpdater::EChannel::Stable); } },
+			  { LOCTEXT("ULatest", "Latest"), []() { return FFSDSUpdater::Get().GetChannel() == FFSDSUpdater::EChannel::Latest; },
+				  []() { FFSDSUpdater::Get().SetChannel(FFSDSUpdater::EChannel::Latest); } } }) ]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(200.f)
+				[
+					SNew(STextBlock).Text(LOCTEXT("UThis", "This build")).Font(MenuUi::MenuFont(11, TEXT("Bold"))).ColorAndOpacity(MenuUi::Ink)
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text_Lambda([]() { return FText::FromString(FFSDSUpdater::Get().CurrentText()); })
+				.Font(MenuUi::MenuFont(11)).ColorAndOpacity(MenuUi::Ink)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("UCheck", "Check now"), []() { return false; },
+					[]() { FFSDSUpdater::Get().Check(/*bInteractive=*/true); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				SNew(SBox).Visibility_Lambda([]() { return FFSDSUpdater::Get().HasUpdate() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakeChoice(LOCTEXT("UUpdate", "Update and restart"), []() { return false; },
+						[]() { FFSDSUpdater::Get().Update(); })
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				SNew(SBox).Visibility_Lambda([]() { return FFSDSUpdater::Get().CanRollBack() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakeChoice(LOCTEXT("URollBack", "Back to the previous build"), []() { return false; },
+						[]() { FFSDSUpdater::Get().RollBack(); })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(9, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([]() { return FText::FromString(FFSDSUpdater::Get().StatusText()); })
+				.ColorAndOpacity_Lambda([]() { return FSlateColor(FFSDSUpdater::Get().GetState() == FFSDSUpdater::EState::Failed ? MenuUi::Bad
+					: FFSDSUpdater::Get().HasUpdate() ? MenuUi::Good : MenuUi::Ink); })
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("UpdatesHint",
+				"New builds come from the repo's GitHub Releases. Stable: the tagged releases. Latest: the last build of "
+				"dev, newer but less tested. "
+				"Updating downloads the build, restarts the sim into it, and keeps this one: Back to the previous build "
+				"returns to it. After updating, Rebuild pipeline below so the stack matches."))
+			.Font(MenuUi::MenuFont(10)).ColorAndOpacity(MenuUi::Muted).AutoWrapText(true)
+		]
 		+ SVerticalBox::Slot().AutoHeight() [ MakeHeading(LOCTEXT("PipelineCode", "PIPELINE CODE")) ]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
@@ -1096,6 +1168,36 @@ TSharedRef<SWidget> SFSDSMenu::BuildSettingsPage()
 				SNew(STextBlock)
 				.Text_Lambda([this]() { return FText::FromString(RebuildStatus ? RebuildStatus() : FString()); })
 				.ColorAndOpacity_Lambda([this]() { return FSlateColor(RebuildFailed && RebuildFailed() ? MenuUi::Bad : MenuUi::Good); })
+				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+		[
+			SNew(SHorizontalBox)
+			.Visibility_Lambda([]() { return FFSDSUpdater::Get().StackText().IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				MakeChoice(LOCTEXT("StackCheck", "Compare with this build"), []() { return false; },
+					[]() { FFSDSUpdater::Get().CheckStack(/*bFetch=*/true); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 3, 0)
+			[
+				SNew(SBox).Visibility_Lambda([]() { return FFSDSUpdater::Get().CanMatchStack() ? EVisibility::Visible : EVisibility::Collapsed; })
+				[
+					MakeChoice(LOCTEXT("StackMatch", "Bring the stack in step"), []() { return false; },
+						[]() { FFSDSUpdater::Get().MatchStack(); })
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center).Padding(9, 0, 0, 0)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([]() { return FText::FromString(FFSDSUpdater::Get().StackText()); })
+				.ColorAndOpacity_Lambda([]()
+				{
+					const FFSDSUpdater::EStack S = FFSDSUpdater::Get().GetStackState();
+					return FSlateColor(S == FFSDSUpdater::EStack::Differs || S == FFSDSUpdater::EStack::Failed ? MenuUi::Bad
+						: S == FFSDSUpdater::EStack::Behind ? MenuUi::Ink : MenuUi::Good);
+				})
 				.Font(MenuUi::MenuFont(10)).AutoWrapText(true)
 			]
 		]
