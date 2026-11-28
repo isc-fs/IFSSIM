@@ -70,6 +70,7 @@ import os
 import hashlib
 import random
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -456,6 +457,7 @@ STACK_UP_TIMEOUT_S = 1200.0  # rebuild (C++ too) + a cold Numba cache
 BUILD_CACHE = "bench_ws_"
 PARAMS = Path("bringup") / "config" / "params.yaml"
 BRIDGE_SRC = Path("ros2") / "src"  # the sim bridge's packages, in the IFSSIM checkout
+BRIDGE_PKG = "ifssim_bridge"  # the one a panda run builds: the pipeline is the panda's
 COMPONENT_ALIASES = {"cone_detection": "cone_detection_node"}
 
 
@@ -726,6 +728,32 @@ class Stack:
             run += ["-e", "DV_REBUILD_ON_STARTUP=true", self.image]
             ready = STACK_READY
         else:  # the latte panda runs the pipeline: here only the sim bridge
+            # The image's own bridge is from whenever it was built, and a bridge older or newer than
+            # the sim misreads its sensor stream: a 2026-11-12 image gave /clock and /imu at 9 Hz
+            # instead of 60, and the pipeline on the panda drove blind. So the bridge is built from
+            # this checkout, as in the full stack, but only it: the pipeline is the panda's.
+            bridge_src = self.checkout / BRIDGE_SRC / BRIDGE_PKG
+            rebuild = ""
+            if bridge_src.is_dir():
+                if self.work_dir is not None:
+                    self.work_dir.mkdir(parents=True, exist_ok=True)
+                self.tmp = Path(
+                    tempfile.mkdtemp(prefix="bench-dv-stack-", dir=self.work_dir)
+                )
+                bridge = self.tmp / "ros2" / BRIDGE_PKG
+                shutil.copytree(bridge_src, bridge, ignore=shutil.ignore_patterns(".git"))
+                run += ["-v", f"{bridge}:{WS}/src/{BRIDGE_PKG}"]
+                for volume, folder in build_cache(self.image):
+                    run += ["-v", f"{volume}:{WS}/{folder}"]
+                stamp = f"{WS}/build/.dv_bridge_hash"
+                digest = source_hash(bridge)
+                rebuild = (
+                    f"export AMENT_PREFIX_PATH={WS}/install/fs_msgs:{WS}/install/dv_msgs:$AMENT_PREFIX_PATH && "
+                    f"cd {WS} && "
+                    f'{{ [ "$(cat {stamp} 2>/dev/null)" = {digest} ] || '
+                    f"{{ rm -f {stamp} && colcon build --symlink-install --packages-select {BRIDGE_PKG} "
+                    f"&& echo {digest} > {stamp}; }}; }} && "
+                )
             launch = (
                 f"source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && "
                 # the image's entrypoint adds these ament_cmake packages, and
@@ -733,12 +761,21 @@ class Stack:
                 # find ifssim_bridge
                 f"export AMENT_PREFIX_PATH={WS}/install/fs_msgs:{WS}/install/ifssim_bridge:"
                 f"{WS}/install/dv_msgs:$AMENT_PREFIX_PATH && "
+                f"{rebuild}"
+                + (
+                    f"source {WS}/install/setup.bash && "
+                    f"export AMENT_PREFIX_PATH={WS}/install/fs_msgs:{WS}/install/ifssim_bridge:"
+                    f"{WS}/install/dv_msgs:$AMENT_PREFIX_PATH && "
+                    if rebuild
+                    else ""
+                )
+                + f'echo "{STACK_READY} (bridge only)" && '
                 f"exec ros2 launch {WS}/bridge.launch.py host:={SIM_HOST} port:={self.sim_port}"
             )
             run += ["--entrypoint", "bash", self.image, "-c", launch]
-            ready = None
+            ready = STACK_READY
         log(
-            f"starting the pipeline stack ({'pipeline and sim bridge from this checkout' if ready else 'bridge only'}, {self.image})"
+            f"starting the pipeline stack ({'pipeline and sim bridge from this checkout' if self.where == 'bench_pc' else 'sim bridge from this checkout, the pipeline is on the latte panda'}, {self.image})"
         )
         r = docker(*run, timeout=600)
         self.started = (
@@ -1522,11 +1559,27 @@ def main(argv: list[str] | None = None) -> int:
         help=f"the stack's image (default $IFSSIM_DV_IMAGE or {DEFAULT_IMAGE})",
     )
     args = ap.parse_args(argv)
+    # A cancelled job (the benchweb runner, a CI cancel) is SIGTERM to this process's group. Python
+    # ends on it at once, without running ``finally``: the stack's container stayed up, the
+    # latte panda's pipeline kept running, and the stack that --replace-stack had stopped was
+    # never started again. Turn it into an interrupt, so run()'s cleanup does run; and take no
+    # second one while it does.
+    def on_term(signum, frame):  # noqa: ARG001
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, on_term)
+    except ValueError:  # not the main thread (a test)
+        pass
     try:
         return run(args)
     except BenchmarkError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("interrupted: stopped what this run started", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

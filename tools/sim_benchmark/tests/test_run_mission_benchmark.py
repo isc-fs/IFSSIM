@@ -393,6 +393,13 @@ def test_the_latte_panda_needs_its_commands_and_runs_them(tmp_path, world, docke
     assert "/dv_pipeline_stack_ws/install/ifssim_bridge:" in run
     assert "host:=host.docker.internal" in run
     assert "DV_REBUILD_ON_STARTUP" not in run and "/src/slam" not in run
+    # but the bridge is built from this checkout, not the image's (an old one misreads the sim's
+    # sensor stream: a few Hz of /clock and /imu, and the pipeline on the panda drives blind)
+    assert "/dv_pipeline_stack_ws/src/ifssim_bridge" in run
+    assert "colcon build --symlink-install --packages-select ifssim_bridge" in run
+    assert run.index("colcon build") < run.index("exec ros2 launch")
+    assert "IFSSIM ROS stack starting (bridge only)" in run  # what the wait for the container looks for
+    assert not list(tmp_path.glob("**/bench-dv-stack-*"))  # the work copy is gone after the run
     [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
     code = json.loads((d / "manifest.json").read_text())["code"]["pipeline"]
     assert (
@@ -905,3 +912,29 @@ def test_a_copy_made_before_the_container_ran_is_removed_without_root(tmp_path, 
     stack.down(lambda m: None)  # never started: a failure before `docker run`
     assert not work.exists() and stack.tmp is None
     assert not any(c[:4] == ["run", "--rm", "--entrypoint", "find"] for c in docker.calls)
+
+
+def test_a_sigterm_runs_the_cleanup_and_exits_130(monkeypatch):
+    """A cancelled job is SIGTERM to the process group: the stack and the panda's pipeline must
+    still be stopped (run()'s ``finally``), not left running with the stack they replaced stopped."""
+    import os
+    import signal
+
+    cleaned = []
+
+    def fake_run(args):
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)  # the cancel arrives mid-run
+            time.sleep(5)
+            raise AssertionError("the SIGTERM did not interrupt the run")
+        finally:
+            os.kill(os.getpid(), signal.SIGTERM)  # a second one must not cut the cleanup short
+            cleaned.append("down")
+
+    monkeypatch.setattr(rmb, "run", fake_run)
+    old = signal.getsignal(signal.SIGTERM)
+    try:
+        assert rmb.main(["--missions", "acceleration"]) == 130
+    finally:
+        signal.signal(signal.SIGTERM, old)
+    assert cleaned == ["down"]
