@@ -393,6 +393,13 @@ def test_the_latte_panda_needs_its_commands_and_runs_them(tmp_path, world, docke
     assert "/dv_pipeline_stack_ws/install/ifssim_bridge:" in run
     assert "host:=host.docker.internal" in run
     assert "DV_REBUILD_ON_STARTUP" not in run and "/src/slam" not in run
+    # but the bridge is built from this checkout, not the image's (an old one misreads the sim's
+    # sensor stream: a few Hz of /clock and /imu, and the pipeline on the panda drives blind)
+    assert "/dv_pipeline_stack_ws/src/ifssim_bridge" in run
+    assert "colcon build --symlink-install --packages-select ifssim_bridge" in run
+    assert run.index("colcon build") < run.index("exec ros2 launch")
+    assert "IFSSIM ROS stack starting (bridge only)" in run  # what the wait for the container looks for
+    assert not list(tmp_path.glob("**/bench-dv-stack-*"))  # the work copy is gone after the run
     [d] = (tmp_path / "results" / "mission").glob("*/*/seed1")
     code = json.loads((d / "manifest.json").read_text())["code"]["pipeline"]
     assert (
