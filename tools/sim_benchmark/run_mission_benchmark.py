@@ -70,6 +70,7 @@ import os
 import hashlib
 import random
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1558,11 +1559,27 @@ def main(argv: list[str] | None = None) -> int:
         help=f"the stack's image (default $IFSSIM_DV_IMAGE or {DEFAULT_IMAGE})",
     )
     args = ap.parse_args(argv)
+    # A cancelled job (the benchweb runner, a CI cancel) is SIGTERM to this process's group. Python
+    # ends on it at once, without running ``finally``: the stack's container stayed up, the
+    # latte panda's pipeline kept running, and the stack that --replace-stack had stopped was
+    # never started again. Turn it into an interrupt, so run()'s cleanup does run; and take no
+    # second one while it does.
+    def on_term(signum, frame):  # noqa: ARG001
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, on_term)
+    except ValueError:  # not the main thread (a test)
+        pass
     try:
         return run(args)
     except BenchmarkError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("interrupted: stopped what this run started", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
